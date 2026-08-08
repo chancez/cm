@@ -815,8 +815,20 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool) error {
 	m.mu.Unlock()
 
 	if live {
+		// A session whose shell has already exited is not a failure to stop, whatever the RPC says.
+		//
+		// This window is narrow and real: the shell exits, the shim starts shutting down and closes its
+		// connection, and the session is still in the registry. Shutdown then fails with a transport error,
+		// and reporting that would be wrong twice over. The caller asked for the session to be gone and it
+		// is, and returning early left the record in the database forever, since the delete below never ran.
+		//
+		// Found as a flaky `cm kill --all` reporting "stopping d5: ttrpc: closed" under -race, which widens
+		// the window enough to hit. Checked after the call rather than before, because before is its own
+		// race: the shell can exit between the check and the RPC.
 		if err := sess.Shutdown(ctx, force); err != nil && !force {
-			return fmt.Errorf("stopping %s: %w", name, err)
+			if ended, _ := sess.Ended(); !ended {
+				return fmt.Errorf("stopping %s: %w", name, err)
+			}
 		}
 		// Give the shim a moment to exit so its socket is gone before returning, which
 		// lets the name be reused immediately.
