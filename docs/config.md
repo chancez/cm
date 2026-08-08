@@ -3,11 +3,40 @@
 Configuration is optional. cm works with no file, and every setting has a default that suits the
 common case.
 
-The file is TOML, read from `$XDG_CONFIG_HOME/cm/cm.toml` (`~/.config/cm/cm.toml` on Linux,
-`~/Library/Application Support/cm/cm.toml` on macOS). Override with `--config` or `$CM_CONFIG`.
+The file is TOML, read from `$XDG_CONFIG_HOME/cm/cm.toml` if that is set, otherwise the platform's
+config directory (`~/.config/cm/cm.toml` on Linux, `~/Library/Application Support/cm/cm.toml` on
+macOS). Override with `--config` or `$CM_CONFIG`.
+
+`XDG_CONFIG_HOME` is honoured before the platform directory because Go's `os.UserConfigDir` ignores it
+on macOS, so a file in `~/.config/cm` was silently not read. Nothing reported that, since a missing
+config is not an error. Run `cm config` to see which path is in use.
 
 An unknown key is an error rather than being ignored, because a misspelled setting is otherwise
 indistinguishable from one that has no effect.
+
+## Directories
+
+cm uses two, for different lifetimes. `cm config` prints both, and which rule chose each.
+
+| | Holds | Resolution |
+| --- | --- | --- |
+| runtime | sockets, and nothing else | `--runtime-dir`, `$CM_RUNTIME_DIR`, `runtime_dir`, `$XDG_RUNTIME_DIR/cm`, then `$TMPDIR/cm-$UID` |
+| state | the database and logs | `--state-dir`, `$CM_STATE_DIR`, `state_dir`, `$XDG_STATE_HOME/cm`, then `~/.local/state/cm` |
+
+The runtime directory holds `server.sock` and one `shim-NAME.sock` per session. Nothing else is ever
+written there, which is why it can live somewhere the system sweeps.
+
+It deliberately does not honour `XDG_DATA_HOME`. That directory is for persistent application data,
+which is what the state directory holds; sockets belong in a runtime directory, which is what
+`XDG_RUNTIME_DIR` is for, and macOS sets no such variable. Keeping sockets under `TMPDIR` also means an
+abandoned one is cleaned up without cm doing anything, where one in a persistent directory would
+accumulate. cm copes with a stale socket either way -- a new server binds over it, and `cm doctor`
+reports it as `stale-socket` -- but not having to is better.
+
+The cost of that choice is path length. A unix socket path cannot exceed 103 bytes, and the macOS
+per-user `TMPDIR` is around 55 characters, which leaves roughly 37 for a session name. Real names are
+far shorter than that (`kitty.260` is 9), and `cm doctor` warns through `long-socket-path` before it
+becomes a failure. Set `$CM_RUNTIME_DIR` to something shorter if you need the room.
 
 ## Example
 

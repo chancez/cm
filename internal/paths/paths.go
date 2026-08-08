@@ -27,6 +27,21 @@ func SessionEnv() string {
 	return Env("SESSION")
 }
 
+// DirOrigin names which rule resolved a directory, for reporting.
+//
+// Recorded because it cannot be worked out afterwards: every branch below produces an absolute path, so a
+// value that came from XDG_STATE_HOME and one that came from the built-in default are indistinguishable once
+// resolved. `cm config` reports where each setting came from, and without this it reported "default" for a
+// path XDG had chosen.
+type DirOrigin struct {
+	// Runtime and State name the source of each directory: an environment variable name, or "default".
+	Runtime string
+	State   string
+}
+
+// OriginDefault is the origin string for a built-in default.
+const OriginDefault = "default"
+
 // Dirs holds the resolved directories for a cm instance. Keeping them in one struct
 // lets tests point an entire instance at a temporary directory.
 type Dirs struct {
@@ -48,30 +63,55 @@ type Dirs struct {
 // result is that a process started without TMPDIR set lands somewhere its own `list`
 // cannot see. A single override is easier to reason about.
 func Default() (Dirs, error) {
-	var d Dirs
+	d, _, err := DefaultWithOrigin()
+	return d, err
+}
+
+// DefaultWithOrigin is Default, and also reports which rule chose each directory.
+//
+// Separate from Default so the common caller stays a two-value call, since only `cm config` needs the origin.
+//
+// Sockets stay under TMPDIR rather than moving to XDG_DATA_HOME, which was considered and rejected. The
+// runtime directory holds nothing but sockets -- server.sock and one shim-NAME.sock per session, verified --
+// and an abandoned socket in a temp directory is swept for free, where one in a persistent directory
+// accumulates. cm copes with stale sockets either way, binding over them and reporting them through doctor,
+// but self-cleaning is worth more than the 25 bytes of extra session-name budget a shorter path would buy.
+// XDG_RUNTIME_DIR is honoured because that is freedesktop's directory for exactly this, and it is unset on
+// macOS.
+func DefaultWithOrigin() (Dirs, DirOrigin, error) {
+	var (
+		d      Dirs
+		origin DirOrigin
+	)
 
 	if root := os.Getenv(Env("RUNTIME_DIR")); root != "" {
 		d.Runtime = root
+		origin.Runtime = "$" + Env("RUNTIME_DIR")
 	} else if xdg := os.Getenv("XDG_RUNTIME_DIR"); xdg != "" {
 		d.Runtime = filepath.Join(xdg, Name)
+		origin.Runtime = "$XDG_RUNTIME_DIR"
 	} else {
 		tmp := os.TempDir()
 		d.Runtime = filepath.Join(tmp, fmt.Sprintf("%s-%d", Name, os.Getuid()))
+		origin.Runtime = OriginDefault
 	}
 
 	if root := os.Getenv(Env("STATE_DIR")); root != "" {
 		d.State = root
+		origin.State = "$" + Env("STATE_DIR")
 	} else if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
 		d.State = filepath.Join(xdg, Name)
+		origin.State = "$XDG_STATE_HOME"
 	} else {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return Dirs{}, fmt.Errorf("resolving home directory: %w", err)
+			return Dirs{}, DirOrigin{}, fmt.Errorf("resolving home directory: %w", err)
 		}
 		d.State = filepath.Join(home, ".local", "state", Name)
+		origin.State = OriginDefault
 	}
 
-	return d, nil
+	return d, origin, nil
 }
 
 // Ensure creates the directories, owner-only. The sockets inside grant control of a

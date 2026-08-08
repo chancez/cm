@@ -79,6 +79,12 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	if err != nil {
 		return err
 	}
+	// The origin of the built-in resolution, which only paths knows: XDG_RUNTIME_DIR and XDG_STATE_HOME both
+	// produce an absolute path, so a directory they chose is indistinguishable from the default once resolved.
+	_, origin, err := paths.DefaultWithOrigin()
+	if err != nil {
+		return err
+	}
 
 	// Read through the accessors rather than the struct fields, so what is printed is what the rest of the
 	// program sees: the fields hold what the file said, which for anything unset is the zero value.
@@ -115,8 +121,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		RuntimeDir: dirs.Runtime,
 		StateDir:   dirs.State,
 		Sources: map[string]string{
-			"runtime_dir": dirSource(cmd, "runtime-dir", cfg.RuntimeDir),
-			"state_dir":   dirSource(cmd, "state-dir", cfg.StateDir),
+			"runtime_dir": dirSource(cmd, "runtime-dir", cfg.RuntimeDir, origin.Runtime),
+			"state_dir":   dirSource(cmd, "state-dir", cfg.StateDir, origin.State),
 		},
 		ScrollbackLines: cfg.Scrollback(),
 		ResizePolicy:    resize,
@@ -170,7 +176,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 // An earlier version inferred it by checking whether the variable was set, which reported the environment as
 // the source even when a flag had overridden it -- the value was right and the explanation was wrong, which
 // for a command whose entire job is explaining where values come from is the worst kind of bug.
-func dirSource(cmd *cobra.Command, flagName, fileVal string) string {
+func dirSource(cmd *cobra.Command, flagName, fileVal, fallback string) string {
 	if envName, ok := filledFromEnv[flagName]; ok {
 		return "$" + envName
 	}
@@ -180,5 +186,8 @@ func dirSource(cmd *cobra.Command, flagName, fileVal string) string {
 	if fileVal != "" {
 		return "config file"
 	}
-	return "default"
+	// Whatever paths resolved it to: an XDG variable, or the built-in default. Reporting "default"
+	// unconditionally here was wrong for anyone with XDG_STATE_HOME set, which is the same class of mistake as
+	// conflating a flag with an environment variable -- a right value with a wrong explanation.
+	return fallback
 }
