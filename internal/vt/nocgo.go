@@ -40,6 +40,7 @@ func (s *SessionTerminal) Title() string                  { return "" }
 func (s *SessionTerminal) Pwd() string                    { return "" }
 func (s *SessionTerminal) FocusReporting() bool           { return false }
 func (s *SessionTerminal) Plain() ([]byte, error)         { return nil, ErrUnavailable }
+func (s *SessionTerminal) Tail(int, bool) ([]byte, error) { return nil, ErrUnavailable }
 func (s *SessionTerminal) VT() ([]byte, error)            { return nil, ErrUnavailable }
 func (s *SessionTerminal) HTML() ([]byte, error)          { return nil, ErrUnavailable }
 func (s *SessionTerminal) Close() error                   { return nil }

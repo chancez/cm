@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -242,10 +243,27 @@ func newKillCommand(g *globals) *cobra.Command {
 }
 
 func newSendCommand(g *globals) *cobra.Command {
-	var newline bool
+	var (
+		newline bool
+		until   string
+		timeout time.Duration
+		asJSON  bool
+	)
 	cmd := &cobra.Command{
-		Use:               "send <session> <text>...",
-		Short:             "Send input to a session without attaching",
+		Use:   "send <session> <text>...",
+		Short: "Send input to a session without attaching",
+		Long: `Send input to a session without attaching.
+
+--wait blocks until the session reaches a state after the input lands, which is
+how a script or an agent runs something and then reads the result:
+
+  cm send build 'make' --enter --wait idle && cm read build
+
+That is one request, not a send followed by 'cm wait', and the difference is
+correctness rather than efficiency. The command starts as soon as the input
+arrives, so a fast one finishes before a separate wait could be issued, and that
+wait would then block until its timeout having missed what it was waiting for.
+The server arms the wait before writing the input.`,
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -259,21 +277,45 @@ func newSendCommand(g *globals) *cobra.Command {
 				// mode, where CR is what accept-line is bound to.
 				data += "\r"
 			}
+
+			var state serverv1.WaitState
+			if until != "" {
+				var ok bool
+				state, ok = waitStates[until]
+				if !ok {
+					return fmt.Errorf("unknown state %q, want one of idle, busy, blocked, exited", until)
+				}
+			}
+
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				_, err := cl.Send(ctx, &serverv1.SendRequest{
-					Session: name,
-					Data:    []byte(data),
+				resp, err := cl.Send(ctx, &serverv1.SendRequest{
+					Session:       name,
+					Data:          []byte(data),
+					WaitUntil:     state,
+					WaitTimeoutMs: uint64(timeout.Milliseconds()),
 				})
-				return err
+				if err != nil {
+					return err
+				}
+				if resp.GetWait() == nil {
+					return nil
+				}
+				return reportWait(os.Stdout, name, until, resp.GetWait(), asJSON)
 			})
 		},
 	}
-	cmd.Flags().BoolVarP(&newline, "enter", "n", false,
+	f := cmd.Flags()
+	f.BoolVarP(&newline, "enter", "n", false,
 		"append a carriage return so the shell runs the input")
+	f.StringVar(&until, "wait", "",
+		"after sending, wait until the session is idle, busy, blocked, or exited")
+	f.DurationVar(&timeout, "timeout", 0,
+		"give up waiting after this long (0 waits indefinitely)")
+	f.BoolVar(&asJSON, "json", false, "print the wait result as JSON")
 	return cmd
 }
 

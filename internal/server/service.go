@@ -543,10 +543,43 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	if !ok {
 		return nil, fmt.Errorf("%q: %w", req.Session, store.ErrNotFound)
 	}
+
+	if req.WaitUntil == serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
+		if err := sess.Write(ctx, req.Data); err != nil {
+			return nil, err
+		}
+		return &serverv1.SendResponse{}, nil
+	}
+
+	// Subscribe before writing, so the wait cannot miss what the input causes.
+	//
+	// This ordering is the entire reason a combined send-and-wait exists. Two separate calls cannot be
+	// ordered from outside: the command runs as soon as the input lands, so a fast one finishes before a
+	// following Wait arrives, and that wait then blocks until its timeout having missed the transition
+	// it was created for. Arming first closes the window rather than narrowing it.
+	sub := sess.subscribeMetadata()
+	defer sess.unsubscribeMetadata(sub)
+	// Drain the seeded value, which describes the session as it was before the input.
+	select {
+	case <-sub.ch:
+	default:
+	}
+
+	// Recorded before the input, so a command that starts and finishes too fast to observe is still
+	// evident from the count having moved.
+	runsBefore := sess.CommandRuns()
+
 	if err := sess.Write(ctx, req.Data); err != nil {
 		return nil, err
 	}
-	return &serverv1.SendResponse{}, nil
+
+	// afterInput, so a wait for idle means "the command I just sent finished" rather than "the shell is
+	// at a prompt", which it already was.
+	wait, err := s.awaitState(ctx, sess, sub, req.WaitUntil, req.WaitTimeoutMs, true, runsBefore)
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.SendResponse{Wait: wait}, nil
 }
 
 func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
@@ -577,6 +610,30 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 		return nil, err
 	}
 	return &serverv1.HistoryResponse{Data: data}, nil
+}
+
+// Read returns a bounded, parseable view of a session's recent output.
+//
+// Distinct from History, which renders the whole scrollback: a caller reading a session
+// programmatically wants the tail, and wants soft-wrapped lines rejoined so a path the terminal broke to
+// fit its width is one line again.
+func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
+	sess, live := s.mgr.Get(req.Session)
+	if !live {
+		// A finished session is the common case here, not an edge one: `cm run` waits for its command, so
+		// the session has already ended by the time anything reads its output.
+		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap)
+		if err != nil {
+			return nil, err
+		}
+		return &serverv1.ReadResponse{Data: data}, nil
+	}
+
+	data, err := sess.Read(int(req.Lines), req.Unwrap)
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.ReadResponse{Data: data}, nil
 }
 
 func (s *Service) GetEnv(ctx context.Context, req *serverv1.GetEnvRequest) (*serverv1.GetEnvResponse, error) {

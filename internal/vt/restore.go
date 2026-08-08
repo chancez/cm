@@ -238,6 +238,62 @@ func (t *Terminal) Plain() ([]byte, error) {
 	return t.format(formatOptions{emit: C.GHOSTTY_FORMATTER_FORMAT_PLAIN})
 }
 
+// Tail returns the last lines of the terminal's contents as plain text.
+//
+// Separate from Plain because a caller reading a session programmatically wants a bounded, parseable
+// view rather than the whole scrollback: a build log is megabytes, and the failure is in the last screen
+// of it.
+//
+// unwrap rejoins soft-wrapped lines, which is what makes the result parseable. A line the terminal broke
+// to fit its width is one line as far as the program that wrote it is concerned, and splitting it puts a
+// newline into the middle of a path or a stack frame. The formatter does this natively, so there is no
+// heuristic here about which breaks were soft.
+//
+// A lines value of zero means everything, so a caller can ask for the whole thing without a second code
+// path.
+func (t *Terminal) Tail(lines int, unwrap bool) ([]byte, error) {
+	if t.closed {
+		return nil, fmt.Errorf("terminal is closed")
+	}
+	out, err := t.format(formatOptions{
+		emit:   C.GHOSTTY_FORMATTER_FORMAT_PLAIN,
+		unwrap: unwrap,
+		// Trailing whitespace is padding the terminal added to fill a row, not content. Keeping it makes
+		// every line look ragged to a caller matching on it.
+		trim: true,
+	})
+	if err != nil || lines <= 0 {
+		return out, err
+	}
+	return lastLines(out, lines), nil
+}
+
+// lastLines returns the final n lines of p.
+//
+// Counted from the end rather than by splitting the whole buffer, since the buffer can be megabytes and
+// only its tail is wanted.
+func lastLines(p []byte, n int) []byte {
+	if n <= 0 || len(p) == 0 {
+		return p
+	}
+	// A trailing newline ends the last line rather than starting an empty one, so it is not counted.
+	end := len(p)
+	if p[end-1] == '\n' {
+		end--
+	}
+	count := 0
+	for i := end - 1; i >= 0; i-- {
+		if p[i] != '\n' {
+			continue
+		}
+		count++
+		if count == n {
+			return p[i+1:]
+		}
+	}
+	return p
+}
+
 // HTML returns the terminal's contents as HTML, preserving styling.
 func (t *Terminal) HTML() ([]byte, error) {
 	if t.closed {
@@ -264,6 +320,8 @@ func (t *Terminal) VT() ([]byte, error) {
 // deal with C structs.
 type formatOptions struct {
 	emit            C.GhosttyFormatterFormat
+	unwrap          bool
+	trim            bool
 	selection       *C.GhosttySelection
 	modes           bool
 	scrollingRegion bool
@@ -281,6 +339,8 @@ func (t *Terminal) format(o formatOptions) ([]byte, error) {
 	opts := C.GhosttyFormatterTerminalOptions{}
 	opts.size = C.size_t(unsafe.Sizeof(opts))
 	opts.emit = o.emit
+	opts.unwrap = C.bool(o.unwrap)
+	opts.trim = C.bool(o.trim)
 	opts.selection = o.selection
 	opts.extra.modes = C.bool(o.modes)
 	opts.extra.scrolling_region = C.bool(o.scrollingRegion)

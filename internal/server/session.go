@@ -176,6 +176,9 @@ type Terminal interface {
 	// Plain, VT, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
+	// Tail renders the last lines as plain text, optionally rejoining soft-wrapped lines. A lines
+	// value of zero means everything.
+	Tail(lines int, unwrap bool) ([]byte, error)
 	VT() ([]byte, error)
 	HTML() ([]byte, error)
 	// Close releases emulator resources.
@@ -457,6 +460,18 @@ func (s *Session) Command() osc.CommandState {
 	return s.command
 }
 
+// CommandRuns counts the commands the shell has reported starting.
+//
+// Exists so a waiter can tell "a command ran and finished" from "nothing has happened yet", which the
+// current state alone cannot express: both look idle. Counted by the tracker, which sees every marker,
+// because a command fast enough for its start and end to arrive in one chunk of output is never
+// observably running.
+func (s *Session) CommandRuns() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.command.Runs
+}
+
 // Metadata is what a session reports about itself.
 type Metadata struct {
 	Title string
@@ -503,10 +518,13 @@ func (s *Session) subscribeMetadata() *metaSub {
 
 	s.mu.Lock()
 	s.metaSubs[sub] = struct{}{}
-	current := Metadata{Title: s.title, Cwd: s.cwd}
+	current := Metadata{Title: s.title, Cwd: s.cwd, Command: s.command}
 	s.mu.Unlock()
 
-	if current.Title != "" || current.Cwd.Path != "" {
+	// Command is part of the seed, and the condition below accounts for it. A subscriber that arrives
+	// while a command is already running would otherwise be told nothing about it until the shell
+	// reported again, which for a long build is the whole time it matters.
+	if current.Title != "" || current.Cwd.Path != "" || current.Command.Running {
 		sub.ch <- current
 	}
 	return sub
@@ -907,6 +925,22 @@ func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32,
 		}
 	}
 	return nil
+}
+
+// Read renders the tail of the session's contents, with soft-wrapped lines optionally rejoined.
+//
+// Separate from History because the audiences differ: History exists so a person can page or pipe the
+// whole scrollback, while this exists so a program can parse a bounded amount of it.
+func (s *Session) Read(lines int, unwrap bool) ([]byte, error) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		// No emulator, so nothing can be rendered. Nil rather than an error, matching History: the
+		// session works, this particular view does not.
+		return nil, nil
+	}
+	return term.Tail(lines, unwrap)
 }
 
 // History renders the session's contents, scrollback included.

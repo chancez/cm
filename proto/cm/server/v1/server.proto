@@ -34,6 +34,18 @@ service Server {
   // change its environment, so the shell has to ask and apply the result itself.
   rpc GetEnv(GetEnvRequest) returns (GetEnvResponse);
 
+  // Read returns a bounded, parseable view of a session's recent output.
+  //
+  // Distinct from History, which renders everything: a caller reading a session programmatically wants
+  // the tail, with soft-wrapped lines rejoined so a path broken to fit the terminal is one line again.
+  rpc Read(ReadRequest) returns (ReadResponse);
+
+  // Wait blocks until a session reaches a state, so a caller can sequence work without polling.
+  //
+  // Server-side rather than a client loop: the server already watches the output stream, so it can
+  // answer from an event instead of a caller sampling `list` and racing the transition it wanted.
+  rpc Wait(WaitRequest) returns (WaitResponse);
+
   // Shutdown stops the server, leaving sessions running.
   //
   // Sessions survive by design: each shim owns its pty, so a server that exits leaves every
@@ -43,6 +55,50 @@ service Server {
 }
 
 // ShutdownRequest asks the server to stop.
+message ReadRequest {
+  string session = 1;
+  // How many lines from the end. Zero means everything.
+  uint32 lines = 2;
+  // Whether to rejoin soft-wrapped lines. A line the terminal broke to fit its width is one line to the
+  // program that wrote it, so splitting it puts a newline inside a path or a stack frame.
+  bool unwrap = 3;
+}
+
+message ReadResponse {
+  bytes data = 1;
+}
+
+// WaitState is a condition a caller can wait for.
+enum WaitState {
+  WAIT_STATE_UNSPECIFIED = 0;
+  // IDLE means the shell is at a prompt with no command running, from OSC 133.
+  WAIT_STATE_IDLE = 1;
+  // BUSY means a command is running.
+  WAIT_STATE_BUSY = 2;
+  // EXITED means the session ended, whatever its status.
+  WAIT_STATE_EXITED = 3;
+}
+
+message WaitRequest {
+  string session = 1;
+  WaitState until = 2;
+  // How long to wait before giving up. Zero waits indefinitely.
+  //
+  // Milliseconds rather than a duration string: this crosses a wire, and an integer needs no parser on
+  // either side.
+  uint64 timeout_ms = 3;
+}
+
+message WaitResponse {
+  // Whether the condition was reached, as opposed to the wait timing out.
+  bool satisfied = 1;
+  // The session's state when the wait returned, so a caller that timed out learns what it was instead.
+  bool busy = 2;
+  string command = 3;
+  SessionState state = 4;
+  int32 exit_code = 5;
+}
+
 message ShutdownRequest {}
 
 // ShutdownResponse confirms the server is stopping.
@@ -287,9 +343,20 @@ message KillResponse {
 message SendRequest {
   string session = 1;
   bytes data = 2;
+
+  // Wait for a state after delivering the input, in the same request.
+  //
+  // One request rather than a send followed by a wait, because the two cannot be ordered from outside:
+  // a command that finishes before the second call arrives leaves the caller waiting for a transition
+  // that already happened. The server arms the wait before it writes the input, so there is no window.
+  WaitState wait_until = 3;
+  uint64 wait_timeout_ms = 4;
 }
 
-message SendResponse {}
+message SendResponse {
+  // Present only when wait_until was set. Reports the same thing Wait does.
+  WaitResponse wait = 1;
+}
 
 // HistoryFormat selects how session contents are rendered.
 enum HistoryFormat {

@@ -134,9 +134,12 @@ func TestBusyTracksTheRunningCommand(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 	requireShell(t, "/bin/zsh")
+	// The shell reports OSC 133 because the test says so, not because the machine happens to be
+	// configured for it.
+	osc := e.withOSC133()
 
 	// -i, because the markers come from the shell's interactive prompt hooks.
-	e.mustRun("run", "--session", "busy", "-d", "--", "/bin/zsh", "-i")
+	e.mustRun(append([]string{"run", "--session", "busy", "-d"}, append(osc, "--", "/bin/zsh", "-i")...)...)
 
 	// Idle once the prompt is up. Polled rather than assumed: the shell has to start first.
 	e.waitFor("the session to settle at a prompt", 15*time.Second, func() bool {
@@ -173,8 +176,11 @@ func TestBusyIsNotPersistedAcrossARestart(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 	requireShell(t, "/bin/zsh")
+	// The shell reports OSC 133 because the test says so, not because the machine happens to be
+	// configured for it.
+	osc := e.withOSC133()
 
-	e.mustRun("run", "--session", "notstored", "-d", "--", "/bin/zsh", "-i")
+	e.mustRun(append([]string{"run", "--session", "notstored", "-d"}, append(osc, "--", "/bin/zsh", "-i")...)...)
 	e.waitFor("the session to settle at a prompt", 15*time.Second, func() bool {
 		s, ok := e.session("notstored")
 		return ok && !s.Busy

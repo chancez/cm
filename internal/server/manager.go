@@ -889,6 +889,38 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 func (m *Manager) HistoryFromDisk(
 	ctx context.Context, name string, format serverv1.HistoryFormat,
 ) ([]byte, error) {
+	return m.replayFromDisk(ctx, name, func(term Terminal) ([]byte, error) {
+		switch format {
+		case serverv1.HistoryFormat_HISTORY_FORMAT_VT:
+			return term.VT()
+		case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
+			return term.HTML()
+		default:
+			return term.Plain()
+		}
+	})
+}
+
+// ReadFromDisk renders the tail of a finished session's persisted output.
+//
+// The same replay as HistoryFromDisk with a different render, which is the point of splitting them: a
+// finished command's output is the common case for `cm read`, since `cm run` waits for the command and
+// the session is already gone by the time anything reads it.
+func (m *Manager) ReadFromDisk(
+	ctx context.Context, name string, lines int, unwrap bool,
+) ([]byte, error) {
+	return m.replayFromDisk(ctx, name, func(term Terminal) ([]byte, error) {
+		return term.Tail(lines, unwrap)
+	})
+}
+
+// replayFromDisk rebuilds a finished session's screen from its saved log and hands it to render.
+//
+// Necessary because a session that ends leaves the registry, taking its terminal model with it, so there
+// would otherwise be no way to read what a command printed once it exited.
+func (m *Manager) replayFromDisk(
+	ctx context.Context, name string, render func(Terminal) ([]byte, error),
+) ([]byte, error) {
 	rec, err := m.store.Get(ctx, name)
 	if err != nil {
 		return nil, err
@@ -940,14 +972,7 @@ func (m *Manager) HistoryFromDisk(
 	// Discard anything the emulator generated: those answer queries from a program that is gone.
 	term.TakePending()
 
-	switch format {
-	case serverv1.HistoryFormat_HISTORY_FORMAT_VT:
-		return term.VT()
-	case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
-		return term.HTML()
-	default:
-		return term.Plain()
-	}
+	return render(term)
 }
 
 // Close stops tracking sessions without terminating them.

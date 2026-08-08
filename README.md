@@ -66,6 +66,18 @@ contract rather than whatever the wire format happens to be.
 Sessions can also survive a reboot, opt-in per session or by name pattern: the content comes back
 and a fresh shell starts in the recorded directory. See `docs/persistence.md`.
 
+Sessions can be driven without attaching, which is what makes cm usable from a script or an agent:
+
+```
+cm send build 'make' --enter --wait idle   # send, then wait for it to finish
+cm read build --lines 50                   # the recent tail, soft wrap rejoined
+cm wait api --until exited                 # block until a session ends
+cm run --env KEY=value -- ./task           # a command in its own session
+```
+
+`cm info <session> --field busy` reports whether a command is running, from OSC 133. See
+`docs/architecture.md`.
+
 See `docs/` for design notes and trade-offs:
 
 - `docs/architecture.md` - why three layers, and what each owns

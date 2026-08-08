@@ -393,6 +393,46 @@ func requireShell(t *testing.T, path string) {
 	}
 }
 
+// osc133rc is a zshrc that emits the OSC 133 markers cm reads.
+//
+// The tests supply this rather than relying on whatever the machine has configured. On a developer's
+// machine kitty's shell integration is usually loaded and everything works; in a container there are no
+// dotfiles at all, so the shell reports nothing and every test about busy state fails for a reason that
+// has nothing to do with cm. That failure is also misleading: it looks like broken detection rather than
+// a shell that was never asked to report.
+//
+// Deliberately the minimum, not a copy of kitty's integration: prompt start, and command start with the
+// cmdline extension. Those are the two markers the feature depends on, and writing them out here means
+// the test states its own preconditions.
+const osc133rc = `
+autoload -Uz add-zsh-hook
+_osc133_precmd() { printf '\033]133;A\007' }
+_osc133_preexec() { printf '\033]133;C;cmdline=%s\007' "${1// /\\ }" }
+add-zsh-hook precmd _osc133_precmd
+add-zsh-hook preexec _osc133_preexec
+`
+
+// withOSC133 returns the flags that make a session's shell report OSC 133.
+//
+// Passed to `cm run --env` rather than exported into this process, because the server spawns shims: a
+// variable this test exports is not in the server's environment and so never reaches the shell. That is
+// exactly the gap `--env` exists to close.
+//
+// ZDOTDIR is what zsh reads instead of $HOME for its startup files, so the user's own configuration is
+// neither needed nor consulted, and the test states its own preconditions.
+func (e *env) withOSC133() []string {
+	e.t.Helper()
+
+	dir := filepath.Join(e.state, "zdotdir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		e.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".zshrc"), []byte(osc133rc), 0o600); err != nil {
+		e.t.Fatalf("WriteFile() error = %v", err)
+	}
+	return []string{"--env", "ZDOTDIR=" + dir}
+}
+
 // requireTerminal skips a test that needs the terminal emulator.
 //
 // A build without cgo has no emulator, so screen restore on reattach and `cm history` genuinely do not

@@ -47,6 +47,10 @@ RUN cd /src/ghostty && zig build \
       -Demit-macos-app=false
 
 FROM golang:1.26-bookworm
+# zsh, because the OSC 133 tests need a shell that emits the markers, and skipping them here would leave
+# the feature verified on macOS only. python3 is what those tests use to print an over-long line.
+RUN apt-get update && apt-get install -y --no-install-recommends zsh python3 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

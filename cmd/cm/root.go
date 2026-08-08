@@ -71,6 +71,8 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 	root.AddCommand(
 		newAttachCommand(g),
 		newListCommand(g),
+		newWaitCommand(g),
+		newReadCommand(g),
 		newKillCommand(g),
 		newServerCommand(g),
 		newSendCommand(g),

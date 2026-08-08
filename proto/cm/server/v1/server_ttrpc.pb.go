@@ -14,6 +14,8 @@ type ServerService interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Read(context.Context, *ReadRequest) (*ReadResponse, error)
+	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -77,6 +79,20 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.GetEnv(ctx, &req)
 			},
+			"Read": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ReadRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Read(ctx, &req)
+			},
+			"Wait": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req WaitRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Wait(ctx, &req)
+			},
 			"Shutdown": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req ShutdownRequest
 				if err := unmarshal(&req); err != nil {
@@ -104,6 +120,8 @@ type ServerClient interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Read(context.Context, *ReadRequest) (*ReadResponse, error)
+	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -186,6 +204,22 @@ func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*Histo
 func (c *serverClient) GetEnv(ctx context.Context, req *GetEnvRequest) (*GetEnvResponse, error) {
 	var resp GetEnvResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "GetEnv", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+	var resp ReadResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Read", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Wait(ctx context.Context, req *WaitRequest) (*WaitResponse, error) {
+	var resp WaitResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Wait", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

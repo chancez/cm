@@ -169,6 +169,34 @@ true of a process, not of a record, so a stored value would come back after a re
 command that finished long ago and a confirmation built on it would fire forever. The cost is that a
 session adopted by a new server reports idle until its next command.
 
+## Waiting, and why the server does it
+
+`cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from
+the session's own output rather than a client polling `cm list`, which costs one request and, more
+importantly, cannot miss a transition that a sampling loop would.
+
+Three details are load-bearing, and each is a bug that was hit rather than a precaution.
+
+The subscription is registered *before* anything that could cause a change. `cm wait` subscribes before
+its first check; `cm send --wait` subscribes before writing its input. Checking first and subscribing
+second leaves a window where the transition happens in between, and the wait then blocks until its
+timeout having missed exactly what it was waiting for.
+
+A wait issued after sending input cannot be satisfied by the state the session was already in. A shell at
+a prompt is idle, and it takes a few hundred milliseconds to report the command it was just given -- about
+300ms for zsh, which is long enough to lose every time rather than occasionally. So `send --wait idle`
+waits for a command to have started before idle counts, or it would return before the command existed and
+the caller would read output from before its own input.
+
+That start cannot be detected by watching for the session to *be* busy. The metadata subscription
+coalesces to a depth of one, so a command like `true` starts and finishes between two reads and arrives
+as a single event. The session instead counts commands the shell has reported starting, and a waiter
+compares that count: it asks whether a command ran at all, which survives the collapse. Without it,
+`cm send true --wait idle` timed out reporting "waiting for idle; it is idle".
+
+`--wait` is part of the send request rather than a second call for the same reason. Two calls cannot be
+ordered from outside, so a fast command finishes before the second one arrives.
+
 ## Known gaps
 
 Kitty graphics and OSC 8 hyperlink targets are not part of a restored screen: libghostty's

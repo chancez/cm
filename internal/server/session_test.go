@@ -114,6 +114,26 @@ func (f *fakeTerminal) Size() (uint16, uint16) {
 	return f.rows, f.cols
 }
 
+// Tail mirrors the real implementation closely enough to test the plumbing: it bounds the output by
+// lines and, when asked to unwrap, joins nothing, since a fake has no notion of soft wrapping. Tests
+// about unwrapping belong against the real emulator.
+func (f *fakeTerminal) Tail(lines int, unwrap bool) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	if lines <= 0 {
+		return f.written, nil
+	}
+	// Count back from the end, matching the real one.
+	all := strings.Split(strings.TrimSuffix(string(f.written), "\n"), "\n")
+	if len(all) > lines {
+		all = all[len(all)-lines:]
+	}
+	return []byte(strings.Join(all, "\n")), nil
+}
+
 func (f *fakeTerminal) Written() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
