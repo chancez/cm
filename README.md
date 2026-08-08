@@ -54,10 +54,10 @@ crash, history, send-without-attach, and cwd/title tracking forwarded to clients
 Not done yet: persistence across reboot, per-client environment capture, JSON output,
 configurable detach key. See `docs/` for design notes and trade-offs:
 
-- `docs/architecture.md` — why three layers, and what each owns
-- `docs/restore.md` — how screen restore works and why each detail is there
-- `docs/rpc.md` — why ttrpc, measured against gRPC and Connect
-- `docs/libghostty.md` — using libghostty-vt from Go, and its constraints
+- `docs/architecture.md` - why three layers, and what each owns
+- `docs/restore.md` - how screen restore works and why each detail is there
+- `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
+- `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
 
 ## Building
 
