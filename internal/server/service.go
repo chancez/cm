@@ -306,6 +306,7 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			CreatedAtUnix: rec.CreatedAt.Unix(),
 			Exited:        rec.State != store.StateRunning,
 			ExitCode:      int32(rec.ExitCode),
+			State:         sessionState(rec.State),
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.Name); live {
@@ -317,17 +318,48 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 				item.Cwd = cwd.Path
 				item.CwdIsLocal = cwd.IsLocal
 			}
+			item.CwdUri = sess.CwdURI()
 		}
 		out.Sessions = append(out.Sessions, item)
 	}
 	return out, nil
 }
 
+// trimNamePrefix removes a leading quoted session name from a message, since the caller already
+// knows which session it applies to.
+func trimNamePrefix(msg, name string) string {
+	for _, prefix := range []string{
+		fmt.Sprintf("%q: ", name),
+		name + ": ",
+	} {
+		if after, ok := strings.CutPrefix(msg, prefix); ok {
+			return after
+		}
+	}
+	return msg
+}
+
+// sessionState maps a stored state onto the wire enum.
+func sessionState(st store.State) serverv1.SessionState {
+	switch st {
+	case store.StateRunning:
+		return serverv1.SessionState_SESSION_STATE_RUNNING
+	case store.StateExited:
+		return serverv1.SessionState_SESSION_STATE_EXITED
+	case store.StateDead:
+		return serverv1.SessionState_SESSION_STATE_DEAD
+	default:
+		return serverv1.SessionState_SESSION_STATE_UNSPECIFIED
+	}
+}
+
 func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
 	for _, name := range req.Sessions {
 		if err := s.mgr.Kill(ctx, name, req.Force); err != nil {
-			resp.Errors[name] = err.Error()
+			// The map is already keyed by name, so a message that repeats it reads as
+			// `nosuch: "nosuch": session not found`. Strip the redundant prefix.
+			resp.Errors[name] = trimNamePrefix(err.Error(), name)
 			continue
 		}
 		resp.Killed = append(resp.Killed, name)

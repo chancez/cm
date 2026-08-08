@@ -4,10 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
-	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -160,7 +157,10 @@ func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error 
 }
 
 func newListCommand(g *globals) *cobra.Command {
-	var prefix string
+	var (
+		prefix string
+		asJSON bool
+	)
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -176,54 +176,24 @@ func newListCommand(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return printSessions(os.Stdout, resp.Sessions)
+				if asJSON {
+					return printSessionsJSON(os.Stdout, resp.Sessions)
+				}
+				return printSessionsTable(os.Stdout, resp.Sessions)
 			})
 		},
 	}
-	cmd.Flags().StringVar(&prefix, "prefix", "", "only sessions whose name starts with this")
+	f := cmd.Flags()
+	f.StringVar(&prefix, "prefix", "", "only sessions whose name starts with this")
+	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
 }
 
-func printSessions(w *os.File, sessions []*serverv1.Session) error {
-	if len(sessions) == 0 {
-		return nil
-	}
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].CreatedAtUnix < sessions[j].CreatedAtUnix
-	})
-
-	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tCWD")
-	for _, s := range sessions {
-		state := "running"
-		if s.Exited {
-			state = fmt.Sprintf("exited(%d)", s.ExitCode)
-		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\n",
-			s.Name, s.ShellPid, s.Clients, state,
-			humanAge(time.Unix(s.CreatedAtUnix, 0)), s.Cwd)
-	}
-	return tw.Flush()
-}
-
-// humanAge renders an age compactly, since a full timestamp crowds out the columns that
-// matter when scanning a session list.
-func humanAge(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-}
-
 func newKillCommand(g *globals) *cobra.Command {
-	var force bool
+	var (
+		force  bool
+		asJSON bool
+	)
 	cmd := &cobra.Command{
 		Use:   "kill <session>...",
 		Short: "Terminate sessions and their shells",
@@ -243,23 +213,14 @@ func newKillCommand(g *globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				for _, name := range resp.Killed {
-					fmt.Printf("killed %s\n", name)
-				}
-				if len(resp.Errors) > 0 {
-					var msgs []string
-					for name, msg := range resp.Errors {
-						msgs = append(msgs, fmt.Sprintf("%s: %s", name, msg))
-					}
-					sort.Strings(msgs)
-					return fmt.Errorf("%s", strings.Join(msgs, "; "))
-				}
-				return nil
+				return reportKill(os.Stdout, resp, asJSON)
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false,
+	f := cmd.Flags()
+	f.BoolVar(&force, "force", false,
 		"forget the session even if its shim cannot be reached")
+	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
 }
 
@@ -299,7 +260,10 @@ func newSendCommand(g *globals) *cobra.Command {
 }
 
 func newInfoCommand(g *globals) *cobra.Command {
-	var field string
+	var (
+		field  string
+		asJSON bool
+	)
 	cmd := &cobra.Command{
 		Use:   "info <session>",
 		Short: "Print one session's details",
@@ -326,61 +290,20 @@ acting on a remote path locally would be wrong.`,
 					if s.Name != args[0] {
 						continue
 					}
-					return printSessionInfo(s, field)
+					if asJSON {
+						return writeJSON(os.Stdout, toSessionJSON(s))
+					}
+					return printSessionInfo(os.Stdout, s, field)
 				}
 				return fmt.Errorf("session %q not found", args[0])
 			})
 		},
 	}
-	cmd.Flags().StringVar(&field, "field", "",
-		"print only this field: name, pid, clients, cwd, title, state")
+	f := cmd.Flags()
+	f.StringVar(&field, "field", "",
+		"print only this field: name, state, pid, clients, title, cwd, cwd_uri, cwd_is_local")
+	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
-}
-
-func printSessionInfo(s *serverv1.Session, field string) error {
-	// A remote directory is reported as empty rather than as a path that does not exist here, so
-	// a caller cannot accidentally act on it.
-	cwd := s.Cwd
-	if !s.CwdIsLocal {
-		cwd = ""
-	}
-	state := "running"
-	if s.Exited {
-		state = fmt.Sprintf("exited(%d)", s.ExitCode)
-	}
-
-	switch field {
-	case "":
-		tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-		fmt.Fprintf(tw, "name\t%s\n", s.Name)
-		fmt.Fprintf(tw, "pid\t%d\n", s.ShellPid)
-		fmt.Fprintf(tw, "clients\t%d\n", s.Clients)
-		fmt.Fprintf(tw, "state\t%s\n", state)
-		fmt.Fprintf(tw, "title\t%s\n", s.Title)
-		fmt.Fprintf(tw, "cwd\t%s\n", cwd)
-		fmt.Fprintf(tw, "cwd_is_local\t%v\n", s.CwdIsLocal)
-		return tw.Flush()
-	case "name":
-		_, err := fmt.Println(s.Name)
-		return err
-	case "pid":
-		_, err := fmt.Println(s.ShellPid)
-		return err
-	case "clients":
-		_, err := fmt.Println(s.Clients)
-		return err
-	case "state":
-		_, err := fmt.Println(state)
-		return err
-	case "title":
-		_, err := fmt.Println(s.Title)
-		return err
-	case "cwd":
-		_, err := fmt.Println(cwd)
-		return err
-	default:
-		return fmt.Errorf("unknown field %q", field)
-	}
 }
 
 func newHistoryCommand(g *globals) *cobra.Command {

@@ -31,6 +31,34 @@ exclude = ["SSH_AUTH_SOCK"]
 # capture_only = ["TERM", "KITTY_*"]
 ```
 
+## JSON output
+
+`list`, `info`, `kill`, and `get-env` accept `--json`.
+
+The shape is a deliberate contract, defined in `cmd/cm/output.go` rather than by marshalling the
+wire messages directly. Fields are only ever added, never renamed or removed, and a test asserts
+the exact key set so a change cannot slip through unnoticed. Marshalling the protobuf message would
+have exposed fields kept only for compatibility, inviting scripts to depend on the ones being
+phased out.
+
+```
+$ cm list --json | jq -r '.[] | select(.state=="running") | "\(.name) -> \(.cwd)"'
+work -> /home/user/projects
+```
+
+Details worth knowing when scripting against it:
+
+- An empty list is `[]`, never `null`, so a script can iterate unconditionally. Same for
+  `killed` and `errors` in `kill --json`.
+- `state` is `running`, `exited`, or `dead`. Prefer it over `exit_code`, which means nothing for a
+  dead session, since that outcome is unknown rather than observed.
+- `cwd` is empty when the session reported a directory on another host, because acting on a remote
+  path locally would open the wrong place or fail. `cwd_uri` still carries the reported value, so a
+  caller can distinguish "remote" from "nothing reported".
+- `kill --json` reports partial failure in the payload *and* exits non-zero, so a script can check
+  the status without parsing.
+- Ordering is stable: oldest first, ties broken by name.
+
 ## Detach key
 
 `detach_key` accepts `ctrl-<key>` for a letter or one of the punctuation characters that have a

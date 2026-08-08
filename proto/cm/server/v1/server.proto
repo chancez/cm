@@ -172,6 +172,18 @@ message ListResponse {
   repeated Session sessions = 1;
 }
 
+// SessionState is a session's lifecycle stage.
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  // The session has a live shim holding a running shell.
+  SESSION_STATE_RUNNING = 1;
+  // The shell exited, and exit_code says with what.
+  SESSION_STATE_EXITED = 2;
+  // The shim could not be reached. Distinct from exited because the outcome is unknown rather
+  // than observed, so exit_code means nothing.
+  SESSION_STATE_DEAD = 3;
+}
+
 message Session {
   string name = 1;
   int32 shell_pid = 2;
@@ -188,6 +200,13 @@ message Session {
   int64 created_at_unix = 7;
   bool exited = 8;
   int32 exit_code = 9;
+
+  // Lifecycle stage. Preferred over exited, which cannot distinguish a shell that exited from a
+  // shim that vanished; exited remains for compatibility.
+  SessionState state = 10;
+  // Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
+  // caller can tell a remote directory from a local one. cwd holds the decoded local path.
+  string cwd_uri = 11;
 }
 
 message KillRequest {

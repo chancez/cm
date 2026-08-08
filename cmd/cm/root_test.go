@@ -43,6 +43,10 @@ func TestBindEnvPrecedence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear the variable first. Without this the test inherits whatever the developer's
+			// shell has exported, so the default case passes or fails depending on the
+			// environment it ran in rather than on the code.
+			t.Setenv("CM_RUNTIME_DIR", "")
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}

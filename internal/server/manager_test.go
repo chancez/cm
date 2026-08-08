@@ -382,3 +382,25 @@ func TestListReportsLiveSequence(t *testing.T) {
 		t.Errorf("Clients() = %d, want 1", n)
 	}
 }
+
+// A per-session error message must not repeat the session name, since the response is already keyed
+// by it and the result reads as `nosuch: "nosuch": session not found`.
+func TestTrimNamePrefix(t *testing.T) {
+	tests := []struct {
+		msg  string
+		name string
+		want string
+	}{
+		{`"nosuch": session not found`, "nosuch", "session not found"},
+		{"nosuch: session not found", "nosuch", "session not found"},
+		// A message that does not start with the name is left alone.
+		{"shim unreachable", "work", "shim unreachable"},
+		// And a name appearing later must not be stripped.
+		{"cannot reach shim for work", "work", "cannot reach shim for work"},
+	}
+	for _, tt := range tests {
+		if got := trimNamePrefix(tt.msg, tt.name); got != tt.want {
+			t.Errorf("trimNamePrefix(%q, %q) = %q, want %q", tt.msg, tt.name, got, tt.want)
+		}
+	}
+}

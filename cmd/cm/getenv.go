@@ -16,6 +16,7 @@ func newGetEnvCommand(g *globals) *cobra.Command {
 	var (
 		format string
 		all    bool
+		asJSON bool
 	)
 	cmd := &cobra.Command{
 		Use:   "get-env [session]",
@@ -73,6 +74,16 @@ fails rather than falling back.`,
 					return err
 				}
 
+				if asJSON {
+					// The raw recorded values, not a diff: a script applying them has no shell
+					// environment to diff against.
+					env := resp.Env
+					if env == nil {
+						env = map[string]string{}
+					}
+					return writeJSON(os.Stdout, env)
+				}
+
 				d := sessionenv.Diff{Set: resp.Env}
 				if !all {
 					// Compare against this process's environment, which is the shell's, so only
@@ -89,6 +100,8 @@ fails rather than falling back.`,
 	f.StringVar(&format, "format", "plain", "output format: plain, posix, or fish")
 	f.BoolVar(&all, "all", false,
 		"print every recorded variable, not only those that differ from the current environment")
+	f.BoolVar(&asJSON, "json", false,
+		"print every recorded variable as a JSON object, ignoring --format")
 	return cmd
 }
 

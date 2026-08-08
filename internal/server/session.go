@@ -394,6 +394,17 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 	return s.title, s.cwd
 }
 
+// CwdURI returns the directory exactly as the shell reported it, which for OSC 7 is a URI that
+// keeps the host.
+//
+// Worth exposing alongside the decoded path: the host is what distinguishes a session that has
+// ssh'd elsewhere, and a caller shown only a decoded path cannot tell.
+func (s *Session) CwdURI() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rawPwd
+}
+
 // Done is closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.done }
 

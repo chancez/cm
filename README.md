@@ -56,8 +56,10 @@ Also tracks the terminal-related environment variables of whichever client attac
 recently, so a long-running shell can refresh values like kitty's `KITTY_LISTEN_ON` that
 otherwise go stale when the terminal restarts. See `docs/config.md`.
 
-Not done yet: persistence across reboot and JSON output. See `docs/` for design notes and
-trade-offs:
+`list`, `info`, `kill`, and `get-env` accept `--json` for scripting; the shape is a documented
+contract rather than whatever the wire format happens to be.
+
+Not done yet: persistence across reboot. See `docs/` for design notes and trade-offs:
 
 - `docs/architecture.md` - why three layers, and what each owns
 - `docs/restore.md` - how screen restore works and why each detail is there

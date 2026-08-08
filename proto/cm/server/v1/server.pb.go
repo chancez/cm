@@ -28,6 +28,63 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SessionState is a session's lifecycle stage.
+type SessionState int32
+
+const (
+	SessionState_SESSION_STATE_UNSPECIFIED SessionState = 0
+	// The session has a live shim holding a running shell.
+	SessionState_SESSION_STATE_RUNNING SessionState = 1
+	// The shell exited, and exit_code says with what.
+	SessionState_SESSION_STATE_EXITED SessionState = 2
+	// The shim could not be reached. Distinct from exited because the outcome is unknown rather
+	// than observed, so exit_code means nothing.
+	SessionState_SESSION_STATE_DEAD SessionState = 3
+)
+
+// Enum value maps for SessionState.
+var (
+	SessionState_name = map[int32]string{
+		0: "SESSION_STATE_UNSPECIFIED",
+		1: "SESSION_STATE_RUNNING",
+		2: "SESSION_STATE_EXITED",
+		3: "SESSION_STATE_DEAD",
+	}
+	SessionState_value = map[string]int32{
+		"SESSION_STATE_UNSPECIFIED": 0,
+		"SESSION_STATE_RUNNING":     1,
+		"SESSION_STATE_EXITED":      2,
+		"SESSION_STATE_DEAD":        3,
+	}
+)
+
+func (x SessionState) Enum() *SessionState {
+	p := new(SessionState)
+	*p = x
+	return p
+}
+
+func (x SessionState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionState) Descriptor() protoreflect.EnumDescriptor {
+	return file_cm_server_v1_server_proto_enumTypes[0].Descriptor()
+}
+
+func (SessionState) Type() protoreflect.EnumType {
+	return &file_cm_server_v1_server_proto_enumTypes[0]
+}
+
+func (x SessionState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionState.Descriptor instead.
+func (SessionState) EnumDescriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+}
+
 // HistoryFormat selects how session contents are rendered.
 type HistoryFormat int32
 
@@ -65,11 +122,11 @@ func (x HistoryFormat) String() string {
 }
 
 func (HistoryFormat) Descriptor() protoreflect.EnumDescriptor {
-	return file_cm_server_v1_server_proto_enumTypes[0].Descriptor()
+	return file_cm_server_v1_server_proto_enumTypes[1].Descriptor()
 }
 
 func (HistoryFormat) Type() protoreflect.EnumType {
-	return &file_cm_server_v1_server_proto_enumTypes[0]
+	return &file_cm_server_v1_server_proto_enumTypes[1]
 }
 
 func (x HistoryFormat) Number() protoreflect.EnumNumber {
@@ -78,7 +135,7 @@ func (x HistoryFormat) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HistoryFormat.Descriptor instead.
 func (HistoryFormat) EnumDescriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{1}
 }
 
 // AttachRequest is a client-to-server event. The first message on the stream must be an
@@ -978,6 +1035,12 @@ type Session struct {
 	CreatedAtUnix int64  `protobuf:"varint,7,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
 	Exited        bool   `protobuf:"varint,8,opt,name=exited,proto3" json:"exited,omitempty"`
 	ExitCode      int32  `protobuf:"varint,9,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// Lifecycle stage. Preferred over exited, which cannot distinguish a shell that exited from a
+	// shim that vanished; exited remains for compatibility.
+	State SessionState `protobuf:"varint,10,opt,name=state,proto3,enum=cm.server.v1.SessionState" json:"state,omitempty"`
+	// Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
+	// caller can tell a remote directory from a local one. cwd holds the decoded local path.
+	CwdUri        string `protobuf:"bytes,11,opt,name=cwd_uri,json=cwdUri,proto3" json:"cwd_uri,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1073,6 +1136,20 @@ func (x *Session) GetExitCode() int32 {
 		return x.ExitCode
 	}
 	return 0
+}
+
+func (x *Session) GetState() SessionState {
+	if x != nil {
+		return x.State
+	}
+	return SessionState_SESSION_STATE_UNSPECIFIED
+}
+
+func (x *Session) GetCwdUri() string {
+	if x != nil {
+		return x.CwdUri
+	}
+	return ""
 }
 
 type KillRequest struct {
@@ -1519,7 +1596,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vListRequest\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xfb\x01\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc6\x02\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -1530,7 +1607,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05title\x18\x06 \x01(\tR\x05title\x12&\n" +
 	"\x0fcreated_at_unix\x18\a \x01(\x03R\rcreatedAtUnix\x12\x16\n" +
 	"\x06exited\x18\b \x01(\bR\x06exited\x12\x1b\n" +
-	"\texit_code\x18\t \x01(\x05R\bexitCode\"?\n" +
+	"\texit_code\x18\t \x01(\x05R\bexitCode\x120\n" +
+	"\x05state\x18\n" +
+	" \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x17\n" +
+	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\"?\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\"\xa1\x01\n" +
@@ -1555,7 +1635,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03env\x18\x01 \x03(\v2%.cm.server.v1.GetEnvResponse.EnvEntryR\x03env\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*_\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*z\n" +
+	"\fSessionState\x12\x1d\n" +
+	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15SESSION_STATE_RUNNING\x10\x01\x12\x18\n" +
+	"\x14SESSION_STATE_EXITED\x10\x02\x12\x16\n" +
+	"\x12SESSION_STATE_DEAD\x10\x03*_\n" +
 	"\rHistoryFormat\x12\x1e\n" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
@@ -1580,66 +1665,68 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 	return file_cm_server_v1_server_proto_rawDescData
 }
 
-var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_cm_server_v1_server_proto_goTypes = []any{
-	(HistoryFormat)(0),      // 0: cm.server.v1.HistoryFormat
-	(*AttachRequest)(nil),   // 1: cm.server.v1.AttachRequest
-	(*Open)(nil),            // 2: cm.server.v1.Open
-	(*Input)(nil),           // 3: cm.server.v1.Input
-	(*Resize)(nil),          // 4: cm.server.v1.Resize
-	(*Detach)(nil),          // 5: cm.server.v1.Detach
-	(*AttachResponse)(nil),  // 6: cm.server.v1.AttachResponse
-	(*Metadata)(nil),        // 7: cm.server.v1.Metadata
-	(*Opened)(nil),          // 8: cm.server.v1.Opened
-	(*Output)(nil),          // 9: cm.server.v1.Output
-	(*Exited)(nil),          // 10: cm.server.v1.Exited
-	(*ListRequest)(nil),     // 11: cm.server.v1.ListRequest
-	(*ListResponse)(nil),    // 12: cm.server.v1.ListResponse
-	(*Session)(nil),         // 13: cm.server.v1.Session
-	(*KillRequest)(nil),     // 14: cm.server.v1.KillRequest
-	(*KillResponse)(nil),    // 15: cm.server.v1.KillResponse
-	(*SendRequest)(nil),     // 16: cm.server.v1.SendRequest
-	(*SendResponse)(nil),    // 17: cm.server.v1.SendResponse
-	(*HistoryRequest)(nil),  // 18: cm.server.v1.HistoryRequest
-	(*HistoryResponse)(nil), // 19: cm.server.v1.HistoryResponse
-	(*GetEnvRequest)(nil),   // 20: cm.server.v1.GetEnvRequest
-	(*GetEnvResponse)(nil),  // 21: cm.server.v1.GetEnvResponse
-	nil,                     // 22: cm.server.v1.Open.ClientEnvEntry
-	nil,                     // 23: cm.server.v1.KillResponse.ErrorsEntry
-	nil,                     // 24: cm.server.v1.GetEnvResponse.EnvEntry
+	(SessionState)(0),       // 0: cm.server.v1.SessionState
+	(HistoryFormat)(0),      // 1: cm.server.v1.HistoryFormat
+	(*AttachRequest)(nil),   // 2: cm.server.v1.AttachRequest
+	(*Open)(nil),            // 3: cm.server.v1.Open
+	(*Input)(nil),           // 4: cm.server.v1.Input
+	(*Resize)(nil),          // 5: cm.server.v1.Resize
+	(*Detach)(nil),          // 6: cm.server.v1.Detach
+	(*AttachResponse)(nil),  // 7: cm.server.v1.AttachResponse
+	(*Metadata)(nil),        // 8: cm.server.v1.Metadata
+	(*Opened)(nil),          // 9: cm.server.v1.Opened
+	(*Output)(nil),          // 10: cm.server.v1.Output
+	(*Exited)(nil),          // 11: cm.server.v1.Exited
+	(*ListRequest)(nil),     // 12: cm.server.v1.ListRequest
+	(*ListResponse)(nil),    // 13: cm.server.v1.ListResponse
+	(*Session)(nil),         // 14: cm.server.v1.Session
+	(*KillRequest)(nil),     // 15: cm.server.v1.KillRequest
+	(*KillResponse)(nil),    // 16: cm.server.v1.KillResponse
+	(*SendRequest)(nil),     // 17: cm.server.v1.SendRequest
+	(*SendResponse)(nil),    // 18: cm.server.v1.SendResponse
+	(*HistoryRequest)(nil),  // 19: cm.server.v1.HistoryRequest
+	(*HistoryResponse)(nil), // 20: cm.server.v1.HistoryResponse
+	(*GetEnvRequest)(nil),   // 21: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),  // 22: cm.server.v1.GetEnvResponse
+	nil,                     // 23: cm.server.v1.Open.ClientEnvEntry
+	nil,                     // 24: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                     // 25: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
-	2,  // 0: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
-	3,  // 1: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
-	4,  // 2: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
-	5,  // 3: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
-	22, // 4: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
-	8,  // 5: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
-	9,  // 6: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
-	10, // 7: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
-	7,  // 8: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
-	13, // 9: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	23, // 10: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	0,  // 11: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	24, // 12: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
-	1,  // 13: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	11, // 14: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	14, // 15: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	16, // 16: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	18, // 17: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	20, // 18: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
-	6,  // 19: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	12, // 20: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	15, // 21: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	17, // 22: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	19, // 23: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	21, // 24: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
-	19, // [19:25] is the sub-list for method output_type
-	13, // [13:19] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	3,  // 0: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
+	4,  // 1: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
+	5,  // 2: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
+	6,  // 3: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
+	23, // 4: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	9,  // 5: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
+	10, // 6: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
+	11, // 7: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
+	8,  // 8: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
+	14, // 9: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	0,  // 10: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
+	24, // 11: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	1,  // 12: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	25, // 13: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	2,  // 14: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	12, // 15: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	15, // 16: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	17, // 17: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	19, // 18: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	21, // 19: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	7,  // 20: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	13, // 21: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	16, // 22: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	18, // 23: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	20, // 24: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	22, // 25: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	20, // [20:26] is the sub-list for method output_type
+	14, // [14:20] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -1665,7 +1752,7 @@ func file_cm_server_v1_server_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
