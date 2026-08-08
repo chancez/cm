@@ -15,8 +15,19 @@ against a 2.5 MB do-nothing baseline:
 | Connect | 13.4 MB | +10.9 MB |
 | gRPC | 14.8 MB | +12.3 MB |
 
-Size matters more here than in a typical service. The binary re-execs itself as a shim
-once per session, so every live session pays for it in resident memory.
+Size matters more here than in a typical service, though less than the wording above once implied. The
+binary re-execs itself as a shim once per session, so a larger binary does cost resident memory per
+session, but not one-for-one: text pages are shared and demand-paged.
+
+Measured rather than assumed. Two otherwise identical Go programs, one padded to be 34 MB larger, differed
+by **8.6 MB RSS** per process, roughly a quarter of the size difference. An idle `grpc.NewServer()` and
+nothing else measures 14.0 MB on disk and 13.1 MB resident. cm today is 24.6 MB on disk with shims at about
+6.4 MB resident each.
+
+So the size argument holds in direction and is weaker in magnitude than "every session pays for the whole
+binary". At around 20 sessions, linking gRPC unconditionally would cost roughly 70-90 MB resident for a
+transport only a remote client would use, which is the reason it is a build-time choice rather than a
+runtime flag.
 
 ## Reasoning
 
@@ -74,3 +85,58 @@ depends on to tell a fresh attach from a reconnect.
 Services are named `Shim` and `Server`, not `ShimService`. The ttrpc generator appends
 its own suffix, so buf's `SERVICE_SUFFIX` rule would yield `ShimServiceService` and
 `RegisterServerServiceService`. `buf.yaml` documents both lint exclusions.
+
+## The transport seam
+
+`internal/transport` sits between cm's RPC logic and the wire protocol. Nothing above it names a
+transport: every `ttrpc.` reference outside that package is gone, down from 14 across five files.
+
+The seam is over construction rather than over calls, which the generated code forces.
+`protoc-gen-go-ttrpc` and `protoc-gen-go-grpc` emit different, incompatible service interfaces for the same
+proto, each embedding its own stream type, so no single interface can describe both. What they share is the
+plumbing around them: build a server, register, serve, shut down; dial, get a typed client, close.
+
+This was only cheap because of something worth recording: cm's handlers use typed `Send`/`Recv`
+exclusively and never the transport's `SendMsg`/`RecvMsg`. Those appear in one test fake and nowhere else,
+so the stream types were already nearly portable.
+
+`DialShim` is fixed to ttrpc and deliberately not swappable. The server-to-shim hop is a local unix socket
+by construction, so there is no remote case to serve, and the shim is the process that multiplies per
+session, which is where a heavier transport's memory cost would land.
+
+### Why there is no gRPC implementation yet
+
+Attempted, and stopped at a real obstacle rather than a matter of effort. `protoc-gen-go-grpc` generates
+stubs that assume the message types live in the same Go package. Generating both stub sets into one package
+is a redeclaration error, since both emit `ShimClient`, `NewShimClient`, and a `Subscribe` stream type;
+remapping the gRPC package means the stubs no longer see the messages. The plugin has exactly one option,
+`require_unimplemented_servers`, so there is no supported way to split stubs from messages.
+
+The ways through all have real cost. Generating the messages twice duplicates about 3,500 lines, and worse,
+`Service.Attach` takes `*serverv1.AttachRequest` while a gRPC handler would take a different Go type for
+the same wire message, so every handler would need conversion or generics -- exactly the code the seam
+exists to leave alone. A separate `.proto` per transport means duplicate protos or a build step rewriting
+`go_package`. Patching the generated file to import the messages is the smallest change and is a codegen
+hack that breaks on plugin updates.
+
+None of that is worth paying before there is a concrete need. `cm attach` over SSH already covers remote
+use without a second transport, which was part of the original reasoning.
+
+### Benchmarks
+
+`internal/transport/bench_test.go` measures the transport in isolation, serving a do-nothing service so the
+numbers describe the wire rather than a pty, an emulator, and sqlite. On an M3 Max:
+
+| | ns/op | allocs/op | notes |
+|---|---|---|---|
+| raw unix socket round trip | 2,400 | 0 | control, no RPC |
+| unary round trip | 17,800 | 34 | what `list` and `report` cost |
+| unary with 4 KiB payload | 20,900 | 34 | 196 MB/s |
+| stream, 256 x 4 KiB | 1,295,000 | 1,588 | 810 MB/s |
+| open a stream | 18,700 | 36 | paid per attach |
+
+The raw socket row is the point of including a control: it puts the RPC cost in perspective, showing ttrpc
+adds about 14.5us over the socket itself rather than leaving 17.8us as a number with no scale.
+
+4 KiB is one pty read, taken from `ptyReadSize` rather than picked, so the throughput figures describe
+messages cm actually sends.
