@@ -403,9 +403,13 @@ func runSession(
 				// opposite of what the user asked for. Verified by adding a delay here, which made the
 				// session survive.
 				_ = stream.Send(&serverv1.AttachRequest{
-					Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
+					Event: &serverv1.AttachRequest_Detach{
+						Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
+					},
 				})
-				waitForDetachAck(out)
+				if wantsDetachAck(opts) {
+					waitForDetachAck(out)
+				}
 				result.Detached = true
 				return outcomeDone, nil
 			}
@@ -460,9 +464,13 @@ func runSession(
 			// Interrupted, such as by SIGTERM. Detach rather than abandoning the stream so
 			// an owned session is not destroyed by the client being asked to stop.
 			_ = stream.Send(&serverv1.AttachRequest{
-				Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
+				Event: &serverv1.AttachRequest_Detach{
+					Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
+				},
 			})
-			waitForDetachAck(out)
+			if wantsDetachAck(opts) {
+				waitForDetachAck(out)
+			}
 			result.Detached = true
 			return outcomeDone, nil
 		}
@@ -562,4 +570,18 @@ func resumeFromValue(p *uint64) int64 {
 		return -1
 	}
 	return int64(*p)
+}
+
+// wantsDetachAck reports whether this client should wait for the server to confirm a detach.
+//
+// Only an owning client needs to. The acknowledgement exists because the send is asynchronous: returning
+// immediately tears the connection down before the Detach is transmitted, so the server sees a client that
+// vanished without detaching and destroys the session it was asked to keep. That only destroys an *owned*
+// session, so a read-only follower has nothing to protect and no reason to pay for a round trip.
+//
+// Saying so explicitly, rather than letting the send fail, is what keeps the server's log quiet: a follower
+// that exits as its Detach goes out loses the race about 40% of the time, and warning about it made
+// `cm doctor` report a healthy installation as having a problem.
+func wantsDetachAck(opts Options) bool {
+	return opts.Own && !opts.ReadOnly
 }

@@ -352,7 +352,7 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	}
 
 	_ = stream.Send(&serverv1.AttachRequest{
-		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
+		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
 
 	// The name, since the caller may not have chosen one and needs it to attach later. Printed even when the

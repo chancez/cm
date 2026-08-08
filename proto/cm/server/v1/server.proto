@@ -335,7 +335,20 @@ message Resize {
 // Detach ends this client's attachment without terminating the session. Sending it
 // explicitly is what distinguishes leaving a session from losing the connection, so an
 // owning client's session survives a deliberate detach.
-message Detach {}
+message Detach {
+  // The client will exit without reading the acknowledgement, so do not send one.
+  //
+  // For a client that detaches as its last act and has nothing to do with the confirmation: `cm run -d`,
+  // `cm attach --no-attach`, and a follower being interrupted. Their connection is closing as the Detach
+  // goes out, so the reply loses a race about 40% of the time and the server logged a warning for behavior
+  // that was intended. The session was never at risk -- the flag that protects it is set before the reply is
+  // attempted -- so the warning was pure noise, and it made `cm doctor` report a healthy installation as
+  // having a problem.
+  //
+  // An interactive client leaves this false and waits, because for an owned session the reply is what
+  // guarantees the Detach was transmitted rather than discarded with the connection.
+  bool no_ack = 1;
+}
 
 // AttachResponse is a server-to-client event.
 message AttachResponse {

@@ -363,13 +363,23 @@ func (s *Service) recvLoop(
 			// racing its own disconnect. A client that sent Detach and exited immediately had the
 			// message dropped, because the send is asynchronous and closing the connection discarded
 			// it, and the server then reaped the owned session it was asked to keep.
-			if err := srv.Send(&serverv1.AttachResponse{
-				Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
-			}); err != nil {
-				// The client is gone, which is the case this acknowledgement exists to avoid but
-				// cannot always prevent. The flag above is already set, so the session survives.
-				s.mgr.log.Warn("acknowledging a detach failed",
-					"session", sess.name, "error", err)
+			//
+			// Skipped when the client said it will not wait. `cm run -d`, `cm attach --no-attach`, and an
+			// interrupted follower all detach as their last act and exit; their connection is closing as the
+			// Detach arrives, so the reply lost a race about 40% of the time and produced a warning for
+			// behavior that was intended. The session was never at risk, since sawDetach above is what
+			// protects it, so the warning was noise that also made `cm doctor` report a healthy installation
+			// as having a problem.
+			if !req.GetDetach().NoAck {
+				if err := srv.Send(&serverv1.AttachResponse{
+					Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
+				}); err != nil {
+					// A client that asked for the acknowledgement and then vanished before it arrived. Worth
+					// a warning, unlike the case above: it means an interactive client lost its connection
+					// mid-detach, and for an owned session the flag above is the only thing that saved it.
+					s.mgr.log.Warn("acknowledging a detach failed",
+						"session", sess.name, "error", err)
+				}
 			}
 			close(detached)
 			return nil

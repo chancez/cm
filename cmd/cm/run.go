@@ -232,7 +232,7 @@ func startRun(
 	// Detach explicitly rather than dropping the connection, so the session is left running for the
 	// same reason a user detaching leaves theirs running.
 	_ = stream.Send(&serverv1.AttachRequest{
-		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
+		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
 	return opened.Session, opened.Created, nil
 }

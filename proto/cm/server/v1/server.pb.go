@@ -1551,7 +1551,19 @@ func (x *Resize) GetYPixel() uint32 {
 // explicitly is what distinguishes leaving a session from losing the connection, so an
 // owning client's session survives a deliberate detach.
 type Detach struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The client will exit without reading the acknowledgement, so do not send one.
+	//
+	// For a client that detaches as its last act and has nothing to do with the confirmation: `cm run -d`,
+	// `cm attach --no-attach`, and a follower being interrupted. Their connection is closing as the Detach
+	// goes out, so the reply loses a race about 40% of the time and the server logged a warning for behavior
+	// that was intended. The session was never at risk -- the flag that protects it is set before the reply is
+	// attempted -- so the warning was pure noise, and it made `cm doctor` report a healthy installation as
+	// having a problem.
+	//
+	// An interactive client leaves this false and waits, because for an owned session the reply is what
+	// guarantees the Detach was transmitted rather than discarded with the connection.
+	NoAck         bool `protobuf:"varint,1,opt,name=no_ack,json=noAck,proto3" json:"no_ack,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1584,6 +1596,13 @@ func (x *Detach) ProtoReflect() protoreflect.Message {
 // Deprecated: Use Detach.ProtoReflect.Descriptor instead.
 func (*Detach) Descriptor() ([]byte, []int) {
 	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *Detach) GetNoAck() bool {
+	if x != nil {
+		return x.NoAck
+	}
+	return false
 }
 
 // AttachResponse is a server-to-client event.
@@ -2850,8 +2869,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
 	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x17\n" +
 	"\ax_pixel\x18\x03 \x01(\rR\x06xPixel\x12\x17\n" +
-	"\ay_pixel\x18\x04 \x01(\rR\x06yPixel\"\b\n" +
-	"\x06Detach\"\x95\x02\n" +
+	"\ay_pixel\x18\x04 \x01(\rR\x06yPixel\"\x1f\n" +
+	"\x06Detach\x12\x15\n" +
+	"\x06no_ack\x18\x01 \x01(\bR\x05noAck\"\x95\x02\n" +
 	"\x0eAttachResponse\x12.\n" +
 	"\x06opened\x18\x01 \x01(\v2\x14.cm.server.v1.OpenedH\x00R\x06opened\x12.\n" +
 	"\x06output\x18\x02 \x01(\v2\x14.cm.server.v1.OutputH\x00R\x06output\x12.\n" +

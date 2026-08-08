@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,5 +149,94 @@ func TestLogsShimUnknownSession(t *testing.T) {
 	r := e.run("logs", "shim", "nosuchsession")
 	if r.code == 0 {
 		t.Errorf("exit code = 0 for an unknown session, want non-zero\nstdout: %s", r.stdout)
+	}
+}
+
+// Ordinary use logs no warnings, so `cm doctor` reports a healthy installation as healthy.
+//
+// This was a real complaint. Three clients -- `cm run -d`, `cm attach --no-attach`, and an interrupted
+// follower -- send Detach as their last act and exit without reading the acknowledgement. The server's reply
+// then lost a race about 40% of the time, measured at 8 of 20 runs, and each failure logged a warning for
+// behavior that was entirely intended. The session was never at risk, since the flag protecting it is set
+// before the reply is attempted, so the warning was pure noise -- and worse, it made doctor report
+// log-warnings on an installation where nothing was wrong.
+//
+// Fixed by letting a client say it will not wait, so the server skips both the reply and the warning. The log
+// is quiet because nothing failed, rather than because a genuine failure was downgraded: an owning interactive
+// client still asks for the acknowledgement and still warns if it does not arrive.
+//
+// Repeated, because the bug it guards against was probabilistic: one round would have passed more often than
+// not even before the fix. Even so, this test alone does not reliably catch a client that stops setting the
+// flag -- removing it from `cm run -d` needs about three runs of this test to show up. The deterministic
+// assertion is TestDetachWithNoAckIsNotAcknowledged in internal/server, which checks the protocol directly;
+// this one proves the noise is gone from ordinary use, which that cannot.
+func TestOrdinaryUseLogsNoWarnings(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.mustRun("run", "--session", "quiet", "-d", "--", "/bin/sh", "-c", "sleep 60")
+	e.waitFor("the session to be running", 15*time.Second, func() bool {
+		s, ok := e.session("quiet")
+		return ok && s.State == "running"
+	})
+
+	// Several detached runs, not one. The warning was probabilistic -- 8 of 20 before the fix -- so a single
+	// `run -d` passes more often than not even when broken, and a mutation removing its no_ack survived a test
+	// that only ran it once.
+	for i := range 5 {
+		e.mustRun("run", "--session", "d"+itoa(i), "-d", "--", "/bin/sh", "-c", "sleep 30")
+	}
+
+	for i := range 5 {
+		// A follower interrupted mid-stream with SIGINT, which is how a watcher normally stops and the case
+		// that produced the noise. followFor rather than runWithin, since the interruption is the point here
+		// and runWithin treats a timeout as a failure.
+		e.followFor(700*time.Millisecond, "read", "--follow", "quiet")
+		// And a session created without attaching, which does return on its own.
+		e.mustRunWithin(15*time.Second, "attach", "--no-attach", "na"+itoa(i))
+	}
+
+	// No detach-acknowledgement warnings, which is the specific noise this is about.
+	log := e.readFileOrEmpty(e.serverLogPath())
+	if n := strings.Count(log, "acknowledging a detach failed"); n != 0 {
+		t.Errorf("the server logged %d detach-acknowledgement warnings for ordinary use:\n%s", n, log)
+	}
+
+	// And doctor does not report warnings, which is the consequence that made it worth fixing.
+	got, _ := e.doctor()
+	if slices.Contains(got.kinds(), "log-warnings") {
+		t.Errorf("doctor reports log-warnings for a healthy installation: %v", got.kinds())
+	}
+}
+
+// An owning interactive client still asks for the acknowledgement, and its session still survives a detach.
+//
+// The other half: the fix must not quiet the case the acknowledgement exists for. An owned session detached
+// deliberately has to survive, and that only works because the client waits for the server to confirm the
+// Detach was received rather than exiting into a torn-down connection.
+func TestOwningClientStillWaitsForTheDetachAck(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	c := attachOnPty(t, e, "ownedsess", "--own", "--", "/bin/sh")
+	c.waitReady()
+	c.typeLine("echo READY_MARK")
+	c.waitForOutput("READY_MARK", 15*time.Second)
+
+	c.detachKey()
+	e.waitFor("the client to detach", 15*time.Second, func() bool {
+		s, ok := e.session("ownedsess")
+		return ok && s.Clients == 0
+	})
+
+	// Survives, which is what the acknowledgement protects: an owned session whose client vanished without
+	// detaching would have been destroyed.
+	s, ok := e.session("ownedsess")
+	if !ok {
+		t.Fatal("the owned session was destroyed by a deliberate detach")
+	}
+	if s.State != "running" {
+		t.Errorf("state = %q after detaching, want running", s.State)
 	}
 }

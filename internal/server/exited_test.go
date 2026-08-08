@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"strings"
@@ -333,5 +335,65 @@ func TestDetachIsAcknowledged(t *testing.T) {
 		t.Error("the owned session was destroyed by a deliberate detach")
 	} else if ended, _ := sess.Ended(); ended {
 		t.Error("the owned session ended after a deliberate detach, want it still running")
+	}
+}
+
+// A client that says it will not wait gets no acknowledgement, and no warning is logged.
+//
+// The complement of TestDetachIsAcknowledged, and the deterministic form of a real complaint. Three clients --
+// `cm run -d`, `cm attach --no-attach`, and an interrupted follower -- detach as their last act and exit
+// without reading the reply. The server's send then lost a race about 40% of the time, measured at 8 of 20
+// runs, and each failure logged a warning for behavior that was entirely intended. Worse, it made `cm doctor`
+// report log-warnings on an installation where nothing was wrong.
+//
+// Asserted here rather than only end to end because the bug was probabilistic: the e2e test needs several
+// rounds to be likely to catch it, while this is exact. Both exist, since the e2e test is what proves the noise
+// is actually gone from ordinary use.
+func TestDetachWithNoAckIsNotAcknowledged(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	ctx := context.Background()
+
+	rec := startShimFor(t, shimConfigFor("noack", "sleep 5"))
+	rec.State = "running"
+	if err := st.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	// The server's own log, so the absence of a warning can be asserted rather than assumed.
+	var logged bytes.Buffer
+	mgr.SetLogger(slog.New(slog.NewTextHandler(&logged, nil)))
+
+	svc := NewService(mgr)
+	streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	stream := newFakeStream(streamCtx,
+		openReq(&serverv1.Open{Session: "noack", Rows: 24, Cols: 80}),
+		&serverv1.AttachRequest{
+			Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
+		},
+	)
+	if err := svc.Attach(streamCtx, stream); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Attach() error = %v", err)
+	}
+
+	for _, resp := range stream.sent() {
+		if resp.GetDetached() != nil {
+			t.Error("server acknowledged a detach that asked for no acknowledgement")
+		}
+	}
+	// And nothing was warned about, which is the point: the log is quiet because nothing failed rather than
+	// because a real failure was downgraded.
+	if strings.Contains(logged.String(), "acknowledging a detach failed") {
+		t.Errorf("server warned about a detach that asked for no acknowledgement:\n%s", logged.String())
+	}
+
+	// The session still survives, since the flag that protects it is set before the reply is considered.
+	if sess, ok := mgr.Get("noack"); !ok {
+		t.Error("the session was destroyed by a detach that wanted no acknowledgement")
+	} else if ended, _ := sess.Ended(); ended {
+		t.Error("the session ended after a deliberate detach, want it still running")
 	}
 }

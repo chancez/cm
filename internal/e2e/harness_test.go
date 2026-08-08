@@ -325,6 +325,52 @@ func (e *env) runWithin(timeout time.Duration, args ...string) result {
 	}
 }
 
+// followFor runs a command that streams until interrupted, stopping it after d.
+//
+// A timeout is fatal in runWithin, which is right for a command expected to finish: a follower that fails to
+// stop is a bug, and one such bug ran for 504 seconds before it was noticed. It is wrong for a follower of a
+// live session, where the interruption is the point -- that is how a watcher normally stops, and the exit is
+// what the test is about.
+func (e *env) followFor(d time.Duration, args ...string) result {
+	e.t.Helper()
+
+	cmd := exec.Command(e.bin, args...)
+	cmd.Env = e.environ()
+	cmd.Dir = e.state
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		e.t.Fatalf("opening %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+	cmd.Stdin = devNull
+
+	if err := cmd.Start(); err != nil {
+		e.t.Fatalf("starting cm %v: %v", args, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-done:
+		// Ended on its own, which happens when the session finishes first.
+	case <-time.After(d):
+		// Interrupted, as a user pressing ctrl-c would. SIGINT rather than Kill so the client takes its
+		// normal exit path, which is what detaches and is the whole point of following it here.
+		_ = cmd.Process.Signal(os.Interrupt)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+			e.t.Fatalf("cm %v did not exit within 5s of SIGINT", args)
+		}
+	}
+	return result{stdout: out.String(), stderr: errBuf.String()}
+}
+
 // asExit is errors.As specialized to *exec.ExitError, kept separate to keep run readable.
 func asExit(err error, target **exec.ExitError) bool {
 	if ee, ok := err.(*exec.ExitError); ok {
