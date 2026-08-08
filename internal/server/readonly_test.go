@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -72,7 +74,10 @@ func (f *fakeAttachStream) RecvMsg(m any) error {
 	if !ok {
 		return errors.New("unexpected message type")
 	}
-	*out = *req
+	// proto.Merge rather than assigning the struct: a protobuf message embeds a mutex, so copying
+	// one by value is a race waiting to happen and go vet rejects it.
+	proto.Reset(out)
+	proto.Merge(out, req)
 	return nil
 }
 
