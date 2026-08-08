@@ -35,6 +35,21 @@ does not avoid gRPC as a dependency. It imports `google.golang.org/grpc/status` 
 error codes, so gRPC is in the module graph either way. The size win is real; the
 dependency-isolation win is not.
 
+## Alternatives ruled out for a specific reason
+
+[grpchan](https://github.com/fullstorydev/grpchan) looks attractive at first: keep gRPC's
+generated code and semantics but swap HTTP/2 for a lighter transport. It offers two, and
+neither works here. `inprocgrpc` is for a client and server in the same process. Its
+HTTP/1.1 transport, per its own README, "supports all stream kinds other than
+full-duplex bidi streams".
+
+`Attach` is a full-duplex bidi stream and cannot be anything else: keystrokes flow up
+while output flows down, continuously and independently. A half-duplex approximation
+would mean not being able to type while output is streaming.
+
+The goal behind considering it, gRPC-like semantics without HTTP/2, is what ttrpc already
+provides. It reaches that by not being gRPC rather than by replacing gRPC's transport.
+
 ## Costs accepted
 
 - Small community and thin documentation. It is, in practice, the containerd RPC
