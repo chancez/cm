@@ -1,0 +1,270 @@
+package e2e
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/creack/pty"
+)
+
+// ptyClient is a `cm attach` process with a real controlling terminal, plus a reader draining it.
+//
+// A pty rather than pipes, because the client behaves differently without one: it checks for a terminal
+// to decide whether EOF on stdin means "the window closed" or "input is simply finished", and it only
+// puts the terminal into raw mode when there is one. Testing attach over pipes exercises a path no
+// interactive user takes.
+type ptyClient struct {
+	t    *testing.T
+	ptmx *os.File
+	cmd  *exec.Cmd
+
+	mu   sync.Mutex
+	seen strings.Builder
+}
+
+// attachOnPty starts `cm attach` on a pty and begins draining its output.
+//
+// The output is read continuously on its own goroutine rather than on demand. A pty does not support
+// read deadlines ("file type does not support deadline"), so a read-when-asked helper blocks forever
+// once the expected text has arrived, and the client then stalls behind a full pty buffer. That looked
+// exactly like the detach key being ignored.
+func attachOnPty(t *testing.T, e *env, args ...string) *ptyClient {
+	t.Helper()
+
+	cmd := exec.Command(e.bin, append([]string{"attach"}, args...)...)
+	cmd.Env = e.environ()
+	cmd.Dir = e.state
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatalf("pty.Start() error = %v", err)
+	}
+	// A definite size, so a restored screen has a known geometry rather than the pty's default.
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
+		t.Fatalf("Setsize() error = %v", err)
+	}
+
+	c := &ptyClient{t: t, ptmx: ptmx, cmd: cmd}
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				c.mu.Lock()
+				c.seen.Write(buf[:n])
+				c.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	t.Cleanup(func() {
+		ptmx.Close()
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return c
+}
+
+// waitReady blocks until the client has painted something, so input sent afterwards is not lost.
+//
+// Keystrokes written before the client has finished attaching go into the pty buffer and are read by
+// the client before it has a session to forward them to, so they vanish. That looked like the shell
+// ignoring input, and it is a real ordering requirement rather than a test artifact: anything driving
+// cm programmatically has to wait for it to be ready.
+//
+// Waits for the shell's prompt rather than for anything cm emits. The escape sequences a client writes
+// on attach come from the emulator serializing a screen, so a build without cgo sends none of them and
+// waiting for a cursor-home would hang: on Linux without cgo the pty showed only "# ".
+//
+// A prompt is the real readiness signal anyway, since it means the shell is accepting commands.
+func (c *ptyClient) waitReady() {
+	c.t.Helper()
+	// Both common prompt endings, since the shell here is whatever /bin/sh is: "$ " for a user and "# "
+	// for root, which is what a container runs as.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		got := c.output()
+		if strings.Contains(got, "$ ") || strings.Contains(got, "# ") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.t.Fatalf("timed out waiting for a shell prompt on the pty, got %q", c.output())
+}
+
+// output returns everything the client has written to its terminal so far.
+func (c *ptyClient) output() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seen.String()
+}
+
+// typeLine sends a line as if typed.
+func (c *ptyClient) typeLine(text string) {
+	c.t.Helper()
+	if _, err := c.ptmx.Write([]byte(text + "\n")); err != nil {
+		c.t.Fatalf("writing to the pty: %v", err)
+	}
+}
+
+// detachKey sends ctrl-\, the default detach key, as the literal byte a terminal would send.
+func (c *ptyClient) detachKey() {
+	c.t.Helper()
+	if _, err := c.ptmx.Write([]byte{0x1c}); err != nil {
+		c.t.Fatalf("sending the detach key: %v", err)
+	}
+}
+
+// kill terminates the client without letting it detach, which is what closing a window does.
+func (c *ptyClient) kill() {
+	c.t.Helper()
+	if err := c.cmd.Process.Kill(); err != nil {
+		c.t.Fatalf("killing the client: %v", err)
+	}
+	_, _ = c.cmd.Process.Wait()
+}
+
+// waitForOutput blocks until the client's terminal shows want, and returns everything seen.
+func (c *ptyClient) waitForOutput(want string, timeout time.Duration) string {
+	c.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := c.output(); strings.Contains(got, want) {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.t.Fatalf("timed out waiting for %q on the pty, got %q", want, c.output())
+	return ""
+}
+
+// Attaching, detaching, and reattaching must repaint the screen.
+//
+// This is the whole point of the program, and it only works through a real terminal: the restore blob
+// is escape sequences written to a tty, so a test over pipes would assert that bytes were sent without
+// checking that they reconstruct anything.
+//
+// The detach key is ctrl-\, sent as a literal 0x1c byte.
+func TestAttachDetachReattachRepaintsScreen(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	// The repainted screen comes from the emulator serializing terminal state, so this test is about
+	// rendering. The ownership tests below are not, and deliberately have no such guard.
+	requireTerminal(t, e)
+
+	c := attachOnPty(t, e, "paint", "--", "/bin/sh")
+	c.waitReady()
+	// A distinctive marker rather than a prompt, since the prompt depends on the shell's configuration.
+	c.typeLine("echo SCREEN_MARKER")
+	c.waitForOutput("SCREEN_MARKER", 15*time.Second)
+
+	// Detach, leaving the session running.
+	c.detachKey()
+	e.waitFor("the client to detach", 10*time.Second, func() bool {
+		s, ok := e.session("paint")
+		return ok && s.Clients == 0
+	})
+	if s, _ := e.session("paint"); s.State != "running" {
+		t.Errorf("state after detach = %q, want the session still running", s.State)
+	}
+
+	// Reattach on a fresh terminal. The marker has to come back, which it can only do if the server
+	// serialized the screen and the client painted it.
+	c2 := attachOnPty(t, e, "paint")
+	got := c2.waitForOutput("SCREEN_MARKER", 15*time.Second)
+
+	// No literal escape sequences rendered as text. This is the artifact class that a restore gets
+	// wrong: a client resuming mid-sequence loses the ESC and the parameters show up as characters.
+	if strings.Contains(got, "[24;1H") || strings.Contains(got, "0;10;1c") {
+		t.Errorf("restored screen contains escape parameters as literal text: %q", got)
+	}
+}
+
+// A session must outlive the terminal its client was running in.
+//
+// Killing the client without a detach is what closing a terminal window does. Without --own the
+// session survives, which is what makes reopening a terminal restore the work in it.
+func TestSessionSurvivesClientBeingKilled(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "orphan", "--", "/bin/sh")
+	c.waitReady()
+	c.typeLine("echo STILL_HERE")
+	c.waitForOutput("STILL_HERE", 15*time.Second)
+
+	// SIGKILL, so no cleanup runs: the client gets no chance to detach politely, which is the point.
+	c.kill()
+
+	e.waitFor("the client to be gone", 10*time.Second, func() bool {
+		s, ok := e.session("orphan")
+		return ok && s.Clients == 0
+	})
+	if s, ok := e.session("orphan"); !ok || s.State != "running" {
+		t.Errorf("session after the client was killed = %+v (found=%v), want it still running", s, ok)
+	}
+}
+
+// An owned session must end when its client vanishes without detaching.
+//
+// The mirror of the test above, and the distinction the --own flag exists to draw: a session created
+// for a particular window should not outlive that window, while a session the user detached from
+// should. Getting this wrong in either direction is bad, so both need asserting.
+func TestOwnedSessionEndsWhenItsClientVanishes(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "owned", "--own", "--", "/bin/sh")
+	c.waitReady()
+	c.typeLine("echo OWNED_READY")
+	c.waitForOutput("OWNED_READY", 15*time.Second)
+
+	c.kill()
+
+	e.waitFor("the owned session to end", 15*time.Second, func() bool {
+		s, ok := e.session("owned")
+		return !ok || s.State != "running"
+	})
+}
+
+// Detaching deliberately must leave an owned session running.
+//
+// The third case, and the one that makes ownership useful rather than merely destructive: ctrl-\ and a
+// closed window look similar from the server's side, and telling them apart is the whole basis of the
+// flag.
+//
+// This found a real bug, and only a real client on a real terminal could. The client sent Detach and
+// returned immediately, but ttrpc sends are asynchronous, so closing the connection discarded the
+// message: the server saw a client that vanished without detaching and destroyed the session. Every
+// unit test drives the service with a fake stream whose Send completes synchronously, so none of them
+// could see it. The user-visible effect was that pressing ctrl-\ in a per-window session killed the
+// work in it, which is the exact opposite of what detaching means.
+func TestOwnedSessionSurvivesADeliberateDetach(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "kept", "--own", "--", "/bin/sh")
+	c.waitReady()
+	c.typeLine("echo KEPT_READY")
+	c.waitForOutput("KEPT_READY", 15*time.Second)
+
+	c.detachKey()
+	e.waitFor("the client to detach", 10*time.Second, func() bool {
+		s, ok := e.session("kept")
+		return ok && s.Clients == 0
+	})
+
+	// Give any mistaken reap a chance to happen before declaring success, or the test would pass simply
+	// by asking too early.
+	time.Sleep(500 * time.Millisecond)
+	if s, ok := e.session("kept"); !ok || s.State != "running" {
+		t.Errorf("owned session after a deliberate detach = %+v (found=%v), want it running", s, ok)
+	}
+}
