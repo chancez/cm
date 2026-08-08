@@ -48,6 +48,10 @@ type Options struct {
 	// ClientEnv holds terminal-related variables from this client's environment, recorded by the
 	// server so a shell inside the session can refresh them later.
 	ClientEnv map[string]string
+	// Persist requests that this session's content survive a reboot.
+	Persist bool
+	// OnRestore overrides the configured restore behavior for this session.
+	OnRestore string
 	// DetachKey is the key that detaches. Zero value means the default.
 	DetachKey DetachKeySpec
 	// OnMetadata, when set, is called as the session reports its title and directory.
@@ -190,6 +194,8 @@ func runSession(
 		Cwd:           opts.Dir,
 		Env:           opts.Env,
 		ClientEnv:     opts.ClientEnv,
+		Persist:       opts.Persist,
+		OnRestore:     opts.OnRestore,
 		ResumeFromSeq: *resumeFrom,
 	}
 	if err := stream.Send(&serverv1.AttachRequest{

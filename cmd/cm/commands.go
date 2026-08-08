@@ -16,10 +16,12 @@ import (
 
 func newAttachCommand(g *globals) *cobra.Command {
 	var (
-		own      bool
-		readOnly bool
-		dir      string
-		setTitle bool
+		own       bool
+		readOnly  bool
+		dir       string
+		setTitle  bool
+		persist   bool
+		onRestore string
 	)
 	cmd := &cobra.Command{
 		Use:   "attach [session]",
@@ -83,6 +85,8 @@ Detach with ctrl-\ , which leaves the session running.`,
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
+				Persist:   persist,
+				OnRestore: onRestore,
 			}
 			if setTitle {
 				// Forward the session's title to the outer terminal.
@@ -108,6 +112,10 @@ Detach with ctrl-\ , which leaves the session running.`,
 	f.StringVar(&dir, "dir", "", "working directory for a newly created session")
 	f.BoolVar(&setTitle, "set-title", true,
 		"forward the session's title to the terminal")
+	f.BoolVar(&persist, "persist", false,
+		"keep this session's content across a reboot")
+	f.StringVar(&onRestore, "on-restore", "",
+		"what to do when reviving this session: shell, none, or command")
 	return cmd
 }
 

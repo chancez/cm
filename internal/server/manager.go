@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -40,10 +41,43 @@ type Manager struct {
 	// and it keeps every shim in a server's lifetime consistent.
 	selfExe     string
 	newTerminal NewTerminalFunc
+	// persist decides which sessions survive a reboot and what happens when one is revived. Nil
+	// disables persistence entirely, which is the default.
+	persist *PersistPolicy
 
 	mu       sync.Mutex
 	sessions map[string]*Session
 }
+
+// PersistPolicy decides which sessions survive a reboot and how they come back.
+//
+// Passed in rather than read from config here, so the manager and its tests do not depend on the
+// config package or on a file existing.
+type PersistPolicy struct {
+	// Matches reports whether a session name persists by configuration alone.
+	Matches func(name string) bool
+	// Limits bounds a persisted log.
+	Limits seqlog.FileLimits
+	// OnRestore is what to do when a dead session with saved content is attached to.
+	OnRestore RestoreAction
+	// CommandIsSafeToRerun reports whether a recorded command may be re-run without the session
+	// having asked. Matches the program name only, so it is a convenience rather than a guarantee.
+	CommandIsSafeToRerun func(argv []string) bool
+	// ExpireAfter removes a dead persisted session after this long.
+	ExpireAfter time.Duration
+}
+
+// RestoreAction is what happens when a dead session with saved content is attached to.
+type RestoreAction string
+
+const (
+	// RestoreShell starts a fresh shell in the recorded directory.
+	RestoreShell RestoreAction = "shell"
+	// RestoreNone replays the content and starts nothing.
+	RestoreNone RestoreAction = "none"
+	// RestoreCommand re-runs the recorded command verbatim.
+	RestoreCommand RestoreAction = "command"
+)
 
 // NewManager creates a manager. Call Reconcile before serving clients.
 func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (*Manager, error) {
@@ -58,6 +92,20 @@ func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (
 		newTerminal: newTerminal,
 		sessions:    make(map[string]*Session),
 	}, nil
+}
+
+// SetPersistPolicy enables persistence.
+func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }
+
+// persistsSession reports whether a session should write its output to disk.
+func (m *Manager) persistsSession(name string, requested bool) bool {
+	if m.persist == nil {
+		return false
+	}
+	if requested {
+		return true
+	}
+	return m.persist.Matches != nil && m.persist.Matches(name)
 }
 
 // Reconcile adopts sessions recorded in the database whose shims are still alive.
@@ -233,6 +281,16 @@ type OpenOptions struct {
 	// Owned records that the attaching client claims the session, so dropping its
 	// connection without detaching should end it.
 	Owned bool
+	// Persist requests that this session's content survive a reboot, regardless of whether its
+	// name matches the configured patterns.
+	Persist bool
+	// OnRestore overrides the configured restore behavior for this session. Empty means the
+	// configured default.
+	OnRestore RestoreAction
+
+	// restoreFrom is a saved log to replay before the session starts producing output. Set
+	// internally when reviving a dead session, never by a caller.
+	restoreFrom string
 	// ClientEnv holds terminal-related variables from the attaching client, recorded so a shell
 	// in the session can refresh them later.
 	ClientEnv map[string]string
@@ -259,8 +317,9 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 	}
 	m.mu.Unlock()
 
-	// A record can exist without a live session: the shell exited, or a previous server
-	// marked it dead. Reattaching to those is not possible, so the record is replaced.
+	// A record can exist without a live session: the shell exited, a previous server marked it
+	// dead, or the machine rebooted. The shell cannot be resumed either way, but its content can,
+	// so the record is examined before being replaced.
 	if rec, err := m.store.Get(ctx, opts.Name); err == nil {
 		if rec.State == store.StateRunning {
 			// Recorded as running but not in our registry, which happens if Reconcile
@@ -275,6 +334,10 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 				}
 			}
 		}
+
+		// Carry forward what a restore needs, since the record is about to be deleted.
+		opts = m.inheritForRestore(opts, rec)
+
 		if err := m.store.Delete(ctx, opts.Name); err != nil {
 			return nil, false, fmt.Errorf("replacing stale record for %s: %w", opts.Name, err)
 		}
@@ -289,6 +352,63 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 	return sess, true, nil
 }
 
+// inheritForRestore carries a dead session's saved state into the options that will recreate it.
+//
+// The record is deleted immediately after, so anything a restore needs has to be read here.
+// Deliberately does not override what the caller asked for: an explicit directory or command on the
+// new attach wins, because the user asking for something specific outranks what a previous
+// incarnation happened to be doing.
+func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOptions {
+	if m.persist == nil || rec.LogPath == "" {
+		return opts
+	}
+
+	// The replay path needs the log, and it only exists for a session that was persisting.
+	opts.restoreFrom = rec.LogPath
+	opts.Persist = true
+
+	if opts.Dir == "" && rec.Cwd != "" {
+		opts.Dir = rec.Cwd
+	}
+
+	action := opts.OnRestore
+	if action == "" {
+		action = m.persist.OnRestore
+	}
+	if action == "" {
+		action = RestoreShell
+	}
+
+	// Re-running the recorded command is the one behavior that executes something the user did not
+	// type just now, so it happens only when asked for explicitly or when the program is on the
+	// allowlist.
+	if action == RestoreCommand && len(opts.Command) == 0 && rec.Command != "" {
+		argv := strings.Fields(rec.Command)
+		allowed := opts.OnRestore == RestoreCommand
+		if !allowed && m.persist.CommandIsSafeToRerun != nil {
+			allowed = m.persist.CommandIsSafeToRerun(argv)
+		}
+		if allowed {
+			opts.Command = argv
+		}
+	}
+	if action == RestoreNone {
+		// Nothing is started. The client still gets the replayed screen, so the session reads as
+		// history rather than as something running.
+		opts.Command = []string{holdCommand}
+	}
+
+	return opts
+}
+
+// holdCommand is what a session runs when its restore behavior is "none".
+//
+// A process that waits rather than no process at all, because the rest of cm assumes a session has
+// a pty and a child: without one there is nothing to attach to, resize, or read from. Reading from
+// an empty stdin blocks until the session is killed, which is the desired "nothing is running"
+// behavior with none of the special cases.
+const holdCommand = "cat"
+
 // create spawns a shim and records the session.
 func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error) {
 	if opts.Rows == 0 || opts.Cols == 0 {
@@ -300,10 +420,17 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
+	persisting := m.persistsSession(opts.Name, opts.Persist)
+
+	logPath := ""
+	if persisting {
+		logPath = m.dirs.SessionLog(opts.Name)
+	}
+
 	rec := store.Session{
 		Name:       opts.Name,
 		ShimSocket: socket,
-		LogPath:    m.dirs.SessionLog(opts.Name),
+		LogPath:    logPath,
 		State:      store.StateRunning,
 		Command:    strings.Join(opts.Command, " "),
 		Cwd:        opts.Dir,
@@ -318,7 +445,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
-	pid, err := m.spawnShim(ctx, opts, socket)
+	pid, err := m.spawnShim(ctx, opts, socket, logPath)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.Name)
 		return nil, err
@@ -332,6 +459,23 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.Name)
 		return nil, err
+	}
+
+	// Replay a previous incarnation's screen, so the first client sees what was there before the
+	// reboot rather than a bare prompt.
+	//
+	// A failed replay is not fatal: the session works, it simply starts empty, which is strictly
+	// better than refusing to open it because a cache could not be read.
+	if opts.restoreFrom != "" {
+		limits := seqlog.FileLimits{}
+		if m.persist != nil {
+			limits = m.persist.Limits
+		}
+		if blob, _, rerr := replayPersisted(
+			opts.restoreFrom, m.newTerminal, opts.Rows, opts.Cols, limits,
+		); rerr == nil && len(blob) > 0 {
+			sess.setRestored(blob)
+		}
 	}
 
 	// Record the shell's pid for reporting, best effort: the session works without it.
@@ -352,7 +496,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 // child is deliberately not waited on: it must outlive this server, so it is reparented to
 // init by letting this process release it. Setsid detaches it from the server's session so
 // a signal sent to the server's process group cannot reach it.
-func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket string) (int, error) {
+func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPath string) (int, error) {
 	args := []string{
 		"--runtime-dir", m.dirs.Runtime,
 		"--state-dir", m.dirs.State,
@@ -360,6 +504,18 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket string
 		"--session", opts.Name,
 		"--rows", strconv.Itoa(int(opts.Rows)),
 		"--cols", strconv.Itoa(int(opts.Cols)),
+	}
+	if logPath != "" {
+		args = append(args, "--persist-path", logPath)
+		if m.persist != nil {
+			if m.persist.Limits.MaxLines > 0 {
+				args = append(args, "--persist-max-lines", strconv.Itoa(m.persist.Limits.MaxLines))
+			}
+			if m.persist.Limits.MaxBytes > 0 {
+				args = append(args, "--persist-max-bytes",
+					strconv.FormatInt(m.persist.Limits.MaxBytes, 10))
+			}
+		}
 	}
 	if opts.Dir != "" {
 		args = append(args, "--dir", opts.Dir)
@@ -497,6 +653,56 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool) error {
 		return fmt.Errorf("shim for %s is unreachable; use --force to forget it", name)
 	}
 	return m.store.Delete(ctx, name)
+}
+
+// ExpireDeadSessions removes dead sessions older than the configured age, along with their logs.
+//
+// Necessary rather than tidy: without it both the session list and the disk grow forever across
+// reboots, and a machine that opens a session per terminal window accumulates them quickly.
+//
+// Only sessions that are not running are considered, and liveness is not re-probed here: a session
+// recorded as dead has already been probed by Reconcile, and probing again would let a slow shim be
+// deleted for being busy.
+func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, error) {
+	if m.persist == nil || m.persist.ExpireAfter <= 0 {
+		return 0, nil
+	}
+
+	records, err := m.store.List(ctx, "")
+	if err != nil {
+		return 0, fmt.Errorf("listing sessions to expire: %w", err)
+	}
+
+	cutoff := now.Add(-m.persist.ExpireAfter)
+	removed := 0
+	for _, rec := range records {
+		if rec.State == store.StateRunning {
+			continue
+		}
+		// A live session in the registry is never expired, whatever the record says: the record can
+		// lag, and deleting a session someone is attached to would be worse than keeping a stale
+		// row.
+		if _, live := m.Get(rec.Name); live {
+			continue
+		}
+		// UpdatedAt rather than CreatedAt: what matters is how long ago the session stopped being
+		// useful, not how long ago it started.
+		if rec.UpdatedAt.After(cutoff) {
+			continue
+		}
+
+		if rec.LogPath != "" {
+			// A log that cannot be removed is not a reason to keep the record. The row is what makes
+			// the session visible, and an orphaned file is a smaller problem than a session that
+			// can never be cleaned up.
+			_ = os.Remove(rec.LogPath)
+		}
+		if err := m.store.Delete(ctx, rec.Name); err != nil {
+			return removed, fmt.Errorf("expiring session %s: %w", rec.Name, err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // Close stops tracking sessions without terminating them.

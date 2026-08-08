@@ -67,6 +67,14 @@ type Session struct {
 	rawPwd string
 	cwd    osc.Cwd
 
+	// restored holds a screen replayed from a previous incarnation's saved log, handed to the first
+	// client that attaches and then discarded.
+	//
+	// Discarded after one use because it describes a session that has since started producing its
+	// own output; replaying it to a later client would show that client a screen from before the
+	// reboot.
+	restored []byte
+
 	// metaSubs are notified when the title or directory changes: the manager persists them, and
 	// each attached client forwards them on so a terminal emulator can react. Keyed by pointer
 	// so a client can remove its own.
@@ -457,6 +465,19 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	// worse but still better than a blank screen.
 	from := s.recent.Oldest()
 	var restore []byte
+
+	// A screen replayed from a previous incarnation takes precedence, since the live model holds
+	// only what this session has produced since it started, which is nothing yet.
+	if resumeFrom == nil && len(s.restored) > 0 {
+		restore = s.restored
+		s.restored = nil
+		return attachment{
+			reader:  s.recent.Subscribe(s.recent.Next()),
+			restore: restore,
+			first:   s.clients.Add(1) == 1,
+		}, nil
+	}
+
 	if resumeFrom != nil {
 		from = *resumeFrom
 	} else if s.term != nil {
@@ -480,6 +501,13 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 		restore: restore,
 		first:   s.clients.Add(1) == 1,
 	}, nil
+}
+
+// setRestored records a screen replayed from a previous incarnation's saved log.
+func (s *Session) setRestored(blob []byte) {
+	s.mu.Lock()
+	s.restored = blob
+	s.mu.Unlock()
 }
 
 // detach releases a subscriber, reporting whether it was the last one.

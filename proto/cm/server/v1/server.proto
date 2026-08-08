@@ -93,6 +93,17 @@ message Open {
   // Distinct from env above, which sets variables for a shell being created. These are recorded
   // for an existing shell to ask about later.
   map<string, string> client_env = 12;
+
+  // Persist requests that this session's content survive a reboot, regardless of whether its name
+  // matches the server's configured patterns.
+  bool persist = 13;
+
+  // OnRestore overrides the server's configured behavior when reviving this session: "shell",
+  // "none", or "command". Empty means the configured default.
+  //
+  // A string rather than an enum because it is a per-session override of a config value that is
+  // also a string, and keeping one spelling avoids two vocabularies for the same setting.
+  string on_restore = 14;
 }
 
 message Input {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -139,5 +140,154 @@ func TestDefaultPathHonorsEnvOverride(t *testing.T) {
 	}
 	if got != "/custom/cm.toml" {
 		t.Errorf("DefaultPath() = %q, want %q", got, "/custom/cm.toml")
+	}
+}
+
+func TestPersistConfig(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[persist]
+enabled = true
+sessions = ["kitty.*", "work"]
+on_restore = "command"
+safe_commands = ["nvim", "less"]
+max_lines = 5000
+max_bytes = 1048576
+expire_after = "24h"
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Persist.Enabled {
+		t.Error("Enabled = false, want true")
+	}
+	if !cfg.PersistsSession("kitty.55") {
+		t.Error("kitty.55 does not persist, want the pattern to match")
+	}
+	if !cfg.PersistsSession("work") {
+		t.Error("work does not persist, want the exact name to match")
+	}
+	if cfg.PersistsSession("scratch") {
+		t.Error("scratch persists, want only configured names")
+	}
+
+	mode, err := cfg.RestoreMode()
+	if err != nil {
+		t.Fatalf("RestoreMode() error = %v", err)
+	}
+	if mode != RestoreCommand {
+		t.Errorf("RestoreMode() = %q, want %q", mode, RestoreCommand)
+	}
+
+	limits := cfg.PersistLimits()
+	if limits.MaxLines != 5000 || limits.MaxBytes != 1048576 {
+		t.Errorf("PersistLimits() = %+v, want 5000 lines and 1048576 bytes", limits)
+	}
+
+	expire, err := cfg.ExpireAfter()
+	if err != nil {
+		t.Fatalf("ExpireAfter() error = %v", err)
+	}
+	if expire != 24*time.Hour {
+		t.Errorf("ExpireAfter() = %v, want 24h", expire)
+	}
+}
+
+// Nothing persists unless enabled, so a user who has not opted in never has output written to disk.
+func TestPersistDisabledByDefault(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.toml"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Persist.Enabled {
+		t.Error("Enabled = true with no config, want false")
+	}
+	// Even a matching-looking name must not persist while disabled.
+	if cfg.PersistsSession("kitty.1") {
+		t.Error("a session persists with persistence disabled")
+	}
+}
+
+// Patterns are only consulted when enabled, so leaving them configured but turning persistence off
+// really does turn it off.
+func TestPersistPatternsIgnoredWhenDisabled(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[persist]
+enabled = false
+sessions = ["kitty.*"]
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PersistsSession("kitty.55") {
+		t.Error("kitty.55 persists although persistence is disabled")
+	}
+}
+
+func TestRestoreModeDefaultAndValidation(t *testing.T) {
+	// Unset means a fresh shell, the safe option.
+	cfg := &Config{}
+	mode, err := cfg.RestoreMode()
+	if err != nil || mode != RestoreShell {
+		t.Errorf("RestoreMode() = (%q, %v), want (shell, nil)", mode, err)
+	}
+
+	// A misspelling is reported rather than silently defaulting, since the difference between
+	// "shell" and "command" is whether cm executes something.
+	cfg = &Config{Persist: PersistConfig{OnRestore: "comand"}}
+	if _, err := cfg.RestoreMode(); err == nil {
+		t.Error("RestoreMode() = nil error for a misspelling, want a rejection")
+	}
+}
+
+func TestExpireAfterValidation(t *testing.T) {
+	// Unset means the default rather than never.
+	cfg := &Config{}
+	got, err := cfg.ExpireAfter()
+	if err != nil || got != DefaultExpireAfter {
+		t.Errorf("ExpireAfter() = (%v, %v), want (%v, nil)", got, err, DefaultExpireAfter)
+	}
+
+	// Zero would mean "expire immediately", which nobody means by writing it, so it is refused
+	// rather than deleting sessions the moment they die.
+	for _, spec := range []string{"0s", "-1h", "nonsense"} {
+		cfg = &Config{Persist: PersistConfig{ExpireAfter: spec}}
+		if _, err := cfg.ExpireAfter(); err == nil {
+			t.Errorf("ExpireAfter(%q) = nil error, want a rejection", spec)
+		}
+	}
+}
+
+// The allowlist matches the program name only, which is why it is documented as a convenience. The
+// test pins that behavior so the limitation is not mistaken for a bug later.
+func TestCommandIsSafeToRerun(t *testing.T) {
+	cfg := &Config{Persist: PersistConfig{SafeCommands: []string{"nvim", "less"}}}
+
+	tests := []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"nvim", "notes.md"}, true},
+		{[]string{"/usr/bin/nvim", "notes.md"}, true},
+		{[]string{"less", "file"}, true},
+		{[]string{"make", "install"}, false},
+		{[]string{}, false},
+		{nil, false},
+		// Documented limitation: an allowlisted program with hostile arguments still matches, since
+		// only the name is compared.
+		{[]string{"nvim", "-c", ":!rm -rf /tmp/x"}, true},
+	}
+	for _, tt := range tests {
+		if got := cfg.CommandIsSafeToRerun(tt.argv); got != tt.want {
+			t.Errorf("CommandIsSafeToRerun(%v) = %v, want %v", tt.argv, got, tt.want)
+		}
+	}
+}
+
+func TestPersistLimitsDefaults(t *testing.T) {
+	cfg := &Config{}
+	limits := cfg.PersistLimits()
+	if limits.MaxLines <= 0 || limits.MaxBytes <= 0 {
+		t.Errorf("PersistLimits() = %+v, want both bounds defaulted so neither is unlimited", limits)
 	}
 }

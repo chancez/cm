@@ -73,11 +73,30 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
 		return err
 	}
 
+	if cfg.Persist.Enabled {
+		policy, err := persistPolicy(cfg)
+		if err != nil {
+			l.Close()
+			return err
+		}
+		mgr.SetPersistPolicy(policy)
+	}
+
 	// Adopt sessions whose shims survived a previous server before accepting clients, so a
 	// client that reconnects immediately finds its session already present.
 	if err := mgr.Reconcile(ctx); err != nil {
 		l.Close()
 		return err
+	}
+
+	// Expire on startup and then periodically. Startup is when a reboot's accumulation is visible,
+	// and the ticker covers a server that stays up for weeks.
+	if cfg.Persist.Enabled {
+		if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
+			// Not fatal: failing to clean up is worth reporting but not worth refusing to serve.
+			fmt.Fprintf(os.Stderr, "expiring sessions: %v\n", err)
+		}
+		go expirePeriodically(ctx, mgr)
 	}
 
 	return server.Serve(ctx, l, server.NewService(mgr))
@@ -165,6 +184,51 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// expireInterval is how often dead sessions are swept while the server runs.
+//
+// Hourly rather than more often: expiry is measured in days, so a long interval costs nothing and
+// keeps a mostly-idle server mostly idle.
+const expireInterval = time.Hour
+
+// expirePeriodically sweeps dead sessions until the context is cancelled.
+func expirePeriodically(ctx context.Context, mgr *server.Manager) {
+	t := time.NewTicker(expireInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
+				fmt.Fprintf(os.Stderr, "expiring sessions: %v\n", err)
+			}
+		}
+	}
+}
+
+// persistPolicy translates configuration into the policy the manager uses.
+//
+// Kept here rather than in the manager so the manager, and its tests, do not depend on the config
+// package or on a file existing.
+func persistPolicy(cfg *config.Config) (*server.PersistPolicy, error) {
+	mode, err := cfg.RestoreMode()
+	if err != nil {
+		return nil, err
+	}
+	expire, err := cfg.ExpireAfter()
+	if err != nil {
+		return nil, err
+	}
+
+	return &server.PersistPolicy{
+		Matches:              cfg.PersistsSession,
+		Limits:               cfg.PersistLimits(),
+		OnRestore:            server.RestoreAction(mode),
+		CommandIsSafeToRerun: cfg.CommandIsSafeToRerun,
+		ExpireAfter:          expire,
+	}, nil
 }
 
 // terminalFactory builds the function the manager uses to create terminal models.

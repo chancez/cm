@@ -59,8 +59,10 @@ otherwise go stale when the terminal restarts. See `docs/config.md`.
 `list`, `info`, `kill`, and `get-env` accept `--json` for scripting; the shape is a documented
 contract rather than whatever the wire format happens to be.
 
-Not done yet: persistence across reboot, which is designed but unimplemented. See `docs/` for
-design notes and trade-offs:
+Sessions can also survive a reboot, opt-in per session or by name pattern: the content comes back
+and a fresh shell starts in the recorded directory. See `docs/persistence.md`.
+
+See `docs/` for design notes and trade-offs:
 
 - `docs/architecture.md` - why three layers, and what each owns
 - `docs/restore.md` - how screen restore works and why each detail is there

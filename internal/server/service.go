@@ -45,6 +45,8 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		Env:       open.Env,
 		Owned:     open.Own,
 		ClientEnv: open.ClientEnv,
+		Persist:   open.Persist,
+		OnRestore: RestoreAction(open.OnRestore),
 	})
 	if err != nil {
 		return err

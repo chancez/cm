@@ -263,3 +263,23 @@ func scanSession(sc scanner) (Session, error) {
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return sess, nil
 }
+
+// SetUpdatedAt overrides a session's last-modified time.
+//
+// Exists for tests, which need to age a record to exercise expiry without waiting. Kept on the store
+// rather than reaching into sqlite from a test, so the column name lives in one place.
+func (s *Store) SetUpdatedAt(ctx context.Context, name string, when time.Time) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET updated_at = ? WHERE name = ?`, when.UnixMilli(), name)
+	if err != nil {
+		return fmt.Errorf("setting updated_at for %s: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("%q: %w", name, ErrNotFound)
+	}
+	return nil
+}

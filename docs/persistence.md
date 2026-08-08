@@ -1,7 +1,7 @@
 # Persistence across a reboot
 
-**Status: designed, not implemented.** This records the decisions so the implementation does not
-have to relitigate them.
+**Status: implemented.** Verified end to end by killing every cm process, removing the sockets, and
+attaching again: the content comes back with a fresh shell beneath it.
 
 ## What can and cannot survive
 
@@ -102,13 +102,35 @@ It is removed after `expire_after`, defaulting to a week.
 Expiry is necessary rather than tidy: without it both the session list and the disk grow forever
 across reboots, and the session counter is already past 260 on the machine this is built for.
 
-## Implementation order
+## How it fits together
 
-1. Disk-backed `seqlog` behind the existing interface, with the line and byte bounds.
-2. Shim writes to it for sessions marked persistent, and recovers its position on startup.
-3. Server replays a saved log through libghostty on attach to a dead session.
-4. Restore behaviors, config, and the per-session flags.
-5. Expiry, run at server startup and periodically.
+The shim mirrors pty output to a file (`internal/seqlog/file.go`). The file records the sequence
+number its first retained byte carries, since trimming means the first byte is not sequence zero;
+without that a replay would number output from zero and disagree with every stored position.
 
-Steps 1 and 2 are useful on their own: they make a session survive the shim being killed, not only a
-reboot.
+On attach to a dead session, the server reads the record before deleting it, carries the log path
+and directory into the options that recreate the session, and replays the log through libghostty to
+produce a restore blob (`internal/server/restore.go`). That blob goes to the first client and is then
+discarded, since the session has started producing its own output and a later client showing a
+pre-reboot screen would be wrong.
+
+Query responses the emulator generates during replay are dropped. They answer questions a program
+asked before the reboot, and that program no longer exists, so delivering them would inject stray
+input into a new shell.
+
+`on_restore = "none"` runs a holding process rather than nothing, because the rest of cm assumes a
+session has a pty and a child: without one there is nothing to attach to, resize, or read from.
+
+## Failure behavior
+
+Deliberately biased toward keeping a session usable:
+
+- A corrupt or unreadable log is reset rather than rejected, since refusing to open a session
+  because of an unreadable cache trades something recoverable for something that is not.
+- A replay that fails leaves the session working but empty.
+- A write failure mid-session stops persisting rather than ending the session.
+- A log that cannot be deleted during expiry does not keep the record alive: the row is what makes a
+  session visible, and an orphaned file is the smaller problem.
+
+But an unusable persist *path* fails loudly at creation, because silently not persisting is
+discovered only after a reboot, when it is too late to matter.

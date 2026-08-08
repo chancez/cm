@@ -293,7 +293,16 @@ type Open struct {
 	//
 	// Distinct from env above, which sets variables for a shell being created. These are recorded
 	// for an existing shell to ask about later.
-	ClientEnv     map[string]string `protobuf:"bytes,12,rep,name=client_env,json=clientEnv,proto3" json:"client_env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ClientEnv map[string]string `protobuf:"bytes,12,rep,name=client_env,json=clientEnv,proto3" json:"client_env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Persist requests that this session's content survive a reboot, regardless of whether its name
+	// matches the server's configured patterns.
+	Persist bool `protobuf:"varint,13,opt,name=persist,proto3" json:"persist,omitempty"`
+	// OnRestore overrides the server's configured behavior when reviving this session: "shell",
+	// "none", or "command". Empty means the configured default.
+	//
+	// A string rather than an enum because it is a per-session override of a config value that is
+	// also a string, and keeping one spelling avoids two vocabularies for the same setting.
+	OnRestore     string `protobuf:"bytes,14,opt,name=on_restore,json=onRestore,proto3" json:"on_restore,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -410,6 +419,20 @@ func (x *Open) GetClientEnv() map[string]string {
 		return x.ClientEnv
 	}
 	return nil
+}
+
+func (x *Open) GetPersist() bool {
+	if x != nil {
+		return x.Persist
+	}
+	return false
+}
+
+func (x *Open) GetOnRestore() string {
+	if x != nil {
+		return x.OnRestore
+	}
+	return ""
 }
 
 type Input struct {
@@ -1543,7 +1566,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xa8\x03\n" +
+	"\x05event\"\xe1\x03\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -1558,7 +1581,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	" \x01(\tR\x03cwd\x12\x10\n" +
 	"\x03env\x18\v \x03(\tR\x03env\x12@\n" +
 	"\n" +
-	"client_env\x18\f \x03(\v2!.cm.server.v1.Open.ClientEnvEntryR\tclientEnv\x1a<\n" +
+	"client_env\x18\f \x03(\v2!.cm.server.v1.Open.ClientEnvEntryR\tclientEnv\x12\x18\n" +
+	"\apersist\x18\r \x01(\bR\apersist\x12\x1d\n" +
+	"\n" +
+	"on_restore\x18\x0e \x01(\tR\tonRestore\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +

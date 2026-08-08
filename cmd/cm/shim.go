@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 )
 
@@ -19,10 +20,13 @@ import (
 // written.
 func newShimCommand(g *globals) *cobra.Command {
 	var (
-		session    string
-		dir        string
-		rows, cols uint16
-		logBytes   int
+		session         string
+		dir             string
+		rows, cols      uint16
+		logBytes        int
+		persistPath     string
+		persistMaxLines int
+		persistMaxBytes int64
 	)
 	cmd := &cobra.Command{
 		Use:                "shim",
@@ -42,12 +46,17 @@ func newShimCommand(g *globals) *cobra.Command {
 				return err
 			}
 			return runShim(cmd.Context(), dirs, shim.Config{
-				Session:  session,
-				Command:  args,
-				Dir:      dir,
-				Rows:     rows,
-				Cols:     cols,
-				LogBytes: logBytes,
+				Session:     session,
+				Command:     args,
+				Dir:         dir,
+				Rows:        rows,
+				Cols:        cols,
+				LogBytes:    logBytes,
+				PersistPath: persistPath,
+				PersistLimits: seqlog.FileLimits{
+					MaxLines: persistMaxLines,
+					MaxBytes: persistMaxBytes,
+				},
 			})
 		},
 	}
@@ -58,6 +67,12 @@ func newShimCommand(g *globals) *cobra.Command {
 	f.Uint16Var(&rows, "rows", 24, "initial window rows")
 	f.Uint16Var(&cols, "cols", 80, "initial window columns")
 	f.IntVar(&logBytes, "log-bytes", 0, "bytes of output to retain (0 for the default)")
+	f.StringVar(&persistPath, "persist-path", "",
+		"file to mirror output to, so the session survives this process")
+	f.IntVar(&persistMaxLines, "persist-max-lines", 0,
+		"lines to retain in the persisted log (0 for the default)")
+	f.Int64Var(&persistMaxBytes, "persist-max-bytes", 0,
+		"byte ceiling for the persisted log (0 for the default)")
 	return cmd
 }
 
