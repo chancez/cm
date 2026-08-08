@@ -161,33 +161,83 @@ func TestDoctorFindsAndCleansAnOrphan(t *testing.T) {
 	}
 }
 
-// Errors in the server log are surfaced, since nothing else shows them.
+// doctor surfaces errors and warnings the server and its shims logged, and only recent ones.
 //
-// Provoked rather than injected: killing a session's shim behind the server's back makes it fail to record an
-// outcome, which is exactly the kind of thing that only ever reaches the log.
-func TestDoctorSurfacesServerLogErrors(t *testing.T) {
+// An e2e test because the reading crosses a process boundary: one process appends to the log and another parses
+// it, and the format they agree on is slog's text output, which nothing in the unit tests actually produces.
+// The unit tests build log lines by hand, so a change to how cm logs would leave them passing.
+//
+// The entries are written directly rather than provoked. An earlier version of this test ran a command it hoped
+// would log an error and then looped over the findings asserting things only if any existed, which meant it
+// passed whether or not anything was found. Writing known lines makes the assertion unconditional.
+func TestDoctorSurfacesLoggedErrorsAndWarnings(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 
-	// A finding needs a real logged error. `kill --force` on a session whose shim is unreachable is one of
-	// the paths that logs and carries on.
-	e.mustRun("run", "--session", "gone", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	// A real session, so a shim log exists at the path the scan derives, rather than a file invented by the
+	// test at a path nothing else would use.
+	e.mustRun("run", "--session", "logged", "-d", "--", "/bin/sh", "-c", "sleep 120")
 	e.waitFor("the session to be running", 15*time.Second, func() bool {
-		s, ok := e.session("gone")
+		s, ok := e.session("logged")
 		return ok && s.State == "running"
 	})
 
-	got, _ := e.doctor()
-	// Not asserting that an error exists, since whether this particular sequence logs one is an
-	// implementation detail. What matters is that when the log has errors the report quotes them, and that a
-	// clean log produces no finding, which is what the absence here checks.
-	for _, f := range got.ofKind("server-errors") {
-		if !strings.Contains(f.Detail, "error(s)") {
-			t.Errorf("server-errors detail = %q, want a count of errors", f.Detail)
-		}
+	now := time.Now()
+	stamp := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339Nano) }
+
+	// Appended, not overwritten: the server is running and writing to this file, and truncating it under a live
+	// server would be a different test with a worse failure mode.
+	e.appendLog(e.serverLogPath(),
+		"time="+stamp(-time.Minute)+` level=ERROR msg="a recent error"`,
+		"time="+stamp(-2*time.Minute)+` level=WARN msg="a recent warning"`,
+		// Outside the 24-hour window, so this one must not be reported however loud it is.
+		"time="+stamp(-48*time.Hour)+` level=ERROR msg="an ancient error"`,
+	)
+	// A shim log, which the check previously never opened.
+	e.appendLog(e.shimLogPath("logged"),
+		"time="+stamp(-3*time.Minute)+` level=ERROR msg="a shim error"`)
+
+	got, code := e.doctor()
+
+	errs := got.ofKind("server-errors")
+	if len(errs) != 1 {
+		t.Fatalf("findings = %v, want one server-errors finding", got.kinds())
+	}
+	warns := got.ofKind("log-warnings")
+	if len(warns) != 1 {
+		t.Fatalf("findings = %v, want one log-warnings finding", got.kinds())
+	}
+
+	// The recent error from each file, and the warning, each in the right finding.
+	if !strings.Contains(errs[0].Detail, "a recent error") {
+		t.Errorf("server-errors does not include the server's error: %q", errs[0].Detail)
+	}
+	if !strings.Contains(errs[0].Detail, "a shim error") {
+		t.Errorf("server-errors does not include the shim's error: %q", errs[0].Detail)
+	}
+	if !strings.Contains(warns[0].Detail, "a recent warning") {
+		t.Errorf("log-warnings does not include the warning: %q", warns[0].Detail)
+	}
+	// The old entry is not reported, which is the whole reason for the window.
+	if strings.Contains(errs[0].Detail, "an ancient error") {
+		t.Errorf("an entry from 48 hours ago was reported: %q", errs[0].Detail)
+	}
+	// Nor does the warning leak into the errors, or the reverse.
+	if strings.Contains(errs[0].Detail, "a recent warning") {
+		t.Errorf("the warning was reported as an error: %q", errs[0].Detail)
+	}
+	if strings.Contains(warns[0].Detail, "a recent error") {
+		t.Errorf("the error was reported as a warning: %q", warns[0].Detail)
+	}
+	// Neither is fixable: both record something that already happened, and deleting a log destroys the
+	// evidence rather than fixing anything.
+	for _, f := range append(errs, warns...) {
 		if f.Fixable {
-			t.Error("server-errors was reported as fixable; a logged error already happened")
+			t.Errorf("%s was reported as fixable", f.Kind)
 		}
+	}
+	if code == 0 {
+		t.Error("exit code = 0 with findings, want non-zero")
 	}
 }
 

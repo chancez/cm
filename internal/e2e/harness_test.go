@@ -393,6 +393,33 @@ func (e *env) serverLogPath() string {
 	return filepath.Join(e.state, "logs", "server.log")
 }
 
+// shimLogPath is where a session's shim writes its diagnostic log.
+//
+// Separate from the session's output log: this records what the shim did, that records what the shell printed.
+func (e *env) shimLogPath(session string) string {
+	return filepath.Join(e.state, "logs", "shim-"+session+".log")
+}
+
+// appendLog adds lines to a log file.
+//
+// Appends rather than writes, because the server is running and writing to the same file: truncating it under a
+// live server would test something else, with a worse failure mode than the test is about.
+func (e *env) appendLog(path string, lines ...string) {
+	e.t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		e.t.Fatalf("MkdirAll() error = %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		e.t.Fatalf("OpenFile(%s) error = %v", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+		e.t.Fatalf("writing to %s: %v", path, err)
+	}
+}
+
 // processAlive reports whether a pid names a live process.
 //
 // Signal 0 rather than reading the process table, since it asks the kernel the question directly and does not
