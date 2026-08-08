@@ -28,9 +28,36 @@ Because the shim buffers output while the server is away, restarting the server 
 brief freeze rather than a lost session. Clients resume from their last sequence number
 without redrawing.
 
+## Commands
+
+```
+cm attach [session]      attach, creating the session if needed (ctrl-\ detaches)
+cm list                  list sessions
+cm info <session>        one session's details; --field for a single value
+cm history <session>     print contents including scrollback; --format=plain|vt|html
+cm send <session> <text> send input without attaching
+cm kill <session>...     terminate sessions
+```
+
+`attach` with no name asks the server to allocate one, and `--own` ends the session when the
+client disconnects without detaching. Together those give a terminal emulator a session per
+window that cleans itself up on close.
+
+A server starts automatically when needed, so there is normally no reason to run `cm server`.
+
 ## Status
 
-Early. See `docs/` for design notes.
+Working and usable: persistent sessions, attach/detach, screen and scrollback restore on
+reattach, multiple clients per session, resize, session survival across a server restart or
+crash, history, send-without-attach, and cwd/title tracking forwarded to clients.
+
+Not done yet: persistence across reboot, per-client environment capture, JSON output,
+configurable detach key. See `docs/` for design notes and trade-offs:
+
+- `docs/architecture.md` — why three layers, and what each owns
+- `docs/restore.md` — how screen restore works and why each detail is there
+- `docs/rpc.md` — why ttrpc, measured against gRPC and Connect
+- `docs/libghostty.md` — using libghostty-vt from Go, and its constraints
 
 ## Building
 
