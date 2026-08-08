@@ -87,8 +87,33 @@ and the ED-versus-SU bugs completely. When diagnosing, dump per-row contents usi
 selections; reasoning about coordinates was actively misleading, and the row dump was what made
 the actual behavior visible.
 
-## Known limitation
+## Terminator choice
+
+The pwd report is BEL-terminated rather than ST-terminated (`ESC` backslash). With ST, a real
+kitty rendered the *following* OSC as literal text. A control test with BEL on the same stream
+was clean, so this is not a guess. The value is a URI and cannot contain a BEL, so nothing needs
+escaping.
+
+## Known limitations
 
 Kitty graphics and OSC 8 hyperlink targets are absent from a restored screen, because
 libghostty's formatter does not re-emit them. Both work in live output. zmx has the same gap
 and the fix belongs upstream.
+
+**A leftover escape parameter can appear on the restored prompt line.** With a prompt that uses
+relative cursor motion, reattaching can leave something like `[183D` rendered as text on that one
+line. What is known:
+
+- It is cosmetic and does not propagate. The next prompt is clean, scrollback is intact, and the
+  session is fully usable.
+- It is cm's doing. The same shell and prompt in a bare terminal do not produce it.
+- It is not corrupted state. The VT model contains no such bytes, and `history --format=vt`
+  is clean, so nothing wrong is being stored.
+- It is not the prompt rewriter, libghostty's parser, or a chunk boundary. Each was tested
+  directly and preserves bytes exactly, including across every split point.
+
+The remaining explanation is that the restored cursor position and the shell's own
+relative-motion redraw disagree, so part of that redraw lands where it is displayed rather than
+consumed. zmx reached a similar conclusion for nested sessions and called cursor-position
+reconciliation not reliably fixable in its architecture. Worth revisiting deliberately rather
+than patching blind.

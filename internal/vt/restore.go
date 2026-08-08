@@ -84,8 +84,14 @@ func (t *Terminal) Restore() ([]byte, error) {
 	// Emitted by hand rather than via the formatter's pwd extra, which includes a NUL
 	// sentinel that kitty persists into its session file and then cannot parse back.
 	// (zmx issue 222.)
+	//
+	// Terminated with BEL rather than ST (ESC backslash), which is the more common form and the
+	// one that works. Verified in a real kitty: with an ST terminator here, the *next* OSC in
+	// the stream is swallowed and the sequence after that loses its ESC, so a cursor move like
+	// ESC[179C renders as the literal text "179C" next to the prompt. The same test with BEL is
+	// clean. Since the value is a URI it cannot contain a BEL, so there is nothing to escape.
 	if pwd, err := t.Pwd(); err == nil && pwd != "" {
-		fmt.Fprintf(&buf, "\x1b]7;%s\x1b\\", pwd)
+		fmt.Fprintf(&buf, "\x1b]7;%s\x07", pwd)
 	}
 
 	if buf.Len() == 0 {

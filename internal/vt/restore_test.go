@@ -1,6 +1,7 @@
 package vt
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -411,5 +412,80 @@ func TestCallbacksFireWithoutCrashing(t *testing.T) {
 	}
 	if len(gotPty) == 0 {
 		t.Error("no write_pty callback for a cursor position report; a program asking would hang")
+	}
+}
+
+// Restore output must not splice into the formatter's trailing bytes.
+//
+// Title and pwd are appended after the formatter's output. If that output ends inside an escape
+// sequence, the appended OSC's introducer is consumed as its continuation and the next real
+// sequence loses its ESC, so a cursor move like ESC[179C renders as the literal text "179C".
+// Observed in a real terminal after reattaching.
+func TestRestoreDoesNotCorruptFollowingSequences(t *testing.T) {
+	term := newTerminal(t, 24, 80)
+
+	// A prompt-like stream: set a title and directory, then position the cursor.
+	if err := term.Write([]byte(
+		"\x1b]2;my-title\x07\x1b]7;file:///tmp\x1b\\prompt\x1b[32mgreen\x1b[0m",
+	)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	restore, err := term.Restore()
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	// Replaying the snapshot and then a cursor move must leave the cursor moved, not print the
+	// move's parameters as text.
+	dst := newTerminal(t, 24, 80)
+	if err := dst.Write(restore); err != nil {
+		t.Fatalf("replaying: %v", err)
+	}
+	if err := dst.Write([]byte("\x1b[10CMOVED")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := dst.Plain()
+	if err != nil {
+		t.Fatalf("Plain() error = %v", err)
+	}
+	if strings.Contains(string(got), "10C") {
+		t.Errorf("cursor-move parameters rendered as text, so an ESC was swallowed:\n%q",
+			normalize(string(got)))
+	}
+	if !strings.Contains(string(got), "MOVED") {
+		t.Errorf("screen = %q, want it to contain MOVED", normalize(string(got)))
+	}
+}
+
+// The pwd report must be BEL-terminated, not ST-terminated.
+//
+// Verified in a real kitty: with ST (ESC backslash) here, the next OSC in the stream is swallowed
+// and the sequence after it loses its ESC, so a cursor move renders as literal text beside the
+// prompt. The same stream with BEL is clean.
+func TestRestorePwdUsesBelTerminator(t *testing.T) {
+	term := newTerminal(t, 24, 80)
+	if err := term.Write([]byte("\x1b]7;file:///tmp/somewhere\x1b\\content")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	restore, err := term.Restore()
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	i := bytes.Index(restore, []byte("\x1b]7;"))
+	if i < 0 {
+		t.Fatal("restore bytes carry no OSC 7")
+	}
+	rest := restore[i:]
+	bel := bytes.IndexByte(rest, 0x07)
+	st := bytes.Index(rest, []byte("\x1b\\"))
+	if bel < 0 {
+		t.Fatalf("OSC 7 is not BEL-terminated: %q", rest)
+	}
+	if st >= 0 && st < bel {
+		t.Errorf("OSC 7 uses an ST terminator, which swallows the following OSC: %q", rest)
 	}
 }
