@@ -112,7 +112,15 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	if err != nil {
 		return err
 	}
-	defer os.Remove(dirs.ServerSocket())
+	// No explicit os.Remove of the socket path here.
+	//
+	// Go's *net.UnixListener already unlinks the path it bound when it is closed, so removing it by
+	// name is redundant, and worse than redundant: it deletes whatever is at that path *now*, which
+	// after a restart is the next server's socket. A client would then start a server, see it log
+	// "server starting" and adopt sessions, and still fail with "server did not become ready",
+	// because the socket it was waiting for had been unlinked by the server that just exited.
+	//
+	// Reproduced by stopping and starting a server repeatedly: it failed within a few iterations.
 
 	logger.Info("server starting", "pid", os.Getpid(), "socket", dirs.ServerSocket())
 
