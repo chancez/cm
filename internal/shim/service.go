@@ -107,7 +107,11 @@ func (s *Service) Write(_ context.Context, req *shimv1.WriteRequest) (*shimv1.Wr
 }
 
 func (s *Service) Resize(_ context.Context, req *shimv1.ResizeRequest) (*shimv1.ResizeResponse, error) {
-	if err := s.session.Resize(
+	resize := s.session.Resize
+	if req.ForceSignal {
+		resize = s.session.ResizeSignal
+	}
+	if err := resize(
 		uint16(req.Rows), uint16(req.Cols),
 		uint16(req.XPixel), uint16(req.YPixel),
 	); err != nil {

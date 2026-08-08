@@ -224,6 +224,29 @@ func (s *Session) Resize(rows, cols, xpixel, ypixel uint16) error {
 	})
 }
 
+// ResizeSignal sets the window size and guarantees the child sees a change.
+//
+// The kernel raises SIGWINCH only when the size actually differs from the current one, so a client
+// reattaching at the size the session already has gets no signal, and a program that repaints only
+// on SIGWINCH keeps updating a screen that is now a replayed snapshot.
+//
+// When the requested size is already current, the size is briefly set one row shorter and then
+// restored, which produces two real changes and therefore two real signals.
+//
+// Rows rather than columns is deliberate: a narrower width makes the terminal re-wrap every line
+// to a width the client never had, and that reflow is visible and sometimes lossy. One row less is
+// only ever a scroll.
+func (s *Session) ResizeSignal(rows, cols, xpixel, ypixel uint16) error {
+	cur, curCols, err := s.Size()
+	if err == nil && cur == rows && curCols == cols && rows > 1 {
+		nudge := pty.Winsize{Rows: rows - 1, Cols: cols, X: xpixel, Y: ypixel}
+		if err := pty.Setsize(s.ptmx, &nudge); err != nil {
+			return err
+		}
+	}
+	return s.Resize(rows, cols, xpixel, ypixel)
+}
+
 // Size reports the pty's current window size.
 func (s *Session) Size() (rows, cols uint16, err error) {
 	ws, err := pty.GetsizeFull(s.ptmx)

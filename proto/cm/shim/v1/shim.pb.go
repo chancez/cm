@@ -396,8 +396,17 @@ type ResizeRequest struct {
 	Rows  uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
 	Cols  uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
 	// Pixel dimensions, for programs that ask. Zero when unknown.
-	XPixel        uint32 `protobuf:"varint,3,opt,name=x_pixel,json=xPixel,proto3" json:"x_pixel,omitempty"`
-	YPixel        uint32 `protobuf:"varint,4,opt,name=y_pixel,json=yPixel,proto3" json:"y_pixel,omitempty"`
+	XPixel uint32 `protobuf:"varint,3,opt,name=x_pixel,json=xPixel,proto3" json:"x_pixel,omitempty"`
+	YPixel uint32 `protobuf:"varint,4,opt,name=y_pixel,json=yPixel,proto3" json:"y_pixel,omitempty"`
+	// Make the shell see a window-size change even when the size is unchanged.
+	//
+	// The kernel raises SIGWINCH only when the size actually differs, so a client reattaching at
+	// the size the session already has gets nothing, and a program that repaints only on SIGWINCH
+	// keeps drawing against a screen that is now a replayed snapshot.
+	//
+	// Optional so an older shim that does not understand it simply resizes as before, which is the
+	// current behavior rather than a failure.
+	ForceSignal   bool `protobuf:"varint,5,opt,name=force_signal,json=forceSignal,proto3" json:"force_signal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -458,6 +467,13 @@ func (x *ResizeRequest) GetYPixel() uint32 {
 		return x.YPixel
 	}
 	return 0
+}
+
+func (x *ResizeRequest) GetForceSignal() bool {
+	if x != nil {
+		return x.ForceSignal
+	}
+	return false
 }
 
 type ResizeResponse struct {
@@ -694,12 +710,13 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\fWriteRequest\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\")\n" +
 	"\rWriteResponse\x12\x18\n" +
-	"\awritten\x18\x01 \x01(\x04R\awritten\"i\n" +
+	"\awritten\x18\x01 \x01(\x04R\awritten\"\x8c\x01\n" +
 	"\rResizeRequest\x12\x12\n" +
 	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
 	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x17\n" +
 	"\ax_pixel\x18\x03 \x01(\rR\x06xPixel\x12\x17\n" +
-	"\ay_pixel\x18\x04 \x01(\rR\x06yPixel\"\x10\n" +
+	"\ay_pixel\x18\x04 \x01(\rR\x06yPixel\x12!\n" +
+	"\fforce_signal\x18\x05 \x01(\bR\vforceSignal\"\x10\n" +
 	"\x0eResizeResponse\"L\n" +
 	"\rSignalRequest\x12\x16\n" +
 	"\x06signal\x18\x01 \x01(\x05R\x06signal\x12#\n" +

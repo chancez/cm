@@ -100,6 +100,16 @@ message ResizeRequest {
   // Pixel dimensions, for programs that ask. Zero when unknown.
   uint32 x_pixel = 3;
   uint32 y_pixel = 4;
+
+  // Make the shell see a window-size change even when the size is unchanged.
+  //
+  // The kernel raises SIGWINCH only when the size actually differs, so a client reattaching at
+  // the size the session already has gets nothing, and a program that repaints only on SIGWINCH
+  // keeps drawing against a screen that is now a replayed snapshot.
+  //
+  // Optional so an older shim that does not understand it simply resizes as before, which is the
+  // current behavior rather than a failure.
+  bool force_signal = 5;
 }
 
 message ResizeResponse {}

@@ -458,8 +458,23 @@ func (s *Session) Write(ctx context.Context, data []byte) error {
 //
 // The model must track the pty or a restore would describe a screen of the wrong shape.
 func (s *Session) Resize(ctx context.Context, rows, cols, xpixel, ypixel uint32) error {
+	return s.resize(ctx, rows, cols, xpixel, ypixel, false)
+}
+
+// ResizeSignal is Resize, but guarantees the shell sees a window-size change even when the size is
+// unchanged.
+//
+// Used on a fresh attach, where a program that repaints only on SIGWINCH would otherwise keep
+// drawing against the snapshot just replayed. Not used for ordinary resizes, where the size really
+// did change and the kernel signals on its own.
+func (s *Session) ResizeSignal(ctx context.Context, rows, cols, xpixel, ypixel uint32) error {
+	return s.resize(ctx, rows, cols, xpixel, ypixel, true)
+}
+
+func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32, force bool) error {
 	if _, err := s.shim.Resize(ctx, &shimv1.ResizeRequest{
 		Rows: rows, Cols: cols, XPixel: xpixel, YPixel: ypixel,
+		ForceSignal: force,
 	}); err != nil {
 		return err
 	}

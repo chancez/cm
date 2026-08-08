@@ -71,7 +71,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// resume the client already matches, and resizing would make the shell redraw for no reason.
 	resizing := open.ResumeFromSeq == nil && !open.ReadOnly && open.Rows > 0 && open.Cols > 0
 	if resizing {
-		if err := sess.Resize(ctx, open.Rows, open.Cols, open.XPixel, open.YPixel); err != nil {
+		// ResizeSignal rather than Resize: on a fresh attach the shell has to redraw even when the
+		// size is unchanged, or a program that repaints only on SIGWINCH keeps updating a screen
+		// that is now the snapshot replayed below.
+		if err := sess.ResizeSignal(ctx, open.Rows, open.Cols, open.XPixel, open.YPixel); err != nil {
 			return fmt.Errorf("sizing session %s: %w", sess.name, err)
 		}
 		rows, cols := int(open.Rows), int(open.Cols)
