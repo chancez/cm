@@ -3,9 +3,12 @@ package seqlog
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 // drain reads chunks until the reader would block, returning the concatenated bytes and
@@ -354,5 +357,70 @@ func TestEmptyAppendIsNoop(t *testing.T) {
 	l.Append([]byte{})
 	if oldest, next := l.Bounds(); oldest != 0 || next != 0 {
 		t.Errorf("Bounds() = (%d, %d), want (0, 0)", oldest, next)
+	}
+}
+
+// Closing a reader while another goroutine is blocked in Next must not crash.
+//
+// This is the shape of a client detaching: the service reads output on one goroutine and closes the
+// reader from another when the stream ends, so the two run concurrently every single time. The bug
+// was a nil dereference in Next, because Close observed sub outside the lock and cleared it after,
+// leaving a window where Next saw a non-nil sub and then dereferenced nil. It took down the whole
+// server, since a panic on that goroutine is not recovered.
+//
+// Run with -race to catch the unsynchronized access as well as the crash.
+func TestCloseWhileBlockedInNext(t *testing.T) {
+	// Many iterations, because the window is a few instructions wide. A single pass passes even with
+	// the bug present.
+	for range 200 {
+		log := New(1024)
+		r := log.Subscribe(0)
+
+		// Blocked in Next: nothing has been appended, so it is waiting on the subscriber channel.
+		done := make(chan error, 1)
+		go func() {
+			_, err := r.Next(context.Background())
+			done <- err
+		}()
+
+		// Give the goroutine a chance to reach the blocking select before closing under it.
+		runtime.Gosched()
+		r.Close()
+
+		select {
+		case err := <-done:
+			// ErrClosed is the contract: a closed reader has nothing further coming. Any other
+			// error is acceptable too, but returning a chunk would mean it read a subscription that
+			// was already gone.
+			if err == nil {
+				t.Fatal("Next() returned a chunk after Close(), want an error")
+			}
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("Next() error = %v, want ErrClosed", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Next() did not return after the reader was closed")
+		}
+	}
+}
+
+// Close has to stay safe to call repeatedly, since the service closes readers from more than one
+// exit path and both can run.
+func TestReaderCloseIsIdempotentUnderConcurrency(t *testing.T) {
+	log := New(1024)
+	r := log.Subscribe(0)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Close()
+		}()
+	}
+	wg.Wait()
+
+	if _, err := r.Next(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Errorf("Next() error = %v after Close(), want ErrClosed", err)
 	}
 }

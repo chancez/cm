@@ -20,8 +20,11 @@ type Chunk struct {
 
 // Reader streams chunks from a Log starting at a sequence number, blocking for more
 // until the log closes or the context is cancelled.
+// A Reader may be closed while another goroutine is blocked in Next, which is the normal shape of a
+// client detaching, so sub is guarded by the log's mutex rather than only read at setup.
 type Reader struct {
 	log *Log
+	// sub is nil once closed. Read and written under log.mu.
 	sub *subscriber
 	// next is the sequence number this reader wants next.
 	next uint64
@@ -62,14 +65,33 @@ func (l *Log) Subscribe(from uint64) *Reader {
 	return &Reader{log: l, sub: s, next: next, gap: gap}
 }
 
-// Close releases the reader's registration. Safe to call more than once.
+// Close releases the reader's registration. Safe to call more than once, and safe to call while
+// another goroutine is blocked in Next.
+//
+// sub is both checked and cleared under the lock. Reading it first and clearing it after, which is
+// the obvious way to write this, races a concurrent Next: Next would see a non-nil sub, and by the
+// time it dereferenced it Close had nilled it, so a detaching client crashed the server with a nil
+// dereference. Rare in practice, because it needs the detach to land inside a window a few
+// instructions wide, and a crash rather than a wrong answer when it does.
 func (r *Reader) Close() {
+	r.log.mu.Lock()
+	defer r.log.mu.Unlock()
 	if r.sub == nil {
 		return
 	}
-	r.log.mu.Lock()
+	// Wake a Next that is already blocked on this subscription before removing it. Without this the
+	// reader is unregistered, so no append or log close will ever signal it again, and Next waits
+	// forever on a channel nobody holds. That is worse than the crash this ordering also prevents: a
+	// leaked goroutine per detached client, holding the session's log alive.
+	//
+	// A non-blocking send is enough. The channel has capacity 1 and carries no data, so a signal
+	// already pending will wake Next just as well.
+	select {
+	case r.sub.ch <- struct{}{}:
+	default:
+	}
+
 	delete(r.log.subs, r.sub)
-	r.log.mu.Unlock()
 	r.sub = nil
 }
 
@@ -103,6 +125,12 @@ func (r *Reader) Next(ctx context.Context) (Chunk, error) {
 		}
 
 		closed := r.log.closed
+		// A reader closed while blocked here has no subscription left to wait on. Reported as
+		// ErrClosed, the same as a closed log, since either way nothing further is coming.
+		if r.sub == nil {
+			r.log.mu.Unlock()
+			return Chunk{}, ErrClosed
+		}
 		ch := r.sub.ch
 		r.log.mu.Unlock()
 
