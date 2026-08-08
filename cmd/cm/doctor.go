@@ -39,12 +39,22 @@ while to diagnose, because each fails silently rather than reporting an error.
   no-shell-integration  sessions whose shells never report OSC 133, so cm cannot
                         tell busy from idle
   session-backlog       finished records piling up in 'cm list'
+  pty-pressure          the system running low on ptys, which breaks terminal
+                        allocation in unrelated programs
+  loose-dir-perms       cm's directories readable by other users, exposing
+                        session output and the sockets controlling live shells
+  missing-log           a session record naming an output log that is gone, so
+                        'cm history' and screen restore silently return nothing
+  unreachable-shim      a session this server is tracking whose shim does not
+                        answer, so it lists as running while commands fail
 
---clean acts on orphan-shim and stale-socket. An orphan is asked to shut down
-through its own socket rather than signalled, so it closes its pty and reaps its
-shell; a shim that is not an orphan is never contacted. Nothing else is repaired
-automatically: the rest are either a record of something that already happened or
-a decision that is not a diagnostic's to make.
+--clean acts on orphan-shim, stale-socket, and loose-dir-perms. An orphan is
+asked to shut down through its own socket rather than signalled, so it closes its
+pty and reaps its shell; a shim that is not an orphan is never contacted.
+Tightening a directory mode only takes access away from other users and leaves
+cm's own behavior identical. Nothing else is repaired automatically: the rest are
+either a record of something that already happened or a decision that is not a
+diagnostic's to make.
 
 Exits non-zero when anything is found, so it can gate a script.
 

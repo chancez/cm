@@ -128,6 +128,10 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	findings = append(findings, m.checkSocketPath()...)
 	findings = append(findings, m.checkShellIntegration()...)
 	findings = append(findings, m.checkSessionBacklog(ctx)...)
+	findings = append(findings, m.checkPtyPressure()...)
+	findings = append(findings, m.checkDirPerms()...)
+	findings = append(findings, m.checkMissingLogs(ctx)...)
+	findings = append(findings, m.checkTrackedShims(ctx)...)
 	findings = append(findings, m.checkServerLog()...)
 
 	sort.Slice(findings, func(i, j int) bool {
@@ -166,6 +170,16 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 				continue
 			}
 			done = append(done, fmt.Sprintf("removed stale socket for %s", f.Session))
+
+		case FindingLooseDirPerms:
+			// Safe to do automatically in a way that killing things is not: tightening a mode takes access
+			// away from other users and leaves cm's own behavior identical. The path is in Socket, which is
+			// where checkDirPerms puts it.
+			if err := os.Chmod(f.Socket, 0o700); err != nil {
+				m.log.Warn("tightening directory permissions failed", "path", f.Socket, "error", err)
+				continue
+			}
+			done = append(done, fmt.Sprintf("restricted %s to its owner", f.Socket))
 		}
 	}
 	return done
