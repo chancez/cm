@@ -184,9 +184,20 @@ func Load(path string) (*Config, error) {
 }
 
 // DefaultPath returns where cm looks for its configuration.
+//
+// XDG_CONFIG_HOME is honoured before falling back to os.UserConfigDir, which matters on macOS: that
+// function returns ~/Library/Application Support there and ignores the variable entirely, so a user who
+// keeps their dotfiles in ~/.config had their file silently not read. It is also what the rest of cm
+// already does, since paths.Default honours XDG_RUNTIME_DIR and XDG_STATE_HOME.
+//
+// Found the hard way: `cm config` reported the file as absent while it sat in ~/.config/cm/cm.toml, and a
+// detach_key set there had never taken effect. A missing config is not an error, so nothing said so.
 func DefaultPath() (string, error) {
 	if p := os.Getenv(paths.Env("CONFIG")); p != "" {
 		return p, nil
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, paths.Name, paths.Name+".toml"), nil
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {

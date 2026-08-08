@@ -28,8 +28,10 @@ func newAttachCommand(g *globals) *cobra.Command {
 		detachKeyArg string
 	)
 	cmd := &cobra.Command{
-		Use:   "attach [session]",
-		Short: "Attach to a session, creating it if needed",
+		Use: "attach [session]",
+		// The one command typed dozens of times a day, so it gets the shortest name that is not ambiguous.
+		Aliases: []string{"a"},
+		Short:   "Attach to a session, creating it if needed",
 		Long: `Attach to a session, creating it if it does not exist.
 
 Being idempotent is what lets a terminal emulator use one command for both

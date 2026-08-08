@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chancez/cm/internal/paths"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -335,5 +337,67 @@ func TestResizePolicyFromFile(t *testing.T) {
 	}
 	if got != ResizeSmallest {
 		t.Errorf("Resize() = %q, want %q", got, ResizeSmallest)
+	}
+}
+
+// DefaultPath honours XDG_CONFIG_HOME before falling back to os.UserConfigDir.
+//
+// This was a real bug. On macOS os.UserConfigDir returns ~/Library/Application Support and ignores
+// XDG_CONFIG_HOME entirely, so a user who keeps dotfiles in ~/.config had their file silently not read: a
+// missing config is not an error, so nothing reported it, and a detach_key set there simply did nothing.
+//
+// It was also inconsistent within cm, since paths.Default already honours XDG_RUNTIME_DIR and
+// XDG_STATE_HOME. Found by `cm config` printing the path it looks at, which is most of why that command
+// exists.
+func TestDefaultPathHonoursXDGConfigHome(t *testing.T) {
+	t.Setenv(paths.Env("CONFIG"), "")
+	t.Setenv("XDG_CONFIG_HOME", "/xdg/config")
+
+	got, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath() error = %v", err)
+	}
+	want := filepath.Join("/xdg/config", paths.Name, paths.Name+".toml")
+	if got != want {
+		t.Errorf("DefaultPath() = %q, want %q", got, want)
+	}
+}
+
+// CM_CONFIG wins over XDG_CONFIG_HOME.
+//
+// The explicit override has to beat the convention, or a test harness and a one-off invocation cannot
+// redirect cm on a machine that sets XDG_CONFIG_HOME. Every e2e test depends on this.
+func TestDefaultPathPrefersTheExplicitOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/xdg/config")
+	t.Setenv(paths.Env("CONFIG"), "/explicit/cm.toml")
+
+	got, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath() error = %v", err)
+	}
+	if got != "/explicit/cm.toml" {
+		t.Errorf("DefaultPath() = %q, want the explicit override", got)
+	}
+}
+
+// With neither set, the platform's config directory is used.
+//
+// The fallback, so the XDG support above does not become a requirement: a machine with no XDG variables
+// still finds a config in the conventional place for its platform.
+func TestDefaultPathFallsBackToTheUserConfigDir(t *testing.T) {
+	t.Setenv(paths.Env("CONFIG"), "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	got, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath() error = %v", err)
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this machine: %v", err)
+	}
+	want := filepath.Join(dir, paths.Name, paths.Name+".toml")
+	if got != want {
+		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
 }

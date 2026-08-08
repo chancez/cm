@@ -110,6 +110,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newLogsCommand(g),
 		newShimCommand(g),
 		newVersionCommand(g),
+		newConfigCommand(g),
 		newCompletionsCommand(),
 	)
 
@@ -125,6 +126,12 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 // a flag or the environment.
 //
 // Only unset flags are filled, which gives flag > env > default precedence for free.
+//
+// Which flags were filled is recorded in filledFromEnv, because Flags().Set marks a flag Changed and thereby
+// erases the difference between "passed on the command line" and "taken from the environment". Nothing depends
+// on that for behavior, since either way the value is the same, but `cm config` reports where each setting came
+// from and would otherwise have to guess. It guessed wrong: checking the variable first reported the
+// environment as the source even when a flag had overridden it.
 func bindEnv(cmd *cobra.Command) error {
 	var err error
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
@@ -138,10 +145,18 @@ func bindEnv(cmd *cobra.Command) error {
 		}
 		if setErr := cmd.Flags().Set(f.Name, val); setErr != nil {
 			err = fmt.Errorf("%s: %w", key, setErr)
+			return
 		}
+		filledFromEnv[f.Name] = key
 	})
 	return err
 }
+
+// filledFromEnv records which flags bindEnv set, and from which variable.
+//
+// Package-level because it is written by PersistentPreRunE and read by a command's RunE, which have no other
+// channel between them, and because exactly one command runs per process.
+var filledFromEnv = map[string]string{}
 
 // sessionNameArg validates a single session-name argument before RunE, so an invalid name
 // fails before any connection is made.

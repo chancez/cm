@@ -221,6 +221,9 @@ func (e *env) environ() []string {
 		"CM_STATE_DIR="+e.state,
 		// A predictable shell, so a session's own output does not depend on the developer's prompt.
 		"SHELL=/bin/sh",
+		// Pointed at this test's own directory rather than left inherited, so a change to config-path
+		// precedence cannot quietly reintroduce reading the developer's real file.
+		"XDG_CONFIG_HOME="+filepath.Join(e.state, "xdg-config"),
 	)
 	if e.session_ != "" {
 		out = append(out, "CM_SESSION="+e.session_)
@@ -232,9 +235,17 @@ func (e *env) environ() []string {
 	if e.config != "" {
 		out = append(out, "CM_CONFIG="+e.config)
 	} else {
-		// Explicitly empty rather than unset: an inherited CM_CONFIG would silently make a test read
-		// the developer's real configuration, and it would pass or fail based on their machine.
-		out = append(out, "CM_CONFIG=")
+		// A path inside this test's own directory rather than an empty value.
+		//
+		// Empty means unset, so cm falls through to XDG_CONFIG_HOME or the platform config directory and
+		// reads the developer's real file. That is not hypothetical: with detach_key set in ~/.config/cm,
+		// a test that had written no config saw ctrl-o, so every e2e test was running against whatever
+		// happened to be on the machine. It looked isolated only because the fallback path did not exist
+		// until XDG support was added.
+		//
+		// Naming a file that does not exist is both isolated and the default path a new user is on, since a
+		// missing config is not an error.
+		out = append(out, "CM_CONFIG="+filepath.Join(e.state, "absent-cm.toml"))
 	}
 	return out
 }
