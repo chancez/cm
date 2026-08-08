@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -467,6 +468,25 @@ func killStrandedServers(t *testing.T, e *env) {
 			_ = p.Signal(syscall.SIGTERM)
 		}
 	}
+}
+
+// serverIsRunning reports whether a server is listening.
+//
+// Checked by the socket rather than by running a command, since every command starts one if none is running,
+// which would make the check create what it is looking for.
+func (e *env) serverIsRunning() bool {
+	sock := filepath.Join(e.runtime, "server.sock")
+	if _, err := os.Stat(sock); err != nil {
+		return false
+	}
+	// A socket file can outlive its server, so dial it: the file's existence alone would report a stale socket
+	// as a running server.
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // restartServer stops the running server and waits for it to go.

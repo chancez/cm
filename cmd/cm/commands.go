@@ -18,13 +18,14 @@ import (
 
 func newAttachCommand(g *globals) *cobra.Command {
 	var (
-		own       bool
-		readOnly  bool
-		dir       string
-		setTitle  bool
-		persist   bool
-		onRestore string
-		env       []string
+		own          bool
+		readOnly     bool
+		dir          string
+		setTitle     bool
+		persist      bool
+		onRestore    string
+		env          []string
+		detachKeyArg string
 	)
 	cmd := &cobra.Command{
 		Use:   "attach [session]",
@@ -37,7 +38,10 @@ creating a window's session and reattaching to it after a restart.
 With no name, the server allocates one and prints it, which is how a per-window
 session is created without the caller inventing names.
 
-Detach with ctrl-\ , which leaves the session running.`,
+Detach with ctrl-\ , which leaves the session running. --detach-key changes that
+for one attachment, which matters when something outside this client already
+claims the key: a multiplexer you are attaching from within sees it first, so the
+inner client never receives it.`,
 		// Only the args before "--" are the session name; everything after is the command
 		// to run, so MaximumNArgs would wrongly reject "attach x -- sh -c ...".
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -73,7 +77,14 @@ Detach with ctrl-\ , which leaves the session running.`,
 				return err
 			}
 
-			detachKey, err := client.ParseDetachKey(cfg.DetachKey)
+			// The flag wins over the config file, as flags do. Worth having as a flag and not only a
+			// setting: the case for changing it is usually one attachment rather than every one, such as
+			// attaching from inside another multiplexer that claims ctrl-\ for itself.
+			keySpec := cfg.DetachKey
+			if detachKeyArg != "" {
+				keySpec = detachKeyArg
+			}
+			detachKey, err := client.ParseDetachKey(keySpec)
 			if err != nil {
 				return err
 			}
@@ -126,6 +137,8 @@ Detach with ctrl-\ , which leaves the session running.`,
 		"what to do when reviving this session: shell, none, or command")
 	f.StringArrayVar(&env, "env", nil,
 		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
+	f.StringVar(&detachKeyArg, "detach-key", "",
+		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	return cmd
 }
 

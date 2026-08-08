@@ -67,6 +67,10 @@ Sessions survive detaching, the client exiting, and the server restarting. It
 provides no windows, tabs, or splits: your terminal emulator already does that.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// A --version flag as well as the subcommand, because both are what people try first and neither
+		// being there is its own small friction. Cobra prints this for --version; the subcommand reports more,
+		// including the running server's build.
+		Version: paths.Version(),
 		// Without this, running bare `cm` exits 0 having printed nothing useful.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
@@ -105,6 +109,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newGetEnvCommand(g),
 		newLogsCommand(g),
 		newShimCommand(g),
+		newVersionCommand(g),
 		newCompletionsCommand(),
 	)
 

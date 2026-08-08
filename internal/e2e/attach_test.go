@@ -114,6 +114,17 @@ func (c *ptyClient) typeLine(text string) {
 	}
 }
 
+// write sends raw bytes, for keys that have no convenience method.
+//
+// Bytes rather than a string, since these are control characters and spelling them as escapes in a string
+// literal invites the mangling that makes a terminal test silently pass.
+func (c *ptyClient) write(b []byte) {
+	c.t.Helper()
+	if _, err := c.ptmx.Write(b); err != nil {
+		c.t.Fatalf("writing to the pty: %v", err)
+	}
+}
+
 // detachKey sends ctrl-\, the default detach key, as the literal byte a terminal would send.
 func (c *ptyClient) detachKey() {
 	c.t.Helper()
@@ -266,5 +277,69 @@ func TestOwnedSessionSurvivesADeliberateDetach(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if s, ok := e.session("kept"); !ok || s.State != "running" {
 		t.Errorf("owned session after a deliberate detach = %+v (found=%v), want it running", s, ok)
+	}
+}
+
+// --detach-key overrides the configured key for one attachment.
+//
+// Asked for after attaching to cm from inside a zmx window: zmx claims ctrl-\ and has no way to change it, so
+// the outer client saw the key first and the inner cm never received it. Nesting one multiplexer in another is
+// exactly the situation during a migration, and the fix has to be per-attachment rather than a global setting.
+//
+// A real pty and real keystroke bytes, since the whole mechanism is about which client sees a byte first.
+func TestAttachDetachKeyFlagOverridesTheDefault(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	// ctrl-o rather than the default ctrl-\.
+	c := attachOnPty(t, e, "customkey", "--detach-key", "ctrl-o", "--", "/bin/sh")
+	c.waitReady()
+	c.typeLine("echo READY_MARK")
+	c.waitForOutput("READY_MARK", 15*time.Second)
+
+	// The default key must now reach the shell rather than detaching. 0x1c is ctrl-\.
+	c.write([]byte{0x1c})
+	time.Sleep(500 * time.Millisecond)
+	s, ok := e.session("customkey")
+	if !ok {
+		t.Fatal("session vanished")
+	}
+	if s.Clients != 1 {
+		t.Errorf("clients = %d after sending the default detach key, want 1: the flag should have "+
+			"disabled it", s.Clients)
+	}
+
+	// And the configured key detaches. 0x0f is ctrl-o.
+	c.write([]byte{0x0f})
+	e.waitFor("the client to detach on the custom key", 15*time.Second, func() bool {
+		s, ok := e.session("customkey")
+		return ok && s.Clients == 0
+	})
+
+	// The session survives, which is what detaching means.
+	after, ok := e.session("customkey")
+	if !ok {
+		t.Fatal("the session was destroyed rather than detached from")
+	}
+	if after.State != "running" {
+		t.Errorf("state = %q after detaching, want running", after.State)
+	}
+}
+
+// An invalid --detach-key is rejected rather than silently ignored.
+//
+// Silently falling back to the default would be worse than an error: the user asked for a key precisely because
+// the default does not reach them, so ignoring it means the client cannot be detached at all.
+func TestAttachRejectsAnInvalidDetachKey(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	r := e.run("attach", "badkey", "--detach-key", "not-a-key", "--", "/bin/sh")
+	if r.code == 0 {
+		t.Errorf("exit code = 0 for an invalid detach key, want non-zero\nstdout: %s", r.stdout)
+	}
+	if !strings.Contains(r.stderr, "detach key") {
+		t.Errorf("stderr = %q, want it to name the detach key as the problem", r.stderr)
 	}
 }

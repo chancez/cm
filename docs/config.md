@@ -139,6 +139,12 @@ Details worth knowing when scripting against it:
 control code (`[`, `\`, `]`, `^`, `_`, `?`, `@`), and `none` to disable detaching by key. The
 default is `ctrl-\`.
 
+`cm attach --detach-key` overrides this for a single attachment, and takes precedence over the
+config file. That exists for the case where something outside the client already claims the key:
+attaching to cm from inside another multiplexer means the outer client sees ctrl-\ first and the
+inner one never receives it, so the window closes instead of detaching. A per-attachment flag fits
+that better than a setting, since it is usually one window rather than every one.
+
 Configurable because that combination is awkward or unreachable on some keyboard layouts, and
 disableable because a program running in the session may want the key itself.
 

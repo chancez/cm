@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -135,7 +134,7 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		// A server too old to know this method cannot report anything, which is itself the diagnosis: it is
 		// version skew, and the one case doctor cannot investigate from the inside. Said plainly, since
 		// "Unimplemented desc = method Doctor" does not tell a reader to restart their server.
-		if strings.Contains(err.Error(), "Unimplemented") {
+		if isUnimplemented(err) {
 			return fmt.Errorf(
 				"the running server is too old to support this command (client is %s); "+
 					"restart it with `cm server stop` and it will be replaced by this build",
