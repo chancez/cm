@@ -87,6 +87,45 @@ What has actually worked:
 - **Check the fix is not too broad.** Reverting to "always fail" and "never fail" and confirming the
   test rejects both is what distinguishes a real assertion from one that merely passes.
 
+## What only a real process can catch
+
+Three shipped bugs were invisible to the unit tests for a structural reason rather than an oversight:
+they lived between processes. `internal/e2e` exists for that class.
+
+- A session adopted after a server restart came back with a blank screen. Nothing below the process
+  boundary starts a *second server process* against the same store.
+- `cm list` filled with every command ever run, because expiry was gated on a config flag. Every unit
+  test sets the policy explicitly, so the default path was never exercised.
+- A build without cgo could not create a session at all, since the fault was in wiring that only
+  exists in `main`.
+
+Writing those tests then found three more: a server deleting its successor's socket on restart, an
+owned session being destroyed by a deliberate detach, and `cm run` output not being readable after the
+command exited.
+
+The detach one is the clearest argument for driving a real client. The client sent Detach and returned,
+but ttrpc sends are asynchronous, so closing the connection discarded the message. Every unit test
+drives the service through a fake stream whose `Send` completes synchronously, so the window does not
+exist there at all.
+
+## Verifying a test actually catches its bug
+
+Every fix here has a test confirmed to fail without it. That check is worth doing mechanically, because
+four tests passed while the bug was present:
+
+- **`go test` caching.** With only a dependency changed, results were served from cache and three
+  "still passing" readings were meaningless. Use `-count=1` when mutating code under test.
+- **Counting occurrences instead of asserting the value.** A resume-boundary off-by-one duplicates a
+  *fragment*, not a whole line: `"UNIQUE_LINE\r\n_LINE\r\n"` contains the line exactly once and is
+  still corrupt.
+- **`t.Fatalf` in a wait helper.** It aborted before the real assertion, so a corrupt result reported
+  as "did not contain X" and the mutation looked caught when it was not.
+- **The command chosen for a race.** `/usr/bin/true` lost the exit-status race 36 of 40 times, while
+  `sh -c 'echo RAN; exit 7'` lost only 2 of 40, because the echo gives the attach time to finish.
+
+Also worth checking that a fix is not too broad. Reverting to "always fail" and "never fail", and
+confirming the test rejects both, is what distinguishes a real assertion from one that merely passes.
+
 ## Where a delay is a diagnostic
 
 Adding a `time.Sleep` inside a suspected window is a cheap way to turn an intermittent failure into

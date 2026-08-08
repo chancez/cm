@@ -86,10 +86,20 @@ mise install
 mise run build
 ```
 
-Tests run on the host with `mise run test`. `mise run test-linux` runs them on Linux in Docker,
-which is worth doing before trusting a change to anything platform-specific: a macOS-only run never
-compiles the Linux paths, and `/bin/sh` there is dash rather than bash.
+Tests run on the host with `mise run test`. Two Linux runs exist, and they check different things:
+
+- `mise run test-linux-cgo` builds libghostty from source and runs everything, so screen restore,
+  history, and adoption-with-scrollback are covered. This is the one to use before trusting a change
+  to anything platform-specific.
+- `mise run test-linux` builds without cgo. The tests that need rendering skip themselves, so this
+  covers less, and it is the only thing that verifies cm degrades rather than breaks when the
+  emulator is absent.
+
+Both matter: a macOS-only run never compiles the Linux paths, and `/bin/sh` there is dash rather than
+bash, which has caught real bugs.
 
 `mise run build-linux` cross-compiles without cgo. Such a build has no terminal emulator, so screen
 restore on reattach and `cm history` are unavailable while everything else works. See
 `docs/architecture.md`.
+
+`go test -short` skips the end-to-end tests, which spawn real processes and ptys.
