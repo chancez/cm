@@ -647,7 +647,13 @@ func (x *WaitResponse) GetExitCode() int32 {
 type DoctorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Act on the fixable findings rather than only reporting them.
-	Repair        bool `protobuf:"varint,1,opt,name=repair,proto3" json:"repair,omitempty"`
+	Repair bool `protobuf:"varint,1,opt,name=repair,proto3" json:"repair,omitempty"`
+	// The calling client's build, so the server can report a mismatch with its own.
+	//
+	// Sent by the client rather than derived server-side, because that is the only place it is knowable: the
+	// server cannot tell which binary connected to it. Empty from a client that predates this field, which
+	// is itself a version difference worth reporting.
+	ClientVersion string `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -689,11 +695,20 @@ func (x *DoctorRequest) GetRepair() bool {
 	return false
 }
 
+func (x *DoctorRequest) GetClientVersion() string {
+	if x != nil {
+		return x.ClientVersion
+	}
+	return ""
+}
+
 type DoctorResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Findings []*Finding             `protobuf:"bytes,1,rep,name=findings,proto3" json:"findings,omitempty"`
 	// What a repair did, empty when repair was not requested.
-	Repaired      []string `protobuf:"bytes,2,rep,name=repaired,proto3" json:"repaired,omitempty"`
+	Repaired []string `protobuf:"bytes,2,rep,name=repaired,proto3" json:"repaired,omitempty"`
+	// The server's own build, so a client can show both sides of a mismatch.
+	ServerVersion string `protobuf:"bytes,3,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -740,6 +755,13 @@ func (x *DoctorResponse) GetRepaired() []string {
 		return x.Repaired
 	}
 	return nil
+}
+
+func (x *DoctorResponse) GetServerVersion() string {
+	if x != nil {
+		return x.ServerVersion
+	}
+	return ""
 }
 
 // Finding is one thing wrong with an installation.
@@ -2553,12 +2575,14 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04busy\x18\x02 \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\x03 \x01(\tR\acommand\x120\n" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
-	"\texit_code\x18\x05 \x01(\x05R\bexitCode\"'\n" +
+	"\texit_code\x18\x05 \x01(\x05R\bexitCode\"N\n" +
 	"\rDoctorRequest\x12\x16\n" +
-	"\x06repair\x18\x01 \x01(\bR\x06repair\"_\n" +
+	"\x06repair\x18\x01 \x01(\bR\x06repair\x12%\n" +
+	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\"\x86\x01\n" +
 	"\x0eDoctorResponse\x121\n" +
 	"\bfindings\x18\x01 \x03(\v2\x15.cm.server.v1.FindingR\bfindings\x12\x1a\n" +
-	"\brepaired\x18\x02 \x03(\tR\brepaired\"\xb9\x01\n" +
+	"\brepaired\x18\x02 \x03(\tR\brepaired\x12%\n" +
+	"\x0eserver_version\x18\x03 \x01(\tR\rserverVersion\"\xb9\x01\n" +
 	"\aFinding\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x16\n" +

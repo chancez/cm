@@ -66,6 +66,31 @@ func findingsByKind(fs []Finding) map[string][]Finding {
 	return out
 }
 
+// stateFindings drops the findings that describe the test environment rather than the state under test.
+//
+// Necessary because several checks are legitimately true of any test run and would otherwise swamp every
+// assertion: a temp directory is deep enough to threaten the socket path limit, a manager built without a
+// terminal factory has no emulator, and a shell in a fixture never loads shell integration. Each has its own
+// test; here they are noise.
+//
+// Filtering by kind rather than by counting, so a *new* unexpected finding still fails a test that expects
+// none. Dropping "everything but orphans" would hide the next surprise.
+func stateFindings(fs []Finding) []Finding {
+	environmental := map[string]bool{
+		FindingLongSocketPath:     true,
+		FindingNoTerminal:         true,
+		FindingNoShellIntegration: true,
+		FindingVersionSkew:        true,
+	}
+	var out []Finding
+	for _, f := range fs {
+		if !environmental[f.Kind] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // A healthy installation reports nothing.
 //
 // Worth asserting first: a diagnostic that cries wolf on a working setup is worse than none, since it trains
@@ -82,12 +107,12 @@ func TestDiagnoseFindsNothingWhenHealthy(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx)
+	got, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("Diagnose() = %+v, want nothing on a healthy installation", got)
+	if state := stateFindings(got); len(state) != 0 {
+		t.Errorf("Diagnose() = %+v, want nothing about the installation's state", state)
 	}
 }
 
@@ -110,7 +135,7 @@ func TestDiagnoseFindsAnOrphanedShim(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx)
+	got, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -156,7 +181,7 @@ func TestRepairStopsOrphansAndSparesHealthySessions(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	found, err := mgr.Diagnose(ctx)
+	found, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -192,7 +217,7 @@ func TestDiagnoseFindsAStaleSocket(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx)
+	got, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -227,7 +252,7 @@ func TestDiagnoseReportsARecordWithNoShim(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx)
+	got, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -256,11 +281,11 @@ func TestDiagnoseHandlesAMissingRuntimeDir(t *testing.T) {
 		t.Fatalf("RemoveAll() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx)
+	got, err := mgr.Diagnose(ctx, paths.Version())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v, want a missing runtime dir to be fine", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("Diagnose() = %+v, want nothing", got)
+	if state := stateFindings(got); len(state) != 0 {
+		t.Errorf("Diagnose() = %+v, want nothing", state)
 	}
 }

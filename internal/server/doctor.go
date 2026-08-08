@@ -56,7 +56,7 @@ const (
 // shim whose runtime directory has been deleted, because there is nothing left to enumerate. The
 // alternative, scanning the process table for anything that looks like a shim, can be fooled and could kill
 // something that is not cm's, which is a worse failure than missing an orphan.
-func (m *Manager) Diagnose(ctx context.Context) ([]Finding, error) {
+func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding, error) {
 	records, err := m.store.List(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
@@ -120,6 +120,16 @@ func (m *Manager) Diagnose(ctx context.Context) ([]Finding, error) {
 		})
 	}
 
+	// The rest of the checks, each encoding a failure that has happened here. They are independent and
+	// non-destructive, so they all run rather than stopping at the first thing found: a reader debugging a
+	// problem wants the whole picture, not the first item alphabetically.
+	findings = append(findings, checkVersionSkew(clientVersion)...)
+	findings = append(findings, m.checkTerminal()...)
+	findings = append(findings, m.checkSocketPath()...)
+	findings = append(findings, m.checkShellIntegration()...)
+	findings = append(findings, m.checkSessionBacklog(ctx)...)
+	findings = append(findings, m.checkServerLog()...)
+
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Kind != findings[j].Kind {
 			return findings[i].Kind < findings[j].Kind
@@ -165,13 +175,14 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 func (s *Service) Doctor(
 	ctx context.Context, req *serverv1.DoctorRequest,
 ) (*serverv1.DoctorResponse, error) {
-	findings, err := s.mgr.Diagnose(ctx)
+	findings, err := s.mgr.Diagnose(ctx, req.ClientVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	resp := &serverv1.DoctorResponse{
-		Findings: make([]*serverv1.Finding, 0, len(findings)),
+		Findings:      make([]*serverv1.Finding, 0, len(findings)),
+		ServerVersion: paths.Version(),
 	}
 	if req.Repair {
 		resp.Repaired = s.mgr.Repair(ctx, findings)

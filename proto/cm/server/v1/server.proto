@@ -157,12 +157,20 @@ message WaitResponse {
 message DoctorRequest {
   // Act on the fixable findings rather than only reporting them.
   bool repair = 1;
+  // The calling client's build, so the server can report a mismatch with its own.
+  //
+  // Sent by the client rather than derived server-side, because that is the only place it is knowable: the
+  // server cannot tell which binary connected to it. Empty from a client that predates this field, which
+  // is itself a version difference worth reporting.
+  string client_version = 2;
 }
 
 message DoctorResponse {
   repeated Finding findings = 1;
   // What a repair did, empty when repair was not requested.
   repeated string repaired = 2;
+  // The server's own build, so a client can show both sides of a mismatch.
+  string server_version = 3;
 }
 
 // Finding is one thing wrong with an installation.
