@@ -81,19 +81,33 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
 	}
 
-	reader, restore, err := sess.attach(open.ResumeFromSeq)
+	att, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
 		return err
 	}
-	defer sess.detach(reader)
+	reader := att.reader
+	defer func() {
+		// Tell a program that tracks focus when the last client leaves, since a detached session
+		// is exactly "nobody is watching".
+		if last := sess.detach(att); last {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			sess.ReportFocus(ctx, false)
+		}
+	}()
 	startSeq := reader.Position()
+
+	// And when one arrives.
+	if att.first {
+		sess.ReportFocus(ctx, true)
+	}
 
 	if err := srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Opened{
 			Opened: &serverv1.Opened{
 				Session: sess.name,
 				Created: created,
-				Restore: restore,
+				Restore: att.restore,
 				NextSeq: startSeq,
 			},
 		},

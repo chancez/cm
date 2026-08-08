@@ -127,3 +127,19 @@ func (s *SessionTerminal) Close() error {
 	defer s.mu.Unlock()
 	return s.term.Close()
 }
+
+// FocusReporting reports whether the program in the session asked to be told about focus changes
+// (DECSET 1004).
+//
+// Worth knowing because such a program uses focus to decide whether anyone is watching: a TUI may
+// skip rendering, and something long-running may raise a desktop notification only when
+// unobserved. Detaching is exactly "nobody is watching", so it should be reported as focus loss.
+func (s *SessionTerminal) FocusReporting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	on, err := s.term.focusEventMode()
+	if err != nil {
+		return false
+	}
+	return on
+}

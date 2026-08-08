@@ -293,3 +293,11 @@ func cmPwdChanged(_ C.GhosttyTerminal, userdata unsafe.Pointer) {
 // cmSyncMode exposes the synchronized-output mode to tests in this package, which cannot
 // reference the C accessor from a non-cgo file.
 func cmSyncMode() C.GhosttyMode { return C.cm_mode_sync_output() }
+
+// focusEventMode reports whether DECSET 1004 focus reporting is enabled.
+func (t *Terminal) focusEventMode() (bool, error) {
+	if t.closed {
+		return false, nil
+	}
+	return t.mode(C.cm_mode_focus_event())
+}

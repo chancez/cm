@@ -23,5 +23,6 @@ GhosttyResult cm_install_callbacks(GhosttyTerminal terminal,
 // Modes are built by a static inline function that cgo cannot call, so the ones cm needs are
 // exposed as ordinary functions.
 GhosttyMode cm_mode_sync_output(void);
+GhosttyMode cm_mode_focus_event(void);
 
 #endif

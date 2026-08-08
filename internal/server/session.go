@@ -105,6 +105,8 @@ type Terminal interface {
 	Title() string
 	// Pwd returns the last directory the shell reported, unparsed.
 	Pwd() string
+	// FocusReporting reports whether the program asked to be told about focus changes.
+	FocusReporting() bool
 	// Plain, VT, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
@@ -404,18 +406,29 @@ func (s *Session) LastSeq() uint64 {
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
+// attachment is what a client gets from attaching.
+type attachment struct {
+	// reader streams session output.
+	reader *seqlog.Reader
+	// restore holds bytes reproducing the current screen, empty when resuming.
+	restore []byte
+	// first reports that this is the only attached client, so a program that tracks focus should
+	// be told someone is watching again.
+	first bool
+}
+
 // attach registers a subscriber and returns it along with the sequence number its stream
 // begins at.
 //
 // The caller gets restore bytes and a starting sequence under one lock, so no output can
 // slip between snapshotting the screen and subscribing. Getting that wrong would show a
 // client a screen that is either missing bytes or replaying them twice.
-func (s *Session) attach(resumeFrom *uint64) (*seqlog.Reader, []byte, error) {
+func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.ended {
-		return nil, nil, ErrSessionGone
+		return attachment{}, ErrSessionGone
 	}
 
 	// A resuming client already has the session on screen and wants only the bytes it
@@ -429,7 +442,7 @@ func (s *Session) attach(resumeFrom *uint64) (*seqlog.Reader, []byte, error) {
 	} else if s.term != nil {
 		b, err := s.term.Restore()
 		if err != nil {
-			return nil, nil, fmt.Errorf("serializing terminal state: %w", err)
+			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
 		restore = b
 		// State is replayed, so streaming starts at the present rather than repeating
@@ -437,15 +450,41 @@ func (s *Session) attach(resumeFrom *uint64) (*seqlog.Reader, []byte, error) {
 		from = s.lastSeq
 	}
 
-	r := s.recent.Subscribe(from)
-	s.clients.Add(1)
-	return r, restore, nil
+	return attachment{
+		reader:  s.recent.Subscribe(from),
+		restore: restore,
+		first:   s.clients.Add(1) == 1,
+	}, nil
 }
 
-// detach releases a subscriber.
-func (s *Session) detach(r *seqlog.Reader) {
-	r.Close()
-	s.clients.Add(-1)
+// detach releases a subscriber, reporting whether it was the last one.
+func (s *Session) detach(a attachment) (last bool) {
+	a.reader.Close()
+	return s.clients.Add(-1) == 0
+}
+
+// ReportFocus tells the program in the session whether anyone is watching.
+//
+// Only sent when the program asked for focus events (DECSET 1004). Some programs use focus to
+// decide whether to render at all, or whether to raise a desktop notification instead, and a
+// detached session is exactly "nobody is watching". Without this a program keeps behaving as
+// though it is on screen.
+//
+// Written as input rather than output because that is what a terminal does: focus reports travel
+// the same direction as keystrokes.
+func (s *Session) ReportFocus(ctx context.Context, focused bool) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil || !term.FocusReporting() {
+		return
+	}
+
+	seq := "\x1b[O" // focus out
+	if focused {
+		seq = "\x1b[I"
+	}
+	_ = s.Write(ctx, []byte(seq))
 }
 
 // Write sends input to the session's shell.

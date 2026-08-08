@@ -99,12 +99,12 @@ func TestReconcileAdoptsLiveShim(t *testing.T) {
 		t.Fatal("session was not adopted")
 	}
 
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	if got := readUntil(t, r, "ADOPTED"); !strings.Contains(got, "ADOPTED") {
+	defer sess.detach(att)
+	if got := readUntil(t, att.reader, "ADOPTED"); !strings.Contains(got, "ADOPTED") {
 		t.Errorf("output = %q, want the adopted session's output", got)
 	}
 
@@ -292,12 +292,12 @@ func TestCloseLeavesShimRunningAndPersistsResumePoint(t *testing.T) {
 	if !live {
 		t.Fatal("session not adopted")
 	}
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	readUntil(t, r, "SOMETHING")
-	sess.detach(r)
+	readUntil(t, att.reader, "SOMETHING")
+	sess.detach(att)
 
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -360,12 +360,12 @@ func TestListReportsLiveSequence(t *testing.T) {
 	}
 
 	sess, _ := mgr.Get("listed")
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	readUntil(t, r, "LISTED")
+	defer sess.detach(att)
+	readUntil(t, att.reader, "LISTED")
 
 	sessions, err := mgr.List(ctx, "")
 	if err != nil {

@@ -29,6 +29,8 @@ type fakeTerminal struct {
 	pending  [][]byte
 	title    string
 	pwd      string
+	// focusReporting stands in for DECSET 1004 being enabled by the program.
+	focusReporting bool
 }
 
 func (f *fakeTerminal) Write(p []byte) error {
@@ -73,6 +75,12 @@ func (f *fakeTerminal) Title() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.title
+}
+
+func (f *fakeTerminal) FocusReporting() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.focusReporting
 }
 
 func (f *fakeTerminal) Pwd() string {
@@ -205,12 +213,12 @@ func TestSessionFeedsTerminalModel(t *testing.T) {
 	}
 	defer sess.Close()
 
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	readUntil(t, r, "MODELED")
+	defer sess.detach(att)
+	readUntil(t, att.reader, "MODELED")
 
 	// The terminal model must see the same bytes the client does, or a restore would show a
 	// screen that never existed.
@@ -240,26 +248,33 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 	readUntil(t, warm, "HELLO")
 	warm.Close()
 
-	fresh, restore, err := sess.attach(nil)
+	fresh, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("fresh attach() error = %v", err)
 	}
 	defer sess.detach(fresh)
-	if string(restore) != "RESTORED" {
-		t.Errorf("fresh attach restore = %q, want %q", restore, "RESTORED")
+	if string(fresh.restore) != "RESTORED" {
+		t.Errorf("fresh attach restore = %q, want %q", fresh.restore, "RESTORED")
+	}
+	if !fresh.first {
+		t.Error("first attach reports first = false, want true so focus can be reported")
 	}
 
 	from := uint64(0)
-	resumed, restore, err := sess.attach(&from)
+	resumed, err := sess.attach(&from)
 	if err != nil {
 		t.Fatalf("resumed attach() error = %v", err)
 	}
 	defer sess.detach(resumed)
-	if len(restore) != 0 {
-		t.Errorf("resumed attach restore = %q, want nothing: the client already has the screen", restore)
+	if len(resumed.restore) != 0 {
+		t.Errorf("resumed attach restore = %q, want nothing: the client already has the screen",
+			resumed.restore)
 	}
-	if got := resumed.Position(); got != from {
+	if got := resumed.reader.Position(); got != from {
 		t.Errorf("resumed reader position = %d, want %d", got, from)
+	}
+	if resumed.first {
+		t.Error("second attach reports first = true, want false")
 	}
 }
 
@@ -283,15 +298,15 @@ func TestAttachWithoutTerminalReplaysRecentOutput(t *testing.T) {
 	warm.Close()
 
 	// Attaching after that output was produced must still show it.
-	r, restore, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	if len(restore) != 0 {
-		t.Errorf("restore = %q, want nothing when there is no terminal model", restore)
+	defer sess.detach(att)
+	if len(att.restore) != 0 {
+		t.Errorf("restore = %q, want nothing when there is no terminal model", att.restore)
 	}
-	if got := readUntil(t, r, "EARLIER"); !strings.Contains(got, "EARLIER") {
+	if got := readUntil(t, att.reader, "EARLIER"); !strings.Contains(got, "EARLIER") {
 		t.Errorf("output = %q, want earlier output replayed", got)
 	}
 }
@@ -310,27 +325,30 @@ func TestMultipleClientsEachSeeOutput(t *testing.T) {
 	}
 	defer sess.Close()
 
-	r1, _, err := sess.attach(nil)
+	a1, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
-	defer sess.detach(r1)
-	r2, _, err := sess.attach(nil)
+	a2, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}
-	defer sess.detach(r2)
+	defer sess.detach(a2)
 
 	if n := sess.Clients(); n != 2 {
 		t.Errorf("Clients() = %d, want 2", n)
 	}
-	for i, r := range []*seqlog.Reader{r1, r2} {
+	for i, r := range []*seqlog.Reader{a1.reader, a2.reader} {
 		if got := readUntil(t, r, "SHARED"); !strings.Contains(got, "SHARED") {
 			t.Errorf("client %d saw %q, want SHARED", i, got)
 		}
 	}
 
-	sess.detach(r1)
+	// Detaching one of two must not report itself as the last, or focus loss would be sent while
+	// a client is still watching.
+	if last := sess.detach(a1); last {
+		t.Error("detach reported last = true with another client attached")
+	}
 	if n := sess.Clients(); n != 1 {
 		t.Errorf("Clients() after detach = %d, want 1", n)
 	}
@@ -351,11 +369,11 @@ func TestSessionEndsWhenShellExits(t *testing.T) {
 	}
 	defer sess.Close()
 
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
+	defer sess.detach(att)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -363,7 +381,7 @@ func TestSessionEndsWhenShellExits(t *testing.T) {
 	var sb strings.Builder
 	var lastErr error
 	for {
-		c, err := r.Next(ctx)
+		c, err := att.reader.Next(ctx)
 		if err != nil {
 			lastErr = err
 			break
@@ -410,7 +428,7 @@ func TestAttachToEndedSessionFails(t *testing.T) {
 		t.Fatal("session did not end")
 	}
 
-	if _, _, err := sess.attach(nil); !errors.Is(err, ErrSessionGone) {
+	if _, err := sess.attach(nil); !errors.Is(err, ErrSessionGone) {
 		t.Errorf("attach() error = %v, want ErrSessionGone", err)
 	}
 }
@@ -431,13 +449,13 @@ func TestTerminalWriteFailureDoesNotKillSession(t *testing.T) {
 	}
 	defer sess.Close()
 
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
+	defer sess.detach(att)
 
-	if got := readUntil(t, r, "STILLWORKS"); !strings.Contains(got, "STILLWORKS") {
+	if got := readUntil(t, att.reader, "STILLWORKS"); !strings.Contains(got, "STILLWORKS") {
 		t.Errorf("output = %q, want output to keep flowing despite the model failing", got)
 	}
 	if ended, _ := sess.Ended(); ended {
@@ -463,12 +481,12 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 		t.Errorf("initial LastSeq() = %d, want 0", got)
 	}
 
-	r, _, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	out := readUntil(t, r, "COUNTED")
+	defer sess.detach(att)
+	out := readUntil(t, att.reader, "COUNTED")
 
 	if got := sess.LastSeq(); got < uint64(len(out)) {
 		t.Errorf("LastSeq() = %d, want at least %d after consuming %q",
@@ -503,17 +521,17 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 	}
 	defer second.Close()
 
-	r2, _, err := second.attach(nil)
+	a2, err := second.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer second.detach(r2)
+	defer second.detach(a2)
 
-	if got := r2.Position(); got < resumeFrom {
+	if got := a2.reader.Position(); got < resumeFrom {
 		t.Errorf("resumed reader position = %d, want at least the resume point %d",
 			got, resumeFrom)
 	}
-	if got := readUntil(t, r2, "SECOND"); strings.Contains(got, "FIRST") {
+	if got := readUntil(t, a2.reader, "SECOND"); strings.Contains(got, "FIRST") {
 		t.Errorf("resumed output = %q, want it to exclude already-consumed output", got)
 	}
 }
@@ -648,12 +666,12 @@ func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
 	if err := sess.Resize(context.Background(), 40, 120, 0, 0); err != nil {
 		t.Fatalf("Resize() error = %v", err)
 	}
-	r, restore, err := sess.attach(nil)
+	att, err := sess.attach(nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
-	defer sess.detach(r)
-	if len(restore) == 0 {
+	defer sess.detach(att)
+	if len(att.restore) == 0 {
 		t.Fatal("attach() returned no restore bytes")
 	}
 
@@ -661,5 +679,100 @@ func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
 	gotRows, gotCols := term.Size()
 	if gotRows != 40 || gotCols != 120 {
 		t.Errorf("terminal model size at snapshot = (%d, %d), want (40, 120)", gotRows, gotCols)
+	}
+}
+
+// A program that asked for focus events must be told when nobody is watching.
+//
+// Some programs use focus to decide whether to render at all, or whether to raise a desktop
+// notification instead of drawing. A detached session is exactly "nobody is watching", so without
+// this the program keeps behaving as though it is on screen.
+//
+// The reports are observed by having the shell read them and print what it got, rather than by
+// looking for the escape bytes in the session's output. A pty echoes control characters in caret
+// notation, so the raw sequence never appears in the stream as written.
+func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
+	// Reads one focus report and prints its final byte, which is O for focus-out and I for
+	// focus-in. LC_ALL keeps od's output format predictable.
+	const script = `
+		echo READY
+		while IFS= read -r -n 3 seq; do
+			printf 'GOT:%s\n' "${seq#*[}"
+		done
+	`
+
+	loud := &fakeTerminal{focusReporting: true}
+	rec := startShimFor(t, shimConfigFor("focus-on", script))
+	sess, err := newSession(rec, loud, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+	readUntil(t, att.reader, "READY")
+
+	sess.ReportFocus(context.Background(), false)
+	if got := readUntil(t, att.reader, "GOT:O"); !strings.Contains(got, "GOT:O") {
+		t.Errorf("output = %q, want the shell to receive a focus-out report", got)
+	}
+
+	sess.ReportFocus(context.Background(), true)
+	if got := readUntil(t, att.reader, "GOT:I"); !strings.Contains(got, "GOT:I") {
+		t.Errorf("output = %q, want the shell to receive a focus-in report", got)
+	}
+}
+
+// Nothing is sent when the program never asked for focus events, since an unrequested escape
+// sequence would arrive as stray keystrokes.
+func TestReportFocusSilentWhenNotRequested(t *testing.T) {
+	quiet := &fakeTerminal{focusReporting: false}
+	rec := startShimFor(t, shimConfigFor("focus-off", "echo READY; cat"))
+	sess, err := newSession(rec, quiet, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+	readUntil(t, att.reader, "READY")
+
+	sess.ReportFocus(context.Background(), false)
+
+	// cat echoes whatever it receives, so anything arriving now would be the report.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if c, err := att.reader.Next(ctx); err == nil && len(c.Data) > 0 {
+		t.Errorf("sent %q although the program never enabled focus events", c.Data)
+	}
+}
+
+// detach must report the last client leaving, since that is what triggers focus loss.
+func TestDetachReportsLastClient(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("last", "sleep 5"))
+
+	sess, err := newSession(rec, nil, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	a1, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	if !a1.first {
+		t.Error("first attach reports first = false, want true")
+	}
+	if last := sess.detach(a1); !last {
+		t.Error("detaching the only client reports last = false, want true")
 	}
 }
