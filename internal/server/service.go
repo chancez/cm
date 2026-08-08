@@ -43,7 +43,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		Command:   open.Command,
 		Dir:       open.Cwd,
 		Env:       open.Env,
-		Owned:     open.Own,
+		Owned:     open.Own && !open.ReadOnly,
 		ClientEnv: open.ClientEnv,
 		Persist:   open.Persist,
 		OnRestore: RestoreAction(open.OnRestore),
@@ -96,7 +96,8 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 	s.mgr.log.Info("client attached",
 		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
-		"read_only", open.ReadOnly, "owns", open.Own, "restore_bytes", len(att.restore))
+		"read_only", open.ReadOnly, "owns", open.Own && !open.ReadOnly,
+		"restore_bytes", len(att.restore))
 	reader := att.reader
 	defer func() {
 		// Tell a program that tracks focus when the last client leaves, since a detached session
@@ -141,8 +142,13 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}()
 
 	// reapIfAbandoned ends an owned session whose client vanished without detaching.
+	//
+	// A read-only client can never trigger this, however it asked. Ownership means "this session
+	// exists for my window", which contradicts watching someone else's, and honoring both flags
+	// together would let a follower destroy the session it was only observing.
+	owns := open.Own && !open.ReadOnly
 	reapIfAbandoned := func() {
-		if open.Own && !sawDetach.Load() {
+		if owns && !sawDetach.Load() {
 			s.reapOwned(sess)
 		}
 	}
