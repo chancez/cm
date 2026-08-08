@@ -25,6 +25,16 @@ func main() {
 	defer stop()
 
 	if err := newRootCommand().ExecuteContext(ctx); err != nil {
+		// A command that ran something else exits with that thing's status, so `cm run -- false`
+		// fails the way `false` does and composes with anything checking an exit code.
+		var coded *exitCodeError
+		if errors.As(err, &coded) {
+			if !coded.reported {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", paths.Name, err)
+			}
+			os.Exit(coded.ExitCode())
+		}
+
 		// Cobra has already printed usage errors and flag errors. Printing again would
 		// duplicate them, so only report what it did not.
 		if !errors.Is(err, errAlreadyReported) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/containerd/ttrpc"
 
@@ -15,6 +16,12 @@ import (
 	"github.com/chancez/cm/internal/seqlog"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
+
+// exitGrace is how long the shim stays reachable after its shell exits.
+//
+// Long enough for a server that was watching to ask for the exit status, short enough that a shim
+// with nobody listening does not linger.
+const exitGrace = 2 * time.Second
 
 // subscribeChunkMax bounds how much output one stream message carries.
 //
@@ -214,6 +221,18 @@ func Serve(ctx context.Context, l net.Listener, svc *Service) error {
 	select {
 	case <-svc.ShutdownRequested():
 	case <-logDone:
+		// The shell exited. Stay reachable briefly rather than exiting at once: the shim is the only
+		// thing that knows the exit status, and the server learns the session ended by this very
+		// stream closing, so leaving immediately means it asks a socket that is already gone and
+		// records the session as having vanished with no status.
+		//
+		// A grace period rather than an acknowledgement handshake, because the shim must not depend
+		// on a server being there at all: a session whose server is down still has to exit cleanly.
+		select {
+		case <-time.After(exitGrace):
+		case <-svc.ShutdownRequested():
+		case <-ctx.Done():
+		}
 	case <-ctx.Done():
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, ttrpc.ErrServerClosed) {

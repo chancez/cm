@@ -17,6 +17,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
@@ -761,6 +762,75 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		m.log.Info("expired dead session", "session", rec.Name, "age", now.Sub(rec.UpdatedAt))
 	}
 	return removed, nil
+}
+
+// HistoryFromDisk renders a finished session's output by replaying its persisted log.
+//
+// Necessary because a session that ends leaves the registry, taking its terminal model with it, so
+// there would otherwise be no way to read what a command printed once it exited. That is the common
+// case for `cm run`, where the output is the whole point.
+func (m *Manager) HistoryFromDisk(
+	ctx context.Context, name string, format serverv1.HistoryFormat,
+) ([]byte, error) {
+	rec, err := m.store.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if rec.LogPath == "" {
+		return nil, fmt.Errorf(
+			"session %s has ended and was not persisting, so its output is gone", name)
+	}
+
+	limits := seqlog.FileLimits{}
+	if m.persist != nil {
+		limits = m.persist.Limits
+	}
+
+	f, err := seqlog.OpenFile(rec.LogPath, limits)
+	if err != nil {
+		return nil, fmt.Errorf("opening persisted log for %s: %w", name, err)
+	}
+	defer f.Close()
+
+	oldest, end := f.Bounds()
+	if end == oldest {
+		return nil, nil
+	}
+	data, _, err := f.ReadFrom(oldest)
+	if err != nil {
+		return nil, fmt.Errorf("reading persisted log for %s: %w", name, err)
+	}
+
+	if m.newTerminal == nil {
+		// Without an emulator the bytes cannot be rendered. Returning them raw would be wrong for
+		// plain text, which is what a caller piping this expects.
+		return nil, fmt.Errorf("session %s has ended and terminal rendering is unavailable", name)
+	}
+
+	rows, cols := uint16(rec.Rows), uint16(rec.Cols)
+	if rows == 0 || cols == 0 {
+		rows, cols = 24, 80
+	}
+	term, err := m.newTerminal(rows, cols)
+	if err != nil {
+		return nil, err
+	}
+	defer term.Close()
+
+	if err := term.Write(data); err != nil {
+		return nil, fmt.Errorf("replaying output for %s: %w", name, err)
+	}
+	// Discard anything the emulator generated: those answer queries from a program that is gone.
+	term.TakePending()
+
+	switch format {
+	case serverv1.HistoryFormat_HISTORY_FORMAT_VT:
+		return term.VT()
+	case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
+		return term.HTML()
+	default:
+		return term.Plain()
+	}
 }
 
 // Close stops tracking sessions without terminating them.

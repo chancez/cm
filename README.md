@@ -36,6 +36,7 @@ cm list                  list sessions
 cm info <session>        one session's details; --field for a single value
 cm history <session>     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching
+cm run -- <command>      run a command in a session and exit with its status
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log
 cm kill <session>...     terminate sessions

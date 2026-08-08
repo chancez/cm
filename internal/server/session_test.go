@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -826,4 +827,40 @@ func TestAttachStreamStartsOnASequenceBoundary(t *testing.T) {
 		t.Skip("rewrite did not change the length, so this case cannot desynchronize")
 	}
 	_ = prompt
+}
+
+// A session must report the shell's real exit status.
+//
+// Regression test for a bug that made every normally-exiting session look like it had vanished. The
+// shim is the only thing that knows the status, and the server learns the session ended by the output
+// stream closing, which happens at the same moment the shell exits. The shim used to exit right then,
+// so the server asked a socket that was already gone and recorded "dead" with no status. Indirectly
+// visible everywhere: `cm list` showed exited(0) for a command that failed.
+func TestSessionReportsRealExitStatus(t *testing.T) {
+	for _, want := range []int{0, 1, 42} {
+		t.Run(fmt.Sprintf("exit-%d", want), func(t *testing.T) {
+			rec := startShimFor(t, shimConfigFor(
+				fmt.Sprintf("status-%d", want), fmt.Sprintf("exit %d", want)))
+
+			sess, err := newSession(rec, nil, 0)
+			if err != nil {
+				t.Fatalf("newSession() error = %v", err)
+			}
+			defer sess.Close()
+
+			select {
+			case <-sess.Done():
+			case <-time.After(10 * time.Second):
+				t.Fatal("session did not end")
+			}
+
+			ended, code := sess.Ended()
+			if !ended {
+				t.Fatal("Ended() = false, want true")
+			}
+			if code != want {
+				t.Errorf("exit code = %d, want %d; -1 means the status was lost", code, want)
+			}
+		})
+	}
 }

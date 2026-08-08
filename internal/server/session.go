@@ -286,11 +286,27 @@ func (s *Session) finish() {
 		return
 	}
 
-	// Ask the shim why the stream ended. A shell that exited has a status worth
-	// reporting; an unreachable shim means the outcome is unknown.
+	// Ask the shim why the stream ended. A shell that exited has a status worth reporting; an
+	// unreachable shim means the outcome is unknown.
+	//
+	// Retried briefly, because the shim exits once its shell does and the output stream closes at the
+	// same moment. Asking once loses the race often enough that every normally-exiting session was
+	// recorded as "dead" with no status, which is both wrong and indistinguishable from a shim that
+	// really did vanish.
 	code, exited := 0, false
-	if st, err := s.shim.State(context.Background(), &shimv1.StateRequest{}); err == nil {
-		exited, code = st.Exited, int(st.ExitCode)
+	for attempt := range 20 {
+		st, err := s.shim.State(context.Background(), &shimv1.StateRequest{})
+		if err == nil {
+			exited, code = st.Exited, int(st.ExitCode)
+			if exited {
+				break
+			}
+			// Reachable but not yet reporting an exit, so the shell is still being reaped.
+		} else if attempt > 0 && !exited {
+			// Gone before answering. Nothing more will be learned by asking again.
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	s.mu.Lock()

@@ -376,6 +376,21 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.Name); live {
+			// Including its outcome. A session records that it ended before the manager writes it
+			// back, so a caller polling for a short-lived command would otherwise see it as running
+			// and then briefly as dead, since an unwritten record still says running while the shim
+			// is already gone.
+			if ended, code := sess.Ended(); ended {
+				item.Exited = true
+				item.ExitCode = int32(code)
+				item.State = serverv1.SessionState_SESSION_STATE_EXITED
+				if code < 0 {
+					// A negative code is the marker for an unreachable shim rather than a status.
+					item.ExitCode = 0
+					item.State = serverv1.SessionState_SESSION_STATE_DEAD
+				}
+			}
+
 			title, cwd := sess.Metadata()
 			if title != "" {
 				item.Title = title
@@ -448,9 +463,16 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 }
 
 func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
-	sess, ok := s.mgr.Get(req.Session)
-	if !ok {
-		return nil, fmt.Errorf("%q: %w", req.Session, store.ErrNotFound)
+	sess, live := s.mgr.Get(req.Session)
+	if !live {
+		// A session that has ended leaves the registry, so its terminal model is gone. If it was
+		// persisting, its output is still on disk and can be replayed, which is what makes reading a
+		// finished command's output possible at all.
+		data, err := s.mgr.HistoryFromDisk(ctx, req.Session, req.Format)
+		if err != nil {
+			return nil, err
+		}
+		return &serverv1.HistoryResponse{Data: data}, nil
 	}
 
 	var format HistoryFormat
