@@ -374,6 +374,28 @@ func (e *env) ageAllRecords(d time.Duration) {
 	}
 }
 
+// deleteSessionRecord removes a session's row while leaving its shim running.
+//
+// The only way to produce a real orphan: every command that removes a session also stops its shim, which is
+// correct behavior and means an orphan cannot be created through the CLI. This reproduces what a crash between
+// spawning a shim and recording it, or a deleted state directory, leaves behind.
+//
+// Requires no server to be running, since sqlite is opened directly.
+func (e *env) deleteSessionRecord(name string) {
+	e.t.Helper()
+
+	dirs := paths.Dirs{Runtime: e.runtime, State: e.state}
+	st, err := store.Open(context.Background(), dirs.Database())
+	if err != nil {
+		e.t.Fatalf("store.Open() error = %v", err)
+	}
+	defer st.Close()
+
+	if err := st.Delete(context.Background(), name); err != nil {
+		e.t.Fatalf("Delete(%s) error = %v", name, err)
+	}
+}
+
 // waitFor polls until cond holds, failing with describe if it never does.
 //
 // Polling rather than sleeping: how long a shell takes to produce output is not something to hardcode,

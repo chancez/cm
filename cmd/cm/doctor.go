@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -55,11 +56,16 @@ deleted cannot be found this way, since there is nothing left to enumerate.`,
 			if err != nil {
 				return err
 			}
-			// Deliberately not ensureServer. Diagnosing an installation must not change it, and starting a
-			// server would adopt the very sessions being reported on.
-			conn, cl, err := dialServer(dirs)
+			// Starts a server if none is running, rather than refusing.
+			//
+			// The first version declined, on the reasoning that a diagnostic should not change what it
+			// examines. That was wrong in practice: the advice for an out-of-date server is to stop it, and
+			// after doing so `cm doctor` failed with "no server is running", so following the instructions
+			// produced a second error. Starting one also does not hide anything, since adoption is what a
+			// healthy installation does and an orphan is by definition not adopted.
+			conn, cl, err := connectServer(cmd.Context(), dirs)
 			if err != nil {
-				return fmt.Errorf("no server is running, so there is nothing to diagnose: %w", err)
+				return err
 			}
 			defer conn.Close()
 
@@ -102,6 +108,15 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		ClientVersion: paths.Version(),
 	})
 	if err != nil {
+		// A server too old to know this method cannot report anything, which is itself the diagnosis: it is
+		// version skew, and the one case doctor cannot investigate from the inside. Said plainly, since
+		// "Unimplemented desc = method Doctor" does not tell a reader to restart their server.
+		if strings.Contains(err.Error(), "Unimplemented") {
+			return fmt.Errorf(
+				"the running server is too old to support this command (client is %s); "+
+					"restart it with `cm server stop` and it will be replaced by this build",
+				paths.Version())
+		}
 		return err
 	}
 
@@ -147,8 +162,15 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		}
 	}
 
-	// Nothing left to report after a repair is success, since the problems are gone.
+	// Non-zero when a problem remains, so this can gate a script.
+	//
+	// Without --clean that is every finding. With it, a fixable finding that was repaired no longer counts,
+	// while an unfixable one still does: it is still true, and reporting success with a real problem standing
+	// would make the exit status worthless.
 	remaining := len(resp.Findings) - len(resp.Repaired)
+	if !clean {
+		remaining = len(resp.Findings)
+	}
 	if remaining <= 0 {
 		return nil
 	}

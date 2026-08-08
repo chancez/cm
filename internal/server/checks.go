@@ -139,10 +139,13 @@ func (m *Manager) checkTerminal() []Finding {
 
 // socketHeadroom is how many bytes of session name a runtime directory should leave room for.
 //
-// A session name is the variable part of a socket path, and the kitty integration names them kitty.N, so a
-// few dozen bytes is generous. Reported before the limit is reached, since the failure at the limit is a bare
-// EINVAL from bind with nothing pointing at the length.
-const socketHeadroom = 40
+// A session name is the variable part of a socket path. Real ones are short: the kitty integration produces
+// kitty.164, and a server-allocated name is s1. 24 bytes is several times that.
+//
+// Calibrated rather than picked. An earlier value of 40 flagged a working installation whose runtime directory
+// was a macOS temp path, which is 66 characters before anything is appended -- a false positive on a setup
+// that has never failed, which is the fastest way to teach someone to ignore a diagnostic.
+const socketHeadroom = 24
 
 // checkSocketPath reports a runtime directory long enough to threaten the limit on a unix socket path.
 //
