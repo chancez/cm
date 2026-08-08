@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/containerd/ttrpc"
-
+	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -431,13 +429,8 @@ func readInput(tty *TTY, out chan<- []byte, errc chan<- error) {
 }
 
 // dial connects to the server's socket.
-func dial(socketPath string) (*ttrpc.Client, serverv1.ServerClient, error) {
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	cl := ttrpc.NewClient(conn)
-	return cl, serverv1.NewServerClient(cl), nil
+func dial(socketPath string) (transport.Conn, serverv1.ServerClient, error) {
+	return transport.DialServer(socketPath)
 }
 
 // outMsg is one message from the server, or the error that ended the stream.

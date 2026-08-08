@@ -10,10 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containerd/ttrpc"
-
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
+	"github.com/chancez/cm/internal/transport"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
@@ -192,11 +191,11 @@ func Listen(socketPath string) (net.Listener, error) {
 
 // Serve runs the shim until the shell exits, a client requests shutdown, or ctx is done.
 func Serve(ctx context.Context, l net.Listener, svc *Service) error {
-	srv, err := ttrpc.NewServer()
+	srv, err := transport.NewTTRPCServer()
 	if err != nil {
-		return fmt.Errorf("creating ttrpc server: %w", err)
+		return err
 	}
-	shimv1.RegisterShimService(srv, svc)
+	shimv1.RegisterShimService(srv.Server, svc)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -237,7 +236,7 @@ func Serve(ctx context.Context, l net.Listener, svc *Service) error {
 		}
 	case <-ctx.Done():
 	case err := <-serveErr:
-		if err != nil && !errors.Is(err, ttrpc.ErrServerClosed) {
+		if err != nil {
 			return err
 		}
 	}

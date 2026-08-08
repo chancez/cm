@@ -8,9 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/containerd/ttrpc"
-
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -49,11 +48,14 @@ func Listen(socketPath string) (net.Listener, error) {
 // Shutdown leaves shims running on purpose. That is what makes an upgrade or restart
 // survivable for a shell, and the next server adopts them through Reconcile.
 func Serve(ctx context.Context, l net.Listener, svc *Service) error {
-	srv, err := ttrpc.NewServer()
+	srv, err := transport.NewTTRPCServer()
 	if err != nil {
-		return fmt.Errorf("creating ttrpc server: %w", err)
+		return err
 	}
-	serverv1.RegisterServerService(srv, svc)
+	// Registration stays transport-specific, since the generated code is: each plugin emits its own
+	// service interface and its own registration function. The lifecycle around it is what the
+	// transport package abstracts.
+	serverv1.RegisterServerService(srv.Server, svc)
 
 	// A Shutdown RPC cancels this rather than the caller's context, so the paths for "asked to
 	// stop" and "signalled to stop" converge on the same orderly shutdown below.
@@ -67,7 +69,9 @@ func Serve(ctx context.Context, l net.Listener, svc *Service) error {
 	select {
 	case <-ctx.Done():
 	case err := <-serveErr:
-		if err != nil && !errors.Is(err, ttrpc.ErrServerClosed) {
+		// Already normalized: the transport reports an ordinary shutdown as nil rather than its own
+		// sentinel, so there is nothing transport-specific to compare against here.
+		if err != nil {
 			return err
 		}
 	}

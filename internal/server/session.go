@@ -11,17 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/containerd/ttrpc"
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/transport"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
@@ -45,7 +43,10 @@ type Session struct {
 	record store.Session
 
 	// conn and shim reach the session's shim. The server is the shim's only client.
-	conn *ttrpc.Client
+	//
+	// The interface rather than the concrete client, since the only thing done with it is closing: that
+	// is what keeps the transport swappable without every holder naming it.
+	conn transport.Conn
 	shim shimv1.ShimClient
 
 	// term accumulates terminal state so a reattaching client can be restored. Nil until
@@ -194,13 +195,12 @@ type Terminal interface {
 }
 
 // dialShim connects to a shim's socket.
-func dialShim(socket string) (*ttrpc.Client, shimv1.ShimClient, error) {
-	conn, err := net.Dial("unix", socket)
+func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
+	conn, cl, err := transport.DialShim(socket)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to shim at %s: %w", socket, err)
 	}
-	cl := ttrpc.NewClient(conn)
-	return cl, shimv1.NewShimClient(cl), nil
+	return conn, cl, nil
 }
 
 // newSession connects to a shim and starts consuming its output from fromSeq.

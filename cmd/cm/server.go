@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/containerd/ttrpc"
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/cmlog"
@@ -18,6 +17,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/server"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/transport"
 	"github.com/chancez/cm/internal/vt"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -210,31 +210,24 @@ func withServer(
 //
 // Used by completion, which runs on every tab press: a stray keystroke must not launch a daemon, and
 // if none is running there is nothing to complete.
-func dialServer(dirs paths.Dirs) (*ttrpc.Client, serverv1.ServerClient, error) {
-	conn, err := net.Dial("unix", dirs.ServerSocket())
-	if err != nil {
-		return nil, nil, err
-	}
-	cl := ttrpc.NewClient(conn)
-	return cl, serverv1.NewServerClient(cl), nil
+func dialServer(dirs paths.Dirs) (transport.Conn, serverv1.ServerClient, error) {
+	return transport.DialServer(dirs.ServerSocket())
 }
 
-func connectServer(ctx context.Context, dirs paths.Dirs) (*ttrpc.Client, serverv1.ServerClient, error) {
-	if conn, err := net.Dial("unix", dirs.ServerSocket()); err == nil {
-		cl := ttrpc.NewClient(conn)
-		return cl, serverv1.NewServerClient(cl), nil
+func connectServer(ctx context.Context, dirs paths.Dirs) (transport.Conn, serverv1.ServerClient, error) {
+	if conn, cl, err := dialServer(dirs); err == nil {
+		return conn, cl, nil
 	}
 
 	if err := ensureServer(ctx, dirs); err != nil {
 		return nil, nil, err
 	}
 
-	conn, err := net.Dial("unix", dirs.ServerSocket())
+	conn, cl, err := dialServer(dirs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to server: %w", err)
 	}
-	cl := ttrpc.NewClient(conn)
-	return cl, serverv1.NewServerClient(cl), nil
+	return conn, cl, nil
 }
 
 // ensureServer starts a server and waits for it to accept connections.
