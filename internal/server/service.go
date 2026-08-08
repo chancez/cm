@@ -65,16 +65,17 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 
 	sess, created, err := s.mgr.Open(ctx, OpenOptions{
-		Name:      open.Session,
-		Rows:      uint16(open.Rows),
-		Cols:      uint16(open.Cols),
-		Command:   open.Command,
-		Dir:       open.Cwd,
-		Env:       open.Env,
-		Owned:     open.Own && !open.ReadOnly,
-		ClientEnv: open.ClientEnv,
-		Persist:   open.Persist,
-		OnRestore: RestoreAction(open.OnRestore),
+		Name:          open.Session,
+		Rows:          uint16(open.Rows),
+		Cols:          uint16(open.Cols),
+		Command:       open.Command,
+		Dir:           open.Cwd,
+		Env:           open.Env,
+		Owned:         open.Own && !open.ReadOnly,
+		ClientEnv:     open.ClientEnv,
+		Persist:       open.Persist,
+		CaptureOutput: open.CaptureOutput,
+		OnRestore:     RestoreAction(open.OnRestore),
 	})
 	if err != nil {
 		return err

@@ -98,6 +98,14 @@ type Session struct {
 	// Owned records that a client claimed this session, so losing that client's
 	// connection without an explicit detach should end the session.
 	Owned bool
+	// PersistRequested records that persistence was asked for, rather than turned on to capture a
+	// command's output.
+	//
+	// The distinction is about lifetime, not storage. `cm run` persists so its output is readable
+	// after the command exits, which is what it documents, but such a session is finished business
+	// within seconds. Expiry uses this to keep it out of `cm list` for the week a deliberately
+	// persisted session is kept.
+	PersistRequested bool
 	// Env holds the environment variables the most recent client reported, so a shell inside the
 	// session can refresh values that describe a terminal which may since have been replaced.
 	Env       map[string]string
@@ -178,5 +186,15 @@ var migrations = []string{
 	// key, so a table would add a join for no benefit.
 	`
 	ALTER TABLE sessions ADD COLUMN env TEXT NOT NULL DEFAULT '';
+	`,
+
+	// Whether persistence was asked for, as opposed to enabled to capture a command's output.
+	//
+	// Needed because the two cases have different lifetimes and a log path alone cannot tell them
+	// apart. `cm run` persists so its output is readable after the command exits, which is what its
+	// documentation promises, but such a session is finished business within seconds and should not
+	// occupy `cm list` for the week a deliberately persisted session gets.
+	`
+	ALTER TABLE sessions ADD COLUMN persist_requested INTEGER NOT NULL DEFAULT 0;
 	`,
 }

@@ -563,13 +563,14 @@ func ageRecord(t *testing.T, st *store.Store, name string, when time.Time) {
 	}
 }
 
-// A session that saved no output is forgotten much sooner than a persisted one.
+// A session nobody asked to persist is forgotten much sooner than one that was.
 //
 // Without this, every short command a user runs sits in `cm list` for the persisted-session lifetime,
-// which defaults to a week. Twenty `cm run` invocations made the list useless, and the records held
-// nothing recoverable: with no log path, `cm history` can only report that the output is gone. The
-// only reason to keep such a record at all is that `cm run` reads its exit status back through
-// `list`, which takes seconds.
+// which defaults to a week. Twenty `cm run` invocations made the list useless.
+//
+// Keyed on PersistRequested rather than on whether a log exists, because `cm run` writes a log so its
+// output can be read after the command exits. Those two cases look identical on disk and differ only in
+// how long the session is worth keeping.
 func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
 	mgr, st, dirs := newTestManager(t, nil)
 	policy := testPolicy()
@@ -580,26 +581,31 @@ func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
 
 	now := time.Now()
 
-	// Saved output, ended an hour ago: kept, since it is still worth reviving and reading.
+	// Asked to persist, ended an hour ago: kept, since it is still worth reviving and reading.
 	logPath := dirs.SessionLog("saved")
 	writeSavedLog(t, logPath, "saved content\r\n")
 	if err := st.Create(ctx, store.Session{
-		Name:    "saved",
-		LogPath: logPath,
+		Name:             "saved",
+		LogPath:          logPath,
+		State:            store.StateExited,
+		PersistRequested: true,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Not asked for, ended an hour ago: gone. It has a log, because `cm run` captures output, and it is
+	// still forgotten, which is the distinction this test exists for.
+	capturedLog := dirs.SessionLog("ran")
+	writeSavedLog(t, capturedLog, "captured output\r\n")
+	if err := st.Create(ctx, store.Session{
+		Name:    "ran",
+		LogPath: capturedLog,
 		State:   store.StateExited,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	// No saved output, ended an hour ago: gone, since nothing about it can be recovered.
-	if err := st.Create(ctx, store.Session{
-		Name:  "ran",
-		State: store.StateExited,
-	}); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-
-	// No saved output, but only just ended: kept, or `cm run` could not read its exit status back.
+	// Not asked for, but only just ended: kept, or `cm run` could not read its exit status back.
 	if err := st.Create(ctx, store.Session{
 		Name:  "justran",
 		State: store.StateExited,

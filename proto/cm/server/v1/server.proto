@@ -117,6 +117,14 @@ message Open {
   // A string rather than an enum because it is a per-session override of a config value that is
   // also a string, and keeping one spelling avoids two vocabularies for the same setting.
   string on_restore = 14;
+
+  // CaptureOutput saves this session's output so it can be read after the session ends, without
+  // asking for reboot survival.
+  //
+  // Distinct from persist because the two differ in how long the session is kept, not in mechanism.
+  // `cm run` sets this so `cm history` works once the command has exited, while leaving the session
+  // eligible for prompt cleanup rather than the week a persisted session is kept.
+  bool capture_output = 15;
 }
 
 message Input {
@@ -142,8 +150,17 @@ message AttachResponse {
     Output output = 2;
     Exited exited = 3;
     Metadata metadata = 4;
+    Detached detached = 5;
   }
 }
+
+// Detached confirms the server processed a client's Detach.
+//
+// A client must wait for this before exiting. Sending Detach and returning immediately does not work:
+// the send is asynchronous, so the connection is torn down before the message is transmitted, and the
+// server then sees a client that vanished without detaching. For an owned session that means being
+// destroyed, which is the opposite of what detaching asks for.
+message Detached {}
 
 // Metadata reports what the shell has said about itself, so a client can act on it.
 //

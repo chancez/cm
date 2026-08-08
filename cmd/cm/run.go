@@ -140,6 +140,14 @@ func startRun(ctx context.Context, cl serverv1.ServerClient, opts runOptions) (s
 				// disconnects immediately by design.
 				Own:     false,
 				Persist: opts.persist,
+				// Always, so `cm history` works once the command has exited, which is what this
+				// command's help promises. Without it the output is gone the moment the command
+				// finishes, which for a short command is immediately.
+				//
+				// Not the same as --persist: this does not ask the session to survive a reboot, and
+				// the session stays eligible for prompt cleanup rather than being kept for the week a
+				// persisted session gets.
+				CaptureOutput: true,
 			},
 		},
 	}); err != nil {

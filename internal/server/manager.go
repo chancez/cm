@@ -79,13 +79,12 @@ type PersistPolicy struct {
 	CommandIsSafeToRerun func(argv []string) bool
 	// ExpireAfter removes a dead persisted session after this long.
 	ExpireAfter time.Duration
-	// ForgetUnpersistedAfter removes an ended session that saved no output after this long.
+	// ForgetUnpersistedAfter removes an ended session nobody asked to persist after this long.
 	//
-	// Separate from ExpireAfter, and much shorter, because such a record holds nothing recoverable:
-	// its log was never written, so `cm history` can only report that the output is gone. The only
-	// reason to keep it at all is that `cm run` reads the exit status back through `list`, which
-	// takes seconds. Keeping it for the persisted-session lifetime instead means every short
-	// command a user ever runs stays in `cm list` for days, which makes the command useless.
+	// Separate from ExpireAfter, and much shorter. Such a session is finished business: either it
+	// saved nothing, or it saved output only so `cm run` could show it, which is wanted for seconds
+	// rather than days. Sharing the persisted lifetime means every short command a user runs stays in
+	// `cm list` for a week, which makes the command useless.
 	ForgetUnpersistedAfter time.Duration
 }
 
@@ -415,6 +414,14 @@ type OpenOptions struct {
 	// Persist requests that this session's content survive a reboot, regardless of whether its
 	// name matches the configured patterns.
 	Persist bool
+	// CaptureOutput saves this session's output so it can be read after the session ends, without
+	// asking for reboot survival.
+	//
+	// Separate from Persist because the two differ in lifetime rather than mechanism. `cm run` sets
+	// this so `cm history` works once the command exits, which is what it documents, but such a
+	// session is finished business in seconds and must not sit in `cm list` for the week a
+	// deliberately persisted session is kept.
+	CaptureOutput bool
 	// OnRestore overrides the configured restore behavior for this session. Empty means the
 	// configured default.
 	OnRestore RestoreAction
@@ -551,7 +558,9 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
-	persisting := m.persistsSession(opts.Name, opts.Persist)
+	// Either reason produces a log; only the first makes the session long-lived.
+	requested := m.persistsSession(opts.Name, opts.Persist)
+	persisting := requested || opts.CaptureOutput
 
 	logPath := ""
 	if persisting {
@@ -569,6 +578,8 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Cols:       int(opts.Cols),
 		Owned:      opts.Owned,
 		Env:        opts.ClientEnv,
+		// Records why there is a log, which is what expiry keys off.
+		PersistRequested: requested,
 	}
 	// Record before spawning so a shim can never exist without a row describing it. A row
 	// with no shim is recoverable; a shim with no row is invisible.
@@ -841,8 +852,11 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		}
 		// UpdatedAt rather than CreatedAt: what matters is how long ago the session stopped being
 		// useful, not how long ago it started.
+		// Keyed on whether persistence was *asked for*, not on whether a log exists. `cm run` writes
+		// a log so its output survives the command, and treating that as a deliberately persisted
+		// session would put every command a user runs in `cm list` for a week.
 		limit := cutoff
-		if rec.LogPath == "" {
+		if !rec.PersistRequested {
 			limit = unpersistedCutoff
 		}
 		if rec.UpdatedAt.After(limit) {

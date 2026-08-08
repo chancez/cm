@@ -11,7 +11,8 @@ import (
 )
 
 const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
-	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at, env`
+	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at, env,
+	persist_requested`
 
 // Create inserts a session record.
 //
@@ -29,11 +30,12 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols, sess.Owned,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeEnv(sess.Env),
+		sess.PersistRequested,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.Name, err)
@@ -246,11 +248,12 @@ func scanSession(sc scanner) (Session, error) {
 		updated   int64
 		ownedFlag bool
 		envJSON   string
+		requested bool
 	)
 	err := sc.Scan(
 		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
-		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated, &envJSON,
+		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated, &envJSON, &requested,
 	)
 	if err != nil {
 		return Session{}, err
@@ -259,6 +262,7 @@ func scanSession(sc scanner) (Session, error) {
 	sess.LastSeq = uint64(lastSeq)
 	sess.State = State(state)
 	sess.Owned = ownedFlag
+	sess.PersistRequested = requested
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return sess, nil
