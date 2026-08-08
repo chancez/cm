@@ -1,4 +1,4 @@
-package shim
+package seqlog
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func drain(t *testing.T, r *Reader) (string, bool) {
 
 func TestLogAppendAndRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(1024)
+		l := New(1024)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -63,7 +63,7 @@ func TestLogAppendAndRead(t *testing.T) {
 // Bounds is how the server learns where to resume, so its arithmetic is worth asserting
 // directly rather than only through reads.
 func TestLogBounds(t *testing.T) {
-	l := NewLog(10)
+	l := New(10)
 
 	if oldest, next := l.Bounds(); oldest != 0 || next != 0 {
 		t.Errorf("empty Bounds() = (%d, %d), want (0, 0)", oldest, next)
@@ -83,7 +83,7 @@ func TestLogBounds(t *testing.T) {
 
 func TestLogDropsOldestWhenFull(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(5)
+		l := New(5)
 		l.Append([]byte("abcdefgh"))
 
 		// Only the last 5 bytes survive, and a reader starting from 0 is told its view
@@ -101,7 +101,7 @@ func TestLogDropsOldestWhenFull(t *testing.T) {
 // away the most recent output, which is exactly what a reattaching client needs.
 func TestLogAppendLargerThanBuffer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(4)
+		l := New(4)
 		l.Append([]byte("0123456789"))
 
 		if oldest, next := l.Bounds(); oldest != 6 || next != 10 {
@@ -122,7 +122,7 @@ func TestLogAppendLargerThanBuffer(t *testing.T) {
 // duplication.
 func TestResumeAfterSubscriberGoesAway(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(1024)
+		l := New(1024)
 
 		r1 := l.Subscribe(0)
 		l.Append([]byte("before"))
@@ -151,7 +151,7 @@ func TestResumeAfterSubscriberGoesAway(t *testing.T) {
 // that depended on the missing bytes.
 func TestResumeReportsGapWhenOutrun(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(8)
+		l := New(8)
 		l.Append([]byte("12345678"))
 		_, resumeFrom := l.Bounds() // 8
 
@@ -174,7 +174,7 @@ func TestResumeReportsGapWhenOutrun(t *testing.T) {
 
 func TestSubscribeBeyondEndClampsToPresent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(64)
+		l := New(64)
 		l.Append([]byte("abc"))
 
 		// Ahead of the log: treated as caught up, not an error, and not a gap.
@@ -192,7 +192,7 @@ func TestSubscribeBeyondEndClampsToPresent(t *testing.T) {
 // Next must block rather than spin or return empty chunks, and must wake on append.
 func TestNextBlocksUntilAppend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(64)
+		l := New(64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -229,7 +229,7 @@ func TestNextBlocksUntilAppend(t *testing.T) {
 // after the shell exits still sees its final output.
 func TestCloseDrainsThenReportsClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(64)
+		l := New(64)
 		l.Append([]byte("last words"))
 		l.Close()
 
@@ -243,15 +243,15 @@ func TestCloseDrainsThenReportsClosed(t *testing.T) {
 		if string(c.Data) != "last words" {
 			t.Errorf("Next() Data = %q, want %q", c.Data, "last words")
 		}
-		if _, err := r.Next(context.Background()); !errors.Is(err, ErrLogClosed) {
-			t.Errorf("second Next() error = %v, want ErrLogClosed", err)
+		if _, err := r.Next(context.Background()); !errors.Is(err, ErrClosed) {
+			t.Errorf("second Next() error = %v, want ErrClosed", err)
 		}
 	})
 }
 
 func TestCloseWakesBlockedReader(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(64)
+		l := New(64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -264,15 +264,15 @@ func TestCloseWakesBlockedReader(t *testing.T) {
 		synctest.Wait()
 		l.Close()
 
-		if err := <-errc; !errors.Is(err, ErrLogClosed) {
-			t.Errorf("Next() error = %v, want ErrLogClosed", err)
+		if err := <-errc; !errors.Is(err, ErrClosed) {
+			t.Errorf("Next() error = %v, want ErrClosed", err)
 		}
 	})
 }
 
 func TestNextRespectsContextCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(64)
+		l := New(64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -296,7 +296,7 @@ func TestNextRespectsContextCancellation(t *testing.T) {
 // independently.
 func TestMultipleSubscribersEachSeeEverything(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := NewLog(1024)
+		l := New(1024)
 		r1 := l.Subscribe(0)
 		defer r1.Close()
 		r2 := l.Subscribe(0)
@@ -317,7 +317,7 @@ func TestMultipleSubscribersEachSeeEverything(t *testing.T) {
 // would retain max bytes while occupying far more memory over a long session.
 func TestBackingArrayStaysBounded(t *testing.T) {
 	const max = 64
-	l := NewLog(max)
+	l := New(max)
 	for range 1000 {
 		l.Append([]byte("0123456789"))
 	}
@@ -337,7 +337,7 @@ func TestBackingArrayStaysBounded(t *testing.T) {
 }
 
 func TestAppendAfterCloseIsIgnored(t *testing.T) {
-	l := NewLog(64)
+	l := New(64)
 	l.Append([]byte("abc"))
 	l.Close()
 	l.Append([]byte("ignored"))
@@ -349,7 +349,7 @@ func TestAppendAfterCloseIsIgnored(t *testing.T) {
 }
 
 func TestEmptyAppendIsNoop(t *testing.T) {
-	l := NewLog(64)
+	l := New(64)
 	l.Append(nil)
 	l.Append([]byte{})
 	if oldest, next := l.Bounds(); oldest != 0 || next != 0 {

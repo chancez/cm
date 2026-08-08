@@ -1,4 +1,4 @@
-package shim
+package seqlog
 
 import (
 	"context"
@@ -75,7 +75,7 @@ func (r *Reader) Close() {
 
 // Next returns the next available chunk, blocking until there is one.
 //
-// It returns ErrLogClosed only after all remaining buffered output has been returned, so
+// It returns ErrClosed only after all remaining buffered output has been returned, so
 // a subscriber that attaches after the shell exits still sees the final output rather
 // than an immediate error.
 //
@@ -107,7 +107,7 @@ func (r *Reader) Next(ctx context.Context) (Chunk, error) {
 		r.log.mu.Unlock()
 
 		if closed {
-			return Chunk{}, ErrLogClosed
+			return Chunk{}, ErrClosed
 		}
 
 		select {
@@ -116,4 +116,12 @@ func (r *Reader) Next(ctx context.Context) (Chunk, error) {
 			return Chunk{}, ctx.Err()
 		}
 	}
+}
+
+// Position returns the sequence number the reader will deliver next. A client records this
+// so it can resume from the same place after a reconnect.
+func (r *Reader) Position() uint64 {
+	r.log.mu.Lock()
+	defer r.log.mu.Unlock()
+	return r.next
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seqlog"
 )
 
 // ptyReadSize bounds a single read from the pty master.
@@ -54,7 +55,7 @@ type Config struct {
 // Session is a running shell attached to a pty, with its output accumulating in a Log.
 type Session struct {
 	cfg Config
-	log *Log
+	log *seqlog.Log
 
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
@@ -83,7 +84,7 @@ func Start(cfg Config) (*Session, error) {
 		logBytes = DefaultLogBytes
 	}
 
-	s := &Session{cfg: cfg, log: NewLog(logBytes)}
+	s := &Session{cfg: cfg, log: seqlog.New(logBytes)}
 
 	ptmx, tty, err := pty.Open()
 	if err != nil {
@@ -199,7 +200,7 @@ func (s *Session) releasePty() {
 }
 
 // Log exposes the output log for subscribers.
-func (s *Session) Log() *Log { return s.log }
+func (s *Session) Log() *seqlog.Log { return s.log }
 
 // Write sends input to the pty.
 //
@@ -210,7 +211,7 @@ func (s *Session) Write(p []byte) (int, error) {
 	exited := s.exited
 	s.mu.Unlock()
 	if exited {
-		return 0, ErrLogClosed
+		return 0, seqlog.ErrClosed
 	}
 	return s.ptmx.Write(p)
 }
@@ -257,7 +258,7 @@ func (s *Session) Signal(sig syscall.Signal, group bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.exited || s.cmd.Process == nil {
-		return ErrLogClosed
+		return seqlog.ErrClosed
 	}
 	pid := s.cmd.Process.Pid
 	if group {

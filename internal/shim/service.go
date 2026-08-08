@@ -12,6 +12,7 @@ import (
 	"github.com/containerd/ttrpc"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seqlog"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
@@ -73,7 +74,7 @@ func (s *Service) Subscribe(ctx context.Context, req *shimv1.SubscribeRequest, s
 	for {
 		c, err := r.Next(ctx)
 		if err != nil {
-			if errors.Is(err, ErrLogClosed) {
+			if errors.Is(err, seqlog.ErrClosed) {
 				return nil
 			}
 			return err
@@ -134,7 +135,7 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 	}
 	// A shell that has already exited is not an error here: the caller wants the session
 	// gone, and it is.
-	if err := s.session.Signal(sig, true); err != nil && !errors.Is(err, ErrLogClosed) {
+	if err := s.session.Signal(sig, true); err != nil && !errors.Is(err, seqlog.ErrClosed) {
 		return nil, err
 	}
 	s.shutdownOnce.Do(func() { close(s.shutdown) })

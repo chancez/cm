@@ -1,12 +1,19 @@
-package shim
+// Package seqlog provides a bounded, sequence-numbered byte log with live subscribers.
+//
+// It exists because two layers need the same thing for the same reason. The shim buffers
+// pty output so a server that goes away and returns resumes rather than losing output, and
+// the server buffers what it has consumed so a reattaching client can be brought up to
+// date. In both cases a subscriber names a byte offset and is told whether the bytes it
+// asked for are still available.
+package seqlog
 
 import (
 	"errors"
 	"sync"
 )
 
-// ErrLogClosed is returned once the log is closed and no further output will arrive.
-var ErrLogClosed = errors.New("output log is closed")
+// ErrClosed is returned once the log is closed and no further output will arrive.
+var ErrClosed = errors.New("output log is closed")
 
 // Log is a bounded, sequence-numbered buffer of terminal output with live subscribers.
 //
@@ -39,15 +46,26 @@ type subscriber struct {
 	ch chan struct{}
 }
 
-// NewLog returns a log retaining at most max bytes. A max below 1 is treated as 1 so
-// the invariants below hold without special cases.
-func NewLog(max int) *Log {
+// New returns a log retaining at most max bytes, numbering from zero. A max below 1 is
+// treated as 1 so the invariants below hold without special cases.
+func New(max int) *Log {
+	return NewAt(max, 0)
+}
+
+// NewAt returns a log whose first byte will be numbered start.
+//
+// A caller relaying another log's output needs this: the server consumes a shim's stream
+// beginning at some sequence number and must keep using those numbers, so a position named
+// by a client means the same thing on both hops. Numbering from zero would make the two
+// disagree by however much the server had already missed.
+func NewAt(max int, start uint64) *Log {
 	if max < 1 {
 		max = 1
 	}
 	return &Log{
-		max:  max,
-		subs: make(map[*subscriber]struct{}),
+		max:    max,
+		oldest: start,
+		subs:   make(map[*subscriber]struct{}),
 	}
 }
 
@@ -84,7 +102,7 @@ func (l *Log) Append(p []byte) {
 	l.wakeLocked()
 }
 
-// Close marks the log complete. Subscribers drain what remains and then see ErrLogClosed.
+// Close marks the log complete. Subscribers drain what remains and then see ErrClosed.
 func (l *Log) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -105,6 +123,20 @@ func (l *Log) wakeLocked() {
 		default:
 		}
 	}
+}
+
+// Oldest returns the lowest sequence number still retained.
+func (l *Log) Oldest() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.oldest
+}
+
+// Next returns the sequence number that will be assigned to the next byte appended.
+func (l *Log) Next() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.oldest + uint64(len(l.buf))
 }
 
 // Bounds returns the oldest retained sequence number and the next sequence number to be

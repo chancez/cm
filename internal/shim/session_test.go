@@ -3,6 +3,8 @@ package shim
 import (
 	"context"
 	"errors"
+
+	"github.com/chancez/cm/internal/seqlog"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -12,7 +14,7 @@ import (
 
 // readUntil accumulates output until want appears or the deadline passes. Terminal output
 // arrives in arbitrarily sized pieces, so tests cannot assume one read per write.
-func readUntil(t *testing.T, r *Reader, want string) string {
+func readUntil(t *testing.T, r *seqlog.Reader, want string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -203,8 +205,8 @@ func TestSessionClosesLogOnShellExit(t *testing.T) {
 		sb.Write(c.Data)
 	}
 
-	if !errors.Is(lastErr, ErrLogClosed) {
-		t.Errorf("final error = %v, want ErrLogClosed", lastErr)
+	if !errors.Is(lastErr, seqlog.ErrClosed) {
+		t.Errorf("final error = %v, want seqlog.ErrClosed", lastErr)
 	}
 	if !strings.Contains(sb.String(), "bye") {
 		t.Errorf("output = %q, want it to contain %q: output before exit must not be lost",
