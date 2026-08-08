@@ -30,7 +30,9 @@ func newReadCommand(g *globals) *cobra.Command {
 		Long: `Print the tail of a session's output as plain text.
 
 Made for reading a session programmatically, where 'cm history' is for reading all
-of it. Two differences follow from that:
+of it and for the formats that only make sense over the whole thing. Use 'cm history
+--format html' when styling matters, since that is the one view neither this command
+nor --raw can produce. Two differences follow from that:
 
 Only the last lines are printed, 100 by default. Use --lines 0 for everything.
 
@@ -41,9 +43,12 @@ terminal laid them out.
 Works after a command has finished, which is the usual case for 'cm run', as long
 as the session saved its output.
 
+--raw prints the bytes the program emitted rather than the text they rendered to,
+still bounded by --lines. That is the difference from 'cm history --format vt', which
+renders the whole scrollback and cannot be limited.
+
 --follow prints the last lines and then keeps streaming, like 'tail -f'. Escape
-sequences are stripped from both halves, so the output stays plain text; use --raw
-to keep them.
+sequences are stripped from both halves unless --raw is given.
 
 The two halves still differ in kind. The lines already printed are a rendered screen
 with wrapping rejoined, and what follows is filtered byte by byte, because a stream
@@ -64,7 +69,7 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 			if err != nil {
 				return err
 			}
-			if follow && raw {
+			if raw {
 				warnIfTerminal(os.Stdout)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
@@ -72,6 +77,7 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 					Session: name,
 					Lines:   uint32(lines),
 					Unwrap:  !wrap,
+					Raw:     raw,
 				})
 				if err != nil {
 					return err
@@ -99,7 +105,7 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 	f.BoolVarP(&follow, "follow", "f", false,
 		"keep streaming new output after the last lines")
 	f.BoolVar(&raw, "raw", false,
-		"with --follow, keep escape sequences instead of stripping them")
+		"print the bytes the program emitted rather than the text they rendered to")
 	f.IntVar(&lines, "lines", defaultReadLines, "how many lines from the end (0 for everything)")
 	f.BoolVar(&wrap, "keep-wrap", false,
 		"keep soft-wrapped lines split as the terminal laid them out")

@@ -188,6 +188,7 @@ type Terminal interface {
 	// Tail renders the last lines as plain text, optionally rejoining soft-wrapped lines. A lines
 	// value of zero means everything.
 	Tail(lines int, unwrap bool) ([]byte, error)
+	TailVT(lines int) ([]byte, error)
 	VT() ([]byte, error)
 	HTML() ([]byte, error)
 	// Close releases emulator resources.
@@ -978,6 +979,20 @@ func (s *Session) Read(lines int, unwrap bool) ([]byte, error) {
 		return nil, nil
 	}
 	return term.Tail(lines, unwrap)
+}
+
+// ReadVT returns the last lines of the session's output as escape sequences.
+//
+// The raw counterpart of Read, so `cm read --raw` can bound its output the way the plain form does. `cm history
+// --format vt` renders the whole scrollback and has no line limit, which is the gap this fills.
+func (s *Session) ReadVT(lines int) ([]byte, error) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return nil, nil
+	}
+	return term.TailVT(lines)
 }
 
 // History renders the session's contents, scrollback included.

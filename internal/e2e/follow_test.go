@@ -238,3 +238,115 @@ func TestFollowStripsEscapesFromTheStream(t *testing.T) {
 		t.Errorf("escape sequences survived in the streamed half:\n%q", out)
 	}
 }
+
+// `cm read --raw` prints the bytes the program emitted, bounded by --lines.
+//
+// The flag used to be accepted and silently ignored without --follow, which is a flag that lies: it reached only
+// the streaming path. Making it work also gives it a purpose `cm history --format vt` cannot serve, since that
+// renders the whole scrollback and has no line limit.
+func TestReadRawPrintsEmittedBytes(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	e.mustRun("run", "--session", "rawread", "--",
+		"/bin/sh", "-c", `printf '\033[31mred\033[0m\n'; echo plain`)
+
+	raw := e.mustRun("read", "--raw", "rawread")
+	if !strings.ContainsRune(raw, 0x1b) {
+		t.Errorf("--raw without --follow produced no escape sequences, so the flag is ignored:\n%q", raw)
+	}
+
+	// And the plain form of the same session has none, which is what makes the flag meaningful rather than a
+	// no-op that happens to look right.
+	plain := e.mustRun("read", "rawread")
+	if strings.ContainsRune(plain, 0x1b) {
+		t.Errorf("the plain form contains escape sequences:\n%q", plain)
+	}
+}
+
+// `cm read --raw` respects --lines, which is what distinguishes it from history's vt format.
+//
+// history --format vt dumps everything and cannot be bounded, so a caller wanting the raw bytes of just the last
+// few lines had no way to ask. That gap is the reason for keeping both commands rather than folding one into the
+// other.
+func TestReadRawRespectsLines(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	e.mustRun("run", "--session", "rawlines", "--",
+		"/bin/sh", "-c", "echo one; echo two; echo three")
+
+	one := e.mustRun("read", "--raw", "--lines", "1", "rawlines")
+	if strings.Contains(one, "one") || strings.Contains(one, "two") {
+		t.Errorf("--lines 1 returned earlier lines:\n%q", one)
+	}
+	if !strings.Contains(one, "three") {
+		t.Errorf("--lines 1 did not return the last line:\n%q", one)
+	}
+
+	// Everything, for contrast, so the bound is doing something rather than the session being short.
+	all := e.mustRun("read", "--raw", "--lines", "0", "rawlines")
+	for _, want := range []string{"one", "two", "three"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("--lines 0 is missing %q:\n%q", want, all)
+		}
+	}
+}
+
+// history --format html preserves styling, which nothing else does.
+//
+// Asserted because it is the reason history survives now that read handles both plain and raw: the html form
+// carries colour and weight as markup, which neither a rendered nor a raw byte stream can express.
+func TestHistoryHTMLPreservesStyling(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	e.mustRun("run", "--session", "styled", "--",
+		"/bin/sh", "-c", `printf '\033[1mbold\033[0m\n'`)
+
+	out := e.mustRun("history", "styled", "--format", "html")
+	if !strings.Contains(out, "bold") {
+		t.Errorf("html output is missing the text:\n%s", out)
+	}
+	// The styling as markup, which is the unique part.
+	if !strings.Contains(out, "font-weight") {
+		t.Errorf("html output does not carry the styling:\n%s", out)
+	}
+}
+
+// `cm read --raw` works on a live session too, not only a finished one.
+//
+// Two code paths, and the tests above only exercised one. A finished session has left the registry, so its
+// output is replayed from disk through Manager.ReadFromDisk; a live one is read from its in-memory terminal
+// through Session.ReadVT. Mutating the live path passed every other test here, which is what surfaced the gap.
+func TestReadRawOnALiveSession(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireTerminal(t, e)
+
+	// Still running when read, which is what puts it on the live path.
+	e.mustRun("run", "--session", "liveraw", "-d", "--",
+		"/bin/sh", "-c", `printf '\033[31mred\033[0m\n'; echo one; echo two; sleep 60`)
+	e.waitForOutputInSession("liveraw", "two", 15*time.Second)
+
+	if s, ok := e.session("liveraw"); !ok || s.State != "running" {
+		t.Fatalf("session is not running, so this test would take the from-disk path instead: %+v", s)
+	}
+
+	raw := e.mustRun("read", "--raw", "liveraw")
+	if !strings.ContainsRune(raw, 0x1b) {
+		t.Errorf("--raw on a live session produced no escape sequences:\n%q", raw)
+	}
+
+	// And --lines bounds it here as well, which is the other half the mutation exposed.
+	one := e.mustRun("read", "--raw", "--lines", "1", "liveraw")
+	if strings.Contains(one, "one") {
+		t.Errorf("--lines 1 on a live session returned earlier lines:\n%q", one)
+	}
+	if !strings.Contains(one, "two") {
+		t.Errorf("--lines 1 on a live session did not return the last line:\n%q", one)
+	}
+}

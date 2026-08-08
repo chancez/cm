@@ -134,6 +134,15 @@ func (f *fakeTerminal) Tail(lines int, unwrap bool) ([]byte, error) {
 	return []byte(strings.Join(all, "\n")), nil
 }
 
+// TailVT returns the same bytes as Tail.
+//
+// A fake writes no escape sequences, so there is nothing for a raw form to preserve that a plain one drops.
+// Distinguishing them here would mean inventing styling the fake never had; the difference belongs against the
+// real emulator, where the formatter actually produces it.
+func (f *fakeTerminal) TailVT(lines int) ([]byte, error) {
+	return f.Tail(lines, false)
+}
+
 func (f *fakeTerminal) Written() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

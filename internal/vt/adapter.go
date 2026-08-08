@@ -145,6 +145,14 @@ func (s *SessionTerminal) Tail(lines int, unwrap bool) (out []byte, err error) {
 	return s.term.Tail(lines, unwrap)
 }
 
+// TailVT returns the last lines of the terminal contents as escape sequences.
+func (s *SessionTerminal) TailVT(lines int) (out []byte, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "rendering recent terminal contents as escapes") }()
+	return s.term.TailVT(lines)
+}
+
 // VT returns the terminal contents as escape sequences.
 func (s *SessionTerminal) VT() (out []byte, err error) {
 	s.mu.Lock()

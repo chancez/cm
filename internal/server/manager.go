@@ -959,9 +959,13 @@ func (m *Manager) HistoryFromDisk(
 // finished command's output is the common case for `cm read`, since `cm run` waits for the command and
 // the session is already gone by the time anything reads it.
 func (m *Manager) ReadFromDisk(
-	ctx context.Context, name string, lines int, unwrap bool,
+	ctx context.Context, name string, lines int, unwrap, raw bool,
 ) ([]byte, error) {
 	return m.replayFromDisk(ctx, name, func(term Terminal) ([]byte, error) {
+		if raw {
+			// unwrap is not passed on: it describes a rendering, and raw output does not go through one.
+			return term.TailVT(lines)
+		}
 		return term.Tail(lines, unwrap)
 	})
 }

@@ -546,6 +546,12 @@ type ReadRequest struct {
 	Session string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
 	// How many lines from the end. Zero means everything.
 	Lines uint32 `protobuf:"varint,2,opt,name=lines,proto3" json:"lines,omitempty"`
+	// Return the bytes the program emitted rather than the text they rendered to.
+	//
+	// Bounded by lines like the plain form, which is what distinguishes this from History's vt format: that
+	// renders the whole scrollback and cannot be limited. Ignored together with unwrap, which describes a
+	// rendering that raw output does not go through.
+	Raw bool `protobuf:"varint,4,opt,name=raw,proto3" json:"raw,omitempty"`
 	// Whether to rejoin soft-wrapped lines. A line the terminal broke to fit its width is one line to the
 	// program that wrote it, so splitting it puts a newline inside a path or a stack frame.
 	Unwrap        bool `protobuf:"varint,3,opt,name=unwrap,proto3" json:"unwrap,omitempty"`
@@ -595,6 +601,13 @@ func (x *ReadRequest) GetLines() uint32 {
 		return x.Lines
 	}
 	return 0
+}
+
+func (x *ReadRequest) GetRaw() bool {
+	if x != nil {
+		return x.Raw
+	}
+	return false
 }
 
 func (x *ReadRequest) GetUnwrap() bool {
@@ -2762,10 +2775,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05state\x18\x02 \x01(\x0e2\x1b.cm.server.v1.ReportedStateR\x05state\x12\x16\n" +
 	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\tR\x06source\"\x10\n" +
-	"\x0eReportResponse\"U\n" +
+	"\x0eReportResponse\"g\n" +
 	"\vReadRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x14\n" +
-	"\x05lines\x18\x02 \x01(\rR\x05lines\x12\x16\n" +
+	"\x05lines\x18\x02 \x01(\rR\x05lines\x12\x10\n" +
+	"\x03raw\x18\x04 \x01(\bR\x03raw\x12\x16\n" +
 	"\x06unwrap\x18\x03 \x01(\bR\x06unwrap\"\"\n" +
 	"\fReadResponse\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"u\n" +

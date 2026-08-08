@@ -647,7 +647,15 @@ func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv
 	if !live {
 		// A finished session is the common case here, not an edge one: `cm run` waits for its command, so
 		// the session has already ended by the time anything reads its output.
-		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap)
+		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap, req.Raw)
+		if err != nil {
+			return nil, err
+		}
+		return &serverv1.ReadResponse{Data: data}, nil
+	}
+
+	if req.Raw {
+		data, err := sess.ReadVT(int(req.Lines))
 		if err != nil {
 			return nil, err
 		}

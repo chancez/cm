@@ -465,7 +465,12 @@ func newHistoryCommand(g *globals) *cobra.Command {
 		Long: `Print a session's contents, including scrollback.
 
 Plain text by default, so it can be piped or paged. --format=vt keeps colors and
-styling; --format=html produces styled markup.`,
+styling; --format=html produces styled markup.
+
+The whole thing, always. 'cm read' is the bounded form: it takes --lines, rejoins
+soft-wrapped lines, and with --raw gives the emitted bytes of just the tail, which
+this cannot do. What only lives here is --format=html, since neither rendered text nor
+raw bytes can carry styling as markup.`,
 		Args:              sessionNameArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {

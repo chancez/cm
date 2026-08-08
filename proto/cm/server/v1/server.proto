@@ -141,6 +141,12 @@ message ReadRequest {
   string session = 1;
   // How many lines from the end. Zero means everything.
   uint32 lines = 2;
+  // Return the bytes the program emitted rather than the text they rendered to.
+  //
+  // Bounded by lines like the plain form, which is what distinguishes this from History's vt format: that
+  // renders the whole scrollback and cannot be limited. Ignored together with unwrap, which describes a
+  // rendering that raw output does not go through.
+  bool raw = 4;
   // Whether to rejoin soft-wrapped lines. A line the terminal broke to fit its width is one line to the
   // program that wrote it, so splitting it puts a newline inside a path or a stack frame.
   bool unwrap = 3;

@@ -294,6 +294,31 @@ func lastLines(p []byte, n int) []byte {
 	return p
 }
 
+// TailVT returns the last lines of the terminal's contents as escape sequences.
+//
+// The raw counterpart of Tail, for a caller that wants what a program actually emitted rather than the text it
+// rendered to. VT covers the whole scrollback; this bounds it, which is what makes `cm read --raw --lines N`
+// possible where `cm history --format vt` can only dump everything.
+//
+// Counting lines in escaped output is approximate by nature, since a line's worth of bytes includes whatever
+// styling it carries. lastLines counts newlines, so a run of styling attached to the line before a boundary
+// stays with that line. The alternative is reconstructing the sequence state at an arbitrary offset, which
+// would mean re-emitting the attributes in force at the cut and is more machinery than a bounded raw dump
+// justifies.
+func (t *Terminal) TailVT(lines int) ([]byte, error) {
+	if t.closed {
+		return nil, fmt.Errorf("terminal is closed")
+	}
+	out, err := t.format(formatOptions{
+		emit:  C.GHOSTTY_FORMATTER_FORMAT_VT,
+		style: true,
+	})
+	if err != nil || lines <= 0 {
+		return out, err
+	}
+	return lastLines(out, lines), nil
+}
+
 // HTML returns the terminal's contents as HTML, preserving styling.
 func (t *Terminal) HTML() ([]byte, error) {
 	if t.closed {
