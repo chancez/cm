@@ -79,6 +79,22 @@ type Session struct {
 	mu       sync.Mutex
 	exited   bool
 	exitCode int
+
+	// ptyMu guards the pty fd's existence against the ioctl callers below, which are RPC handlers
+	// and so run on their own goroutines.
+	//
+	// Separate from mu, and a read-write lock, for two reasons. It must not be held across a
+	// blocking pty read, or closing the fd could no longer interrupt one, and that is exactly how
+	// Shutdown unblocks the pump. And several ioctls at once are harmless, while a close must
+	// exclude all of them.
+	//
+	// Read and Write need no such guard: os.File refcounts its descriptor internally, so those are
+	// safe against a concurrent Close. The ioctl helpers are not, because they go through
+	// os.File.Fd(), which hands out the raw descriptor with no synchronization at all. After a close
+	// that number is stale and the kernel may have handed it to something else, so the ioctl lands
+	// on an unrelated file.
+	ptyMu   sync.RWMutex
+	ptyGone bool
 	// closeOnce guards releasing the pty, which both Wait and Shutdown can reach.
 	closeOnce sync.Once
 }
@@ -254,7 +270,26 @@ func (s *Session) pump() {
 }
 
 func (s *Session) releasePty() {
-	s.closeOnce.Do(func() { s.ptmx.Close() })
+	s.closeOnce.Do(func() {
+		// Marked gone and closed under the write lock, so no ioctl can be mid-flight on the
+		// descriptor while it is being closed or reused.
+		s.ptyMu.Lock()
+		s.ptyGone = true
+		s.ptmx.Close()
+		s.ptyMu.Unlock()
+	})
+}
+
+// withPty runs fn on the pty fd, or reports that the session is over.
+//
+// For the ioctl callers only. See ptyMu on why Read and Write do not use this.
+func (s *Session) withPty(fn func(*os.File) error) error {
+	s.ptyMu.RLock()
+	defer s.ptyMu.RUnlock()
+	if s.ptyGone {
+		return seqlog.ErrClosed
+	}
+	return fn(s.ptmx)
 }
 
 // SetLogger installs a logger. A discarding logger is used until one is set.
@@ -284,8 +319,10 @@ func (s *Session) Write(p []byte) (int, error) {
 // Resize sets the pty window size. The kernel signals the child, so a shell redraws
 // without the shim knowing anything about terminals.
 func (s *Session) Resize(rows, cols, xpixel, ypixel uint16) error {
-	return pty.Setsize(s.ptmx, &pty.Winsize{
-		Rows: rows, Cols: cols, X: xpixel, Y: ypixel,
+	return s.withPty(func(f *os.File) error {
+		return pty.Setsize(f, &pty.Winsize{
+			Rows: rows, Cols: cols, X: xpixel, Y: ypixel,
+		})
 	})
 }
 
@@ -305,7 +342,9 @@ func (s *Session) ResizeSignal(rows, cols, xpixel, ypixel uint16) error {
 	cur, curCols, err := s.Size()
 	if err == nil && cur == rows && curCols == cols && rows > 1 {
 		nudge := pty.Winsize{Rows: rows - 1, Cols: cols, X: xpixel, Y: ypixel}
-		if err := pty.Setsize(s.ptmx, &nudge); err != nil {
+		if err := s.withPty(func(f *os.File) error {
+			return pty.Setsize(f, &nudge)
+		}); err != nil {
 			return err
 		}
 	}
@@ -314,8 +353,12 @@ func (s *Session) ResizeSignal(rows, cols, xpixel, ypixel uint16) error {
 
 // Size reports the pty's current window size.
 func (s *Session) Size() (rows, cols uint16, err error) {
-	ws, err := pty.GetsizeFull(s.ptmx)
-	if err != nil {
+	var ws *pty.Winsize
+	if err := s.withPty(func(f *os.File) error {
+		var ferr error
+		ws, ferr = pty.GetsizeFull(f)
+		return ferr
+	}); err != nil {
 		return 0, 0, err
 	}
 	return ws.Rows, ws.Cols, nil
