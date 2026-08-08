@@ -100,20 +100,23 @@ Kitty graphics and OSC 8 hyperlink targets are absent from a restored screen, be
 libghostty's formatter does not re-emit them. Both work in live output. zmx has the same gap
 and the fix belongs upstream.
 
-**A leftover escape parameter can appear on the restored prompt line.** With a prompt that uses
-relative cursor motion, reattaching can leave something like `[183D` rendered as text on that one
-line. What is known:
+## Two sequence numbers, and why conflating them corrupted the prompt
 
-- It is cosmetic and does not propagate. The next prompt is clean, scrollback is intact, and the
-  session is fully usable.
-- It is cm's doing. The same shell and prompt in a bare terminal do not produce it.
-- It is not corrupted state. The VT model contains no such bytes, and `history --format=vt`
-  is clean, so nothing wrong is being stored.
-- It is not the prompt rewriter, libghostty's parser, or a chunk boundary. Each was tested
-  directly and preserves bytes exactly, including across every split point.
+Output is rewritten on the way through, to force `redraw=0` into prompt markers, and that rewrite
+makes the data longer. Two counters therefore exist and must not be mixed:
 
-The remaining explanation is that the restored cursor position and the shell's own
-relative-motion redraw disagree, so part of that redraw lands where it is displayed rather than
-consumed. zmx reached a similar conclusion for nested sessions and called cursor-position
-reconciliation not reliably fixable in its architecture. Worth revisiting deliberately rather
-than patching blind.
+- `lastSeq` counts the **shim's** bytes. It is the position to resubscribe from after a server
+  restart, and the shim knows nothing about the rewrite.
+- The client log numbers the **rewritten** bytes, since that is what clients read.
+
+Using one as a position in the other desynchronizes them by however much the rewrite added, nine
+bytes per prompt for `;redraw=0`. A client then begins reading part-way into an escape sequence,
+loses its leading ESC, and the remainder renders as literal text: the symptom was `[183D` printed
+beside the prompt after every reattach.
+
+This is worth spelling out because the bug survived a lot of plausible-looking testing. The
+rewriter preserves bytes exactly, including across every possible split point, and it has tests
+proving that. libghostty's parser was fine. The stored state was fine. What was wrong was one
+number used in the wrong coordinate space, two lines away from the rewrite. Bisecting by disabling
+the rewriter is what located it, after several hypotheses about terminators, cursor positions, and
+consecutive OSC sequences were each disproved by experiment.

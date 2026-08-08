@@ -776,3 +776,54 @@ func TestDetachReportsLastClient(t *testing.T) {
 		t.Error("detaching the only client reports last = false, want true")
 	}
 }
+
+// Sequence numbers must not be conflated between the shim's stream and the client's.
+//
+// Output is rewritten on the way through, to force redraw=0 into prompt markers, and that rewrite
+// changes the length. The shim's numbering counts its own bytes while the client log numbers the
+// rewritten ones, so using one as a position in the other desynchronizes them by however much the
+// rewrite added. A client then starts reading inside an escape sequence, loses the leading ESC, and
+// the remainder renders as literal text beside the prompt.
+//
+// Reproduced with output containing a prompt marker, which is what makes the rewrite lengthen it.
+func TestAttachStreamStartsOnASequenceBoundary(t *testing.T) {
+	// A prompt marker with no redraw parameter, so the rewrite appends nine bytes, followed by a
+	// cursor move whose ESC is what went missing.
+	const prompt = "\x1b]133;A\x07PROMPT\x1b[10Dmain\r\n"
+
+	rec := startShimFor(t, shimConfigFor("seqsync",
+		`printf '\033]133;A\007PROMPT\033[10Dmain\r\n'; sleep 5`))
+	rec.Rows, rec.Cols = 24, 80
+
+	term := &fakeTerminal{restore: []byte("RESTORED")}
+	sess, err := newSession(rec, term, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// Let the prompt through so the rewrite has happened and the two counters can diverge.
+	warm := sess.recent.Subscribe(0)
+	readUntil(t, warm, "main")
+	warm.Close()
+
+	// The property: a fresh attach must start exactly at the end of the rewritten log, so no
+	// partial sequence is delivered.
+	att, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	if got, want := att.reader.Position(), sess.recent.Next(); got != want {
+		t.Errorf("stream starts at %d, want the log's end %d; a mismatch delivers a partial escape sequence",
+			got, want)
+	}
+
+	// And the two counters really do differ here, so the test would catch a regression rather than
+	// passing because the rewrite happened to be a no-op.
+	if sess.LastSeq() == sess.recent.Next() {
+		t.Skip("rewrite did not change the length, so this case cannot desynchronize")
+	}
+	_ = prompt
+}

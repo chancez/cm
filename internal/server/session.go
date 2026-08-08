@@ -203,6 +203,15 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// is a gap if the window passes it.
 		s.recent.Append(data)
 
+		// Two sequence numbers, deliberately, because the rewrite above changes the length.
+		//
+		// lastSeq tracks the shim's numbering, since it is the position to resubscribe from after
+		// a restart, and the shim knows nothing about the rewrite. Clients are served from
+		// s.recent, which numbers the rewritten bytes.
+		//
+		// Conflating them desynchronizes the two by however much the rewrite added, which puts a
+		// client's resume position inside an escape sequence and slices the ESC off the front of
+		// it. The visible result is a cursor move rendering as literal text beside the prompt.
 		s.mu.Lock()
 		s.lastSeq = out.Seq + uint64(len(out.Data))
 		s.mu.Unlock()
@@ -445,9 +454,14 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
 		restore = b
-		// State is replayed, so streaming starts at the present rather than repeating
-		// history the snapshot already covers.
-		from = s.lastSeq
+		// State is replayed, so streaming starts at the present rather than repeating history the
+		// snapshot already covers.
+		//
+		// The log's own end, not lastSeq. lastSeq counts the shim's bytes, while the log numbers
+		// the rewritten ones, and prompt rewriting makes those differ by however much it added.
+		// Using lastSeq here starts the stream at an offset inside an escape sequence, which
+		// slices the ESC off and leaves a cursor move rendering as literal text beside the prompt.
+		from = s.recent.Next()
 	}
 
 	return attachment{
