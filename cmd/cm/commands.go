@@ -1,83 +1,138 @@
 package main
 
 import (
-	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
+
+	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/paths"
 )
 
-// errNotImplemented marks a subcommand that is wired up but has no behavior yet, so the
-// dispatch table can be exercised before the layers exist.
+// errNotImplemented marks a subcommand that is wired up but has no behavior yet.
 var errNotImplemented = errors.New("not implemented yet")
 
-// newFlagSet builds a flag set that reports errors through run() rather than exiting,
-// so a usage error still runs deferred cleanup such as restoring the terminal.
-func newFlagSet(name string) *flag.FlagSet {
-	fs := flag.NewFlagSet(paths.Name+" "+name, flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	return fs
+func newAttachCommand(g *globals) *cobra.Command {
+	var (
+		own      bool
+		readOnly bool
+	)
+	cmd := &cobra.Command{
+		Use:   "attach <session>",
+		Short: "Attach to a session, creating it if needed",
+		Long: `Attach to a session, creating it if it does not exist.
+
+Being idempotent is what lets a terminal emulator use one command for both
+creating a window's session and reattaching to it after a restart.`,
+		Args: sessionNameArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("attach %s: %w", args[0], errNotImplemented)
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&own, "own", false,
+		"terminate the session if this client disconnects without detaching")
+	f.BoolVar(&readOnly, "read-only", false,
+		"follow the session without sending input")
+	return cmd
 }
 
-func cmdAttach(ctx context.Context, args []string) error {
-	fs := newFlagSet("attach")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newListCommand(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List sessions",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("list: %w", errNotImplemented)
+		},
 	}
-	if fs.NArg() != 1 {
-		return errors.New("attach requires exactly one session name")
-	}
-	session := fs.Arg(0)
-	if err := paths.ValidateSessionName(session); err != nil {
-		return err
-	}
-	return fmt.Errorf("attach %s: %w", session, errNotImplemented)
 }
 
-func cmdList(ctx context.Context, args []string) error {
-	fs := newFlagSet("list")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newKillCommand(g *globals) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "kill <session>...",
+		Short: "Terminate sessions and their shells",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, name := range args {
+				if err := paths.ValidateSessionName(name); err != nil {
+					return err
+				}
+			}
+			return fmt.Errorf("kill: %w", errNotImplemented)
+		},
 	}
-	return fmt.Errorf("list: %w", errNotImplemented)
+	cmd.Flags().BoolVar(&force, "force", false,
+		"forget the session even if its shim cannot be reached")
+	return cmd
 }
 
-func cmdKill(ctx context.Context, args []string) error {
-	fs := newFlagSet("kill")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newServerCommand(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "server",
+		Short: "Run the server in the foreground",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return fmt.Errorf("server: %w", errNotImplemented)
+		},
 	}
-	if fs.NArg() != 1 {
-		return errors.New("kill requires exactly one session name")
-	}
-	session := fs.Arg(0)
-	if err := paths.ValidateSessionName(session); err != nil {
-		return err
-	}
-	return fmt.Errorf("kill %s: %w", session, errNotImplemented)
 }
 
-func cmdServer(ctx context.Context, args []string) error {
-	fs := newFlagSet("server")
-	if err := fs.Parse(args); err != nil {
-		return err
+// newShimCommand builds the hidden shim subcommand.
+//
+// The server re-execs this; a human never types it. Suggestions are disabled so a
+// malformed re-exec fails loudly instead of helpfully running something adjacent, and
+// interspersed args are disabled so the argv the server constructs is parsed exactly as
+// written.
+func newShimCommand(g *globals) *cobra.Command {
+	var (
+		session    string
+		rows, cols uint16
+	)
+	cmd := &cobra.Command{
+		Use:                "shim",
+		Short:              "Internal: hold a session's pty",
+		Hidden:             true,
+		Args:               cobra.NoArgs,
+		DisableSuggestions: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := paths.ValidateSessionName(session); err != nil {
+				return err
+			}
+			return fmt.Errorf("shim %s: %w", session, errNotImplemented)
+		},
 	}
-	return fmt.Errorf("server: %w", errNotImplemented)
+	cmd.Flags().SetInterspersed(false)
+	f := cmd.Flags()
+	f.StringVar(&session, "session", "", "session name this shim serves")
+	f.Uint16Var(&rows, "rows", 24, "initial window rows")
+	f.Uint16Var(&cols, "cols", 80, "initial window columns")
+	return cmd
 }
 
-// cmdShim runs a session's shim. The server passes the session name and the pty size it
-// wants; the shim owns the pty from then on.
-func cmdShim(ctx context.Context, args []string) error {
-	fs := newFlagSet(shimSubcommand)
-	session := fs.String("session", "", "session name this shim serves")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newCompletionsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:       "completions <shell>",
+		Short:     "Print a shell completion script",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := cmd.Root()
+			switch args[0] {
+			case "bash":
+				return root.GenBashCompletionV2(os.Stdout, true)
+			case "zsh":
+				return root.GenZshCompletion(os.Stdout)
+			case "fish":
+				return root.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return root.GenPowerShellCompletionWithDesc(os.Stdout)
+			default:
+				return fmt.Errorf("unsupported shell %q", args[0])
+			}
+		},
 	}
-	if err := paths.ValidateSessionName(*session); err != nil {
-		return err
-	}
-	return fmt.Errorf("shim %s: %w", *session, errNotImplemented)
 }
