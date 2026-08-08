@@ -10,6 +10,7 @@ import (
 
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/seqlog"
+	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -154,7 +155,12 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				//
 				// Without this, `cm run` on a fast command failed with "sizing session s9: ttrpc:
 				// closed" instead of the command's exit code, about one run in ten on Linux.
-				if ended, _ := sess.Ended(); !ended {
+				//
+				// Two ways to recognize it, because they can arrive in either order. The session may
+				// already be marked ended, or the shim may say so first: the server learns of an exit
+				// by watching the output stream, so a resize can reach a shim whose pty is already
+				// released while this session still looks alive.
+				if ended, _ := sess.Ended(); !ended && !isSessionOver(err) {
 					sess.detach(att)
 					return fmt.Errorf("sizing session %s: %w", sess.name, err)
 				}
@@ -338,6 +344,18 @@ func (s *Service) recvLoop(
 			// Recorded before signalling, so the exit path cannot observe the close without also
 			// seeing the flag.
 			sawDetach.Store(true)
+			// Acknowledged before signalling, so the client can wait for confirmation rather than
+			// racing its own disconnect. A client that sent Detach and exited immediately had the
+			// message dropped, because the send is asynchronous and closing the connection discarded
+			// it, and the server then reaped the owned session it was asked to keep.
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
+			}); err != nil {
+				// The client is gone, which is the case this acknowledgement exists to avoid but
+				// cannot always prevent. The flag above is already set, so the session survives.
+				s.mgr.log.Warn("acknowledging a detach failed",
+					"session", sess.name, "error", err)
+			}
 			close(detached)
 			return nil
 
@@ -587,4 +605,21 @@ func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) er
 			Exited: &serverv1.Exited{ExitCode: int32(code)},
 		},
 	})
+}
+
+// isSessionOver reports whether an error from a shim means its session has ended.
+//
+// Matched on the message rather than with errors.Is, because ttrpc carries an error across the socket
+// as a status with a string: the sentinel does not survive the trip, so the receiver has nothing to
+// compare against. Ugly, and preferable to the alternative of treating every shim error as a session
+// ending, which would hide real failures.
+//
+// The shim's own error rather than seqlog.ErrClosed, which is about an output log. Sharing one string
+// made a resize on a just-exited session report "output log is closed", which the server could not
+// distinguish from a genuine problem.
+func isSessionOver(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), shim.ErrSessionOver.Error())
 }

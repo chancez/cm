@@ -240,10 +240,6 @@ func runSession(
 
 	// Output arrives on its own goroutine so input handling is never blocked behind a
 	// slow write to the terminal.
-	type outMsg struct {
-		resp *serverv1.AttachResponse
-		err  error
-	}
 	out := make(chan outMsg, 16)
 	go func() {
 		defer close(out)
@@ -337,10 +333,18 @@ func runSession(
 						},
 					})
 				}
-				// Tell the server this was deliberate, so an owned session survives.
+				// Tell the server this was deliberate, so an owned session survives, and wait for it
+				// to say so.
+				//
+				// Waiting is not politeness. The send is asynchronous, so returning here tears down the
+				// connection before the message is transmitted: the server then sees a client that
+				// vanished without detaching and destroys the owned session, which is precisely the
+				// opposite of what the user asked for. Verified by adding a delay here, which made the
+				// session survive.
 				_ = stream.Send(&serverv1.AttachRequest{
 					Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
 				})
+				waitForDetachAck(out)
 				result.Detached = true
 				return outcomeDone, nil
 			}
@@ -397,6 +401,7 @@ func runSession(
 			_ = stream.Send(&serverv1.AttachRequest{
 				Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
 			})
+			waitForDetachAck(out)
 			result.Detached = true
 			return outcomeDone, nil
 		}
@@ -433,4 +438,50 @@ func dial(socketPath string) (*ttrpc.Client, serverv1.ServerClient, error) {
 	}
 	cl := ttrpc.NewClient(conn)
 	return cl, serverv1.NewServerClient(cl), nil
+}
+
+// outMsg is one message from the server, or the error that ended the stream.
+//
+// At package scope rather than inside the attach loop so waitForDetachAck can take the channel.
+type outMsg struct {
+	resp *serverv1.AttachResponse
+	err  error
+}
+
+// detachAckTimeout bounds how long a detaching client waits for the server to confirm.
+//
+// Short, because this is a local socket and the only thing being waited on is one small message. A
+// bound at all, because a client that hangs on exit is worse than one that occasionally exits before
+// the acknowledgement arrives: the flag the server sets on receiving Detach is what actually protects
+// the session, and this wait only ensures the message gets there.
+const detachAckTimeout = 2 * time.Second
+
+// waitForDetachAck waits for the server to confirm a detach before the caller exits.
+//
+// ttrpc sends are asynchronous, so returning straight after Send closes the connection while the
+// message may still be queued, and a discarded Detach means the server sees a client that vanished
+// without detaching, which for an owned session means destroying it.
+//
+// Measured honestly, the server's acknowledgement is what fixes that: replying forces the queued
+// Detach to be flushed, and the test passes with this wait removed as long as the reply is sent. This
+// is kept as the explicit half of the handshake, so the guarantee does not rest on a side effect of
+// the transport. Removing both halves fails the test.
+//
+// Drains other messages while waiting, since output can still be in flight, and gives up on timeout or
+// stream error rather than hanging.
+func waitForDetachAck(out <-chan outMsg) {
+	deadline := time.After(detachAckTimeout)
+	for {
+		select {
+		case msg, ok := <-out:
+			if !ok || msg.err != nil {
+				return
+			}
+			if msg.resp.GetDetached() != nil {
+				return
+			}
+		case <-deadline:
+			return
+		}
+	}
 }

@@ -283,3 +283,55 @@ func serveFakeShim(t *testing.T, svc shimv1.ShimService) string {
 	waitSocket(t, socket)
 	return socket
 }
+
+// The server must acknowledge a detach.
+//
+// The client cannot safely exit until it knows the server has seen its Detach: ttrpc sends are
+// asynchronous, so a client that sends and returns tears the connection down with the message possibly
+// still queued. The server then treats it as a client that vanished, and destroys an owned session.
+//
+// Asserted at this level as well as end to end because it is a protocol guarantee, and the e2e test
+// that found it needs a real terminal and a real process to run.
+func TestDetachIsAcknowledged(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	ctx := context.Background()
+
+	rec := startShimFor(t, shimConfigFor("ackdetach", "sleep 5"))
+	rec.State = "running"
+	if err := st.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	svc := NewService(mgr)
+	streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	stream := newFakeStream(streamCtx,
+		// Owned, since that is the case where a missed detach does damage.
+		openReq(&serverv1.Open{Session: "ackdetach", Rows: 24, Cols: 80, Own: true}),
+		&serverv1.AttachRequest{Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}}},
+	)
+	if err := svc.Attach(streamCtx, stream); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Attach() error = %v", err)
+	}
+
+	var acked bool
+	for _, resp := range stream.sent() {
+		if resp.GetDetached() != nil {
+			acked = true
+		}
+	}
+	if !acked {
+		t.Errorf("server sent %d messages and none was Detached, want the detach acknowledged",
+			len(stream.sent()))
+	}
+
+	// And the owned session survived, which is what the acknowledgement protects.
+	if sess, ok := mgr.Get("ackdetach"); !ok {
+		t.Error("the owned session was destroyed by a deliberate detach")
+	} else if ended, _ := sess.Ended(); ended {
+		t.Error("the owned session ended after a deliberate detach, want it still running")
+	}
+}
