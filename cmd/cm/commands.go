@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -210,11 +211,25 @@ func newKillCommand(g *globals) *cobra.Command {
 	var (
 		force  bool
 		asJSON bool
+		all    bool
 	)
 	cmd := &cobra.Command{
-		Use:               "kill <session>...",
-		Short:             "Terminate sessions and their shells",
-		Args:              cobra.MinimumNArgs(1),
+		Use:   "kill <session>...",
+		Short: "Terminate sessions and their shells",
+		Long: `Terminate sessions and their shells.
+
+--all kills every session the server knows, which is what a test harness or a
+teardown script wants: killing by name means enumerating them first, and a
+missed one leaves a shell and its pty behind.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				if len(args) > 0 {
+					return errors.New("--all takes no session names")
+				}
+				return nil
+			}
+			return cobra.MinimumNArgs(1)(cmd, args)
+		},
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, name := range args {
@@ -227,7 +242,24 @@ func newKillCommand(g *globals) *cobra.Command {
 				return err
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				resp, err := cl.Kill(ctx, &serverv1.KillRequest{Sessions: args, Force: force})
+				names := args
+				if all {
+					// Enumerated here rather than server-side, so --all is exactly "kill these names" and
+					// the server keeps one meaning for a kill request. Nothing is killed if the list is
+					// empty, which is the right answer for a server with no sessions.
+					listed, err := cl.List(ctx, &serverv1.ListRequest{})
+					if err != nil {
+						return err
+					}
+					names = make([]string, 0, len(listed.Sessions))
+					for _, s := range listed.Sessions {
+						names = append(names, s.Name)
+					}
+					if len(names) == 0 {
+						return nil
+					}
+				}
+				resp, err := cl.Kill(ctx, &serverv1.KillRequest{Sessions: names, Force: force})
 				if err != nil {
 					return err
 				}
@@ -238,6 +270,7 @@ func newKillCommand(g *globals) *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVar(&force, "force", false,
 		"forget the session even if its shim cannot be reached")
+	f.BoolVar(&all, "all", false, "kill every session")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
 }

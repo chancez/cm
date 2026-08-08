@@ -71,8 +71,9 @@ request rather than polling, and cannot miss a transition the way sampling
 			if err != nil {
 				return err
 			}
-			// Deliberately not ensureServer: waiting on a session implies one exists, and starting a
-			// server here would create one that reports the session missing anyway.
+			// withServer starts a server if none is running, which is right rather than a shortcut: a
+			// session outlives its server, so a wait issued while the server is down should adopt the
+			// session and answer, not fail. That is the same path an upgrade takes.
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				// No client-side deadline on the context. The server owns the timeout and returns a
 				// result describing the session either way; cancelling the request instead would lose

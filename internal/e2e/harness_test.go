@@ -126,9 +126,19 @@ func newEnv(t *testing.T) *env {
 	}
 
 	t.Cleanup(func() {
-		// Stop the server and every session before removing the directory, or shims outlive the test
-		// holding ptys and the next test inherits them.
-		e.run("kill", "--all")
+		// Stop every session before the server, or shims outlive the test holding ptys.
+		//
+		// This is not hypothetical housekeeping. A shim holds a pty for as long as it runs, macOS caps
+		// them at 511 system-wide, and a suite that leaks one per session exhausts them: the failure
+		// arrives as `pty.Start() error = device not configured` in whichever test happens to run once
+		// the limit is reached, which looks like a bug in that test rather than a leak in the harness.
+		//
+		// mustRun, not run, and checked rather than ignored. This previously called `kill --all` before
+		// that flag existed, so it failed silently on every teardown and leaked every session. 437 stray
+		// ptys had accumulated by the time the exhaustion surfaced.
+		if r := e.run("kill", "--all"); r.code != 0 {
+			t.Errorf("cleanup: kill --all failed, which leaks a pty per session: %s", r.stderr)
+		}
 		e.run("server", "stop")
 		e.waitServerGone()
 		os.RemoveAll(root)
