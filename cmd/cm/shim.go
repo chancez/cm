@@ -7,6 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
@@ -45,7 +47,11 @@ func newShimCommand(g *globals) *cobra.Command {
 			if err := dirs.Ensure(); err != nil {
 				return err
 			}
-			return runShim(cmd.Context(), dirs, shim.Config{
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			return runShim(cmd.Context(), dirs, cfg, shim.Config{
 				Session:     session,
 				Command:     args,
 				Dir:         dir,
@@ -80,10 +86,25 @@ func newShimCommand(g *globals) *cobra.Command {
 //
 // Binding before starting the shell means a shim that cannot claim its socket, because
 // another already holds it, fails without having spawned anything.
-func runShim(ctx context.Context, dirs paths.Dirs, cfg shim.Config) error {
+func runShim(ctx context.Context, dirs paths.Dirs, appCfg *config.Config, cfg shim.Config) error {
+	level, enabled, err := appCfg.Logging()
+	if err != nil {
+		return err
+	}
+	logger, closeLog, err := cmlog.New(cmlog.Options{
+		Path:    dirs.ShimLog(cfg.Session),
+		Level:   level,
+		Enabled: enabled,
+	})
+	if err != nil {
+		return err
+	}
+	defer closeLog.Close()
+
 	socket := dirs.ShimSocket(cfg.Session)
 	l, err := shim.Listen(socket)
 	if err != nil {
+		logger.Error("claiming shim socket failed", "socket", socket, "error", err)
 		return err
 	}
 	// Serve closes the listener, which unlinks nothing, so remove the socket here.
@@ -94,10 +115,20 @@ func runShim(ctx context.Context, dirs paths.Dirs, cfg shim.Config) error {
 	session, err := shim.Start(cfg)
 	if err != nil {
 		l.Close()
+		logger.Error("starting session failed", "session", cfg.Session, "error", err)
 		return fmt.Errorf("starting session %s: %w", cfg.Session, err)
 	}
+	session.SetLogger(logger)
 
-	return shim.Serve(ctx, l, shim.NewService(session))
+	logger.Info("shim started",
+		"session", cfg.Session, "pid", os.Getpid(), "shell_pid", session.ShellPID(),
+		"persisting", cfg.PersistPath != "")
+
+	serveErr := shim.Serve(ctx, l, shim.NewService(session))
+
+	exited, code := session.Exited()
+	logger.Info("shim exiting", "session", cfg.Session, "shell_exited", exited, "exit_code", code)
+	return serveErr
 }
 
 // removeSocket unlinks the shim socket, ignoring the case where it is already gone.

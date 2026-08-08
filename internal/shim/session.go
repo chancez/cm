@@ -9,6 +9,7 @@ package shim
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 )
@@ -60,7 +62,9 @@ type Config struct {
 // Session is a running shell attached to a pty, with its output accumulating in a Log.
 type Session struct {
 	cfg Config
-	log *seqlog.Log
+	// outputLog holds the session's terminal output. Distinct from log, which records what the shim
+	// itself did.
+	outputLog *seqlog.Log
 	// persist mirrors output to disk when the session is configured to survive this process. Nil
 	// otherwise, which is the common case.
 	persist *seqlog.File
@@ -68,6 +72,9 @@ type Session struct {
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
 	cmd  *exec.Cmd
+
+	// log records what the shim does. Never nil.
+	log *slog.Logger
 
 	mu       sync.Mutex
 	exited   bool
@@ -92,7 +99,7 @@ func Start(cfg Config) (*Session, error) {
 		logBytes = DefaultLogBytes
 	}
 
-	s := &Session{cfg: cfg, log: seqlog.New(logBytes)}
+	s := &Session{cfg: cfg, log: cmlog.Discard(), outputLog: seqlog.New(logBytes)}
 
 	if cfg.PersistPath != "" {
 		limits := cfg.PersistLimits
@@ -112,7 +119,7 @@ func Start(cfg Config) (*Session, error) {
 		// process started still means the same byte. Starting from zero would make every stored
 		// position wrong.
 		_, next := pf.Bounds()
-		s.log = seqlog.NewAt(logBytes, next)
+		s.outputLog = seqlog.NewAt(logBytes, next)
 	}
 
 	ptmx, tty, err := pty.Open()
@@ -195,12 +202,16 @@ func (s *Session) pump() {
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			s.log.Append(buf[:n])
+			s.outputLog.Append(buf[:n])
 			if s.persist != nil {
 				// A failed write stops persisting rather than ending the session. The shell and
 				// its live output are the valuable part; the file is a cache that improves the
 				// next reboot.
 				if perr := s.persist.Append(buf[:n]); perr != nil {
+					// The session continues without persisting, so a reboot will lose it. That is a
+					// silent downgrade of something the user asked for, hence the log.
+					s.log.Error("persisting output failed, session will not survive a reboot",
+						"session", s.cfg.Session, "error", perr)
 					s.persist.Close()
 					s.mu.Lock()
 					s.persist = nil
@@ -231,7 +242,7 @@ func (s *Session) pump() {
 
 	// Closing the log releases subscribers once they have drained the final output,
 	// which is how the server learns the session is over.
-	s.log.Close()
+	s.outputLog.Close()
 
 	// Flush here rather than on every append: the tail is what a restore needs most, and this is
 	// the point where losing it would matter.
@@ -246,8 +257,15 @@ func (s *Session) releasePty() {
 	s.closeOnce.Do(func() { s.ptmx.Close() })
 }
 
+// SetLogger installs a logger. A discarding logger is used until one is set.
+func (s *Session) SetLogger(l *slog.Logger) {
+	if l != nil {
+		s.log = l
+	}
+}
+
 // Log exposes the output log for subscribers.
-func (s *Session) Log() *seqlog.Log { return s.log }
+func (s *Session) Log() *seqlog.Log { return s.outputLog }
 
 // Write sends input to the pty.
 //

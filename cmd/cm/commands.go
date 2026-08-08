@@ -47,6 +47,7 @@ Detach with ctrl-\ , which leaves the session running.`,
 			}
 			return nil
 		},
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var session string
 			if n := cmd.ArgsLenAtDash(); n != 0 && len(args) > 0 {
@@ -203,9 +204,10 @@ func newKillCommand(g *globals) *cobra.Command {
 		asJSON bool
 	)
 	cmd := &cobra.Command{
-		Use:   "kill <session>...",
-		Short: "Terminate sessions and their shells",
-		Args:  cobra.MinimumNArgs(1),
+		Use:               "kill <session>...",
+		Short:             "Terminate sessions and their shells",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, name := range args {
 				if err := paths.ValidateSessionName(name); err != nil {
@@ -235,9 +237,10 @@ func newKillCommand(g *globals) *cobra.Command {
 func newSendCommand(g *globals) *cobra.Command {
 	var newline bool
 	cmd := &cobra.Command{
-		Use:   "send <session> <text>...",
-		Short: "Send input to a session without attaching",
-		Args:  cobra.MinimumNArgs(2),
+		Use:               "send <session> <text>...",
+		Short:             "Send input to a session without attaching",
+		Args:              cobra.MinimumNArgs(2),
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if err := paths.ValidateSessionName(name); err != nil {
@@ -283,7 +286,8 @@ padding, or parsing.
 
 cwd is empty when the session has reported a directory on another host, since
 acting on a remote path locally would be wrong.`,
-		Args: sessionNameArg,
+		Args:              sessionNameArg,
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dirs, err := g.dirs()
 			if err != nil {
@@ -323,7 +327,8 @@ func newHistoryCommand(g *globals) *cobra.Command {
 
 Plain text by default, so it can be piped or paged. --format=vt keeps colors and
 styling; --format=html produces styled markup.`,
-		Args: sessionNameArg,
+		Args:              sessionNameArg,
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var f serverv1.HistoryFormat
 			switch format {

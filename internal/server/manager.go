@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -44,6 +46,8 @@ type Manager struct {
 	// persist decides which sessions survive a reboot and what happens when one is revived. Nil
 	// disables persistence entirely, which is the default.
 	persist *PersistPolicy
+	// log records what the manager does. Never nil, so callers do not have to check.
+	log *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -91,7 +95,16 @@ func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (
 		selfExe:     exe,
 		newTerminal: newTerminal,
 		sessions:    make(map[string]*Session),
+		log:         cmlog.Discard(),
 	}, nil
+}
+
+// SetLogger installs a logger. A discarding logger is used until one is set, so nothing has to
+// nil-check.
+func (m *Manager) SetLogger(l *slog.Logger) {
+	if l != nil {
+		m.log = l
+	}
 }
 
 // SetPersistPolicy enables persistence.
@@ -131,6 +144,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		alive, err := probeShim(ctx, rec.ShimSocket)
 		if err != nil && !alive {
 			// Unreachable in a way that says nothing is listening.
+			m.log.Info("session shim is gone, marking dead",
+				"session", rec.Name, "socket", rec.ShimSocket, "error", err)
 			state := store.StateDead
 			if applyErr := m.store.Apply(ctx, rec.Name, store.Update{State: &state}); applyErr != nil {
 				return fmt.Errorf("marking %s dead: %w", rec.Name, applyErr)
@@ -143,8 +158,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if err != nil {
 			// The shim answered a moment ago, so this is worth reporting but not fatal:
 			// the remaining sessions should still come back.
+			m.log.Warn("adopting session failed",
+				"session", rec.Name, "from_seq", rec.LastSeq, "error", err)
 			continue
 		}
+		m.log.Info("adopted session", "session", rec.Name, "from_seq", rec.LastSeq)
 		m.mu.Lock()
 		m.sessions[rec.Name] = sess
 		m.mu.Unlock()
@@ -184,6 +202,7 @@ func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) 
 		}
 		return nil, err
 	}
+	sess.log = m.log.With("session", rec.Name)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.
@@ -219,7 +238,12 @@ func (m *Manager) persistMetadata(sess *Session) {
 			if meta.Cwd.IsLocal && meta.Cwd.Path != "" {
 				upd.Cwd = &meta.Cwd.Path
 			}
-			_ = m.store.Apply(ctx, sess.name, upd)
+			if err := m.store.Apply(ctx, sess.name, upd); err != nil {
+				// Advisory, so the session continues. Logged because a `list` showing a stale
+				// directory is otherwise unexplainable.
+				m.log.Warn("recording session metadata failed",
+					"session", sess.name, "error", err)
+			}
 			cancel()
 		case <-sess.Done():
 			return
@@ -253,11 +277,17 @@ func (m *Manager) watch(sess *Session) {
 	seq := sess.LastSeq()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = m.store.Apply(ctx, sess.name, store.Update{
+	if err := m.store.Apply(ctx, sess.name, store.Update{
 		State:    &state,
 		ExitCode: &code,
 		LastSeq:  &seq,
-	})
+	}); err != nil {
+		// This one matters: without it the next server sees a session as running and tries to adopt
+		// a shim that is gone.
+		m.log.Error("recording session outcome failed",
+			"session", sess.name, "state", state, "error", err)
+	}
+	m.log.Info("session ended", "session", sess.name, "state", state, "exit_code", code)
 
 	m.mu.Lock()
 	if m.sessions[sess.name] == sess {
@@ -471,18 +501,35 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		if m.persist != nil {
 			limits = m.persist.Limits
 		}
-		if blob, _, rerr := replayPersisted(
+		blob, _, rerr := replayPersisted(
 			opts.restoreFrom, m.newTerminal, opts.Rows, opts.Cols, limits,
-		); rerr == nil && len(blob) > 0 {
+		)
+		switch {
+		case rerr != nil:
+			// Not fatal, but the user asked for their content back and did not get it, so this is
+			// exactly the kind of silent degradation the log exists for.
+			m.log.Warn("replaying persisted session failed",
+				"session", opts.Name, "path", opts.restoreFrom, "error", rerr)
+		case len(blob) > 0:
 			sess.setRestored(blob)
+			m.log.Info("restored session from disk",
+				"session", opts.Name, "restore_bytes", len(blob))
 		}
 	}
 
 	// Record the shell's pid for reporting, best effort: the session works without it.
 	if st, err := sess.State(ctx); err == nil {
 		shellPID := int(st.ShellPid)
-		_ = m.store.Apply(ctx, opts.Name, store.Update{ShellPID: &shellPID})
+		if err := m.store.Apply(ctx, opts.Name, store.Update{ShellPID: &shellPID}); err != nil {
+			m.log.Warn("recording shell pid failed", "session", opts.Name, "error", err)
+		}
+	} else {
+		m.log.Warn("reading shim state failed", "session", opts.Name, "error", err)
 	}
+
+	m.log.Info("created session",
+		"session", opts.Name, "shim_pid", pid, "persisting", persisting,
+		"rows", opts.Rows, "cols", opts.Cols)
 
 	m.mu.Lock()
 	m.sessions[opts.Name] = sess
@@ -695,12 +742,16 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 			// A log that cannot be removed is not a reason to keep the record. The row is what makes
 			// the session visible, and an orphaned file is a smaller problem than a session that
 			// can never be cleaned up.
-			_ = os.Remove(rec.LogPath)
+			if err := os.Remove(rec.LogPath); err != nil && !os.IsNotExist(err) {
+				m.log.Warn("removing expired session log failed",
+					"session", rec.Name, "path", rec.LogPath, "error", err)
+			}
 		}
 		if err := m.store.Delete(ctx, rec.Name); err != nil {
 			return removed, fmt.Errorf("expiring session %s: %w", rec.Name, err)
 		}
 		removed++
+		m.log.Info("expired dead session", "session", rec.Name, "age", now.Sub(rec.UpdatedAt))
 	}
 	return removed, nil
 }
@@ -723,7 +774,12 @@ func (m *Manager) Close() error {
 	for _, sess := range sessions {
 		// Persist the resume point so the next server picks up exactly here.
 		seq := sess.LastSeq()
-		_ = m.store.Apply(ctx, sess.name, store.Update{LastSeq: &seq})
+		if err := m.store.Apply(ctx, sess.name, store.Update{LastSeq: &seq}); err != nil {
+			// Losing this means the next server resubscribes from an older position and replays
+			// output the client already saw, so it is worth knowing about.
+			m.log.Error("recording resume point failed",
+				"session", sess.name, "seq", seq, "error", err)
+		}
 		sess.Close()
 	}
 	return nil

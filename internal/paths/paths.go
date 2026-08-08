@@ -108,6 +108,19 @@ func (d Dirs) logDir() string {
 	return filepath.Join(d.State, "logs")
 }
 
+// ServerLog is the server's diagnostic log.
+func (d Dirs) ServerLog() string {
+	return filepath.Join(d.logDir(), "server.log")
+}
+
+// ShimLog is one session's shim diagnostic log.
+//
+// Separate from the session's output log: this records what the shim did, while that records what the
+// shell printed. Conflating them would make the output unreadable and the diagnostics unparseable.
+func (d Dirs) ShimLog(session string) string {
+	return filepath.Join(d.logDir(), "shim-"+session+".log")
+}
+
 // SessionLog is the append-only output log for one session. Terminal output goes here
 // rather than into sqlite: it is high-volume, written sequentially, and only ever read
 // back in order.

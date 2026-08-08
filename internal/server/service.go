@@ -59,7 +59,12 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// After Open rather than before, because a session created by this call has no row to update
 	// until then.
 	if len(open.ClientEnv) > 0 {
-		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Env: open.ClientEnv})
+		if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Env: open.ClientEnv}); err != nil {
+			// Advisory: the session works, but `get-env` will hand out stale values, which is
+			// otherwise mysterious.
+			s.mgr.log.Warn("recording client environment failed",
+				"session", sess.name, "error", err)
+		}
 	}
 
 	// Resize before snapshotting, not after.
@@ -80,13 +85,18 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return fmt.Errorf("sizing session %s: %w", sess.name, err)
 		}
 		rows, cols := int(open.Rows), int(open.Cols)
-		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
+		if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols}); err != nil {
+			s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+		}
 	}
 
 	att, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
 		return err
 	}
+	s.mgr.log.Info("client attached",
+		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
+		"read_only", open.ReadOnly, "owns", open.Own, "restore_bytes", len(att.restore))
 	reader := att.reader
 	defer func() {
 		// Tell a program that tracks focus when the last client leaves, since a detached session
@@ -275,7 +285,9 @@ func (s *Service) recvLoop(
 				return fmt.Errorf("resizing session %s: %w", sess.name, err)
 			}
 			rows, cols := int(r.Rows), int(r.Cols)
-			_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
+			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols}); err != nil {
+				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+			}
 		}
 	}
 }
@@ -287,7 +299,12 @@ func (s *Service) recvLoop(
 func (s *Service) reapOwned(sess *Session) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = s.mgr.Kill(ctx, sess.name, true)
+	s.mgr.log.Info("owning client vanished, ending session", "session", sess.name)
+	if err := s.mgr.Kill(ctx, sess.name, true); err != nil {
+		// A session that should have been reaped and was not becomes a leak the user has to notice
+		// on their own, so it is logged even though nothing can be done here.
+		s.mgr.log.Error("reaping owned session failed", "session", sess.name, "error", err)
+	}
 }
 
 func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv1.ListResponse, error) {

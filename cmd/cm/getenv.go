@@ -47,7 +47,8 @@ By default only variables that differ from the current environment are printed,
 and a name prefixed with '-' means the client no longer has it. Removals matter:
 a stale socket path is worse than an absent one, because a client tries it and
 fails rather than falling back.`,
-		Args: cobra.MaximumNArgs(1),
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			session, err := resolveSession(args)
 			if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/server"
@@ -42,15 +44,31 @@ for development.`,
 			if err != nil {
 				return err
 			}
-			return runServer(cmd.Context(), dirs, cfg)
+			return runServer(cmd.Context(), dirs, cfg, true)
 		},
 	}
 }
 
-func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
+func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foreground bool) error {
 	if err := dirs.Ensure(); err != nil {
 		return err
 	}
+
+	level, enabled, err := cfg.Logging()
+	if err != nil {
+		return err
+	}
+	logger, closeLog, err := cmlog.New(cmlog.Options{
+		Path:    dirs.ServerLog(),
+		Level:   level,
+		Enabled: enabled,
+		// A server run in the foreground is being watched, so send it to both.
+		Stderr: foreground,
+	})
+	if err != nil {
+		return err
+	}
+	defer closeLog.Close()
 
 	// Bind before opening the database so a second server exits immediately rather than
 	// touching shared state.
@@ -59,6 +77,8 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
 		return err
 	}
 	defer os.Remove(dirs.ServerSocket())
+
+	logger.Info("server starting", "pid", os.Getpid(), "socket", dirs.ServerSocket())
 
 	st, err := store.Open(ctx, dirs.Database())
 	if err != nil {
@@ -72,6 +92,7 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
 		l.Close()
 		return err
 	}
+	mgr.SetLogger(logger)
 
 	if cfg.Persist.Enabled {
 		policy, err := persistPolicy(cfg)
@@ -94,9 +115,9 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
 	if cfg.Persist.Enabled {
 		if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
 			// Not fatal: failing to clean up is worth reporting but not worth refusing to serve.
-			fmt.Fprintf(os.Stderr, "expiring sessions: %v\n", err)
+			logger.Warn("expiring sessions failed", "error", err)
 		}
-		go expirePeriodically(ctx, mgr)
+		go expirePeriodically(ctx, mgr, logger)
 	}
 
 	return server.Serve(ctx, l, server.NewService(mgr))
@@ -118,6 +139,19 @@ func withServer(
 	}
 	defer conn.Close()
 	return fn(ctx, cl)
+}
+
+// dialServer connects to a running server without starting one.
+//
+// Used by completion, which runs on every tab press: a stray keystroke must not launch a daemon, and
+// if none is running there is nothing to complete.
+func dialServer(dirs paths.Dirs) (*ttrpc.Client, serverv1.ServerClient, error) {
+	conn, err := net.Dial("unix", dirs.ServerSocket())
+	if err != nil {
+		return nil, nil, err
+	}
+	cl := ttrpc.NewClient(conn)
+	return cl, serverv1.NewServerClient(cl), nil
 }
 
 func connectServer(ctx context.Context, dirs paths.Dirs) (*ttrpc.Client, serverv1.ServerClient, error) {
@@ -193,7 +227,7 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 const expireInterval = time.Hour
 
 // expirePeriodically sweeps dead sessions until the context is cancelled.
-func expirePeriodically(ctx context.Context, mgr *server.Manager) {
+func expirePeriodically(ctx context.Context, mgr *server.Manager, logger *slog.Logger) {
 	t := time.NewTicker(expireInterval)
 	defer t.Stop()
 	for {
@@ -202,7 +236,7 @@ func expirePeriodically(ctx context.Context, mgr *server.Manager) {
 			return
 		case <-t.C:
 			if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
-				fmt.Fprintf(os.Stderr, "expiring sessions: %v\n", err)
+				logger.Warn("expiring sessions failed", "error", err)
 			}
 		}
 	}

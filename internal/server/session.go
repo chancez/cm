@@ -10,12 +10,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 
 	"github.com/containerd/ttrpc"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -66,6 +68,9 @@ type Session struct {
 	title  string
 	rawPwd string
 	cwd    osc.Cwd
+
+	// log records what this session does. Never nil.
+	log *slog.Logger
 
 	// restored holds a screen replayed from a previous incarnation's saved log, handed to the first
 	// client that attaches and then discarded.
@@ -156,6 +161,7 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		term:     term,
 		recent:   seqlog.NewAt(DefaultRecentBytes, fromSeq),
 		metaSubs: make(map[*metaSub]struct{}),
+		log:      cmlog.Discard(),
 		lastSeq:  fromSeq,
 		done:     make(chan struct{}),
 		stopPump: stopPump,
@@ -192,6 +198,8 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 				// A terminal model that cannot keep up would make restores wrong, but
 				// dropping the session over it would be worse: live output still works.
 				// Give up on restores instead by discarding the model.
+				s.log.Error("terminal model failed, screen restore disabled for this session",
+					"session", s.name, "error", err)
 				s.mu.Lock()
 				s.term = nil
 				s.mu.Unlock()
@@ -295,6 +303,10 @@ func (s *Session) drainPending() {
 	}
 	for _, data := range s.term.TakePending() {
 		if err := s.Write(context.Background(), data); err != nil {
+			// A program that queried the terminal is now waiting for an answer it will never get, so
+			// this explains an otherwise inexplicable hang.
+			s.log.Warn("delivering terminal response to the pty failed",
+				"session", s.name, "bytes", len(data), "error", err)
 			return
 		}
 	}

@@ -8,12 +8,14 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/sessionenv"
@@ -29,6 +31,13 @@ type Config struct {
 	// DetachKey names the key that detaches a client, as a control character like "ctrl-\".
 	// Empty means the default; "none" disables detaching by key.
 	DetachKey string `toml:"detach_key"`
+
+	// LogLevel is the minimum severity recorded: debug, info, warn, error, or off.
+	//
+	// On by default at info. The server and shim run detached with their stdio discarded, so
+	// without a log there is no record of what they did, and several errors are deliberately
+	// swallowed to keep a session alive. Logging is what keeps that from being silent.
+	LogLevel string `toml:"log_level"`
 
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
@@ -190,6 +199,11 @@ func (c *Config) EnvPatterns() []string {
 // EnvMatcher returns a matcher for the effective environment patterns.
 func (c *Config) EnvMatcher() *sessionenv.Matcher {
 	return sessionenv.NewMatcher(c.EnvPatterns())
+}
+
+// Logging returns the configured log level and whether logging is on.
+func (c *Config) Logging() (slog.Level, bool, error) {
+	return cmlog.ParseLevel(c.LogLevel)
 }
 
 // RestoreMode returns the configured restore behavior, validating it.

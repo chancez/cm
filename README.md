@@ -37,8 +37,11 @@ cm info <session>        one session's details; --field for a single value
 cm history <session>     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching
 cm get-env [session]     print env vars from the session's latest client
+cm logs [session]        print cm's diagnostic log
 cm kill <session>...     terminate sessions
 ```
+
+Session names complete dynamically once `cm completions zsh` is installed.
 
 `attach` with no name asks the server to allocate one, and `--own` ends the session when the
 client disconnects without detaching. Together those give a terminal emulator a session per

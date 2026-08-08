@@ -16,6 +16,9 @@ indistinguishable from one that has no effect.
 # libghostty prunes at page granularity, so the effective limit is somewhat higher.
 scrollback_lines = 10000
 
+# Diagnostic log level: debug, info, warn, error, or off. Defaults to info.
+log_level = "info"
+
 # The key that detaches a client. "none" disables detaching by key, which is useful when a
 # program inside the session wants that key for itself.
 detach_key = "ctrl-\\"
@@ -30,6 +33,44 @@ exclude = ["SSH_AUTH_SOCK"]
 # Replaces the built-in list entirely, ignoring `capture`.
 # capture_only = ["TERM", "KITTY_*"]
 ```
+
+## Logging
+
+The server and shim run detached with their stdio discarded, which is deliberate: inheriting a
+client's terminal would tie their lifetime to a window and scribble over the session. Without a log
+there is therefore no record of what they did.
+
+That matters more than usual here because cm deliberately swallows a number of errors so that a
+failure in something advisory cannot end a session: a title that could not be recorded, a metadata
+write that failed, a persisted log that stopped being writable. Each is the right call on its own,
+and together they make a system that degrades silently. The rule is that anything swallowed is
+logged.
+
+```
+cm logs              # the server's log
+cm logs work         # one session's shim log
+cm logs -f           # follow
+cm logs --all        # include the rotated previous file
+```
+
+Logs live under the state directory, are owner-only since they record session names, directories,
+and command lines, and rotate at 4 MiB keeping one previous generation. `log_level = "off"` disables
+them.
+
+This is the diagnostic log, not session output. `cm history` is what the shell printed.
+
+## Completion
+
+```
+cm completions zsh > "${fpath[1]}/_cm"
+```
+
+Session names complete dynamically for `attach`, `kill`, `info`, `history`, `get-env`, and `logs`,
+annotated with each session's state, so it is visible that attaching to a `dead` session will
+restore it rather than join it. `kill` drops names already on the command line.
+
+Completion never starts a server. It runs on every tab press, and a stray keystroke should not
+launch a daemon; with none running there is nothing to complete anyway.
 
 ## JSON output
 
