@@ -266,6 +266,15 @@ message Open {
   // Attach without sending input or affecting sizing: a read-only follower.
   bool read_only = 8;
 
+  // Skip the screen repaint that normally opens an attachment, streaming only what happens from now on.
+  //
+  // For a follower that is not painting a terminal. An interactive client wants the repaint, since it has to
+  // fill an empty window with the session's current screen. Something piping output to a file wants the
+  // opposite: the repaint duplicates whatever it has already printed, which is exactly what
+  // `cm read --follow` produced before this existed -- the last lines twice, once rendered and once as part
+  // of the restored screen.
+  bool no_restore = 16;
+
   // Command to run instead of the user's shell. Only meaningful when creating.
   repeated string command = 9;
 
@@ -490,6 +499,13 @@ message SendRequest {
 }
 
 message SendResponse {
+  // Whether the session has ever reported a command via OSC 133, at the moment the input was sent.
+  //
+  // Reported so a client can warn that a wait may never resolve. It has to come from the server: the signal is
+  // a monotonic counter of commands seen, and the fields a client can already read -- busy, and the current
+  // command -- are cleared once a command finishes, so a fast one leaves nothing behind. That is the same trap
+  // the counter was introduced for.
+  bool shell_reports = 3;
   // Present only when wait_until was set. Reports the same thing Wait does.
   WaitResponse wait = 1;
 }

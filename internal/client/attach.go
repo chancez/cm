@@ -52,6 +52,21 @@ type Options struct {
 	OnRestore string
 	// DetachKey is the key that detaches. Zero value means the default.
 	DetachKey DetachKeySpec
+	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
+	// now on.
+	//
+	// For a follower that is not painting a terminal, where the repaint duplicates output the caller has
+	// already printed.
+	NoRestore bool
+
+	// OnAttached, when set, is called once the server has opened the session on this connection.
+	//
+	// A reliable readiness signal, which OnMetadata is not: metadata is delivered when the session reports a
+	// title or directory, so a quiet session never fires it. Anything that has to order an action after the
+	// attachment is live -- sending input, say -- needs this instead. Called on every connection, so a
+	// reconnect signals again.
+	OnAttached func()
+
 	// OnMetadata, when set, is called as the session reports its title and directory.
 	//
 	// This is how a terminal emulator learns values the shell reported to cm rather than to the
@@ -194,6 +209,7 @@ func runSession(
 		ClientEnv:     opts.ClientEnv,
 		Persist:       opts.Persist,
 		OnRestore:     opts.OnRestore,
+		NoRestore:     opts.NoRestore,
 		ResumeFromSeq: *resumeFrom,
 	}
 	if err := stream.Send(&serverv1.AttachRequest{
@@ -212,6 +228,11 @@ func runSession(
 		return outcomeDone, errors.New("server did not open the session")
 	}
 	result.Session = opened.Session
+	// Signalled here, after Opened and before anything else is read, so a caller ordering work after the
+	// attachment cannot race the first output.
+	if opts.OnAttached != nil {
+		opts.OnAttached()
+	}
 
 	if len(opened.Restore) > 0 {
 		// Clear first so restored state is not painted over whatever the client's own

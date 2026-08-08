@@ -19,8 +19,9 @@ const defaultReadLines = 100
 
 func newReadCommand(g *globals) *cobra.Command {
 	var (
-		lines int
-		wrap  bool
+		lines  int
+		wrap   bool
+		follow bool
 	)
 	cmd := &cobra.Command{
 		Use:   "read <session>",
@@ -37,7 +38,13 @@ fit its width comes back as one line. Use --keep-wrap to see the lines as the
 terminal laid them out.
 
 Works after a command has finished, which is the usual case for 'cm run', as long
-as the session saved its output.`,
+as the session saved its output.
+
+--follow prints the last lines and then keeps streaming, like 'tail -f'. The two
+halves differ in kind: the lines already printed are a rendered screen with wrapping
+rejoined, and what follows is raw output as the program emits it, escape sequences
+included. Re-rendering on every byte would repaint rather than append, which is
+wrong for something being piped to a file.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,6 +60,9 @@ as the session saved its output.`,
 			if err != nil {
 				return err
 			}
+			if follow {
+				warnIfTerminal(os.Stdout)
+			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Read(ctx, &serverv1.ReadRequest{
 					Session: name,
@@ -61,6 +71,11 @@ as the session saved its output.`,
 				})
 				if err != nil {
 					return err
+				}
+				if follow {
+					// The tail first, then the stream. Both go to stdout, so the caller sees one continuous
+					// piece of output rather than having to stitch two commands together.
+					return printTailThenFollow(ctx, dirs, name, resp.Data)
 				}
 				if _, err := os.Stdout.Write(resp.Data); err != nil {
 					return err
@@ -77,6 +92,8 @@ as the session saved its output.`,
 		},
 	}
 	f := cmd.Flags()
+	f.BoolVarP(&follow, "follow", "f", false,
+		"keep streaming new output after the last lines")
 	f.IntVar(&lines, "lines", defaultReadLines, "how many lines from the end (0 for everything)")
 	f.BoolVar(&wrap, "keep-wrap", false,
 		"keep soft-wrapped lines split as the terminal laid them out")

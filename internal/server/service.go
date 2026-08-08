@@ -194,12 +194,22 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		sess.ReportFocus(ctx, true)
 	}
 
+	// The screen repaint, unless the client asked to go without it.
+	//
+	// A client painting a terminal needs it: an empty window has to be filled with the session's current
+	// screen. A follower piping output to a file wants the opposite, since the repaint duplicates whatever it
+	// has already printed -- which is what `cm read --follow` did before this option existed, printing its
+	// last lines twice, once rendered and once inside the restored screen.
+	restore := att.restore
+	if open.NoRestore {
+		restore = nil
+	}
 	if err := srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Opened{
 			Opened: &serverv1.Opened{
 				Session: sess.name,
 				Created: created,
-				Restore: att.restore,
+				Restore: restore,
 				NextSeq: startSeq,
 			},
 		},
@@ -560,7 +570,7 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 		if err := sess.Write(ctx, req.Data); err != nil {
 			return nil, err
 		}
-		return &serverv1.SendResponse{}, nil
+		return &serverv1.SendResponse{ShellReports: sess.CommandRuns() > 0}, nil
 	}
 
 	// Subscribe before writing, so the wait cannot miss what the input causes.
@@ -591,7 +601,10 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	if err != nil {
 		return nil, err
 	}
-	return &serverv1.SendResponse{Wait: wait}, nil
+	// runsBefore, taken before the input, rather than the count now: a caller warning that a wait may never
+	// resolve wants to know whether the shell was already reporting, and this call's own command would
+	// otherwise make every session look like it reports.
+	return &serverv1.SendResponse{Wait: wait, ShellReports: runsBefore > 0}, nil
 }
 
 func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {

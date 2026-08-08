@@ -1236,6 +1236,14 @@ type Open struct {
 	Own bool `protobuf:"varint,7,opt,name=own,proto3" json:"own,omitempty"`
 	// Attach without sending input or affecting sizing: a read-only follower.
 	ReadOnly bool `protobuf:"varint,8,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// Skip the screen repaint that normally opens an attachment, streaming only what happens from now on.
+	//
+	// For a follower that is not painting a terminal. An interactive client wants the repaint, since it has to
+	// fill an empty window with the session's current screen. Something piping output to a file wants the
+	// opposite: the repaint duplicates whatever it has already printed, which is exactly what
+	// `cm read --follow` produced before this existed -- the last lines twice, once rendered and once as part
+	// of the restored screen.
+	NoRestore bool `protobuf:"varint,16,opt,name=no_restore,json=noRestore,proto3" json:"no_restore,omitempty"`
 	// Command to run instead of the user's shell. Only meaningful when creating.
 	Command []string `protobuf:"bytes,9,rep,name=command,proto3" json:"command,omitempty"`
 	// Working directory for a newly created session. Empty means the client's cwd.
@@ -1354,6 +1362,13 @@ func (x *Open) GetOwn() bool {
 func (x *Open) GetReadOnly() bool {
 	if x != nil {
 		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *Open) GetNoRestore() bool {
+	if x != nil {
+		return x.NoRestore
 	}
 	return false
 }
@@ -2481,6 +2496,13 @@ func (x *SendRequest) GetWaitTimeoutMs() uint64 {
 
 type SendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether the session has ever reported a command via OSC 133, at the moment the input was sent.
+	//
+	// Reported so a client can warn that a wait may never resolve. It has to come from the server: the signal is
+	// a monotonic counter of commands seen, and the fields a client can already read -- busy, and the current
+	// command -- are cleared once a command finishes, so a fast one leaves nothing behind. That is the same trap
+	// the counter was introduced for.
+	ShellReports bool `protobuf:"varint,3,opt,name=shell_reports,json=shellReports,proto3" json:"shell_reports,omitempty"`
 	// Present only when wait_until was set. Reports the same thing Wait does.
 	Wait          *WaitResponse `protobuf:"bytes,1,opt,name=wait,proto3" json:"wait,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2515,6 +2537,13 @@ func (x *SendResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SendResponse.ProtoReflect.Descriptor instead.
 func (*SendResponse) Descriptor() ([]byte, []int) {
 	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *SendResponse) GetShellReports() bool {
+	if x != nil {
+		return x.ShellReports
+	}
+	return false
 }
 
 func (x *SendResponse) GetWait() *WaitResponse {
@@ -2775,7 +2804,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\x88\x04\n" +
+	"\x05event\"\xa7\x04\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -2784,7 +2813,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\ay_pixel\x18\x05 \x01(\rR\x06yPixel\x12+\n" +
 	"\x0fresume_from_seq\x18\x06 \x01(\x04H\x00R\rresumeFromSeq\x88\x01\x01\x12\x10\n" +
 	"\x03own\x18\a \x01(\bR\x03own\x12\x1b\n" +
-	"\tread_only\x18\b \x01(\bR\breadOnly\x12\x18\n" +
+	"\tread_only\x18\b \x01(\bR\breadOnly\x12\x1d\n" +
+	"\n" +
+	"no_restore\x18\x10 \x01(\bR\tnoRestore\x12\x18\n" +
 	"\acommand\x18\t \x03(\tR\acommand\x12\x10\n" +
 	"\x03cwd\x18\n" +
 	" \x01(\tR\x03cwd\x12\x10\n" +
@@ -2873,8 +2904,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x126\n" +
 	"\n" +
 	"wait_until\x18\x03 \x01(\x0e2\x17.cm.server.v1.WaitStateR\twaitUntil\x12&\n" +
-	"\x0fwait_timeout_ms\x18\x04 \x01(\x04R\rwaitTimeoutMs\">\n" +
-	"\fSendResponse\x12.\n" +
+	"\x0fwait_timeout_ms\x18\x04 \x01(\x04R\rwaitTimeoutMs\"c\n" +
+	"\fSendResponse\x12#\n" +
+	"\rshell_reports\x18\x03 \x01(\bR\fshellReports\x12.\n" +
 	"\x04wait\x18\x01 \x01(\v2\x1a.cm.server.v1.WaitResponseR\x04wait\"_\n" +
 	"\x0eHistoryRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x123\n" +

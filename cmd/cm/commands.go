@@ -298,6 +298,7 @@ func newSendCommand(g *globals) *cobra.Command {
 		until   string
 		timeout time.Duration
 		asJSON  bool
+		follow  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "send <session> <text>...",
@@ -313,7 +314,20 @@ That is one request, not a send followed by 'cm wait', and the difference is
 correctness rather than efficiency. The command starts as soon as the input
 arrives, so a fast one finishes before a separate wait could be issued, and that
 wait would then block until its timeout having missed what it was waiting for.
-The server arms the wait before writing the input.`,
+The server arms the wait before writing the input.
+
+--follow streams the session's output while the command runs and returns when it
+finishes, which is what watching a build looks like without attaching:
+
+  cm send build 'make' --enter --follow
+
+It implies --wait idle, since it has to know when to stop. The output is raw, as
+the program emitted it, so it is meant for a terminal you are watching or a file
+you are keeping; use 'cm read' afterwards for something a parser will read.
+
+The stream is opened before the input is sent, so nothing the command prints at
+the start is missed. Doing it the other way round loses whatever appears before the
+follower connects, which for a fast command can be all of it.`,
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -328,6 +342,14 @@ The server arms the wait before writing the input.`,
 				data += "\r"
 			}
 
+			// --follow implies waiting for idle, since streaming until "whenever" is not a thing: the
+			// command has to end for this to return. An explicit --wait still wins, so
+			// `--follow --wait exited` watches until the session itself finishes rather than until the
+			// command does.
+			if follow && until == "" {
+				until = "idle"
+			}
+
 			var state serverv1.WaitState
 			if until != "" {
 				var ok bool
@@ -340,6 +362,10 @@ The server arms the wait before writing the input.`,
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
+			}
+			if follow {
+				warnIfTerminal(os.Stdout)
+				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Send(ctx, &serverv1.SendRequest{
@@ -366,6 +392,8 @@ The server arms the wait before writing the input.`,
 	f.DurationVar(&timeout, "timeout", 0,
 		"give up waiting after this long (0 waits indefinitely)")
 	f.BoolVar(&asJSON, "json", false, "print the wait result as JSON")
+	f.BoolVarP(&follow, "follow", "f", false,
+		"stream the session's output until the command finishes (implies --wait idle)")
 	return cmd
 }
 

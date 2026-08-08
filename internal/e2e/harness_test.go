@@ -334,6 +334,32 @@ func asExit(err error, target **exec.ExitError) bool {
 	return false
 }
 
+// mustRunWithin is mustRun with a deadline, for commands that stream until something ends.
+//
+// A bound rather than the default, because a follower that fails to stop hangs rather than failing: one such
+// bug ran for 504 seconds before it was noticed. A timeout turns that into a test failure with output.
+func (e *env) mustRunWithin(timeout time.Duration, args ...string) string {
+	e.t.Helper()
+
+	r := e.runWithin(timeout, args...)
+	if r.code != 0 {
+		e.t.Fatalf("cm %v exited %d\nstdout: %s\nstderr: %s", args, r.code, r.stdout, r.stderr)
+	}
+	return r.stdout
+}
+
+// waitForOutputInSession blocks until a session's output contains want.
+//
+// Read through `cm read` rather than by attaching, so this does not add a client that the test would then have
+// to account for in a clients count.
+func (e *env) waitForOutputInSession(session, want string, timeout time.Duration) {
+	e.t.Helper()
+
+	e.waitFor("output "+want+" in "+session, timeout, func() bool {
+		return strings.Contains(e.run("read", session).stdout, want)
+	})
+}
+
 // mustRun invokes cm and fails the test unless it succeeds.
 func (e *env) mustRun(args ...string) string {
 	e.t.Helper()
