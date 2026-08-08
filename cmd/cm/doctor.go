@@ -47,6 +47,9 @@ while to diagnose, because each fails silently rather than reporting an error.
                         'cm history' and screen restore silently return nothing
   unreachable-shim      a session this server is tracking whose shim does not
                         answer, so it lists as running while commands fail
+  unreachable-server    this server's own socket path no longer refers to it, so
+                        clients silently start a second server while its sessions
+                        stay stranded
 
 --clean acts on orphan-shim, stale-socket, and loose-dir-perms. An orphan is
 asked to shut down through its own socket rather than signalled, so it closes its
@@ -59,7 +62,11 @@ diagnostic's to make.
 Exits non-zero when anything is found, so it can gate a script.
 
 Scoped to cm's own runtime directory: a shim whose runtime directory has been
-deleted cannot be found this way, since there is nothing left to enumerate.`,
+deleted cannot be found this way, since there is nothing left to enumerate. That
+case is worth knowing about, because it is silent -- commands keep working against
+a replacement server while the original holds its sessions and their ptys. The
+affected server reports it as unreachable-server, so run this against the same
+directories the stranded server was started with.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dirs, err := g.dirs()

@@ -58,13 +58,23 @@ type Manager struct {
 	log *slog.Logger
 	// resizePolicy is applied to every session created or adopted. Empty behaves as ResizeLeader.
 	resizePolicy ResizePolicy
+	// socketInode is the inode of the server socket as bound at startup, or zero when unknown.
+	//
+	// Recorded so the server can tell that its own socket path no longer refers to it, which happens when the
+	// runtime directory is deleted underneath a running server: it keeps listening on an inode nothing can
+	// name, and every later command starts a second server. Comparing the path's inode is the only way to
+	// detect that from the inside, since dialing the path reaches whichever server holds it now.
+	socketInode uint64
 	// version is what this server reports as its build. Held as a field rather than read from paths.Version
 	// at each use so a test can set up a mismatch by construction, instead of through an environment
 	// variable and a subprocess. Empty means paths.Version, which is what the real server leaves it as.
 	version string
 
-	mu       sync.Mutex
-	sessions map[string]*Session
+	mu sync.Mutex
+	// reportedUnreachable records that this server has already logged being unreachable, so the periodic
+	// check reports each transition once instead of on every tick.
+	reportedUnreachable bool
+	sessions            map[string]*Session
 }
 
 // PersistPolicy decides which sessions survive a reboot and how they come back.
@@ -134,6 +144,13 @@ func (m *Manager) SetLogger(l *slog.Logger) {
 
 // SetPersistPolicy enables persistence.
 func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }
+
+// SetServerSocketInode records which socket this server is actually serving on.
+//
+// Called by the command that binds the listener, since only it knows. Left unset by tests and by any caller
+// that serves on a socket it opened itself, in which case the check that uses it is skipped rather than
+// reporting a false problem.
+func (m *Manager) SetServerSocketInode(ino uint64) { m.socketInode = ino }
 
 // SetVersion overrides the build this server reports.
 //

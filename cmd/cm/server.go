@@ -108,7 +108,7 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 
 	// Bind before opening the database so a second server exits immediately rather than
 	// touching shared state.
-	l, err := server.Listen(dirs.ServerSocket())
+	l, socketInode, err := server.Listen(dirs.ServerSocket())
 	if err != nil {
 		return err
 	}
@@ -137,6 +137,10 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		return err
 	}
 	mgr.SetLogger(logger)
+	// Recorded so the server can notice that its own socket path stops referring to it, which is what
+	// happens when the runtime directory is deleted underneath it: it keeps listening on an inode nothing can
+	// name while every later command starts a second server.
+	mgr.SetServerSocketInode(socketInode)
 	if !vt.Available {
 		// Sessions, attach, detach, and persistence all work; screen restore on reattach and
 		// `cm history` do not. Logged rather than silent, because "my scrollback vanished" is hard
@@ -184,6 +188,12 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		logger.Warn("expiring sessions failed", "error", err)
 	}
 	go expirePeriodically(ctx, mgr, logger)
+	// Notice if this server's own socket path stops referring to it, and say so in the log.
+	//
+	// Needed because such a server cannot be asked: its socket is unlinked, so no client can name it, and
+	// `cm doctor` reaches the replacement server instead and reports nothing wrong. The log is shared through
+	// the state directory, which survives the deletion, so this is the one channel that still works.
+	go watchOwnSocket(ctx, mgr)
 
 	return server.Serve(ctx, l, server.NewService(mgr))
 }
@@ -298,6 +308,26 @@ func expirePeriodically(ctx context.Context, mgr *server.Manager, logger *slog.L
 			if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
 				logger.Warn("expiring sessions failed", "error", err)
 			}
+		}
+	}
+}
+
+// socketWatchInterval is how often a server checks that its own socket path still names it.
+//
+// The same order as the expiry sweep, and for the same reason: the condition can arise at any time, and the
+// check is a single stat, so polling it costs an idle server nothing.
+const socketWatchInterval = time.Minute
+
+// watchOwnSocket logs when this server becomes unreachable, until the context is cancelled.
+func watchOwnSocket(ctx context.Context, mgr *server.Manager) {
+	t := time.NewTicker(socketWatchInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			mgr.LogIfUnreachable()
 		}
 	}
 }

@@ -132,6 +132,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	findings = append(findings, m.checkDirPerms()...)
 	findings = append(findings, m.checkMissingLogs(ctx)...)
 	findings = append(findings, m.checkTrackedShims(ctx)...)
+	findings = append(findings, m.checkServerSocket()...)
 	findings = append(findings, m.checkServerLog()...)
 
 	sort.Slice(findings, func(i, j int) bool {

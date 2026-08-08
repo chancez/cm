@@ -13,34 +13,44 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
-// Listen binds the server's client-facing socket.
+// Listen binds the server's client-facing socket and reports the inode it bound.
 //
 // A stale socket left by a server that died is reclaimed, but only after confirming nothing
 // answers: unlinking a live server's socket would leave clients unable to find it while it
 // kept running.
-func Listen(socketPath string) (net.Listener, error) {
+//
+// The inode is returned rather than left for the caller to stat, so it is read while this process still holds
+// the only claim on the path. A caller that stat'd it later could race a replacement and record the wrong
+// one, which would make the socket check report a problem that does not exist.
+func Listen(socketPath string) (net.Listener, uint64, error) {
 	if err := paths.CheckSocketPath(socketPath); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if conn, err := net.Dial("unix", socketPath); err == nil {
 		conn.Close()
-		return nil, fmt.Errorf("a server is already listening on %s", socketPath)
+		return nil, 0, fmt.Errorf("a server is already listening on %s", socketPath)
 	}
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("removing stale socket %s: %w", socketPath, err)
+		return nil, 0, fmt.Errorf("removing stale socket %s: %w", socketPath, err)
 	}
 
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("listening on %s: %w", socketPath, err)
+		return nil, 0, fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
 	// The socket grants control of every session, so restrict it to the owner rather than
 	// inheriting the process umask.
 	if err := os.Chmod(socketPath, 0o600); err != nil {
 		l.Close()
-		return nil, fmt.Errorf("restricting %s: %w", socketPath, err)
+		return nil, 0, fmt.Errorf("restricting %s: %w", socketPath, err)
 	}
-	return l, nil
+	ino, err := socketInode(socketPath)
+	if err != nil {
+		// Not fatal. The consequence is one diagnostic check that cannot run, which is a worse outcome than
+		// refusing to serve at all.
+		return l, 0, nil
+	}
+	return l, ino, nil
 }
 
 // Serve runs the server until ctx is cancelled.
