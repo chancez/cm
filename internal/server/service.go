@@ -87,6 +87,12 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, detached)
 	}()
 
+	// Metadata is forwarded so a terminal emulator can retitle a tab or open a new window in the
+	// session's directory. Subscribing before the loop means the current values arrive
+	// immediately rather than only on the next change.
+	metaSub := sess.subscribeMetadata()
+	defer sess.unsubscribeMetadata(metaSub)
+
 	// Output is read on its own goroutine because the reader blocks, and this loop also has
 	// to notice a detach or a dropped connection.
 	type chunkMsg struct {
@@ -137,6 +143,19 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 						Seq:  msg.chunk.Seq,
 						Data: msg.chunk.Data,
 						Gap:  msg.chunk.Gap,
+					},
+				},
+			}); err != nil {
+				return err
+			}
+
+		case meta := <-metaSub.ch:
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Metadata{
+					Metadata: &serverv1.Metadata{
+						Title:      meta.Title,
+						Cwd:        meta.Cwd.Path,
+						CwdIsLocal: meta.Cwd.IsLocal,
 					},
 				},
 			}); err != nil {

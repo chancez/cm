@@ -100,7 +100,22 @@ message AttachResponse {
     Opened opened = 1;
     Output output = 2;
     Exited exited = 3;
+    Metadata metadata = 4;
   }
+}
+
+// Metadata reports what the shell has said about itself, so a client can act on it.
+//
+// A terminal emulator needs this: retitling a tab, or opening a new window in the session's
+// directory, requires knowing values that the shell reported to the multiplexer rather than to the
+// terminal. Sent on attach and whenever a value changes.
+message Metadata {
+  string title = 1;
+  // Working directory, decoded from OSC 7 rather than the raw URI the shell sent.
+  string cwd = 2;
+  // Whether cwd exists on the client's machine. False once a session has ssh'd elsewhere, in
+  // which case acting on the path locally is wrong.
+  bool cwd_is_local = 3;
 }
 
 message Opened {

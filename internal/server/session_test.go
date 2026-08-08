@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
@@ -525,5 +526,103 @@ func shimConfigFor(name, script string) shim.Config {
 		Command: []string{"/bin/sh", "-c", script},
 		Rows:    24,
 		Cols:    80,
+	}
+}
+
+// A newly attached client must receive current metadata immediately rather than waiting for the
+// shell to report again, since a shell reports its directory once per prompt.
+func TestSubscribeMetadataDeliversCurrentValues(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("meta", "sleep 5"))
+
+	sess, err := newSession(rec, nil, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// Simulate the shell having already reported before this client arrived.
+	sess.mu.Lock()
+	sess.title = "existing-title"
+	sess.cwd = osc.Cwd{Path: "/existing/path", IsLocal: true}
+	sess.mu.Unlock()
+
+	sub := sess.subscribeMetadata()
+	defer sess.unsubscribeMetadata(sub)
+
+	select {
+	case got := <-sub.ch:
+		want := Metadata{Title: "existing-title", Cwd: osc.Cwd{Path: "/existing/path", IsLocal: true}}
+		if got != want {
+			t.Errorf("metadata = %+v, want %+v", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("no metadata delivered on subscribe; a client would show a stale title")
+	}
+}
+
+// A slow reader must see the newest values rather than a backlog, and must never stall the output
+// pump that publishes them.
+func TestPublishMetadataCoalesces(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("coalesce", "sleep 5"))
+
+	sess, err := newSession(rec, nil, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	sub := sess.subscribeMetadata()
+	defer sess.unsubscribeMetadata(sub)
+
+	// Publish several times without reading in between.
+	for i, title := range []string{"first", "second", "third"} {
+		sess.publishMetadata(Metadata{Title: title})
+		_ = i
+	}
+
+	select {
+	case got := <-sub.ch:
+		if got.Title != "third" {
+			t.Errorf("metadata title = %q, want %q: a slow reader should see the newest value",
+				got.Title, "third")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no metadata delivered")
+	}
+
+	// And nothing stale queued behind it.
+	select {
+	case extra := <-sub.ch:
+		t.Errorf("a second value %+v was queued, want only the newest retained", extra)
+	default:
+	}
+}
+
+// Publishing must not block when a subscriber never reads, or the output pump would wedge and the
+// whole session would stop.
+func TestPublishMetadataDoesNotBlockOnUnreadSubscriber(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("noblock", "sleep 5"))
+
+	sess, err := newSession(rec, nil, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	sub := sess.subscribeMetadata()
+	defer sess.unsubscribeMetadata(sub)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 1000 {
+			sess.publishMetadata(Metadata{Title: "t" + string(rune('a'+i%26))})
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("publishMetadata blocked on a subscriber that never reads")
 	}
 }

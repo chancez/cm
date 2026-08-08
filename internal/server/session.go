@@ -67,9 +67,10 @@ type Session struct {
 	rawPwd string
 	cwd    osc.Cwd
 
-	// onMetadata is called when the title or directory changes, so the server can persist
-	// them. Set by the manager.
-	onMetadata func(title string, cwd osc.Cwd)
+	// metaSubs are notified when the title or directory changes: the manager persists them, and
+	// each attached client forwards them on so a terminal emulator can react. Keyed by pointer
+	// so a client can remove its own.
+	metaSubs map[*metaSub]struct{}
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -144,6 +145,7 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		shim:     shim,
 		term:     term,
 		recent:   seqlog.NewAt(DefaultRecentBytes, fromSeq),
+		metaSubs: make(map[*metaSub]struct{}),
 		lastSeq:  fromSeq,
 		done:     make(chan struct{}),
 		stopPump: stopPump,
@@ -311,9 +313,67 @@ func (s *Session) noteMetadata() {
 	if !titleChanged && !pwdChanged {
 		return
 	}
-	if s.onMetadata != nil {
-		s.onMetadata(title, cwd)
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd})
+}
+
+// Metadata is what a session reports about itself.
+type Metadata struct {
+	Title string
+	Cwd   osc.Cwd
+}
+
+// metaSub receives metadata changes.
+//
+// Buffered with a depth of one and coalescing: a client only ever needs the latest values, so a
+// slow reader should see the newest rather than a backlog, and must never stall the output pump.
+type metaSub struct {
+	ch chan Metadata
+}
+
+// publishMetadata delivers a change to every subscriber, replacing any undelivered value.
+func (s *Session) publishMetadata(m Metadata) {
+	s.mu.Lock()
+	subs := make([]*metaSub, 0, len(s.metaSubs))
+	for sub := range s.metaSubs {
+		subs = append(subs, sub)
 	}
+	s.mu.Unlock()
+
+	for _, sub := range subs {
+		// Drop a stale pending value before sending, so the receiver gets current state rather
+		// than history it no longer cares about.
+		select {
+		case <-sub.ch:
+		default:
+		}
+		select {
+		case sub.ch <- m:
+		default:
+		}
+	}
+}
+
+// subscribeMetadata registers for metadata changes and delivers current values immediately, so a
+// newly attached client does not have to wait for the shell to report again.
+func (s *Session) subscribeMetadata() *metaSub {
+	sub := &metaSub{ch: make(chan Metadata, 1)}
+
+	s.mu.Lock()
+	s.metaSubs[sub] = struct{}{}
+	current := Metadata{Title: s.title, Cwd: s.cwd}
+	s.mu.Unlock()
+
+	if current.Title != "" || current.Cwd.Path != "" {
+		sub.ch <- current
+	}
+	return sub
+}
+
+// unsubscribeMetadata removes a subscriber.
+func (s *Session) unsubscribeMetadata(sub *metaSub) {
+	s.mu.Lock()
+	delete(s.metaSubs, sub)
+	s.mu.Unlock()
 }
 
 // Metadata returns the session's title and decoded directory.

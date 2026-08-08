@@ -71,6 +71,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newServerCommand(g),
 		newSendCommand(g),
 		newHistoryCommand(g),
+		newInfoCommand(g),
 		newShimCommand(g),
 		newCompletionsCommand(),
 	)

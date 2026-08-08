@@ -45,6 +45,21 @@ type Options struct {
 	Dir string
 	// Env holds extra KEY=VALUE entries when creating.
 	Env []string
+	// OnMetadata, when set, is called as the session reports its title and directory.
+	//
+	// This is how a terminal emulator learns values the shell reported to cm rather than to the
+	// terminal, so it can retitle a tab or open a new window in the right place.
+	OnMetadata func(SessionMetadata)
+}
+
+// SessionMetadata is what a session reports about itself.
+type SessionMetadata struct {
+	Title string
+	// Cwd is the decoded working directory, empty if the shell has not reported one.
+	Cwd string
+	// CwdIsLocal is false once a session has ssh'd elsewhere, in which case acting on Cwd
+	// locally is wrong.
+	CwdIsLocal bool
 }
 
 // Result describes how an attachment ended.
@@ -255,6 +270,16 @@ func runSession(
 				result.Exited = true
 				result.ExitCode = int(ex.ExitCode)
 				return outcomeDone, nil
+			}
+			if m := msg.resp.GetMetadata(); m != nil {
+				if opts.OnMetadata != nil {
+					opts.OnMetadata(SessionMetadata{
+						Title:      m.Title,
+						Cwd:        m.Cwd,
+						CwdIsLocal: m.CwdIsLocal,
+					})
+				}
+				continue
 			}
 			if o := msg.resp.GetOutput(); o != nil {
 				if _, err := tty.Write(o.Data); err != nil {
