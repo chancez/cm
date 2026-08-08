@@ -22,6 +22,15 @@ import (
 // the client would pass even if the server ignored the flag entirely.
 type fakeAttachStream struct {
 	ctx context.Context
+	// hold keeps the stream open after the scripted requests run out, instead of reporting EOF.
+	//
+	// Needed for any test that asserts on what the server *sent*. An immediate EOF makes the
+	// service's receive-error case ready at the same moment as the output it is about to deliver,
+	// and a select among ready cases picks arbitrarily, so the attach can return before sending
+	// anything. That is not the server misbehaving: a real client holds its stream open, so the
+	// case never arises outside the fake. It showed up as a one-run-in-many failure claiming a
+	// follower saw no output.
+	hold chan struct{}
 
 	mu   sync.Mutex
 	in   []*serverv1.AttachRequest
@@ -33,17 +42,47 @@ func newFakeStream(ctx context.Context, reqs ...*serverv1.AttachRequest) *fakeAt
 	return &fakeAttachStream{ctx: ctx, in: reqs}
 }
 
-func (f *fakeAttachStream) Recv() (*serverv1.AttachRequest, error) {
+// newHeldFakeStream returns a stream that stays open until closeStream is called, for tests that
+// assert on sent messages rather than on the attach returning.
+func newHeldFakeStream(ctx context.Context, reqs ...*serverv1.AttachRequest) *fakeAttachStream {
+	return &fakeAttachStream{ctx: ctx, in: reqs, hold: make(chan struct{})}
+}
+
+// closeStream releases a held stream, standing in for the client going away.
+func (f *fakeAttachStream) closeStream() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.hold != nil {
+		select {
+		case <-f.hold:
+		default:
+			close(f.hold)
+		}
+	}
+}
+
+func (f *fakeAttachStream) Recv() (*serverv1.AttachRequest, error) {
+	f.mu.Lock()
 	if len(f.in) == 0 {
 		f.done = true
-		// EOF stands for the client going away, which is what happens after it has said everything
-		// it intends to.
-		return nil, io.EOF
+		hold := f.hold
+		f.mu.Unlock()
+		if hold == nil {
+			// EOF stands for the client going away, which is what happens after it has said
+			// everything it intends to.
+			return nil, io.EOF
+		}
+		// Unlocked while blocking, so closeStream and Send are not deadlocked behind this.
+		select {
+		case <-hold:
+			return nil, io.EOF
+		case <-f.ctx.Done():
+			return nil, f.ctx.Err()
+		}
 	}
 	req := f.in[0]
 	f.in = f.in[1:]
+	f.mu.Unlock()
 	return req, nil
 }
 
@@ -224,13 +263,41 @@ func TestReadOnlyClientReceivesOutput(t *testing.T) {
 	warm.Close()
 
 	svc := NewService(mgr)
-	streamCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	stream := newFakeStream(streamCtx,
+	// Held open, because this asserts on what the server sent. A stream that EOFs immediately lets
+	// the attach return before delivering anything.
+	stream := newHeldFakeStream(streamCtx,
 		openReq(&serverv1.Open{Session: "ro-output", Rows: 24, Cols: 80, ReadOnly: true}),
 	)
-	_ = svc.Attach(streamCtx, stream)
+	attachDone := make(chan struct{})
+	go func() {
+		defer close(attachDone)
+		_ = svc.Attach(streamCtx, stream)
+	}()
 
+	// Poll rather than sleeping a fixed amount: the output has to arrive, and how long that takes
+	// is not something to encode as a constant.
+	var got string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got = followerOutput(stream)
+		if strings.Contains(got, "WATCHED_OUTPUT") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stream.closeStream()
+	<-attachDone
+
+	if !strings.Contains(got, "WATCHED_OUTPUT") {
+		t.Errorf("read-only client saw %q, want the session's output", got)
+	}
+}
+
+// followerOutput collects everything a client was shown, from both the replayed screen and the live
+// stream, since which one carries a given byte depends on when the client attached.
+func followerOutput(stream *fakeAttachStream) string {
 	var got strings.Builder
 	for _, resp := range stream.sent() {
 		if o := resp.GetOutput(); o != nil {
@@ -240,9 +307,7 @@ func TestReadOnlyClientReceivesOutput(t *testing.T) {
 			got.WriteString(string(op.Restore))
 		}
 	}
-	if !strings.Contains(got.String(), "WATCHED_OUTPUT") {
-		t.Errorf("read-only client saw %q, want the session's output", got.String())
-	}
+	return got.String()
 }
 
 // A follower must not be able to end a session by claiming ownership, or watching a build could

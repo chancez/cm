@@ -77,6 +77,32 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	//
 	att, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
+		if errors.Is(err, ErrSessionGone) {
+			// The shell exited between Open and here. Report it the way the streaming loop below
+			// does rather than failing the call: the session really did run and really did exit, so
+			// "session has ended" as an *error* loses the exit code and turns a successful short
+			// command into an RPC failure.
+			//
+			// This is a race a fast command loses often enough to matter. `cm run -- false` exited
+			// 1 with "session has ended" instead of the command's status roughly one time in
+			// twenty-five, and more often on a loaded machine.
+			//
+			// Opened is sent first so this looks like every other attach: a client that has just
+			// been told the session name and then told it exited needs no special case, whereas a
+			// stream that opens with Exited would break the invariant that Opened comes first.
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Opened{
+					Opened: &serverv1.Opened{
+						Session: sess.name,
+						Created: created,
+						NextSeq: sess.LastSeq(),
+					},
+				},
+			}); err != nil {
+				return err
+			}
+			return s.sendExited(srv, sess)
+		}
 		return err
 	}
 
@@ -93,8 +119,19 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			// the size is unchanged, or a program that repaints only on SIGWINCH keeps updating a
 			// screen that is now the snapshot replayed below.
 			if err := sess.ResizeSignal(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
-				sess.detach(att)
-				return fmt.Errorf("sizing session %s: %w", sess.name, err)
+				// A shim that has gone away is not a sizing failure, it is the session ending, and
+				// the same race as above one step later: attach succeeded, then the shell exited
+				// before this resize reached the shim. Sizing a session that no longer exists is
+				// moot, so the attach continues and the loop below reports the exit status.
+				//
+				// Without this, `cm run` on a fast command failed with "sizing session s9: ttrpc:
+				// closed" instead of the command's exit code, about one run in ten on Linux.
+				if ended, _ := sess.Ended(); !ended {
+					sess.detach(att)
+					return fmt.Errorf("sizing session %s: %w", sess.name, err)
+				}
+				s.mgr.log.Info("skipped sizing a session that ended while attaching",
+					"session", sess.name)
 			}
 			ir, ic := int(rows), int(cols)
 			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
@@ -199,13 +236,8 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				// The log closed, meaning the session ended. Report the exit status so the
 				// client stops rather than trying to reconnect to a session that is gone.
 				if errors.Is(msg.err, seqlog.ErrClosed) {
-					ended, code := sess.Ended()
-					if ended {
-						return srv.Send(&serverv1.AttachResponse{
-							Event: &serverv1.AttachResponse_Exited{
-								Exited: &serverv1.Exited{ExitCode: int32(code)},
-							},
-						})
+					if ended, _ := sess.Ended(); ended {
+						return s.sendExited(srv, sess)
 					}
 					return nil
 				}
@@ -512,4 +544,19 @@ func describeCommand(argv []string) string {
 		parts = append(parts, a)
 	}
 	return strings.Join(parts, " ")
+}
+
+// sendExited reports a session's exit status to a client.
+//
+// Shared by the two places a client can learn a session ended: the output stream closing, and an
+// attach that arrived after the shell had already exited. Both must say the same thing, since the
+// client exits with whatever code it is told and a short-lived command can take either path
+// depending on timing.
+func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) error {
+	_, code := sess.Ended()
+	return srv.Send(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Exited{
+			Exited: &serverv1.Exited{ExitCode: int32(code)},
+		},
+	})
 }
