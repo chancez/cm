@@ -1,6 +1,30 @@
 package vt
 
-import "sync"
+import (
+	"fmt"
+	"runtime/debug"
+	"sync"
+)
+
+// recovered turns a panic into an error, so a fault in the terminal model does not take the
+// session with it.
+//
+// The session's real value is the shell and its scrollback, and terminal state is a derived cache.
+// Losing the cache costs screen restore on the next attach; losing the process costs the user's
+// work. zmx saw this twice, where a malformed sequence reached an unreachable branch in the VT
+// library and destroyed the session.
+//
+// This covers panics on the Go side of the boundary, which includes anything the binding itself
+// gets wrong. It cannot catch a segfault inside libghostty: that is a signal, not a panic, and it
+// ends the process regardless. Keeping the cgo surface narrow is the defense against that.
+func recovered(r any, err error, what string) error {
+	if r == nil {
+		return err
+	}
+	// The stack is the only record of where this happened, and it is worth keeping even though the
+	// caller only sees an error.
+	return fmt.Errorf("%s: recovered from panic: %v\n%s", what, r, debug.Stack())
+}
 
 // SessionTerminal adapts a Terminal to what the server needs from a terminal model.
 //
@@ -52,23 +76,26 @@ func NewSessionTerminal(rows, cols uint16, scrollbackLines int) (*SessionTermina
 //
 // Callbacks run during this call and only append to fields this method already owns the lock
 // for, which is why they need no locking of their own.
-func (s *SessionTerminal) Write(p []byte) error {
+func (s *SessionTerminal) Write(p []byte) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "writing to the terminal model") }()
 	return s.term.Write(p)
 }
 
 // Restore returns bytes reproducing the current screen.
-func (s *SessionTerminal) Restore() ([]byte, error) {
+func (s *SessionTerminal) Restore() (out []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "serializing the terminal model") }()
 	return s.term.Restore()
 }
 
 // Resize changes the model's size to match the terminal showing it.
-func (s *SessionTerminal) Resize(rows, cols uint16) error {
+func (s *SessionTerminal) Resize(rows, cols uint16) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "resizing the terminal model") }()
 	return s.term.Resize(rows, cols)
 }
 
@@ -101,23 +128,26 @@ func (s *SessionTerminal) Pwd() string {
 }
 
 // Plain returns the terminal contents as plain text.
-func (s *SessionTerminal) Plain() ([]byte, error) {
+func (s *SessionTerminal) Plain() (out []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "rendering terminal contents") }()
 	return s.term.Plain()
 }
 
 // VT returns the terminal contents as escape sequences.
-func (s *SessionTerminal) VT() ([]byte, error) {
+func (s *SessionTerminal) VT() (out []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "rendering terminal contents") }()
 	return s.term.VT()
 }
 
 // HTML returns the terminal contents as HTML.
-func (s *SessionTerminal) HTML() ([]byte, error) {
+func (s *SessionTerminal) HTML() (out []byte, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "rendering terminal contents") }()
 	return s.term.HTML()
 }
 

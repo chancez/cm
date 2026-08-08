@@ -16,6 +16,10 @@ indistinguishable from one that has no effect.
 # libghostty prunes at page granularity, so the effective limit is somewhat higher.
 scrollback_lines = 10000
 
+# The key that detaches a client. "none" disables detaching by key, which is useful when a
+# program inside the session wants that key for itself.
+detach_key = "ctrl-\\"
+
 [env]
 # Added to the built-in list. A trailing "*" matches by prefix.
 capture = ["MY_TERMINAL_VAR", "PROJECT_*"]
@@ -26,6 +30,21 @@ exclude = ["SSH_AUTH_SOCK"]
 # Replaces the built-in list entirely, ignoring `capture`.
 # capture_only = ["TERM", "KITTY_*"]
 ```
+
+## Detach key
+
+`detach_key` accepts `ctrl-<key>` for a letter or one of the punctuation characters that have a
+control code (`[`, `\`, `]`, `^`, `_`, `?`, `@`), and `none` to disable detaching by key. The
+default is `ctrl-\`.
+
+Configurable because that combination is awkward or unreachable on some keyboard layouts, and
+disableable because a program running in the session may want the key itself.
+
+Whatever key is chosen is detected in three encodings: the raw control byte, the kitty keyboard
+protocol form, and xterm's modifyOtherKeys form. All three are necessary. A terminal with either
+protocol active reports a modified key as an escape sequence rather than a control byte, so
+checking only the byte means the key silently stops detaching for exactly the users most likely to
+have those modes on. zmx hit this with a program that enables modifyOtherKeys on startup.
 
 ## Session environment
 

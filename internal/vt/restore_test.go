@@ -2,6 +2,7 @@ package vt
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -487,5 +488,69 @@ func TestRestorePwdUsesBelTerminator(t *testing.T) {
 	}
 	if st >= 0 && st < bel {
 		t.Errorf("OSC 7 uses an ST terminator, which swallows the following OSC: %q", rest)
+	}
+}
+
+// A panic inside a terminal operation must surface as an error, not take the process down.
+//
+// A session's real value is the shell and its scrollback; terminal state is a derived cache. Losing
+// the cache costs screen restore on the next attach, while losing the process costs the user's
+// work. zmx saw this twice, where a malformed sequence reached an unreachable branch in the VT
+// library and destroyed the session.
+//
+// Exercised by operating on a closed terminal, which is the reachable way to reach the guarded
+// paths without a deliberately corrupt handle.
+func TestSessionTerminalOperationsFailSafelyAfterClose(t *testing.T) {
+	st, err := NewSessionTerminal(24, 80, 100)
+	if err != nil {
+		t.Fatalf("NewSessionTerminal() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// Every operation must report an error rather than panicking or crashing.
+	if err := st.Write([]byte("x")); err == nil {
+		t.Error("Write() after Close = nil error, want failure")
+	}
+	if _, err := st.Restore(); err == nil {
+		t.Error("Restore() after Close = nil error, want failure")
+	}
+	if err := st.Resize(40, 100); err == nil {
+		t.Error("Resize() after Close = nil error, want failure")
+	}
+	if _, err := st.Plain(); err == nil {
+		t.Error("Plain() after Close = nil error, want failure")
+	}
+	if _, err := st.VT(); err == nil {
+		t.Error("VT() after Close = nil error, want failure")
+	}
+	if _, err := st.HTML(); err == nil {
+		t.Error("HTML() after Close = nil error, want failure")
+	}
+
+	// Reaching here at all is the assertion: the process survived.
+}
+
+// The recovery helper must turn a panic into an error and pass through the non-panic case
+// untouched, since it wraps every guarded call.
+func TestRecoveredConvertsPanics(t *testing.T) {
+	if err := recovered(nil, nil, "op"); err != nil {
+		t.Errorf("recovered(nil, nil) = %v, want nil", err)
+	}
+
+	sentinel := errors.New("original")
+	if err := recovered(nil, sentinel, "op"); !errors.Is(err, sentinel) {
+		t.Errorf("recovered(nil, err) = %v, want the original error preserved", err)
+	}
+
+	err := recovered("boom", nil, "doing a thing")
+	if err == nil {
+		t.Fatal("recovered(panic, nil) = nil, want an error")
+	}
+	for _, want := range []string{"doing a thing", "boom"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

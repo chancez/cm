@@ -6,6 +6,11 @@ import (
 )
 
 func TestFindDetach(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
+
 	tests := []struct {
 		name  string
 		input []byte
@@ -14,8 +19,8 @@ func TestFindDetach(t *testing.T) {
 		{"plain text", []byte("ls -la\r"), -1},
 		{"empty", nil, -1},
 
-		{"raw ctrl-backslash", []byte{DetachKey}, 0},
-		{"raw after input", []byte("ls" + string(rune(DetachKey))), 2},
+		{"raw ctrl-backslash", []byte{0x1C}, 0},
+		{"raw after input", []byte("ls\x1c"), 2},
 
 		// A terminal with the kitty keyboard protocol or modifyOtherKeys enabled reports
 		// the key as a CSI sequence, so only checking for 0x1C would silently stop working
@@ -31,12 +36,12 @@ func TestFindDetach(t *testing.T) {
 		{"different kitty key", []byte("\x1b[97;5u"), -1},
 
 		// When several appear, the earliest wins: everything after a detach is discarded.
-		{"earliest of two", []byte("a\x1b[92;5ub" + string(rune(DetachKey))), 1},
+		{"earliest of two", []byte("a\x1b[92;5ub\x1c"), 1},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := FindDetach(tt.input); got != tt.want {
+			if got := key.Find(tt.input); got != tt.want {
 				t.Errorf("FindDetach(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
@@ -44,6 +49,11 @@ func TestFindDetach(t *testing.T) {
 }
 
 func TestMightStartDetach(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
+
 	tests := []struct {
 		name  string
 		input []byte
@@ -66,7 +76,7 @@ func TestMightStartDetach(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := mightStartDetach(tt.input); got != tt.want {
+			if got := key.MightStart(tt.input); got != tt.want {
 				t.Errorf("mightStartDetach(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
@@ -76,6 +86,10 @@ func TestMightStartDetach(t *testing.T) {
 // The property that matters: a detach split across reads is still detected once reassembled,
 // and the bytes before it are preserved for the shell.
 func TestDetachSplitAcrossReads(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
 	full := []byte("echo hi\x1b[92;5u")
 
 	for split := 1; split < len(full); split++ {
@@ -84,26 +98,18 @@ func TestDetachSplitAcrossReads(t *testing.T) {
 		// Simulate the client's buffering: hold back a possible partial sequence.
 		var held []byte
 		buf := append(held, first...)
-		if FindDetach(buf) >= 0 {
+		if key.Find(buf) >= 0 {
 			// Detach was entirely in the first read; nothing more to check.
 			continue
 		}
-		if mightStartDetach(buf) {
-			keep := len(buf)
-			for _, seq := range detachSequences {
-				if n := len(seq) - 1; n < keep {
-					keep = n
-				}
-			}
-			if keep > 0 && keep <= len(buf) {
-				held = append(held, buf[len(buf)-keep:]...)
-				buf = buf[:len(buf)-keep]
-			}
+		if keep := key.HoldBack(buf); keep > 0 && keep <= len(buf) {
+			held = append(held, buf[len(buf)-keep:]...)
+			buf = buf[:len(buf)-keep]
 		}
 		forwarded := append([]byte(nil), buf...)
 
 		buf = append(held, second...)
-		i := FindDetach(buf)
+		i := key.Find(buf)
 		if i < 0 {
 			t.Errorf("split at %d: detach not found after reassembly (forwarded %q, then %q)",
 				split, forwarded, buf)

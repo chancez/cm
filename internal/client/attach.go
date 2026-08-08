@@ -48,6 +48,8 @@ type Options struct {
 	// ClientEnv holds terminal-related variables from this client's environment, recorded by the
 	// server so a shell inside the session can refresh them later.
 	ClientEnv map[string]string
+	// DetachKey is the key that detaches. Zero value means the default.
+	DetachKey DetachKeySpec
 	// OnMetadata, when set, is called as the session reports its title and directory.
 	//
 	// This is how a terminal emulator learns values the shell reported to cm rather than to the
@@ -256,6 +258,12 @@ func runSession(
 	// between two reads is still recognized rather than forwarded to the shell.
 	var held []byte
 
+	detachKey := opts.DetachKey
+	if detachKey.Name == "" {
+		// Zero value means the caller did not configure one.
+		detachKey, _ = ParseDetachKey(DefaultDetachKey)
+	}
+
 	for {
 		select {
 		case msg, ok := <-out:
@@ -313,7 +321,7 @@ func runSession(
 			buf := append(held, data...)
 			held = nil
 
-			if i := FindDetach(buf); i >= 0 {
+			if i := detachKey.Find(buf); i >= 0 {
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.
 				if i > 0 && !opts.ReadOnly {
@@ -332,17 +340,9 @@ func runSession(
 			}
 
 			// Hold back a possible partial detach sequence until the rest arrives.
-			if mightStartDetach(buf) {
-				keep := len(buf)
-				for _, seq := range detachSequences {
-					if n := len(seq) - 1; n < keep {
-						keep = n
-					}
-				}
-				if keep > 0 && keep <= len(buf) {
-					held = append(held, buf[len(buf)-keep:]...)
-					buf = buf[:len(buf)-keep]
-				}
+			if keep := detachKey.HoldBack(buf); keep > 0 && keep <= len(buf) {
+				held = append(held, buf[len(buf)-keep:]...)
+				buf = buf[:len(buf)-keep]
 			}
 
 			if len(buf) > 0 && !opts.ReadOnly {

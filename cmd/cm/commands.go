@@ -70,6 +70,11 @@ Detach with ctrl-\ , which leaves the session running.`,
 				return err
 			}
 
+			detachKey, err := client.ParseDetachKey(cfg.DetachKey)
+			if err != nil {
+				return err
+			}
+
 			opts := client.Options{
 				SocketPath: dirs.ServerSocket(),
 				Session:    session,
@@ -77,6 +82,7 @@ Detach with ctrl-\ , which leaves the session running.`,
 				ReadOnly:   readOnly,
 				Dir:        dir,
 				Command:    argsAfterDash(cmd, args),
+				DetachKey:  detachKey,
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
