@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -41,8 +42,9 @@ func warnIfTerminal(w *os.File) {
 //
 // Read-only always. A follower must not be able to disturb the session it is watching, and this is called from
 // commands whose stdin is not the session's input.
-func followSession(ctx context.Context, dirs paths.Dirs, session string, raw bool) error {
+func followSession(ctx context.Context, dirs paths.Dirs, session string, raw bool, log *slog.Logger) error {
 	opts := client.Options{
+		Log:        log,
 		Session:    session,
 		SocketPath: dirs.ServerSocket(),
 		ReadOnly:   true,
@@ -93,7 +95,7 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 // stream picks up at the session's current position. In practice they line up, because the tail ends where the
 // session is now, which is where the stream begins.
 func printTailThenFollow(
-	ctx context.Context, dirs paths.Dirs, session string, tail []byte, raw bool,
+	ctx context.Context, dirs paths.Dirs, session string, tail []byte, raw bool, log *slog.Logger,
 ) error {
 	if _, err := os.Stdout.Write(tail); err != nil {
 		return err
@@ -105,7 +107,7 @@ func printTailThenFollow(
 			return err
 		}
 	}
-	return followSession(ctx, dirs, session, raw)
+	return followSession(ctx, dirs, session, raw, log)
 }
 
 // followWriter returns where a follower's output goes.
@@ -155,6 +157,7 @@ func sendAndFollow(
 	until serverv1.WaitState,
 	timeout time.Duration,
 	raw bool,
+	log *slog.Logger,
 ) error {
 	if err := ensureServer(ctx, dirs); err != nil {
 		return err
@@ -167,7 +170,7 @@ func sendAndFollow(
 	streamed := make(chan error, 1)
 	attached := make(chan struct{})
 	go func() {
-		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw)
+		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw, log)
 	}()
 
 	// Wait for the attachment before sending, or attaching first buys nothing.
@@ -239,10 +242,11 @@ func sendAndFollow(
 // than a visible failure. OnAttached fires on the server's Opened reply, which is unconditional and always
 // first.
 func followSessionSignalling(
-	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{}, raw bool,
+	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{}, raw bool, log *slog.Logger,
 ) error {
 	var once sync.Once
 	opts := client.Options{
+		Log:        log,
 		Session:    session,
 		SocketPath: dirs.ServerSocket(),
 		ReadOnly:   true,
@@ -297,6 +301,7 @@ func followSessionSignalling(
 // law, so a future change that made these sessions owned would otherwise turn a tidy exit into a destroyed
 // session.
 func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
+	// opts carries the logger already, since this is called from attach, which opens one.
 	if err := ensureServer(ctx, dirs); err != nil {
 		return err
 	}

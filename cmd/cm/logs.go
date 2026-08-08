@@ -10,88 +10,166 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/chancez/cm/internal/paths"
 )
 
+// logsFlags are the options every logs subcommand shares.
+//
+// One struct because the three subcommands differ only in which file they name: sharing the flags means
+// `logs server -f` and `logs shim NAME -f` cannot drift, and adding an option touches one place.
+type logsFlags struct {
+	follow bool
+	lines  int
+	all    bool
+	clear  bool
+}
+
+func (f *logsFlags) bind(cmd *cobra.Command) {
+	fl := cmd.Flags()
+	fl.BoolVarP(&f.follow, "follow", "f", false, "keep reading as the log grows")
+	fl.IntVarP(&f.lines, "lines", "n", 200, "print only the last N lines (0 for all)")
+	fl.BoolVar(&f.all, "all", false, "include the rotated previous log")
+	fl.BoolVar(&f.clear, "clear", false, "empty the log instead of printing it")
+}
+
 func newLogsCommand(g *globals) *cobra.Command {
-	var (
-		follow bool
-		lines  int
-		all    bool
-		clear  bool
-	)
 	cmd := &cobra.Command{
-		Use:   "logs [session]",
-		Short: "Print cm's diagnostic log",
-		Long: `Print cm's diagnostic log.
+		Use:   "logs",
+		Short: "Print cm's diagnostic logs",
+		Long: `Print cm's diagnostic logs.
 
-With no argument, prints the server's log. With a session name, prints that
-session's shim log instead.
+Three kinds of process keep one, and each has a subcommand:
 
-The server and shim run detached with their stdio discarded, so this is the only
-record of what they did. Several errors are deliberately swallowed to keep a
-session alive when something advisory fails, and those are logged here rather
-than shown, so a session that quietly stopped persisting or lost its title says
-so in the log.
+  logs server         the server's, of which there is one
+  logs client         every client's, shared, with pid and boot as fields
+  logs shim <name>    one session's shim
 
-This is the diagnostic log, not the session's output. Use 'cm history' for what
-the shell printed.
+The server and shims run detached with their stdio discarded, so these are the
+only record of what they did. Several errors are deliberately swallowed to keep a
+session alive when something advisory fails, and those are logged rather than
+shown: a session that quietly stopped persisting or lost its title says so here.
 
---clear empties the log instead of printing it, which is worth having while
-debugging: 'cm doctor' reports errors from the last 24 hours, so yesterday's
-entries obscure whether a change helped. It truncates rather than deletes, since
-the server and any shim hold the file open and writing to a deleted file would
-lose their output silently.`,
-		Args:              cobra.MaximumNArgs(1),
+Clients share one file rather than having one each. A client is short-lived and
+there can be one per attached window, so a file each would accumulate for
+diagnostics that are read only when something is wrong. Which client wrote a line
+is in its pid and boot fields instead.
+
+These are diagnostic logs, not session output. Use 'cm history' or 'cm read' for
+what the shell printed.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Bare `cm logs` prints help rather than guessing which log was meant. It used to print the
+			// server's, and keeping that would make the subcommands optional in a way that reads as
+			// inconsistent once there are three.
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(
+		newLogsServerCommand(g),
+		newLogsClientCommand(g),
+		newLogsShimCommand(g),
+	)
+	return cmd
+}
+
+func newLogsServerCommand(g *globals) *cobra.Command {
+	var f logsFlags
+	cmd := &cobra.Command{
+		Use:   "server",
+		Short: "Print the server's diagnostic log",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dirs, err := g.dirs()
+			if err != nil {
+				return err
+			}
+			return runLogs(cmd.Context(), dirs.ServerLog(), f)
+		},
+	}
+	f.bind(cmd)
+	return cmd
+}
+
+func newLogsClientCommand(g *globals) *cobra.Command {
+	var f logsFlags
+	cmd := &cobra.Command{
+		Use:   "client",
+		Short: "Print the shared client diagnostic log",
+		Long: `Print the diagnostic log every client writes to.
+
+One file for all of them, with pid and boot recorded as fields on each line, so
+filtering to one client is a grep rather than finding the right file. boot
+distinguishes a reused pid from the same pid in this boot, which matters because
+the log outlives a reboot.
+
+Clients record what nothing else can see: how often they reconnected, where they
+resumed from, and input held across an outage.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dirs, err := g.dirs()
+			if err != nil {
+				return err
+			}
+			return runLogs(cmd.Context(), dirs.ClientLog(), f)
+		},
+	}
+	f.bind(cmd)
+	return cmd
+}
+
+func newLogsShimCommand(g *globals) *cobra.Command {
+	var f logsFlags
+	cmd := &cobra.Command{
+		Use:   "shim <session>",
+		Short: "Print one session's shim diagnostic log",
+		Long: `Print the diagnostic log for one session's shim.
+
+The shim owns the session's pty and shell, so its log is where a pty that could
+not be resized or output that could not be persisted is recorded.
+
+Separate from the session's output: this is what the shim did, 'cm history' is
+what the shell printed.`,
+		Args:              sessionNameArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
 			}
-
-			path := dirs.ServerLog()
-			if len(args) == 1 {
-				if err := paths.ValidateSessionName(args[0]); err != nil {
-					return err
-				}
-				path = dirs.ShimLog(args[0])
-			}
-
-			if clear {
-				return clearLogs(path, all)
-			}
-
-			if all {
-				// The rotated generation first, so the output reads oldest to newest.
-				if err := printLog(path+".1", 0); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-				lines = 0
-			}
-
-			if err := printLog(path, lines); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return fmt.Errorf("no log at %s; logging may be disabled", path)
-				}
-				return err
-			}
-			if follow {
-				return followLog(cmd.Context(), path)
-			}
-			return nil
+			return runLogs(cmd.Context(), dirs.ShimLog(args[0]), f)
 		},
 	}
-	f := cmd.Flags()
-	f.BoolVarP(&follow, "follow", "f", false, "keep reading as the log grows")
-	f.IntVarP(&lines, "lines", "n", 200,
-		"print only the last N lines (0 for all)")
-	f.BoolVar(&all, "all", false,
-		"include the rotated previous log")
-	f.BoolVar(&clear, "clear", false,
-		"empty the log instead of printing it")
+	f.bind(cmd)
 	return cmd
+}
+
+// runLogs prints, follows, or clears one log file.
+//
+// Shared by every subcommand, so the behavior of --follow, --lines, --all, and --clear cannot differ between
+// them: only the path differs.
+func runLogs(ctx context.Context, path string, f logsFlags) error {
+	if f.clear {
+		return clearLogs(path, f.all)
+	}
+
+	lines := f.lines
+	if f.all {
+		// The rotated generation first, so the output reads oldest to newest.
+		if err := printLog(path+".1", 0); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		lines = 0
+	}
+
+	if err := printLog(path, lines); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("no log at %s; logging may be disabled", path)
+		}
+		return err
+	}
+	if f.follow {
+		return followLog(ctx, path)
+	}
+	return nil
 }
 
 // printLog writes a log file, optionally only its last n lines.
@@ -140,9 +218,6 @@ func printLog(path string, n int) error {
 	return nil
 }
 
-// followLog keeps printing a log as it grows.
-//
-// Polls rather than watching the filesystem: this is a diagnostic aid used interactively, so a
 // fraction of a second of latency does not matter and a poll needs no platform-specific watcher.
 func followLog(ctx context.Context, path string) error {
 	f, err := os.Open(path)

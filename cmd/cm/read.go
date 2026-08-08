@@ -72,6 +72,15 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 			if raw {
 				warnIfTerminal(os.Stdout)
 			}
+
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			logger, closeLog := newClientLogger(dirs, cfg)
+			if closeLog != nil {
+				defer closeLog.Close()
+			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Read(ctx, &serverv1.ReadRequest{
 					Session: name,
@@ -85,7 +94,7 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 				if follow {
 					// The tail first, then the stream. Both go to stdout, so the caller sees one continuous
 					// piece of output rather than having to stitch two commands together.
-					return printTailThenFollow(ctx, dirs, name, resp.Data, raw)
+					return printTailThenFollow(ctx, dirs, name, resp.Data, raw, logger)
 				}
 				if _, err := os.Stdout.Write(resp.Data); err != nil {
 					return err

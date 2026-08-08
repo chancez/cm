@@ -223,7 +223,7 @@ func TestLogsClearEmptiesTheLogAndLoggingContinues(t *testing.T) {
 		return len(e.readFileOrEmpty(e.serverLogPath())) > 0
 	})
 
-	e.mustRun("logs", "--clear")
+	e.mustRun("logs", "server", "--clear")
 	if body := e.readFileOrEmpty(e.serverLogPath()); len(body) != 0 {
 		t.Errorf("log is %d bytes after --clear, want empty:\n%s", len(body), body)
 	}
@@ -253,8 +253,9 @@ func TestLogsClearToleratesAMissingLog(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 
-	// A session name that never existed, so its shim log was never created.
-	if r := e.run("logs", "--clear", "neverexisted"); r.code != 0 {
+	// A session name that never existed, so its shim log was never created. sessionNameArg validates the name
+	// but does not require the session to exist, which is what makes clearing a missing log reachable.
+	if r := e.run("logs", "shim", "neverexisted", "--clear"); r.code != 0 {
 		t.Errorf("exit code = %d clearing a missing log, want 0\nstderr: %s", r.code, r.stderr)
 	}
 }
@@ -277,12 +278,12 @@ func TestLogsClearAllRemovesTheRotatedLog(t *testing.T) {
 	}
 
 	// Without --all it is left alone, since the default is to clear the current log only.
-	e.mustRun("logs", "--clear")
+	e.mustRun("logs", "server", "--clear")
 	if e.readFileOrEmpty(rotated) == "" {
 		t.Error("`logs --clear` removed the rotated log, want it left alone without --all")
 	}
 
-	e.mustRun("logs", "--clear", "--all")
+	e.mustRun("logs", "server", "--clear", "--all")
 	if body := e.readFileOrEmpty(rotated); body != "" {
 		t.Errorf("the rotated log survived `--clear --all`: %q", body)
 	}

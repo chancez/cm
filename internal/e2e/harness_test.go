@@ -428,14 +428,19 @@ func (e *env) waitServerGone() {
 // log has to survive the deletion of the runtime directory, since it is the only channel a server that can no
 // longer be reached has left.
 func (e *env) serverLogPath() string {
-	return filepath.Join(e.state, "logs", "server.log")
+	return filepath.Join(e.state, "logs", "server", "server.log")
+}
+
+// clientLogPath is the shared client diagnostic log.
+func (e *env) clientLogPath() string {
+	return filepath.Join(e.state, "logs", "client", "client.log")
 }
 
 // shimLogPath is where a session's shim writes its diagnostic log.
 //
 // Separate from the session's output log: this records what the shim did, that records what the shell printed.
 func (e *env) shimLogPath(session string) string {
-	return filepath.Join(e.state, "logs", "shim-"+session+".log")
+	return filepath.Join(e.state, "logs", "shim", session+".log")
 }
 
 // appendLog adds lines to a log file.

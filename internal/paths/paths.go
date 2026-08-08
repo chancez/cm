@@ -117,7 +117,10 @@ func DefaultWithOrigin() (Dirs, DirOrigin, error) {
 // Ensure creates the directories, owner-only. The sockets inside grant control of a
 // shell, so the permissions are the access control.
 func (d Dirs) Ensure() error {
-	for _, dir := range []string{d.Runtime, d.State, d.logDir()} {
+	for _, dir := range []string{
+		d.Runtime, d.State, d.logDir(),
+		d.ServerLogDir(), d.ClientLogDir(), d.ShimLogDir(),
+	} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
@@ -148,22 +151,58 @@ func (d Dirs) logDir() string {
 	return filepath.Join(d.State, "logs")
 }
 
+// Diagnostic logs live in a subdirectory per process type: logs/server, logs/client, logs/shim.
+//
+// Separated because there are three kinds of writer and the flat layout made them hard to tell apart by
+// filename alone, which is what doctor's scanner had to do. It also keeps session *output* -- which sits
+// directly in logs/ and is a different thing entirely -- from being mistaken for a diagnostic log.
+const (
+	serverLogSubdir = "server"
+	clientLogSubdir = "client"
+	shimLogSubdir   = "shim"
+)
+
+// ServerLogDir, ClientLogDir, and ShimLogDir are where each kind of diagnostic log lives.
+//
+// Exported so the scanner enumerates a directory rather than pattern-matching filenames, and so a caller
+// adding a log has one place to look.
+func (d Dirs) ServerLogDir() string { return filepath.Join(d.logDir(), serverLogSubdir) }
+func (d Dirs) ClientLogDir() string { return filepath.Join(d.logDir(), clientLogSubdir) }
+func (d Dirs) ShimLogDir() string   { return filepath.Join(d.logDir(), shimLogSubdir) }
+
 // ServerLog is the server's diagnostic log.
 func (d Dirs) ServerLog() string {
-	return filepath.Join(d.logDir(), "server.log")
+	return filepath.Join(d.ServerLogDir(), "server.log")
+}
+
+// ClientLog is the shared diagnostic log for every client.
+//
+// One file rather than one per client. A client is a short-lived process and there can be many -- one per
+// attached window -- so a file each would accumulate without bound for diagnostics that are usually read
+// only when something is wrong. Which client wrote a line is recorded as structured fields instead, so
+// slog's output stays filterable: pid identifies the process, and boot identifies the boot it belongs to,
+// since pids are reused and a log outlives a reboot.
+func (d Dirs) ClientLog() string {
+	return filepath.Join(d.ClientLogDir(), "client.log")
 }
 
 // ShimLog is one session's shim diagnostic log.
 //
 // Separate from the session's output log: this records what the shim did, while that records what the
 // shell printed. Conflating them would make the output unreadable and the diagnostics unparseable.
+//
+// One file per session rather than shared, unlike clients: a shim lives as long as its session, there is
+// exactly one per session, and its name is the obvious way to find it.
 func (d Dirs) ShimLog(session string) string {
-	return filepath.Join(d.logDir(), "shim-"+session+".log")
+	return filepath.Join(d.ShimLogDir(), session+".log")
 }
 
 // SessionLog is the append-only output log for one session. Terminal output goes here
 // rather than into sqlite: it is high-volume, written sequentially, and only ever read
 // back in order.
+//
+// Directly in logs/ rather than a subdirectory, because it is not a diagnostic log: it is what the shell
+// printed, and the subdirectories are for what cm's own processes recorded.
 func (d Dirs) SessionLog(session string) string {
 	return filepath.Join(d.logDir(), session+".log")
 }

@@ -145,8 +145,9 @@ func TestCheckLogsReadsShimLogs(t *testing.T) {
 	if !strings.Contains(got[0].Detail, "persisting output failed") {
 		t.Errorf("detail does not include the shim's error: %q", got[0].Detail)
 	}
-	// The file is named, since "an error happened" without saying where leaves the reader to grep every log.
-	if !strings.Contains(got[0].Detail, "shim-work") {
+	// The file is named, and named in a way that says what kind of log it is: a shim log and a session's output
+	// log share a base name now that the logs are split by directory, so "work.log" alone would be ambiguous.
+	if !strings.Contains(got[0].Detail, "shim/work.log") {
 		t.Errorf("detail does not say which log it came from: %q", got[0].Detail)
 	}
 }
@@ -237,21 +238,53 @@ func TestCheckLogsKeepsEntriesWithUnparseableTimestamps(t *testing.T) {
 	}
 }
 
-// The shim log affixes really do match what ShimLog produces.
+// The scanner looks in the directories the path helpers actually name.
 //
-// Derived rather than hardcoded so a change to the naming cannot silently stop the scan from finding anything,
-// which would look like a clean installation. This asserts the derivation, since the failure mode is silence.
-func TestShimLogAffixesMatchRealNames(t *testing.T) {
-	_, _, dirs := newTestManager(t, nil)
+// The failure mode here is silence: a scanner pointed at the wrong directory finds nothing and reports a clean
+// installation, which is worse than an error. That is not hypothetical -- the previous version read the
+// directory containing the server's log and matched shim logs by filename prefix, so splitting the logs into
+// per-type subdirectories broke it without breaking any test that existed at the time.
+//
+// Asserted against the helpers rather than against literal paths, so the two cannot drift.
+func TestLogFilesCoversEveryLogDirectory(t *testing.T) {
+	mgr, _, dirs := newTestManager(t, nil)
+	now := time.Now()
 
-	base := filepath.Base(dirs.ShimLog("work"))
-	if !strings.HasPrefix(base, shimLogPrefix) || !strings.HasSuffix(base, shimLogSuffix) {
-		t.Errorf("ShimLog produces %q, which does not match prefix %q and suffix %q",
-			base, shimLogPrefix, shimLogSuffix)
+	// One log of each kind, with a distinguishable error in it.
+	writeLog(t, dirs.ServerLog(), logAt(now, "ERROR", "from the server"))
+	writeLog(t, dirs.ClientLog(), logAt(now, "ERROR", "from a client"))
+	writeLog(t, dirs.ShimLog("work"), logAt(now, "ERROR", "from a shim"))
+
+	got := mgr.checkLogs(now)
+	if len(got) != 1 {
+		t.Fatalf("checkLogs() = %+v, want one finding", got)
 	}
-	// And the server's own log must not match, or it would be scanned twice and every entry double-counted.
-	server := filepath.Base(dirs.ServerLog())
-	if strings.HasPrefix(server, shimLogPrefix) && strings.HasSuffix(server, shimLogSuffix) {
-		t.Errorf("the server log %q matches the shim pattern, so it would be counted twice", server)
+	// All three sources, or a whole class of log is invisible.
+	for _, want := range []string{"from the server", "from a client", "from a shim"} {
+		if !strings.Contains(got[0].Detail, want) {
+			t.Errorf("detail does not include %q, so that log directory is not being scanned:\n%s",
+				want, got[0].Detail)
+		}
+	}
+	// Counted once each, not twice: overlapping directories would double every entry.
+	if !strings.Contains(got[0].Detail, "3 errors") {
+		t.Errorf("detail = %q, want exactly 3 errors", got[0].Detail)
+	}
+}
+
+// Session output is not scanned as a diagnostic log.
+//
+// It lives directly in logs/ while diagnostics live in subdirectories, and it holds whatever the shell printed.
+// A build that prints the word ERROR would otherwise be reported as a cm fault.
+func TestLogFilesIgnoresSessionOutput(t *testing.T) {
+	mgr, _, dirs := newTestManager(t, nil)
+	now := time.Now()
+
+	// Output that looks exactly like a log line, which is the case that would fool a scanner reading logs/
+	// indiscriminately.
+	writeLog(t, dirs.SessionLog("work"), logAt(now, "ERROR", "printed by the shell, not by cm"))
+
+	if got := mgr.checkLogs(now); len(got) != 0 {
+		t.Errorf("checkLogs() = %+v, want nothing: session output is not a diagnostic log", got)
 	}
 }

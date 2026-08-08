@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -117,6 +121,12 @@ receives it and the window closes instead of detaching.`,
 				// reaches the shell. Only applies when this call creates the session.
 				Env: env,
 			}
+			logger, closeLog := newClientLogger(dirs, cfg)
+			if closeLog != nil {
+				defer closeLog.Close()
+			}
+			opts.Log = logger
+
 			// Checked before anything that assumes a terminal, since this path has none.
 			if noAttach {
 				return createWithoutAttaching(cmd.Context(), dirs, opts)
@@ -167,6 +177,35 @@ func argsAfterDash(cmd *cobra.Command, args []string) []string {
 		return args[n:]
 	}
 	return nil
+}
+
+// newClientLogger opens the shared client log, tagged with which client is writing.
+//
+// One file for every client, with pid and boot as fields rather than in the filename. A client is short-lived
+// and there can be one per attached window, so a file each would accumulate for diagnostics that are only read
+// when something is wrong. The fields keep it filterable: pid names the process, and boot distinguishes a reused
+// pid from the same pid in this boot, which matters because the log outlives a reboot.
+//
+// Failing to open the log is not fatal. Diagnostics are advisory, and refusing to attach because a log file
+// could not be written would turn a nicety into an outage.
+func newClientLogger(dirs paths.Dirs, cfg *config.Config) (*slog.Logger, io.Closer) {
+	level, enabled, err := cfg.Logging()
+	if err != nil || !enabled {
+		return nil, nil
+	}
+	if err := dirs.Ensure(); err != nil {
+		return nil, nil
+	}
+
+	logger, closer, err := cmlog.New(cmlog.Options{
+		Enabled: true,
+		Level:   level,
+		Path:    dirs.ClientLog(),
+	})
+	if err != nil {
+		return nil, nil
+	}
+	return logger.With("pid", os.Getpid(), "boot", paths.BootID()), closer
 }
 
 func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
@@ -388,7 +427,15 @@ follower connects, which for a fast command can be all of it.`,
 				if raw {
 					warnIfTerminal(os.Stdout)
 				}
-				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout, raw)
+				cfg, cerr := g.config()
+				if cerr != nil {
+					return cerr
+				}
+				logger, closeLog := newClientLogger(dirs, cfg)
+				if closeLog != nil {
+					defer closeLog.Close()
+				}
+				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout, raw, logger)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Send(ctx, &serverv1.SendRequest{

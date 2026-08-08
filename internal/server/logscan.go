@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/chancez/cm/internal/paths"
 )
 
 // FindingLogWarnings is warnings in cm's logs, which are quieter than errors and often more useful.
@@ -145,23 +143,26 @@ func (m *Manager) checkLogs(now time.Time) []Finding {
 // just scrolled past is still recoverable by hand; including it here would mostly resurface entries already
 // outside the staleness window.
 func (m *Manager) logFiles() []string {
-	files := []string{m.dirs.ServerLog()}
+	files := []string{m.dirs.ServerLog(), m.dirs.ClientLog()}
 
 	// Every shim log present, rather than one per known session: a shim whose session record is gone is
 	// exactly the case where its log is the only remaining account of what happened.
-	dir := filepath.Dir(m.dirs.ServerLog())
-	entries, err := os.ReadDir(dir)
+	//
+	// Enumerated from the shim log directory rather than pattern-matched across one flat directory, which is
+	// what this did before the logs were split by type. That version derived a filename prefix from ShimLog so
+	// a naming change could not break it silently -- and a *layout* change would have, since it read the
+	// directory containing the server's log and that is no longer where shim logs are.
+	entries, err := os.ReadDir(m.dirs.ShimLogDir())
 	if err != nil {
+		// No directory yet, which is a fresh installation rather than a problem.
 		return files
 	}
 	var shims []string
 	for _, e := range entries {
-		name := e.Name()
-		// Matched against the naming ShimLog produces rather than a literal, so a change there cannot
-		// silently stop this from finding anything.
-		if strings.HasPrefix(name, shimLogPrefix) && strings.HasSuffix(name, shimLogSuffix) {
-			shims = append(shims, filepath.Join(dir, name))
+		if e.IsDir() {
+			continue
 		}
+		shims = append(shims, filepath.Join(m.dirs.ShimLogDir(), e.Name()))
 	}
 	sort.Strings(shims)
 	return append(files, shims...)
@@ -176,7 +177,10 @@ func scanLog(path string, now time.Time) []logEntry {
 	}
 	defer f.Close()
 
-	name := filepath.Base(path)
+	// Labelled with the directory as well as the filename, since the base name is no longer unique: a shim log
+	// and a session's output log are both NAME.log, in different directories. "shim/work.log" says which kind
+	// of log a line came from, which is the part a reader needs.
+	name := logLabel(path)
 	var out []logEntry
 	sc := bufio.NewScanner(f)
 	// A long line is possible, since a logged error can embed a command line or a path.
@@ -212,6 +216,20 @@ func scanLog(path string, now time.Time) []logEntry {
 	return out
 }
 
+// logLabel names a log file for a finding.
+//
+// The last two path elements, so a reader sees "shim/work.log" rather than "work.log". The base name alone was
+// enough when every log sat in one directory and carried a prefix; with per-type subdirectories a shim log and
+// a session's output log share a base name, and the directory is what tells them apart.
+func logLabel(path string) string {
+	dir, file := filepath.Split(path)
+	kind := filepath.Base(filepath.Clean(dir))
+	if kind == "." || kind == string(filepath.Separator) {
+		return file
+	}
+	return kind + "/" + file
+}
+
 // logStamp recovers the timestamp from a log line.
 //
 // Parsed from the text rather than taken from the file's mtime, which would date every entry in a file by its
@@ -233,21 +251,4 @@ func logStamp(line string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
-}
-
-// Shim log naming, derived from the function that produces it rather than duplicated as literals.
-var shimLogPrefix, shimLogSuffix = shimLogAffixes()
-
-// shimLogAffixes splits a sample shim log name into the parts around the session name.
-func shimLogAffixes() (prefix, suffix string) {
-	const sample = "\x00session\x00"
-	d := paths.Dirs{State: "/"}
-	base := filepath.Base(d.ShimLog(sample))
-	parts := strings.SplitN(base, sample, 2)
-	if len(parts) != 2 {
-		// Unreachable unless ShimLog stops embedding the name, in which case scanning cannot work and failing
-		// loudly beats silently finding nothing.
-		panic("cm: shim log naming no longer embeds the session name")
-	}
-	return parts[0], parts[1]
 }

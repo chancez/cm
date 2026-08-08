@@ -23,6 +23,26 @@ cm uses two, for different lifetimes. `cm config` prints both, and which rule ch
 | runtime | sockets, and nothing else | `--runtime-dir`, `$CM_RUNTIME_DIR`, `runtime_dir`, `$XDG_RUNTIME_DIR/cm`, then `$TMPDIR/cm-$UID` |
 | state | the database and logs | `--state-dir`, `$CM_STATE_DIR`, `state_dir`, `$XDG_STATE_HOME/cm`, then `~/.local/state/cm` |
 
+Inside the state directory, diagnostic logs are split by which process wrote them:
+
+```
+logs/server/server.log     the server's, of which there is one
+logs/client/client.log     every client's, shared, with pid and boot as fields
+logs/shim/<session>.log    one per session's shim
+logs/<session>.log         session output, which is not a diagnostic log
+```
+
+Read them with `cm logs server`, `cm logs client`, and `cm logs shim <session>`.
+
+Clients share one file rather than having one each. A client is short-lived and there can be one per
+attached window, so a file each would accumulate for diagnostics that are read only when something is
+wrong; `pid` and `boot` fields identify the writer instead. `boot` distinguishes a reused pid from the
+same pid in this boot, since the log outlives a reboot.
+
+Session output sits directly in `logs/` because it is not a diagnostic: it is what the shell printed.
+Keeping it out of the subdirectories is what stops `cm doctor` from reporting a build that printed the
+word ERROR as a cm fault.
+
 The runtime directory holds `server.sock` and one `shim-NAME.sock` per session. Nothing else is ever
 written there, which is why it can live somewhere the system sweeps.
 

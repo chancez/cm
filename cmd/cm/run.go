@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -110,7 +111,16 @@ owns the process and reaps it, so nothing is inferred from output.`,
 				// Sent through the same path as `cm send --follow`, which already solves the ordering and the
 				// stop condition, rather than reimplementing either here.
 				if !created {
-					return runInExistingSession(cmd.Context(), dirs, name, args, detach, timeout, quiet, raw)
+					cfg, cerr := g.config()
+					if cerr != nil {
+						return cerr
+					}
+					logger, closeLog := newClientLogger(dirs, cfg)
+					if closeLog != nil {
+						defer closeLog.Close()
+					}
+					return runInExistingSession(
+						cmd.Context(), dirs, name, args, detach, timeout, quiet, raw, logger)
 				}
 
 				if detach {
@@ -380,6 +390,7 @@ func runInExistingSession(
 	detach bool,
 	timeout time.Duration,
 	quiet, raw bool,
+	log *slog.Logger,
 ) error {
 	data := strings.Join(command, " ") + "\r"
 
@@ -412,5 +423,5 @@ func runInExistingSession(
 		return nil
 	}
 
-	return sendAndFollow(ctx, dirs, name, data, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw)
+	return sendAndFollow(ctx, dirs, name, data, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
 }

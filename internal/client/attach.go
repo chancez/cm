@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -69,6 +70,13 @@ type Options struct {
 	// for the ioctls that report size and set raw mode, and a filter is not a file.
 	Output io.Writer
 
+	// Log records what the client did, for diagnosing an attachment that misbehaved.
+	//
+	// Never nil in practice: Attach installs a discarding logger when one is not supplied, so the call sites
+	// below need no nil check. A client has diagnostics nothing else can see -- how often it reconnected, where
+	// it resumed from, input it had to hold across an outage -- and until this existed they were invisible.
+	Log *slog.Logger
+
 	// OnAttached, when set, is called once the server has opened the session on this connection.
 	//
 	// A reliable readiness signal, which OnMetadata is not: metadata is delivered when the session reports a
@@ -114,6 +122,12 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	var result Result
 	result.Session = opts.Session
 
+	// Defaulted here rather than at each use, so nothing has to nil-check a logger.
+	if opts.Log == nil {
+		opts.Log = slog.New(discardLogHandler{})
+	}
+	log := opts.Log.With("session", opts.Session)
+
 	// resumeFrom tracks how far output has been consumed, so a reconnect asks for exactly
 	// what was missed instead of a fresh repaint.
 	var resumeFrom *uint64
@@ -154,6 +168,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			continue
 		}
+		log.Debug("connected to the server", "resume_from", resumeFromValue(resumeFrom))
 
 		outcome, err := runSession(ctx, tty, cl, opts, &result, &resumeFrom, &pending, winch, input, inputErr)
 		conn.Close()
@@ -167,6 +182,11 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			if deadline.IsZero() {
 				deadline = time.Now().Add(reconnectTimeout)
 			}
+			// Logged because a reconnect is invisible otherwise: the client holds the terminal through it, so
+			// a user sees a pause and nothing else, and a session that dropped repeatedly looks the same as
+			// one that never did.
+			log.Info("reconnecting to the server",
+				"error", err, "resume_from", resumeFromValue(resumeFrom), "pending_bytes", len(pending))
 			select {
 			case <-ctx.Done():
 				return result, ctx.Err()
@@ -520,4 +540,26 @@ func waitForDetachAck(out <-chan outMsg) {
 			return
 		}
 	}
+}
+
+// discardLogHandler drops every record, for a client that was given no logger.
+//
+// Defaulted rather than nil-checking at each use: a logger is called from the reconnect path and from
+// error handling, where an extra branch per call would obscure the logic being read.
+type discardLogHandler struct{}
+
+func (discardLogHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardLogHandler) Handle(context.Context, slog.Record) error { return nil }
+func (h discardLogHandler) WithAttrs([]slog.Attr) slog.Handler      { return h }
+func (h discardLogHandler) WithGroup(string) slog.Handler           { return h }
+
+// resumeFromValue renders a resume point for a log line.
+//
+// A nil pointer means "wherever the server decides", which is a meaningful state rather than a missing value,
+// so it is logged as -1 rather than as an empty field.
+func resumeFromValue(p *uint64) int64 {
+	if p == nil {
+		return -1
+	}
+	return int64(*p)
 }
