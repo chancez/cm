@@ -626,3 +626,40 @@ func TestPublishMetadataDoesNotBlockOnUnreadSubscriber(t *testing.T) {
 		t.Fatal("publishMetadata blocked on a subscriber that never reads")
 	}
 }
+
+// A snapshot must describe the size the attaching client will display at.
+//
+// Taking it before resizing yields lines wrapped for the old width, which the client then wraps
+// again, and the screen arrives mangled. The bug is invisible unless a client attaches at a
+// different size than the session currently has, so it needs an explicit test.
+func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("sizing", "sleep 5"))
+	rec.Rows, rec.Cols = 24, 80
+
+	term := &fakeTerminal{rows: 24, cols: 80, restore: []byte("SNAPSHOT")}
+	sess, err := newSession(rec, term, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// What the service does on a fresh attach from a differently sized client: resize, then
+	// snapshot.
+	if err := sess.Resize(context.Background(), 40, 120, 0, 0); err != nil {
+		t.Fatalf("Resize() error = %v", err)
+	}
+	r, restore, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(r)
+	if len(restore) == 0 {
+		t.Fatal("attach() returned no restore bytes")
+	}
+
+	// The model must already be at the client's size when the snapshot is taken.
+	gotRows, gotCols := term.Size()
+	if gotRows != 40 || gotCols != 120 {
+		t.Errorf("terminal model size at snapshot = (%d, %d), want (40, 120)", gotRows, gotCols)
+	}
+}

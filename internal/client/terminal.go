@@ -21,6 +21,13 @@ const resetSequence = "\x1bc"
 // so leftover output from the client's own shell does not sit behind the session.
 const clearSequence = "\x1b[2J\x1b[H"
 
+// cancelSequence is CAN (0x18), which aborts an escape sequence in progress.
+//
+// Needed because a session's last output can end mid-sequence, leaving the terminal waiting for
+// bytes that will never come. Anything written next has its leading ESC eaten as part of that
+// unfinished sequence.
+const cancelSequence = "\x18"
+
 // TTY owns the local terminal's state for the duration of an attachment.
 type TTY struct {
 	in  *os.File
@@ -121,10 +128,9 @@ func (t *TTY) Read(p []byte) (int, error) { return t.in.Read(p) }
 
 // Close restores the terminal.
 //
-// The reset happens before restoring the mode so the escape sequence is not reinterpreted
-// under different settings. Calling Close more than once is safe and does nothing after the
-// first: emitting the reset twice would leave a stray character on screen, since a terminal
-// that does not recognize the sequence prints its trailing byte.
+// The reset happens before restoring the mode so the escape sequence is not reinterpreted under
+// different settings. Calling Close more than once is safe and does nothing after the first,
+// since emitting the reset twice would write bytes to a terminal that is no longer in raw mode.
 func (t *TTY) Close() error {
 	if t.closed {
 		return nil
@@ -133,10 +139,16 @@ func (t *TTY) Close() error {
 
 	var errs []error
 
-	// Only reset when a terminal is actually attached. Writing escape bytes into a pipe
-	// would corrupt whatever is consuming the output.
+	// Only reset when a terminal is actually attached. Writing escape bytes into a pipe would
+	// corrupt whatever is consuming the output.
 	if t.isTTY {
-		if _, err := t.out.WriteString(resetSequence); err != nil {
+		// Cancel any partial escape sequence before the reset.
+		//
+		// A session's final output can end mid-sequence, in which case the terminal is waiting
+		// for more bytes and swallows the reset's ESC as their continuation, leaving a bare "c"
+		// printed on screen. CAN (0x18) aborts whatever sequence is in progress so the reset is
+		// read as a reset.
+		if _, err := t.out.WriteString(cancelSequence + resetSequence); err != nil {
 			errs = append(errs, err)
 		}
 	}

@@ -132,6 +132,10 @@ func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error 
 		return attachErr
 	}
 	switch {
+	case res.Exited && res.ExitCode < 0:
+		// A negative code means the shim became unreachable rather than the shell reporting a
+		// status, so there is no exit code worth showing.
+		fmt.Fprintf(os.Stderr, "session %s ended unexpectedly\n", res.Session)
 	case res.Exited:
 		fmt.Fprintf(os.Stderr, "session %s ended (exit %d)\n", res.Session, res.ExitCode)
 	case res.Detached:

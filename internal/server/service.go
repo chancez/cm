@@ -49,6 +49,24 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		return err
 	}
 
+	// Resize before snapshotting, not after.
+	//
+	// The order matters and is easy to get backwards. A snapshot taken at the session's old size
+	// describes lines wrapped for that width; a client of a different width then wraps them
+	// again, and the screen arrives visibly mangled. Resizing first means the model reflows once,
+	// and the snapshot describes what this client will actually display.
+	//
+	// A newly attached client's size wins, so the shell matches the terminal showing it. On
+	// resume the client already matches, and resizing would make the shell redraw for no reason.
+	resizing := open.ResumeFromSeq == nil && !open.ReadOnly && open.Rows > 0 && open.Cols > 0
+	if resizing {
+		if err := sess.Resize(ctx, open.Rows, open.Cols, open.XPixel, open.YPixel); err != nil {
+			return fmt.Errorf("sizing session %s: %w", sess.name, err)
+		}
+		rows, cols := int(open.Rows), int(open.Cols)
+		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
+	}
+
 	reader, restore, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
 		return err
@@ -67,16 +85,6 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		},
 	}); err != nil {
 		return err
-	}
-
-	// A newly attached client's size wins, so the shell matches the terminal actually
-	// showing it. Resizing on resume would be wrong: the client already matches.
-	if open.ResumeFromSeq == nil && !open.ReadOnly && open.Rows > 0 && open.Cols > 0 {
-		if err := sess.Resize(ctx, open.Rows, open.Cols, open.XPixel, open.YPixel); err != nil {
-			return fmt.Errorf("sizing session %s: %w", sess.name, err)
-		}
-		rows, cols := int(open.Rows), int(open.Cols)
-		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
 	}
 
 	// Whether a Detach was seen is the whole basis of session ownership: closing a terminal
