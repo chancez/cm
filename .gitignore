@@ -1,3 +1,8 @@
 /bin/
-/third_party/
+# Without the trailing slash, so a symlink is ignored too.
+#
+# A git worktree has no third_party of its own, since the libghostty archive is built rather than
+# committed, and linking to the main checkout is the cheap way to make a cgo build work there. With
+# `/third_party/` that symlink is not ignored and gets committed by an `add -A`.
+/third_party
 mise.local.toml
