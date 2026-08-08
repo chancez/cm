@@ -1,15 +1,19 @@
 package paths
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 // Version reports what build this binary is, for diagnostics and for spotting a mismatch.
 //
 // Read from the Go build info rather than stamped with ldflags, so a `go build` with no special flags still
 // produces something meaningful and there is no build incantation to remember.
 //
-// The VCS revision is preferred over Main.Version even when both exist, because Main.Version for anything not
-// installed from a tag is a pseudo-version like v0.0.0-20260808150353-d83057a441e1: it contains the same
-// commit hash padded with noise, and the bare hash is what someone comparing two builds actually reads.
+// A real tag wins; a pseudo-version does not. Main.Version is v0.0.1 when built from a tag, which is what a
+// person wants to read, but v0.0.0-20260808150353-d83057a441e1 otherwise -- the same commit hash padded with
+// noise, where the bare hash is clearer. So a version starting with "v" and containing no "-" is used as-is,
+// and anything else falls through to the commit.
 //
 // Why cm needs this at all: a session outlives the server that created it, and a client can be a different
 // build from the server it talks to. Protobuf ignores unknown fields, so a newer client asking an older
@@ -19,6 +23,12 @@ func Version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
+	}
+
+	// A tagged build reports its tag, which is more useful than a hash. A pseudo-version is not a tag: it is
+	// generated for an untagged commit and carries the same hash this function would print anyway.
+	if v := info.Main.Version; isReleaseVersion(v) {
+		return v
 	}
 
 	var revision, modified string
@@ -31,9 +41,9 @@ func Version() string {
 		}
 	}
 	if revision == "" {
-		// No VCS stamps, which happens when building from a module cache or with -buildvcs=false. A tagged
-		// install has a real version to fall back to; a plain `go build` reports "(devel)", which says
-		// nothing.
+		// No VCS stamps, which happens when building from a module cache or with -buildvcs=false. Anything
+		// Main.Version says beats nothing here, including a pseudo-version, since it at least carries the
+		// commit.
 		if v := info.Main.Version; v != "" && v != "(devel)" {
 			return v
 		}
@@ -53,4 +63,17 @@ func Version() string {
 		return revision + "-dirty"
 	}
 	return revision
+}
+
+// isReleaseVersion reports whether a module version is a real tag rather than a generated pseudo-version.
+//
+// A pseudo-version always carries a timestamp and revision after a dash, as in
+// v0.0.0-20260808150353-d83057a441e1, so the absence of a dash distinguishes v0.0.1 from it.
+//
+// Two consequences worth naming. Go appends "+dirty" to a tagged version built from a modified tree, which has
+// no dash and so is accepted -- correctly, since "v0.0.1+dirty" is exactly what someone needs to see. And a
+// pre-release tag like v1.0.0-rc1 does contain a dash and falls through to the commit hash, which loses a
+// little precision in exchange for never mistaking generated noise for a release.
+func isReleaseVersion(v string) bool {
+	return strings.HasPrefix(v, "v") && !strings.Contains(v, "-")
 }
