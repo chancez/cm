@@ -262,6 +262,50 @@ func newSendCommand(g *globals) *cobra.Command {
 	return cmd
 }
 
+func newHistoryCommand(g *globals) *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "history <session>",
+		Short: "Print a session's contents, scrollback included",
+		Long: `Print a session's contents, including scrollback.
+
+Plain text by default, so it can be piped or paged. --format=vt keeps colors and
+styling; --format=html produces styled markup.`,
+		Args: sessionNameArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var f serverv1.HistoryFormat
+			switch format {
+			case "plain", "":
+				f = serverv1.HistoryFormat_HISTORY_FORMAT_UNSPECIFIED
+			case "vt":
+				f = serverv1.HistoryFormat_HISTORY_FORMAT_VT
+			case "html":
+				f = serverv1.HistoryFormat_HISTORY_FORMAT_HTML
+			default:
+				return fmt.Errorf("unknown format %q, want plain, vt, or html", format)
+			}
+
+			dirs, err := g.dirs()
+			if err != nil {
+				return err
+			}
+			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+				resp, err := cl.History(ctx, &serverv1.HistoryRequest{
+					Session: args[0],
+					Format:  f,
+				})
+				if err != nil {
+					return err
+				}
+				_, err = os.Stdout.Write(resp.Data)
+				return err
+			})
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "plain", "output format: plain, vt, or html")
+	return cmd
+}
+
 func newCompletionsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:       "completions <shell>",

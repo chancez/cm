@@ -16,6 +16,7 @@ import (
 
 	"github.com/containerd/ttrpc"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
@@ -60,6 +61,15 @@ type Session struct {
 	// ended is set once the shim reports the shell exited.
 	ended    bool
 	exitCode int
+	// title and cwd are what the shell last reported about itself, for clients and for
+	// listing. rawPwd is kept so a repeat report can be recognized without re-parsing.
+	title  string
+	rawPwd string
+	cwd    osc.Cwd
+
+	// onMetadata is called when the title or directory changes, so the server can persist
+	// them. Set by the manager.
+	onMetadata func(title string, cwd osc.Cwd)
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -94,6 +104,11 @@ type Terminal interface {
 	Title() string
 	// Pwd returns the last directory the shell reported, unparsed.
 	Pwd() string
+	// Plain, VT, and HTML render the terminal contents, scrollback included, for a history
+	// dump.
+	Plain() ([]byte, error)
+	VT() ([]byte, error)
+	HTML() ([]byte, error)
 	// Close releases emulator resources.
 	Close() error
 }
@@ -170,13 +185,19 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 				s.mu.Unlock()
 			} else {
 				s.drainPending()
+				s.noteMetadata()
 			}
 		}
+
+		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
+		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
+		// repaint its prompt clears it and never gets a usable repaint back.
+		data := osc.RewritePromptRedraw(out.Data)
 
 		// Appending both records the output for later subscribers and wakes current ones.
 		// A slow client cannot stall the session: it simply falls behind and is told there
 		// is a gap if the window passes it.
-		s.recent.Append(out.Data)
+		s.recent.Append(data)
 
 		s.mu.Lock()
 		s.lastSeq = out.Seq + uint64(len(out.Data))
@@ -256,6 +277,50 @@ func (s *Session) drainPending() {
 			return
 		}
 	}
+}
+
+// noteMetadata records title and directory changes the shell reported.
+//
+// Reported values are decoded here rather than stored raw, because a client acting on them needs
+// a usable path: OSC 7 sends a percent-encoded URI, and a session that has ssh'd elsewhere
+// reports a directory that does not exist locally.
+func (s *Session) noteMetadata() {
+	if s.term == nil {
+		return
+	}
+	title := s.term.Title()
+	rawPwd := s.term.Pwd()
+
+	s.mu.Lock()
+	titleChanged := title != s.title
+	pwdChanged := rawPwd != s.rawPwd
+	if titleChanged {
+		s.title = title
+	}
+	if pwdChanged {
+		s.rawPwd = rawPwd
+		if cwd, ok := osc.ParseCwd(rawPwd); ok {
+			s.cwd = cwd
+		} else {
+			s.cwd = osc.Cwd{}
+		}
+	}
+	cwd := s.cwd
+	s.mu.Unlock()
+
+	if !titleChanged && !pwdChanged {
+		return
+	}
+	if s.onMetadata != nil {
+		s.onMetadata(title, cwd)
+	}
+}
+
+// Metadata returns the session's title and decoded directory.
+func (s *Session) Metadata() (title string, cwd osc.Cwd) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.title, s.cwd
 }
 
 // Done is closed when the session ends.
@@ -350,27 +415,38 @@ func (s *Session) Resize(ctx context.Context, rows, cols, xpixel, ypixel uint32)
 	return nil
 }
 
-// Title returns the session's title as reported by the shell.
-func (s *Session) Title() string {
+// History renders the session's contents, scrollback included.
+//
+// Returns nothing rather than an error when there is no terminal model: a session without one
+// works, it simply has no history to render, and failing would be a worse answer than empty.
+func (s *Session) History(format HistoryFormat) ([]byte, error) {
 	s.mu.Lock()
 	term := s.term
 	s.mu.Unlock()
 	if term == nil {
-		return ""
+		return nil, nil
 	}
-	return term.Title()
+	switch format {
+	case HistoryVT:
+		return term.VT()
+	case HistoryHTML:
+		return term.HTML()
+	default:
+		return term.Plain()
+	}
 }
 
-// Pwd returns the session's directory as reported by the shell, unparsed.
-func (s *Session) Pwd() string {
-	s.mu.Lock()
-	term := s.term
-	s.mu.Unlock()
-	if term == nil {
-		return ""
-	}
-	return term.Pwd()
-}
+// HistoryFormat selects how History renders contents.
+type HistoryFormat int
+
+const (
+	// HistoryPlain is plain text, for piping.
+	HistoryPlain HistoryFormat = iota
+	// HistoryVT preserves colors and styling as escape sequences.
+	HistoryVT
+	// HistoryHTML preserves styling as HTML.
+	HistoryHTML
+)
 
 // Shutdown terminates the session's shell and its shim.
 func (s *Session) Shutdown(ctx context.Context, force bool) error {

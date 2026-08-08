@@ -28,6 +28,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// HistoryFormat selects how session contents are rendered.
+type HistoryFormat int32
+
+const (
+	// Plain text, suitable for piping to a file or a pager.
+	HistoryFormat_HISTORY_FORMAT_UNSPECIFIED HistoryFormat = 0
+	// Escape sequences, preserving colors and styling.
+	HistoryFormat_HISTORY_FORMAT_VT HistoryFormat = 1
+	// HTML, preserving styling.
+	HistoryFormat_HISTORY_FORMAT_HTML HistoryFormat = 2
+)
+
+// Enum value maps for HistoryFormat.
+var (
+	HistoryFormat_name = map[int32]string{
+		0: "HISTORY_FORMAT_UNSPECIFIED",
+		1: "HISTORY_FORMAT_VT",
+		2: "HISTORY_FORMAT_HTML",
+	}
+	HistoryFormat_value = map[string]int32{
+		"HISTORY_FORMAT_UNSPECIFIED": 0,
+		"HISTORY_FORMAT_VT":          1,
+		"HISTORY_FORMAT_HTML":        2,
+	}
+)
+
+func (x HistoryFormat) Enum() *HistoryFormat {
+	p := new(HistoryFormat)
+	*p = x
+	return p
+}
+
+func (x HistoryFormat) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (HistoryFormat) Descriptor() protoreflect.EnumDescriptor {
+	return file_cm_server_v1_server_proto_enumTypes[0].Descriptor()
+}
+
+func (HistoryFormat) Type() protoreflect.EnumType {
+	return &file_cm_server_v1_server_proto_enumTypes[0]
+}
+
+func (x HistoryFormat) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use HistoryFormat.Descriptor instead.
+func (HistoryFormat) EnumDescriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+}
+
 // AttachRequest is a client-to-server event. The first message on the stream must be an
 // Open; everything after it is input, a resize, or a detach.
 type AttachRequest struct {
@@ -1117,6 +1170,102 @@ func (*SendResponse) Descriptor() ([]byte, []int) {
 	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{15}
 }
 
+type HistoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	Format        HistoryFormat          `protobuf:"varint,2,opt,name=format,proto3,enum=cm.server.v1.HistoryFormat" json:"format,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryRequest) Reset() {
+	*x = HistoryRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryRequest) ProtoMessage() {}
+
+func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
+func (*HistoryRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *HistoryRequest) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+func (x *HistoryRequest) GetFormat() HistoryFormat {
+	if x != nil {
+		return x.Format
+	}
+	return HistoryFormat_HISTORY_FORMAT_UNSPECIFIED
+}
+
+type HistoryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryResponse) Reset() {
+	*x = HistoryResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryResponse) ProtoMessage() {}
+
+func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
+func (*HistoryResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *HistoryResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 var File_cm_server_v1_server_proto protoreflect.FileDescriptor
 
 const file_cm_server_v1_server_proto_rawDesc = "" +
@@ -1193,12 +1342,22 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vSendRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\"\x0e\n" +
-	"\fSendResponse2\x8e\x02\n" +
+	"\fSendResponse\"_\n" +
+	"\x0eHistoryRequest\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\x123\n" +
+	"\x06format\x18\x02 \x01(\x0e2\x1b.cm.server.v1.HistoryFormatR\x06format\"%\n" +
+	"\x0fHistoryResponse\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data*_\n" +
+	"\rHistoryFormat\x12\x1e\n" +
+	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
+	"\x13HISTORY_FORMAT_HTML\x10\x022\xd6\x02\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
 	"\x04Kill\x12\x19.cm.server.v1.KillRequest\x1a\x1a.cm.server.v1.KillResponse\x12=\n" +
-	"\x04Send\x12\x19.cm.server.v1.SendRequest\x1a\x1a.cm.server.v1.SendResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
+	"\x04Send\x12\x19.cm.server.v1.SendRequest\x1a\x1a.cm.server.v1.SendResponse\x12F\n" +
+	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
 
 var (
 	file_cm_server_v1_server_proto_rawDescOnce sync.Once
@@ -1212,49 +1371,56 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 	return file_cm_server_v1_server_proto_rawDescData
 }
 
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_cm_server_v1_server_proto_goTypes = []any{
-	(*AttachRequest)(nil),  // 0: cm.server.v1.AttachRequest
-	(*Open)(nil),           // 1: cm.server.v1.Open
-	(*Input)(nil),          // 2: cm.server.v1.Input
-	(*Resize)(nil),         // 3: cm.server.v1.Resize
-	(*Detach)(nil),         // 4: cm.server.v1.Detach
-	(*AttachResponse)(nil), // 5: cm.server.v1.AttachResponse
-	(*Opened)(nil),         // 6: cm.server.v1.Opened
-	(*Output)(nil),         // 7: cm.server.v1.Output
-	(*Exited)(nil),         // 8: cm.server.v1.Exited
-	(*ListRequest)(nil),    // 9: cm.server.v1.ListRequest
-	(*ListResponse)(nil),   // 10: cm.server.v1.ListResponse
-	(*Session)(nil),        // 11: cm.server.v1.Session
-	(*KillRequest)(nil),    // 12: cm.server.v1.KillRequest
-	(*KillResponse)(nil),   // 13: cm.server.v1.KillResponse
-	(*SendRequest)(nil),    // 14: cm.server.v1.SendRequest
-	(*SendResponse)(nil),   // 15: cm.server.v1.SendResponse
-	nil,                    // 16: cm.server.v1.KillResponse.ErrorsEntry
+	(HistoryFormat)(0),      // 0: cm.server.v1.HistoryFormat
+	(*AttachRequest)(nil),   // 1: cm.server.v1.AttachRequest
+	(*Open)(nil),            // 2: cm.server.v1.Open
+	(*Input)(nil),           // 3: cm.server.v1.Input
+	(*Resize)(nil),          // 4: cm.server.v1.Resize
+	(*Detach)(nil),          // 5: cm.server.v1.Detach
+	(*AttachResponse)(nil),  // 6: cm.server.v1.AttachResponse
+	(*Opened)(nil),          // 7: cm.server.v1.Opened
+	(*Output)(nil),          // 8: cm.server.v1.Output
+	(*Exited)(nil),          // 9: cm.server.v1.Exited
+	(*ListRequest)(nil),     // 10: cm.server.v1.ListRequest
+	(*ListResponse)(nil),    // 11: cm.server.v1.ListResponse
+	(*Session)(nil),         // 12: cm.server.v1.Session
+	(*KillRequest)(nil),     // 13: cm.server.v1.KillRequest
+	(*KillResponse)(nil),    // 14: cm.server.v1.KillResponse
+	(*SendRequest)(nil),     // 15: cm.server.v1.SendRequest
+	(*SendResponse)(nil),    // 16: cm.server.v1.SendResponse
+	(*HistoryRequest)(nil),  // 17: cm.server.v1.HistoryRequest
+	(*HistoryResponse)(nil), // 18: cm.server.v1.HistoryResponse
+	nil,                     // 19: cm.server.v1.KillResponse.ErrorsEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
-	1,  // 0: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
-	2,  // 1: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
-	3,  // 2: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
-	4,  // 3: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
-	6,  // 4: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
-	7,  // 5: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
-	8,  // 6: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
-	11, // 7: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	16, // 8: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	0,  // 9: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	9,  // 10: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	12, // 11: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	14, // 12: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	5,  // 13: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	10, // 14: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	13, // 15: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	15, // 16: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	2,  // 0: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
+	3,  // 1: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
+	4,  // 2: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
+	5,  // 3: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
+	7,  // 4: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
+	8,  // 5: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
+	9,  // 6: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
+	12, // 7: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	19, // 8: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	0,  // 9: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	1,  // 10: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	10, // 11: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	13, // 12: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	15, // 13: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	17, // 14: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	6,  // 15: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	11, // 16: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	14, // 17: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	16, // 18: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	18, // 19: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	15, // [15:20] is the sub-list for method output_type
+	10, // [10:15] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -1279,13 +1445,14 @@ func file_cm_server_v1_server_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   17,
+			NumEnums:      1,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_cm_server_v1_server_proto_goTypes,
 		DependencyIndexes: file_cm_server_v1_server_proto_depIdxs,
+		EnumInfos:         file_cm_server_v1_server_proto_enumTypes,
 		MessageInfos:      file_cm_server_v1_server_proto_msgTypes,
 	}.Build()
 	File_cm_server_v1_server_proto = out.File

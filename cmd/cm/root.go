@@ -70,6 +70,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newKillCommand(g),
 		newServerCommand(g),
 		newSendCommand(g),
+		newHistoryCommand(g),
 		newShimCommand(g),
 		newCompletionsCommand(),
 	)

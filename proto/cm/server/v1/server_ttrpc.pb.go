@@ -12,6 +12,7 @@ type ServerService interface {
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
+	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 }
 
 type Server_AttachServer interface {
@@ -60,6 +61,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Send(ctx, &req)
 			},
+			"History": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req HistoryRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.History(ctx, &req)
+			},
 		},
 		Streams: map[string]ttrpc.Stream{
 			"Attach": {
@@ -78,6 +86,7 @@ type ServerClient interface {
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
+	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 }
 
 type serverClient struct {
@@ -143,6 +152,14 @@ func (c *serverClient) Kill(ctx context.Context, req *KillRequest) (*KillRespons
 func (c *serverClient) Send(ctx context.Context, req *SendRequest) (*SendResponse, error) {
 	var resp SendResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Send", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*HistoryResponse, error) {
+	var resp HistoryResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "History", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

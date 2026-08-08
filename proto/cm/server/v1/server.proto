@@ -24,6 +24,9 @@ service Server {
 
   // Send writes bytes to a session's shell without attaching to it.
   rpc Send(SendRequest) returns (SendResponse);
+
+  // History returns a session's contents, scrollback included, for printing or piping.
+  rpc History(HistoryRequest) returns (HistoryResponse);
 }
 
 // AttachRequest is a client-to-server event. The first message on the stream must be an
@@ -175,3 +178,22 @@ message SendRequest {
 }
 
 message SendResponse {}
+
+// HistoryFormat selects how session contents are rendered.
+enum HistoryFormat {
+  // Plain text, suitable for piping to a file or a pager.
+  HISTORY_FORMAT_UNSPECIFIED = 0;
+  // Escape sequences, preserving colors and styling.
+  HISTORY_FORMAT_VT = 1;
+  // HTML, preserving styling.
+  HISTORY_FORMAT_HTML = 2;
+}
+
+message HistoryRequest {
+  string session = 1;
+  HistoryFormat format = 2;
+}
+
+message HistoryResponse {
+  bytes data = 1;
+}

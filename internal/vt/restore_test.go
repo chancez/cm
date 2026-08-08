@@ -364,3 +364,52 @@ func TestRestorePreservesScrollbackOnShortTerminal(t *testing.T) {
 		}
 	}
 }
+
+// Regression test for a SIGBUS.
+//
+// ghostty_terminal_set takes a *pointer to* the value being set, so installing callbacks from Go
+// handed libghostty the address of a Go local. It survived until the stack slot was reused, then
+// crashed inside vt_write. None of the other tests installed callbacks, so nothing caught it.
+func TestCallbacksFireWithoutCrashing(t *testing.T) {
+	var (
+		gotTitle string
+		gotPwd   string
+		gotPty   [][]byte
+	)
+
+	term, err := New(24, 80, Callbacks{
+		WritePty:     func(data []byte) { gotPty = append(gotPty, data) },
+		TitleChanged: func(title string) { gotTitle = title },
+		PwdChanged:   func(pwd string) { gotPwd = pwd },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer term.Close()
+
+	// Enough writes that a reused stack slot would have been noticed.
+	for i := range 50 {
+		if err := term.Write([]byte("\x1b]2;title-x\x07some output\r\n")); err != nil {
+			t.Fatalf("Write() %d error = %v", i, err)
+		}
+	}
+	if gotTitle != "title-x" {
+		t.Errorf("title callback gave %q, want %q", gotTitle, "title-x")
+	}
+
+	if err := term.Write([]byte("\x1b]7;file:///tmp/somewhere\x1b\\")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if !strings.Contains(gotPwd, "/tmp/somewhere") {
+		t.Errorf("pwd callback gave %q, want it to contain %q", gotPwd, "/tmp/somewhere")
+	}
+
+	// A device status report must produce a reply, since a program that asks blocks until it
+	// gets one. This is the callback that matters for correctness rather than display.
+	if err := term.Write([]byte("\x1b[6n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if len(gotPty) == 0 {
+		t.Error("no write_pty callback for a cursor position report; a program asking would hang")
+	}
+}

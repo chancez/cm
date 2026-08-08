@@ -80,10 +80,8 @@ type Terminal struct {
 	// handle keeps the Go side reachable from C without passing a Go pointer, which cgo
 	// forbids for anything stored across a call boundary.
 	handle cgo.Handle
-	// userdata is the C-allocated box holding handle, kept so it can be freed.
-	userdata unsafe.Pointer
-	cb       Callbacks
-	closed   bool
+	cb     Callbacks
+	closed bool
 }
 
 // New creates a terminal of the given size.
@@ -107,45 +105,18 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 }
 
 // wireCallbacks installs the trampolines libghostty should call.
+//
+// Done entirely in C. ghostty_terminal_set takes a pointer to the value being set, so doing this
+// from Go would mean handing libghostty the address of a Go local: cgo forbids passing such a
+// pointer, and it crashes with SIGBUS once that stack slot is reused.
 func (t *Terminal) wireCallbacks() error {
-	// The handle is stored in C-allocated memory rather than converted straight to a pointer.
-	// A cgo.Handle is an integer, and casting an integer to unsafe.Pointer produces something
-	// that looks like a pointer to nothing, which the garbage collector and go vet both object
-	// to. Boxing it keeps the value valid for as long as libghostty holds it.
-	t.userdata = C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0))))
-	if t.userdata == nil {
-		return ErrOutOfMemory
-	}
-	*(*C.uintptr_t)(t.userdata) = C.uintptr_t(t.handle)
-
-	if err := t.set(C.GHOSTTY_TERMINAL_OPT_USERDATA, t.userdata); err != nil {
-		return err
-	}
-
-	if t.cb.WritePty != nil {
-		fn := C.cm_write_pty_fn()
-		if err := t.set(C.GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafe.Pointer(&fn)); err != nil {
-			return err
-		}
-	}
-	if t.cb.TitleChanged != nil {
-		fn := C.cm_title_changed_fn()
-		if err := t.set(C.GHOSTTY_TERMINAL_OPT_TITLE_CHANGED, unsafe.Pointer(&fn)); err != nil {
-			return err
-		}
-	}
-	if t.cb.PwdChanged != nil {
-		fn := C.cm_pwd_changed_fn()
-		if err := t.set(C.GHOSTTY_TERMINAL_OPT_PWD_CHANGED, unsafe.Pointer(&fn)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (t *Terminal) set(opt C.GhosttyTerminalOption, val unsafe.Pointer) error {
-	return check(C.ghostty_terminal_set(t.ptr, opt, val),
-		fmt.Sprintf("setting terminal option %d", int(opt)))
+	return check(C.cm_install_callbacks(
+		t.ptr,
+		C.uintptr_t(t.handle),
+		C.bool(t.cb.WritePty != nil),
+		C.bool(t.cb.TitleChanged != nil),
+		C.bool(t.cb.PwdChanged != nil),
+	), "installing callbacks")
 }
 
 // Write feeds terminal output to the emulator.
@@ -188,7 +159,13 @@ func (t *Terminal) SetScrollbackLimit(lines int) error {
 		)
 	}
 	n := C.size_t(lines)
-	return t.set(C.GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, unsafe.Pointer(&n))
+	// Safe to pass the address of a local here: libghostty reads the value during the call and
+	// does not retain the pointer, unlike the callback options.
+	return check(
+		C.ghostty_terminal_set(t.ptr, C.GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
+			unsafe.Pointer(&n)),
+		"setting scrollback limit",
+	)
 }
 
 // Close releases the terminal.
@@ -207,10 +184,6 @@ func (t *Terminal) Close() error {
 	if t.handle != 0 {
 		t.handle.Delete()
 		t.handle = 0
-	}
-	if t.userdata != nil {
-		C.free(t.userdata)
-		t.userdata = nil
 	}
 	return nil
 }
@@ -259,13 +232,15 @@ func (t *Terminal) Pwd() (string, error) {
 // would be a use-after-free rather than an error, which is worth a cheap guard.
 var callbackRegistry sync.Mutex
 
-// terminalFromHandle recovers the Go terminal for a callback by unboxing the handle libghostty
-// was given as userdata.
+// terminalFromHandle recovers the Go terminal for a callback.
+//
+// userdata is the cgo handle itself, passed as an integer through C, so this converts it back
+// rather than dereferencing anything.
 func terminalFromHandle(userdata unsafe.Pointer) *Terminal {
 	if userdata == nil {
 		return nil
 	}
-	h := cgo.Handle(*(*C.uintptr_t)(userdata))
+	h := cgo.Handle(uintptr(userdata))
 	t, _ := h.Value().(*Terminal)
 	return t
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
@@ -136,6 +137,23 @@ func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) 
 		}
 		return nil, err
 	}
+
+	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
+	// new window see current values rather than whatever was true at creation.
+	name := rec.Name
+	sess.onMetadata = func(title string, cwd osc.Cwd) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		upd := store.Update{Title: &title}
+		// Only record a directory that exists on this machine. A session that has ssh'd
+		// elsewhere reports a remote path, and storing it would send a new window somewhere
+		// that does not exist locally.
+		if cwd.IsLocal && cwd.Path != "" {
+			upd.Cwd = &cwd.Path
+		}
+		_ = m.store.Apply(ctx, name, upd)
+	}
+
 	go m.watch(sess)
 	return sess, nil
 }

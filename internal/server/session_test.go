@@ -80,6 +80,24 @@ func (f *fakeTerminal) Pwd() string {
 	return f.pwd
 }
 
+func (f *fakeTerminal) Plain() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.written, nil
+}
+
+func (f *fakeTerminal) VT() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.written, nil
+}
+
+func (f *fakeTerminal) HTML() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte("<pre>"), append(f.written, []byte("</pre>")...)...), nil
+}
+
 func (f *fakeTerminal) Size() (uint16, uint16) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

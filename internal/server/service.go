@@ -225,17 +225,29 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 
 	out := &serverv1.ListResponse{Sessions: make([]*serverv1.Session, 0, len(records))}
 	for _, rec := range records {
-		out.Sessions = append(out.Sessions, &serverv1.Session{
+		item := &serverv1.Session{
 			Name:          rec.Name,
 			ShellPid:      int32(rec.ShellPID),
 			Clients:       uint32(s.mgr.Clients(rec.Name)),
 			Cwd:           rec.Cwd,
-			CwdIsLocal:    true, // OSC 7 tracking lands with the terminal model.
+			CwdIsLocal:    true,
 			Title:         rec.Title,
 			CreatedAtUnix: rec.CreatedAt.Unix(),
 			Exited:        rec.State != store.StateRunning,
 			ExitCode:      int32(rec.ExitCode),
-		})
+		}
+		// A live session's own values are fresher than the stored ones, which lag by a write.
+		if sess, live := s.mgr.Get(rec.Name); live {
+			title, cwd := sess.Metadata()
+			if title != "" {
+				item.Title = title
+			}
+			if cwd.Path != "" {
+				item.Cwd = cwd.Path
+				item.CwdIsLocal = cwd.IsLocal
+			}
+		}
+		out.Sessions = append(out.Sessions, item)
 	}
 	return out, nil
 }
@@ -264,6 +276,29 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 		return nil, err
 	}
 	return &serverv1.SendResponse{}, nil
+}
+
+func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
+	sess, ok := s.mgr.Get(req.Session)
+	if !ok {
+		return nil, fmt.Errorf("%q: %w", req.Session, store.ErrNotFound)
+	}
+
+	var format HistoryFormat
+	switch req.Format {
+	case serverv1.HistoryFormat_HISTORY_FORMAT_VT:
+		format = HistoryVT
+	case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
+		format = HistoryHTML
+	default:
+		format = HistoryPlain
+	}
+
+	data, err := sess.History(format)
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.HistoryResponse{Data: data}, nil
 }
 
 // describeCommand renders an argv for display, quoting only when needed so the common case
