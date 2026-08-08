@@ -59,11 +59,13 @@ otherwise go stale when the terminal restarts. See `docs/config.md`.
 `list`, `info`, `kill`, and `get-env` accept `--json` for scripting; the shape is a documented
 contract rather than whatever the wire format happens to be.
 
-Not done yet: persistence across reboot. See `docs/` for design notes and trade-offs:
+Not done yet: persistence across reboot, which is designed but unimplemented. See `docs/` for
+design notes and trade-offs:
 
 - `docs/architecture.md` - why three layers, and what each owns
 - `docs/restore.md` - how screen restore works and why each detail is there
 - `docs/config.md` - the config file, and the session environment problem
+- `docs/persistence.md` - reboot persistence: what can survive, and the decisions made
 - `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
 - `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
 
