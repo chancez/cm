@@ -14,6 +14,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/containerd/ttrpc"
 
@@ -72,6 +73,15 @@ type Session struct {
 	// log records what this session does. Never nil.
 	log *slog.Logger
 
+	// resizePolicy decides which client sets the size. Empty behaves as ResizeLeader.
+	resizePolicy ResizePolicy
+	// clients tracks each attached client's size, keyed by its attachment.
+	clientSizes map[*attachToken]*clientSize
+	// leader is the attachment that last sent real typing, under ResizeLeader.
+	leader *attachToken
+	// attachOrder increases with each attach.
+	attachOrder uint64
+
 	// restored holds a screen replayed from a previous incarnation's saved log, handed to the first
 	// client that attaches and then discarded.
 	//
@@ -96,6 +106,36 @@ type Session struct {
 
 	// clients counts attached clients for reporting.
 	clients atomic.Int64
+}
+
+// ResizePolicy decides which of several attached clients sets the session's size.
+//
+// It only matters with more than one client, which for per-window sessions is unusual but happens
+// deliberately: attaching twice to compare, or following a session to watch it.
+type ResizePolicy string
+
+const (
+	// ResizeLeader gives sizing to the client that last typed. Mouse motion, focus changes, and
+	// replies to terminal queries do not count, so a window nobody is using cannot take over.
+	ResizeLeader ResizePolicy = "leader"
+	// ResizeLastAttach gives sizing to the most recently attached client.
+	ResizeLastAttach ResizePolicy = "last-attach"
+	// ResizeFirstAttach keeps sizing with the earliest attached client until it leaves.
+	ResizeFirstAttach ResizePolicy = "first-attach"
+	// ResizeSmallest sizes the pty to fit every client, so nothing is cut off for anyone at the cost
+	// of nobody using their full window.
+	ResizeSmallest ResizePolicy = "smallest"
+)
+
+// clientSize is one attached client's reported size.
+type clientSize struct {
+	rows, cols     uint16
+	xpixel, ypixel uint16
+	// order increases with each attach, so first and last can be identified.
+	order uint64
+	// readOnly clients never own sizing, since a follower reflowing the window it watches is the
+	// bug this whole policy exists to avoid.
+	readOnly bool
 }
 
 // Terminal is the terminal state the server maintains for a session.
@@ -154,17 +194,18 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 	pumpCtx, stopPump := context.WithCancel(context.Background())
 
 	s := &Session{
-		name:     rec.Name,
-		record:   rec,
-		conn:     conn,
-		shim:     shim,
-		term:     term,
-		recent:   seqlog.NewAt(DefaultRecentBytes, fromSeq),
-		metaSubs: make(map[*metaSub]struct{}),
-		log:      cmlog.Discard(),
-		lastSeq:  fromSeq,
-		done:     make(chan struct{}),
-		stopPump: stopPump,
+		name:        rec.Name,
+		record:      rec,
+		conn:        conn,
+		shim:        shim,
+		term:        term,
+		recent:      seqlog.NewAt(DefaultRecentBytes, fromSeq),
+		metaSubs:    make(map[*metaSub]struct{}),
+		log:         cmlog.Discard(),
+		clientSizes: make(map[*attachToken]*clientSize),
+		lastSeq:     fromSeq,
+		done:        make(chan struct{}),
+		stopPump:    stopPump,
 	}
 
 	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: fromSeq})
@@ -446,8 +487,21 @@ func (s *Session) LastSeq() uint64 {
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
+// attachToken identifies one attachment, so sizes and leadership can be tracked per client without
+// the client having an identity of its own.
+//
+// The field is not decoration. Go may give every allocation of a zero-size type the same address, so
+// an empty struct here made all tokens compare equal: the map held one entry no matter how many
+// clients attached, and the first client owned sizing forever. Carrying the attach order gives each
+// token a distinct address and doubles as useful identity in logs.
+type attachToken struct {
+	order uint64
+}
+
 // attachment is what a client gets from attaching.
 type attachment struct {
+	// token identifies this attachment for sizing purposes.
+	token *attachToken
 	// reader streams session output.
 	reader *seqlog.Reader
 	// restore holds bytes reproducing the current screen, empty when resuming.
@@ -483,11 +537,7 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	if resumeFrom == nil && len(s.restored) > 0 {
 		restore = s.restored
 		s.restored = nil
-		return attachment{
-			reader:  s.recent.Subscribe(s.recent.Next()),
-			restore: restore,
-			first:   s.clients.Add(1) == 1,
-		}, nil
+		return s.newAttachmentLocked(s.recent.Next(), restore), nil
 	}
 
 	if resumeFrom != nil {
@@ -508,11 +558,196 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 		from = s.recent.Next()
 	}
 
+	return s.newAttachmentLocked(from, restore), nil
+}
+
+// newAttachmentLocked builds an attachment and registers it for sizing.
+//
+// One place rather than at each return, because there are two paths out of attach and the earlier
+// version registered on only one of them, so a client restored from disk had no size entry and could
+// never own sizing.
+func (s *Session) newAttachmentLocked(from uint64, restore []byte) attachment {
+	s.attachOrder++
+	token := &attachToken{order: s.attachOrder}
+	s.clientSizes[token] = &clientSize{order: s.attachOrder}
+
 	return attachment{
+		token:   token,
 		reader:  s.recent.Subscribe(from),
 		restore: restore,
 		first:   s.clients.Add(1) == 1,
-	}, nil
+	}
+}
+
+// registerClientSize records what one client says its terminal is, and reports whether the session
+// should now resize to it.
+//
+// Returning a decision rather than resizing directly keeps the policy in one place and leaves the
+// RPC layer to do the call, which is where the context and error handling belong.
+func (s *Session) registerClientSize(
+	tok *attachToken, rows, cols, xpixel, ypixel uint16, readOnly bool,
+) (wantRows, wantCols, wantX, wantY uint16, resize bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cs := s.clientSizes[tok]
+	if cs == nil {
+		// Detached already, so it has no say.
+		return 0, 0, 0, 0, false
+	}
+	cs.rows, cs.cols, cs.xpixel, cs.ypixel = rows, cols, xpixel, ypixel
+	cs.readOnly = readOnly
+
+	if readOnly || rows == 0 || cols == 0 {
+		return 0, 0, 0, 0, false
+	}
+
+	policy := s.resizePolicy
+	if policy == "" {
+		policy = ResizeLeader
+	}
+
+	switch policy {
+	case ResizeLastAttach:
+		// The newest attach wins, which is what a single-client setup wants and what cm did before
+		// this was configurable.
+		return rows, cols, xpixel, ypixel, true
+
+	case ResizeFirstAttach:
+		// Only the earliest remaining client sizes the session.
+		if s.earliestLocked() != tok {
+			return 0, 0, 0, 0, false
+		}
+		return rows, cols, xpixel, ypixel, true
+
+	case ResizeSmallest:
+		r, c, ok := s.smallestLocked()
+		return r, c, xpixel, ypixel, ok
+
+	default: // ResizeLeader
+		// An attaching client claims sizing only when nothing else holds it. Otherwise the window
+		// someone is working in keeps its size until they type somewhere else.
+		if s.leader == nil || s.clientSizes[s.leader] == nil {
+			s.leader = tok
+			return rows, cols, xpixel, ypixel, true
+		}
+		if s.leader != tok {
+			return 0, 0, 0, 0, false
+		}
+		return rows, cols, xpixel, ypixel, true
+	}
+}
+
+// claimLeadership records that a client typed, and reports its size when leadership moved.
+//
+// Only meaningful under ResizeLeader; the other policies ignore typing entirely.
+func (s *Session) claimLeadership(tok *attachToken) (rows, cols, xpixel, ypixel uint16, resize bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	policy := s.resizePolicy
+	if policy == "" {
+		policy = ResizeLeader
+	}
+	if policy != ResizeLeader {
+		return 0, 0, 0, 0, false
+	}
+
+	cs := s.clientSizes[tok]
+	if cs == nil || cs.readOnly {
+		// A follower never becomes leader, whatever it sends.
+		return 0, 0, 0, 0, false
+	}
+	if s.leader == tok {
+		return 0, 0, 0, 0, false
+	}
+
+	s.leader = tok
+	if cs.rows == 0 || cs.cols == 0 {
+		// Typed before reporting a size, so there is nothing to resize to yet.
+		return 0, 0, 0, 0, false
+	}
+	return cs.rows, cs.cols, cs.xpixel, cs.ypixel, true
+}
+
+// earliestLocked returns the attachment with the lowest order that can own sizing.
+func (s *Session) earliestLocked() *attachToken {
+	var (
+		best  *attachToken
+		order uint64
+	)
+	for tok, cs := range s.clientSizes {
+		if cs.readOnly {
+			continue
+		}
+		if best == nil || cs.order < order {
+			best, order = tok, cs.order
+		}
+	}
+	return best
+}
+
+// smallestLocked returns the largest size that fits every client that has reported one.
+func (s *Session) smallestLocked() (rows, cols uint16, ok bool) {
+	for _, cs := range s.clientSizes {
+		if cs.readOnly || cs.rows == 0 || cs.cols == 0 {
+			continue
+		}
+		if !ok {
+			rows, cols, ok = cs.rows, cs.cols, true
+			continue
+		}
+		rows = min(rows, cs.rows)
+		cols = min(cols, cs.cols)
+	}
+	return rows, cols, ok
+}
+
+// releaseClientSize forgets a detached client, and reports a size to fall back to when its departure
+// changes who owns sizing.
+func (s *Session) releaseClientSize(tok *attachToken) (rows, cols, xpixel, ypixel uint16, resize bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.clientSizes, tok)
+	wasLeader := s.leader == tok
+	if wasLeader {
+		// Unclaimed rather than transferred. The session keeps its current size until someone types,
+		// because reflowing a window nobody touched is exactly the surprise this avoids.
+		s.leader = nil
+	}
+
+	policy := s.resizePolicy
+	if policy == "" {
+		policy = ResizeLeader
+	}
+
+	switch policy {
+	case ResizeSmallest:
+		// One fewer constraint, so the session may be able to grow.
+		r, c, ok := s.smallestLocked()
+		return r, c, 0, 0, ok
+	case ResizeFirstAttach:
+		// Sizing moves to whoever is now earliest.
+		next := s.earliestLocked()
+		if next == nil {
+			return 0, 0, 0, 0, false
+		}
+		cs := s.clientSizes[next]
+		if cs.rows == 0 || cs.cols == 0 {
+			return 0, 0, 0, 0, false
+		}
+		return cs.rows, cs.cols, cs.xpixel, cs.ypixel, true
+	default:
+		return 0, 0, 0, 0, false
+	}
+}
+
+// SetResizePolicy sets which client owns the session's size.
+func (s *Session) SetResizePolicy(p ResizePolicy) {
+	s.mu.Lock()
+	s.resizePolicy = p
+	s.mu.Unlock()
 }
 
 // setRestored records a screen replayed from a previous incarnation's saved log.
@@ -525,6 +760,15 @@ func (s *Session) setRestored(blob []byte) {
 // detach releases a subscriber, reporting whether it was the last one.
 func (s *Session) detach(a attachment) (last bool) {
 	a.reader.Close()
+	if a.token != nil {
+		if rows, cols, x, y, resize := s.releaseClientSize(a.token); resize {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := s.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+				s.log.Warn("resizing after a client detached failed", "error", err)
+			}
+		}
+	}
 	return s.clients.Add(-1) == 0
 }
 

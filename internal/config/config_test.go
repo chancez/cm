@@ -291,3 +291,49 @@ func TestPersistLimitsDefaults(t *testing.T) {
 		t.Errorf("PersistLimits() = %+v, want both bounds defaulted so neither is unlimited", limits)
 	}
 }
+
+func TestResizePolicy(t *testing.T) {
+	tests := []struct {
+		spec    string
+		want    string
+		wantErr bool
+	}{
+		// Unset means leader, which is identical to the old behavior for a single client and only
+		// differs once two are attached.
+		{spec: "", want: ResizeLeader},
+		{spec: "leader", want: ResizeLeader},
+		{spec: "last-attach", want: ResizeLastAttach},
+		{spec: "first-attach", want: ResizeFirstAttach},
+		{spec: "smallest", want: ResizeSmallest},
+		// A misspelling is reported rather than silently defaulting, since the difference is visible
+		// as windows reflowing unexpectedly.
+		{spec: "last", wantErr: true},
+		{spec: "biggest", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.spec, func(t *testing.T) {
+			cfg := &Config{ResizePolicy: tt.spec}
+			got, err := cfg.Resize()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Resize() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("Resize() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResizePolicyFromFile(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `resize_policy = "smallest"`+"\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got, err := cfg.Resize()
+	if err != nil {
+		t.Fatalf("Resize() error = %v", err)
+	}
+	if got != ResizeSmallest {
+		t.Errorf("Resize() = %q, want %q", got, ResizeSmallest)
+	}
+}

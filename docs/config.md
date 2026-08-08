@@ -16,6 +16,10 @@ indistinguishable from one that has no effect.
 # libghostty prunes at page granularity, so the effective limit is somewhat higher.
 scrollback_lines = 10000
 
+# Which of several attached clients sets the session's size:
+# "leader" (default), "last-attach", "first-attach", or "smallest".
+resize_policy = "leader"
+
 # Diagnostic log level: debug, info, warn, error, or off. Defaults to info.
 log_level = "info"
 
@@ -33,6 +37,35 @@ exclude = ["SSH_AUTH_SOCK"]
 # Replaces the built-in list entirely, ignoring `capture`.
 # capture_only = ["TERM", "KITTY_*"]
 ```
+
+## Resize policy
+
+A session can have several clients attached, which for per-window sessions happens deliberately
+rather than often: attaching twice to compare, or following a session to watch it. They may be
+different sizes, and only one size can reach the pty.
+
+- **`leader`** (default) gives sizing to the client that last typed. Attaching does not take it from
+  whoever is working, and a leader that leaves does not hand it on until someone types, because a
+  window nobody touched changing shape is the surprise being avoided.
+- **`last-attach`** gives it to the newest client. This was cm's behavior before the setting existed,
+  and it means opening a second window on a session reflows the first.
+- **`first-attach`** keeps it with the earliest client until it leaves, then passes it to the next
+  earliest.
+- **`smallest`** fits every client, so nothing is cut off for anyone at the cost of nobody using
+  their full window. Each dimension is minimized independently, since a window can be shorter and
+  wider at once.
+
+For a single client every policy behaves identically, so the default changes nothing about a normal
+session.
+
+Under `leader`, only real typing transfers sizing. A terminal sends much more than keystrokes on the
+input channel, and treating any of it as typing would let an idle window take over: mouse motion,
+focus changes, and replies to queries the program made are all forwarded to the shell but never claim
+sizing. zmx hit exactly this, where a cursor position report handed sizing to whichever window
+happened to answer. A key *release* alone does not claim it either, since letting go of a key in a
+window you are leaving is not a reason to take it over.
+
+A read-only follower never owns sizing under any policy.
 
 ## Logging
 

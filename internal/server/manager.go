@@ -48,6 +48,8 @@ type Manager struct {
 	persist *PersistPolicy
 	// log records what the manager does. Never nil, so callers do not have to check.
 	log *slog.Logger
+	// resizePolicy is applied to every session created or adopted. Empty behaves as ResizeLeader.
+	resizePolicy ResizePolicy
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -98,6 +100,10 @@ func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (
 		log:         cmlog.Discard(),
 	}, nil
 }
+
+// SetResizePolicy sets which client owns a session's size. Applies to sessions created or adopted
+// after this call, which in practice means all of them, since it is set before serving.
+func (m *Manager) SetResizePolicy(p ResizePolicy) { m.resizePolicy = p }
 
 // SetLogger installs a logger. A discarding logger is used until one is set, so nothing has to
 // nil-check.
@@ -203,6 +209,7 @@ func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) 
 		return nil, err
 	}
 	sess.log = m.log.With("session", rec.Name)
+	sess.SetResizePolicy(m.resizePolicy)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.

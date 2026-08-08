@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -74,25 +75,32 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// again, and the screen arrives visibly mangled. Resizing first means the model reflows once,
 	// and the snapshot describes what this client will actually display.
 	//
-	// A newly attached client's size wins, so the shell matches the terminal showing it. On
-	// resume the client already matches, and resizing would make the shell redraw for no reason.
-	resizing := open.ResumeFromSeq == nil && !open.ReadOnly && open.Rows > 0 && open.Cols > 0
-	if resizing {
-		// ResizeSignal rather than Resize: on a fresh attach the shell has to redraw even when the
-		// size is unchanged, or a program that repaints only on SIGWINCH keeps updating a screen
-		// that is now the snapshot replayed below.
-		if err := sess.ResizeSignal(ctx, open.Rows, open.Cols, open.XPixel, open.YPixel); err != nil {
-			return fmt.Errorf("sizing session %s: %w", sess.name, err)
-		}
-		rows, cols := int(open.Rows), int(open.Cols)
-		if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols}); err != nil {
-			s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
-		}
-	}
-
 	att, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
 		return err
+	}
+
+	// Whether this client's size wins depends on the configured policy, which only matters once
+	// several clients are attached. On resume the client already matches, so nothing is resized and
+	// the shell is not made to redraw for no reason.
+	if open.ResumeFromSeq == nil {
+		rows, cols, x, y, resize := sess.registerClientSize(
+			att.token, uint16(open.Rows), uint16(open.Cols),
+			uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
+		)
+		if resize {
+			// ResizeSignal rather than Resize: on a fresh attach the shell has to redraw even when
+			// the size is unchanged, or a program that repaints only on SIGWINCH keeps updating a
+			// screen that is now the snapshot replayed below.
+			if err := sess.ResizeSignal(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+				sess.detach(att)
+				return fmt.Errorf("sizing session %s: %w", sess.name, err)
+			}
+			ir, ic := int(rows), int(cols)
+			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
+				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+			}
+		}
 	}
 	s.mgr.log.Info("client attached",
 		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
@@ -138,7 +146,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	detached := make(chan struct{})
 	recvErr := make(chan error, 1)
 	go func() {
-		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, detached, &sawDetach)
+		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, att.token, detached, &sawDetach)
 	}()
 
 	// reapIfAbandoned ends an owned session whose client vanished without detaching.
@@ -255,6 +263,7 @@ func (s *Service) recvLoop(
 	sess *Session,
 	srv serverv1.Server_AttachServer,
 	readOnly bool,
+	tok *attachToken,
 	detached chan<- struct{},
 	sawDetach *atomic.Bool,
 ) error {
@@ -278,6 +287,30 @@ func (s *Service) recvLoop(
 			if readOnly {
 				continue
 			}
+			if !input.IsUserInput(req.GetInput().Data) {
+				// A reply to a terminal query, a mouse report, or a focus change. Forwarded to the
+				// shell, since the program asked for it, but it must not claim sizing: otherwise a
+				// window nobody is using takes over because the program polled the terminal.
+				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
+					return fmt.Errorf("writing to session %s: %w", sess.name, err)
+				}
+				continue
+			}
+			// Typing may transfer sizing, depending on the policy. Checked before the write so
+			// the shell is already at the right size when it sees the keystroke.
+			if rows, cols, x, y, resize := sess.claimLeadership(tok); resize {
+				if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+					s.mgr.log.Warn("resizing on leadership change failed",
+						"session", sess.name, "error", err)
+				} else {
+					ir, ic := int(rows), int(cols)
+					if err := s.mgr.store.Apply(ctx, sess.name,
+						store.Update{Rows: &ir, Cols: &ic}); err != nil {
+						s.mgr.log.Warn("recording session size failed",
+							"session", sess.name, "error", err)
+					}
+				}
+			}
 			if err := sess.Write(ctx, req.GetInput().Data); err != nil {
 				return fmt.Errorf("writing to session %s: %w", sess.name, err)
 			}
@@ -287,11 +320,19 @@ func (s *Service) recvLoop(
 				continue
 			}
 			r := req.GetResize()
-			if err := sess.Resize(ctx, r.Rows, r.Cols, r.XPixel, r.YPixel); err != nil {
+			// The policy decides whether this client's new size takes effect, so a window being
+			// resized while someone else is typing in another does not reflow theirs.
+			rows, cols, x, y, resize := sess.registerClientSize(
+				tok, uint16(r.Rows), uint16(r.Cols), uint16(r.XPixel), uint16(r.YPixel), readOnly,
+			)
+			if !resize {
+				continue
+			}
+			if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
 				return fmt.Errorf("resizing session %s: %w", sess.name, err)
 			}
-			rows, cols := int(r.Rows), int(r.Cols)
-			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols}); err != nil {
+			ir, ic := int(rows), int(cols)
+			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
 				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
 			}
 		}

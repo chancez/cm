@@ -94,6 +94,13 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	mgr.SetLogger(logger)
 
+	resizePolicy, err := cfg.Resize()
+	if err != nil {
+		l.Close()
+		return err
+	}
+	mgr.SetResizePolicy(server.ResizePolicy(resizePolicy))
+
 	if cfg.Persist.Enabled {
 		policy, err := persistPolicy(cfg)
 		if err != nil {

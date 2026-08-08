@@ -28,6 +28,14 @@ type Config struct {
 	// libghostty prunes at page granularity, so the effective limit is somewhat higher.
 	ScrollbackLines *int `toml:"scrollback_lines"`
 
+	// ResizePolicy decides which of several attached clients sets the session's size:
+	// "leader", "last-attach", "first-attach", or "smallest".
+	//
+	// Only matters with more than one client on a session, which for per-window sessions happens
+	// deliberately rather than often. Defaults to "leader", where the client that last typed owns
+	// sizing, so the window being worked in stays correct.
+	ResizePolicy string `toml:"resize_policy"`
+
 	// DetachKey names the key that detaches a client, as a control character like "ctrl-\".
 	// Empty means the default; "none" disables detaching by key.
 	DetachKey string `toml:"detach_key"`
@@ -204,6 +212,29 @@ func (c *Config) EnvMatcher() *sessionenv.Matcher {
 // Logging returns the configured log level and whether logging is on.
 func (c *Config) Logging() (slog.Level, bool, error) {
 	return cmlog.ParseLevel(c.LogLevel)
+}
+
+// Resize policy names, kept as strings here rather than importing the server package: config is a
+// leaf that the server depends on, and reversing that would make a cycle.
+const (
+	ResizeLeader      = "leader"
+	ResizeLastAttach  = "last-attach"
+	ResizeFirstAttach = "first-attach"
+	ResizeSmallest    = "smallest"
+)
+
+// Resize returns the configured resize policy, validating it.
+func (c *Config) Resize() (string, error) {
+	switch c.ResizePolicy {
+	case "", ResizeLeader:
+		return ResizeLeader, nil
+	case ResizeLastAttach, ResizeFirstAttach, ResizeSmallest:
+		return c.ResizePolicy, nil
+	default:
+		return ResizeLeader, fmt.Errorf(
+			"resize_policy = %q, want %q, %q, %q, or %q",
+			c.ResizePolicy, ResizeLeader, ResizeLastAttach, ResizeFirstAttach, ResizeSmallest)
+	}
 }
 
 // RestoreMode returns the configured restore behavior, validating it.
