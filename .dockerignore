@@ -1,0 +1,9 @@
+# Keep the build context small and the image reproducible.
+#
+# third_party matters most: it holds a locally built libghostty for the host platform, and copying a
+# macOS archive into a Linux image would either be ignored or, worse, picked up by the cgo directives
+# and fail to link. The cgo image builds its own from source in a separate stage.
+/third_party/
+/bin/
+mise.local.toml
+.git/

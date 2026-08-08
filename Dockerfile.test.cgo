@@ -1,0 +1,62 @@
+# Linux test image with the terminal emulator built in.
+#
+# Separate from Dockerfile.test, which deliberately builds without cgo to verify that cm degrades
+# rather than breaks. This one is the opposite check: with libghostty-vt linked, the whole suite runs
+# on Linux including screen restore, history, and adoption-with-scrollback, which are the parts the
+# no-cgo image can only skip.
+#
+# Much more expensive to build, since it compiles libghostty from source with zig. Worth it: the
+# rendering tests are where cm's hardest bugs have been.
+FROM golang:1.26-bookworm AS ghostty
+
+# Zig is fetched rather than installed from apt, which has no 0.16 package.
+ARG ZIG_VERSION=0.16.0
+# The full SHA, not the abbreviation mise.toml uses: `git fetch <abbrev>` fails with
+# "couldn't find remote ref", since a server will only resolve a complete object name.
+ARG GHOSTTY_REF=4d605bf0d819df901a0332bbb320dc849fdd82e4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates xz-utils curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      aarch64) zig_arch=aarch64 ;; \
+      x86_64)  zig_arch=x86_64 ;; \
+      *) echo "unsupported arch $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-linux-${ZIG_VERSION}.tar.xz" \
+      -o /tmp/zig.tar.xz; \
+    mkdir -p /opt/zig; \
+    tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
+    ln -s /opt/zig/zig /usr/local/bin/zig; \
+    zig version
+
+# A shallow fetch of the pinned commit, matching what mise.toml uses. The ref is a commit rather than
+# a tag because libghostty-vt has no releases and its API is explicitly unstable.
+RUN set -eux; \
+    git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git /src/ghostty; \
+    cd /src/ghostty; \
+    git fetch --depth 1 origin "${GHOSTTY_REF}"; \
+    git checkout --detach FETCH_HEAD
+
+# Only the vt library. The macOS app and xcframework are irrelevant here and emit-xcframework
+# defaults to "xcodebuild on PATH", which would fail.
+RUN cd /src/ghostty && zig build \
+      -Demit-lib-vt=true \
+      -Demit-xcframework=false \
+      -Demit-macos-app=false
+
+FROM golang:1.26-bookworm
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Into third_party/ rather than somewhere tidier, and after COPY . so it is not overwritten by it.
+#
+# internal/vt hardcodes these paths in its cgo directives, relative to the package source. Overriding
+# them with CGO_CFLAGS/CGO_LDFLAGS does not work: a #cgo LDFLAGS naming an archive by path is used as
+# given, so the build would look for an archive that is not there. Putting the artifacts where the
+# source already expects them means the image tests the same directives a developer uses.
+COPY --from=ghostty /src/ghostty/zig-out /src/third_party/ghostty/zig-out
+ENV CGO_ENABLED=1
+CMD ["go", "test", "./..."]

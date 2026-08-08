@@ -37,13 +37,29 @@ description = "Format, vet, and test"
 depends = ["fmt", "vet", "test"]
 
 [tasks.test-linux]
-description = "Run the tests on Linux in Docker"
+description = "Run the tests on Linux in Docker, without cgo"
 # Verifies the platform-specific code that a macOS-only run never compiles, and catches shell
-# assumptions, since /bin/sh is dash here rather than bash.
+# assumptions, since /bin/sh here is dash rather than bash.
+#
+# No cgo, so this also checks that cm degrades rather than breaks without the emulator. The tests that
+# need rendering skip themselves. For full coverage use test-linux-cgo.
 run = """
 set -euo pipefail
 docker build -f Dockerfile.test -t cm-test:latest .
 docker run --rm cm-test:latest
+"""
+
+[tasks.test-linux-cgo]
+description = "Run the full tests on Linux in Docker, with libghostty"
+# The complete run: libghostty-vt is built from source, so screen restore, history, and
+# adoption-with-scrollback are exercised rather than skipped. Those are where cm's hardest bugs have
+# been, so a Linux run without them checks only half the program.
+#
+# Slow to build the first time, since it compiles libghostty with zig. Cached after that.
+run = """
+set -euo pipefail
+docker build -f Dockerfile.test.cgo -t cm-test-cgo:latest .
+docker run --rm cm-test-cgo:latest
 """
 
 [tasks.build-linux]
