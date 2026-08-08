@@ -74,6 +74,7 @@ See `docs/` for design notes and trade-offs:
 - `docs/persistence.md` - reboot persistence: what can survive, and the decisions made
 - `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
 - `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
+- `docs/concurrency.md` - the lifetime invariants, and how the races were found
 
 ## Building
 
@@ -84,3 +85,11 @@ Requires Go and, to build libghostty-vt from source, Zig 0.16.0. Both are pinned
 mise install
 mise run build
 ```
+
+Tests run on the host with `mise run test`. `mise run test-linux` runs them on Linux in Docker,
+which is worth doing before trusting a change to anything platform-specific: a macOS-only run never
+compiles the Linux paths, and `/bin/sh` there is dash rather than bash.
+
+`mise run build-linux` cross-compiles without cgo. Such a build has no terminal emulator, so screen
+restore on reattach and `cm history` are unavailable while everything else works. See
+`docs/architecture.md`.

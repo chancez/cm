@@ -105,6 +105,19 @@ The server holds terminal state behind an interface with an injected constructor
 reconnect, and ownership logic are testable without the emulator, and a session still works
 without one, minus screen restore.
 
+That claim is checked rather than asserted. `internal/vt` has a `!cgo` stub, so
+`CGO_ENABLED=0 go test ./...` fails if cgo leaks into another package, and `mise run test-linux`
+runs the suite that way in Docker. The stub is a stub, not a fallback: it reports that the
+emulator is unavailable, and the wiring in `cmd/cm` checks `vt.Available` and passes the manager a
+nil constructor, which the manager already treats as "run without a terminal model".
+
+The distinction matters more than it looks. A constructor that *errors* instead of being absent
+fails at session creation, since that is where it is called, so a build without cgo could not
+start a session at all rather than merely losing screen restore. What a no-cgo build loses is
+screen restore on reattach and `cm history`; sessions, attach, detach, multi-client, and
+persistence all work. The server logs the downgrade once at startup, because "my scrollback
+vanished" is otherwise hard to attribute to a build flag.
+
 Restore is a port of zmx's `serializeTerminalState`. Its details are all bug fixes; see
 `docs/restore.md`.
 
