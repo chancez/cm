@@ -1,0 +1,286 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/store"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
+	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
+)
+
+// Finding is one thing wrong with an installation.
+type Finding struct {
+	// Kind is what sort of problem this is, as a stable string a script can match on.
+	Kind string
+	// Session is the session it concerns, from the socket name or the shim itself.
+	Session string
+	// Socket is the path involved.
+	Socket string
+	// ShimPID and ShellPID are set when a shim answered and reported them.
+	ShimPID  int
+	ShellPID int
+	// Detail explains the finding in a sentence.
+	Detail string
+	// Fixable reports whether Repair can act on it.
+	Fixable bool
+}
+
+// Finding kinds. Stable strings rather than an enum, so `cm doctor --json` stays parseable as the set grows.
+const (
+	// FindingOrphanShim is a live shim with no session record: it holds a pty and a shell that nothing
+	// knows about, and nothing will ever reattach to.
+	FindingOrphanShim = "orphan-shim"
+	// FindingStaleSocket is a socket file nothing answers on, left by a shim that died without unlinking.
+	FindingStaleSocket = "stale-socket"
+	// FindingMissingShim is a session recorded as running whose shim cannot be reached, so the record
+	// promises something that is not there.
+	FindingMissingShim = "missing-shim"
+)
+
+// Diagnose reports problems with an installation, without changing anything.
+//
+// Worth having as a command rather than only as internal bookkeeping, because the failure it looks for is
+// silent and cumulative. A shim holds a pty for as long as it runs; macOS caps them at 511 system-wide. A
+// leak of one per session is invisible until the limit is reached, at which point the symptom is an
+// unrelated program failing to allocate a terminal. Nothing in cm's normal output would have shown 426 stray
+// shims, which is how many had accumulated before this was written.
+//
+// Scoped to cm's own runtime directory and its own database. That is a deliberate limit: it cannot see a
+// shim whose runtime directory has been deleted, because there is nothing left to enumerate. The
+// alternative, scanning the process table for anything that looks like a shim, can be fooled and could kill
+// something that is not cm's, which is a worse failure than missing an orphan.
+func (m *Manager) Diagnose(ctx context.Context) ([]Finding, error) {
+	records, err := m.store.List(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions: %w", err)
+	}
+	known := make(map[string]store.Session, len(records))
+	for _, rec := range records {
+		known[rec.Name] = rec
+	}
+
+	sockets, err := m.shimSockets()
+	if err != nil {
+		return nil, err
+	}
+
+	var findings []Finding
+	seen := make(map[string]bool, len(sockets))
+
+	for _, sock := range sockets {
+		name := sessionFromSocket(sock)
+		seen[name] = true
+
+		st, alive := probeShimState(ctx, sock)
+		switch {
+		case !alive:
+			// Nothing answers. Either a shim died without unlinking, or one is mid-startup; the caller is
+			// told which is likelier by whether a record exists.
+			detail := "socket file with nothing listening, left by a shim that died"
+			if _, ok := known[name]; ok {
+				detail = "socket file with nothing listening, though a session record exists"
+			}
+			findings = append(findings, Finding{
+				Kind: FindingStaleSocket, Session: name, Socket: sock,
+				Detail: detail, Fixable: true,
+			})
+
+		case known[name].Name == "":
+			// A shim is running and serving a session nothing knows about. This is the one that costs
+			// resources: it holds a pty and a shell that no client can ever reach.
+			f := Finding{
+				Kind: FindingOrphanShim, Session: name, Socket: sock,
+				ShimPID: int(st.ShimPid), ShellPID: int(st.ShellPid),
+				Detail:  "shim is running with no session record, so nothing can reattach to it",
+				Fixable: true,
+			}
+			if st.Exited {
+				f.Detail = "shim is running with no session record, and its shell has already exited"
+			}
+			findings = append(findings, f)
+		}
+	}
+
+	// The reverse: a record promising a shim that is not there. Not fixable here, since Reconcile already
+	// marks these dead on startup and expiry removes them on its own schedule; reporting is enough.
+	for _, rec := range records {
+		if rec.State != store.StateRunning || seen[rec.Name] {
+			continue
+		}
+		findings = append(findings, Finding{
+			Kind: FindingMissingShim, Session: rec.Name, Socket: rec.ShimSocket,
+			Detail: "recorded as running but has no socket, so its shim is gone",
+		})
+	}
+
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].Kind != findings[j].Kind {
+			return findings[i].Kind < findings[j].Kind
+		}
+		return findings[i].Session < findings[j].Session
+	})
+	return findings, nil
+}
+
+// Repair acts on the fixable findings and reports what it did.
+//
+// Shuts an orphan down through its own socket rather than signalling its process. A shim asked to shut down
+// closes its pty and reaps its shell; killing the process leaves the shell to be reparented and keeps
+// running. Doing it politely is also what makes this safe to run against a live installation: a shim that
+// is not an orphan is never contacted.
+func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
+	var done []string
+	for _, f := range findings {
+		if !f.Fixable {
+			continue
+		}
+		switch f.Kind {
+		case FindingOrphanShim:
+			if err := shutdownShim(ctx, f.Socket); err != nil {
+				m.log.Warn("shutting down an orphaned shim failed",
+					"session", f.Session, "socket", f.Socket, "error", err)
+				continue
+			}
+			done = append(done, fmt.Sprintf("stopped orphaned shim for %s (pid %d)", f.Session, f.ShimPID))
+
+		case FindingStaleSocket:
+			if err := os.Remove(f.Socket); err != nil && !os.IsNotExist(err) {
+				m.log.Warn("removing a stale socket failed", "socket", f.Socket, "error", err)
+				continue
+			}
+			done = append(done, fmt.Sprintf("removed stale socket for %s", f.Session))
+		}
+	}
+	return done
+}
+
+// Doctor reports problems and optionally repairs them, for the RPC.
+func (s *Service) Doctor(
+	ctx context.Context, req *serverv1.DoctorRequest,
+) (*serverv1.DoctorResponse, error) {
+	findings, err := s.mgr.Diagnose(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &serverv1.DoctorResponse{
+		Findings: make([]*serverv1.Finding, 0, len(findings)),
+	}
+	if req.Repair {
+		resp.Repaired = s.mgr.Repair(ctx, findings)
+	}
+	for _, f := range findings {
+		resp.Findings = append(resp.Findings, &serverv1.Finding{
+			Kind:     f.Kind,
+			Session:  f.Session,
+			Socket:   f.Socket,
+			ShimPid:  int32(f.ShimPID),
+			ShellPid: int32(f.ShellPID),
+			Detail:   f.Detail,
+			Fixable:  f.Fixable,
+		})
+	}
+	return resp, nil
+}
+
+// shimSockets lists the shim socket files in the runtime directory.
+func (m *Manager) shimSockets() ([]string, error) {
+	entries, err := os.ReadDir(m.dirs.Runtime)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No runtime directory means no sessions, which is not a problem to report.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", m.dirs.Runtime, err)
+	}
+
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, shimSocketPrefix) && strings.HasSuffix(name, shimSocketSuffix) {
+			out = append(out, filepath.Join(m.dirs.Runtime, name))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// sessionFromSocket recovers a session name from its socket path.
+//
+// Derived from the path rather than by asking the shim, so a socket nothing answers on still reports which
+// session it belonged to.
+func sessionFromSocket(path string) string {
+	base := filepath.Base(path)
+	base = strings.TrimPrefix(base, shimSocketPrefix)
+	return strings.TrimSuffix(base, shimSocketSuffix)
+}
+
+// probeShimState asks a shim about itself, reporting whether it answered.
+func probeShimState(ctx context.Context, socket string) (*shimv1.StateResponse, bool) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	conn, cl, err := dialShim(socket)
+	if err != nil {
+		return nil, false
+	}
+	defer conn.Close()
+
+	st, err := cl.State(ctx, &shimv1.StateRequest{})
+	if err != nil {
+		return nil, false
+	}
+	return st, true
+}
+
+// shutdownShim asks a shim to stop.
+func shutdownShim(ctx context.Context, socket string) error {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	conn, cl, err := dialShim(socket)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Force, because an orphan's shell is not going to be asked politely by anyone else: nothing is
+	// attached and nothing will be.
+	_, err = cl.Shutdown(ctx, &shimv1.ShutdownRequest{Force: true})
+	return err
+}
+
+// probeTimeout bounds how long to wait for a shim to answer.
+//
+// Short, because these are local sockets and the alternative to a timeout is a diagnostic command that
+// hangs on the very wedged shim it is meant to report.
+const probeTimeout = 2 * time.Second
+
+// Socket naming, kept next to the code that parses it back.
+//
+// Derived from paths.Dirs.ShimSocket rather than duplicated as literals, so a change to the naming cannot
+// silently stop this from finding anything.
+var (
+	shimSocketPrefix, shimSocketSuffix = shimSocketAffixes()
+)
+
+// shimSocketAffixes splits a sample shim socket name into the parts around the session name.
+func shimSocketAffixes() (prefix, suffix string) {
+	const sample = "\x00session\x00"
+	d := paths.Dirs{Runtime: "/"}
+	base := filepath.Base(d.ShimSocket(sample))
+	parts := strings.SplitN(base, sample, 2)
+	if len(parts) != 2 {
+		// Unreachable unless ShimSocket stops embedding the name, in which case scanning cannot work and
+		// failing loudly beats silently finding nothing.
+		panic("cm: shim socket naming no longer embeds the session name")
+	}
+	return parts[0], parts[1]
+}

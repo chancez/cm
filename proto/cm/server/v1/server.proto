@@ -52,6 +52,13 @@ service Server {
   // answer from an event instead of a caller sampling `list` and racing the transition it wanted.
   rpc Wait(WaitRequest) returns (WaitResponse);
 
+  // Doctor reports problems with the installation, and optionally repairs them.
+  //
+  // Server-side because the answer needs the session records and the runtime directory together, and the
+  // server already has both. A client scanning the directory itself would have to reimplement the socket
+  // naming and could not read the database.
+  rpc Doctor(DoctorRequest) returns (DoctorResponse);
+
   // Shutdown stops the server, leaving sessions running.
   //
   // Sessions survive by design: each shim owns its pty, so a server that exits leaves every
@@ -145,6 +152,31 @@ message WaitResponse {
   string command = 3;
   SessionState state = 4;
   int32 exit_code = 5;
+}
+
+message DoctorRequest {
+  // Act on the fixable findings rather than only reporting them.
+  bool repair = 1;
+}
+
+message DoctorResponse {
+  repeated Finding findings = 1;
+  // What a repair did, empty when repair was not requested.
+  repeated string repaired = 2;
+}
+
+// Finding is one thing wrong with an installation.
+message Finding {
+  // A stable string rather than an enum, so a script matching on it keeps working as kinds are added:
+  // "orphan-shim", "stale-socket", "missing-shim".
+  string kind = 1;
+  string session = 2;
+  string socket = 3;
+  // Set when a shim answered and reported them.
+  int32 shim_pid = 4;
+  int32 shell_pid = 5;
+  string detail = 6;
+  bool fixable = 7;
 }
 
 message ShutdownRequest {}
