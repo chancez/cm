@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+// Package cm.shim.v1 is the interface between the server and one session's shim.
+//
+// This API is frozen in a way the client-facing API is not. Upgrading the cm binary
+// does not upgrade shims that are already running: they hold the pty for a live shell,
+// which is the entire reason the layer exists. A new server therefore routinely talks to
+// an older shim, and an older server can meet a newer shim after a downgrade.
+//
+// The rules that follow from that:
+//   - Never remove or renumber a field, and never change a field's type or meaning.
+//   - Add optional fields only, and treat their absence as "the peer predates this".
+//   - Never make a new RPC load-bearing for an existing feature. A server must degrade
+//     gracefully when an older shim returns "unimplemented".
+//
+// Keeping this surface small is the point: the shim owns the pty and an append-only log
+// of output, and knows nothing about terminal emulation, scrollback, or session policy.
+package cm.shim.v1;
+
+option go_package = "github.com/chancez/cm/proto/cm/shim/v1;shimv1";
+
+// Shim serves exactly one session, for exactly one caller: the server.
+service Shim {
+  // State reports the shim's status. Used both for health and, on server startup, to
+  // decide whether a recorded session is still alive.
+  rpc State(StateRequest) returns (StateResponse);
+
+  // Subscribe streams terminal output starting from a sequence number, then continues
+  // live. Resuming from the server's last-seen sequence is what lets the server restart
+  // without losing or duplicating output.
+  rpc Subscribe(SubscribeRequest) returns (stream Output);
+
+  // Write sends bytes to the pty. Not a stream: input volume is human-scale, and unary
+  // calls keep the ordering obvious.
+  rpc Write(WriteRequest) returns (WriteResponse);
+
+  // Resize sets the pty window size, which makes the kernel signal the child.
+  rpc Resize(ResizeRequest) returns (ResizeResponse);
+
+  // Signal sends a signal to the shell's process group.
+  rpc Signal(SignalRequest) returns (SignalResponse);
+
+  // Shutdown terminates the shell and exits. Killing the session, not detaching from it.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message StateRequest {}
+
+message StateResponse {
+  // Session name this shim serves.
+  string session = 1;
+  // Process id of the shim itself.
+  int32 shim_pid = 2;
+  // Process id of the shell. Zero once it has exited.
+  int32 shell_pid = 3;
+  // Sequence number one past the last byte appended to the log. A subscriber that has
+  // seen up to this value is fully caught up.
+  uint64 next_seq = 4;
+  // Lowest sequence number still retained. Output before this was truncated, so a
+  // subscriber asking for less than this cannot be served exactly and must be told.
+  uint64 oldest_seq = 5;
+  // Whether the shell has exited.
+  bool exited = 6;
+  // Exit status, meaningful only when exited is true.
+  int32 exit_code = 7;
+  // Window size currently set on the pty.
+  uint32 rows = 8;
+  uint32 cols = 9;
+}
+
+message SubscribeRequest {
+  // First sequence number wanted. Zero means "from the beginning of what is retained".
+  uint64 from_seq = 1;
+}
+
+// Output carries a run of pty output bytes.
+message Output {
+  // Sequence number of the first byte in data.
+  uint64 seq = 1;
+  bytes data = 2;
+  // Set when the requested from_seq had already been truncated. The bytes that follow
+  // start at the oldest retained sequence instead, so the receiver knows its terminal
+  // state has a hole and must resynchronize rather than assume continuity.
+  bool gap = 3;
+}
+
+message WriteRequest {
+  bytes data = 1;
+}
+
+message WriteResponse {
+  // Bytes accepted. May be short: the shim bounds its pty write buffer so a wedged
+  // shell cannot make it grow without limit.
+  uint64 written = 1;
+}
+
+message ResizeRequest {
+  uint32 rows = 1;
+  uint32 cols = 2;
+  // Pixel dimensions, for programs that ask. Zero when unknown.
+  uint32 x_pixel = 3;
+  uint32 y_pixel = 4;
+}
+
+message ResizeResponse {}
+
+message SignalRequest {
+  int32 signal = 1;
+  // Send to the shell's process group rather than the single process, so job control
+  // reaches children too.
+  bool process_group = 2;
+}
+
+message SignalResponse {}
+
+message ShutdownRequest {
+  // Skip the graceful SIGHUP-then-wait and kill immediately.
+  bool force = 1;
+}
+
+message ShutdownResponse {}

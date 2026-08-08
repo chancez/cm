@@ -1,5 +1,7 @@
 [tools]
 go = "1.26.5"
+protoc = "35.1"
+buf = "1.72.0"
 # Only needed by the `libghostty` task to build libghostty-vt from source.
 zig = "0.16.0"
 
@@ -9,6 +11,10 @@ zig = "0.16.0"
 GHOSTTY_REF = "4d605bf0d"
 GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
 GHOSTTY_PREFIX = "{{config_root}}/third_party/ghostty/zig-out"
+# Generated protoc plugins install here so generation does not depend on the
+# ambient GOPATH/bin.
+GOBIN = "{{config_root}}/bin/tools"
+_.path = ["{{config_root}}/bin/tools"]
 
 [tasks.build]
 description = "Build the cm binary"
@@ -29,6 +35,17 @@ run = "go vet ./..."
 [tasks.check]
 description = "Format, vet, and test"
 depends = ["fmt", "vet", "test"]
+
+[tasks.tools]
+description = "Install the protoc plugins pinned in go.mod"
+run = "go install google.golang.org/protobuf/cmd/protoc-gen-go github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc"
+
+[tasks.generate]
+description = "Regenerate protobuf and ttrpc code"
+depends = ["tools"]
+run = "buf generate"
+sources = ["proto/**/*.proto", "buf.gen.yaml"]
+outputs = ["proto/**/*.pb.go"]
 
 [tasks.libghostty]
 description = "Fetch and build libghostty-vt (needed once VT state lands)"

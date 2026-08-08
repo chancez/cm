@@ -1,0 +1,177 @@
+syntax = "proto3";
+
+// Package cm.server.v1 is the interface clients use. The server is the only entry point:
+// clients never talk to a shim directly.
+//
+// Unlike the shim API, this surface may evolve. A client and server are upgraded
+// together, and a client that meets an incompatible server can simply refuse to attach
+// with a clear message.
+package cm.server.v1;
+
+option go_package = "github.com/chancez/cm/proto/cm/server/v1;serverv1";
+
+service Server {
+  // Attach connects a terminal to a session, creating the session if needed. The stream
+  // is bidirectional and long-lived, and carries both input and control events such as
+  // resize so their ordering relative to keystrokes is preserved.
+  rpc Attach(stream AttachRequest) returns (stream AttachResponse);
+
+  // List reports known sessions.
+  rpc List(ListRequest) returns (ListResponse);
+
+  // Kill terminates sessions and their shells.
+  rpc Kill(KillRequest) returns (KillResponse);
+
+  // Send writes bytes to a session's shell without attaching to it.
+  rpc Send(SendRequest) returns (SendResponse);
+}
+
+// AttachRequest is a client-to-server event. The first message on the stream must be an
+// Open; everything after it is input, a resize, or a detach.
+message AttachRequest {
+  oneof event {
+    Open open = 1;
+    Input input = 2;
+    Resize resize = 3;
+    Detach detach = 4;
+  }
+}
+
+message Open {
+  // Session to attach to. Empty asks the server to allocate a unique name, which is how
+  // a terminal emulator creates a per-window session without inventing names itself.
+  string session = 1;
+
+  // Initial window size.
+  uint32 rows = 2;
+  uint32 cols = 3;
+  uint32 x_pixel = 4;
+  uint32 y_pixel = 5;
+
+  // Resume output from this sequence number instead of restoring screen state. Set by a
+  // client reconnecting after the server restarted: its terminal still shows the session,
+  // so it wants the bytes it missed, not a fresh repaint. Absent on a first attach.
+  optional uint64 resume_from_seq = 6;
+
+  // Take ownership of the session: if this client's connection drops without sending a
+  // Detach, the server terminates the session.
+  //
+  // This is what makes per-window sessions work without external cleanup. Closing a
+  // terminal window kills its session, while detaching deliberately, or the server
+  // restarting, leaves it running. Distinguishing those cases is exactly what a terminal
+  // emulator cannot do reliably from the outside.
+  bool own = 7;
+
+  // Attach without sending input or affecting sizing: a read-only follower.
+  bool read_only = 8;
+
+  // Command to run instead of the user's shell. Only meaningful when creating.
+  repeated string command = 9;
+
+  // Working directory for a newly created session. Empty means the client's cwd.
+  string cwd = 10;
+
+  // Environment variables to set for a newly created session, as KEY=VALUE.
+  repeated string env = 11;
+}
+
+message Input {
+  bytes data = 1;
+}
+
+message Resize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+  uint32 x_pixel = 3;
+  uint32 y_pixel = 4;
+}
+
+// Detach ends this client's attachment without terminating the session. Sending it
+// explicitly is what distinguishes leaving a session from losing the connection, so an
+// owning client's session survives a deliberate detach.
+message Detach {}
+
+// AttachResponse is a server-to-client event.
+message AttachResponse {
+  oneof event {
+    Opened opened = 1;
+    Output output = 2;
+    Exited exited = 3;
+  }
+}
+
+message Opened {
+  // Resolved session name, which the client needs when it asked the server to allocate
+  // one.
+  string session = 1;
+  // Whether this call created the session.
+  bool created = 2;
+  // Bytes to write to the terminal before streaming output: either serialized screen
+  // state on a fresh attach, or nothing when resuming.
+  bytes restore = 3;
+  // Sequence number the following output stream starts at. A client tracks this so it can
+  // resume from the right place after a reconnect.
+  uint64 next_seq = 4;
+}
+
+message Output {
+  uint64 seq = 1;
+  bytes data = 2;
+  // Set when output was truncated before the requested sequence, so the client knows its
+  // view has a hole and should reattach fresh rather than assume continuity.
+  bool gap = 3;
+}
+
+// Exited reports that the session's shell exited, so the client should stop rather than
+// try to reconnect.
+message Exited {
+  int32 exit_code = 1;
+}
+
+message ListRequest {
+  // Only sessions whose name matches this prefix. Empty matches all.
+  string prefix = 1;
+}
+
+message ListResponse {
+  repeated Session sessions = 1;
+}
+
+message Session {
+  string name = 1;
+  int32 shell_pid = 2;
+  // Number of attached clients.
+  uint32 clients = 3;
+  // Working directory, as reported by the shell via OSC 7. May be empty if the shell
+  // does not report it.
+  string cwd = 4;
+  // Whether cwd is on this host. A session that has ssh'd elsewhere reports a path that
+  // does not exist locally, so acting on it, such as opening a new window there, is
+  // wrong.
+  bool cwd_is_local = 5;
+  string title = 6;
+  int64 created_at_unix = 7;
+  bool exited = 8;
+  int32 exit_code = 9;
+}
+
+message KillRequest {
+  repeated string sessions = 1;
+  // Remove the session record even if its shim cannot be reached. Without this, an
+  // unreachable shim is left alone: it may be busy rather than dead, and discarding the
+  // record would orphan it permanently.
+  bool force = 2;
+}
+
+message KillResponse {
+  repeated string killed = 1;
+  // Sessions that could not be killed, keyed by name.
+  map<string, string> errors = 2;
+}
+
+message SendRequest {
+  string session = 1;
+  bytes data = 2;
+}
+
+message SendResponse {}

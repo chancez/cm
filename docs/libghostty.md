@@ -8,6 +8,17 @@ to the Ghostty app and not exported, so cm implements them.
 The API is explicitly unstable while the behavior is stable, and there is no tagged
 release, so `mise.toml` pins a commit. Bumping `GHOSTTY_REF` is deliberate.
 
+## All cgo lives in internal/vt
+
+`internal/vt` is the only package that imports "C". Everything else works with Go types
+and never sees a `Ghostty*` handle, an `unsafe.Pointer`, or a `GhosttyResult`. Errors are
+translated at the boundary, and C memory is freed there.
+
+This is worth enforcing rather than merely intending. The API is unstable by upstream's
+own description, so a breaking change should mean editing one package. It also keeps
+`CGO_ENABLED=0` builds of the other layers possible, which matters because the shim
+needs no terminal emulation at all.
+
 ## Why cgo is not a performance problem here
 
 A multiplexer's hot path moves bytes and never inspects cells. libghostty is called once

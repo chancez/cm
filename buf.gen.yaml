@@ -1,0 +1,12 @@
+version: v2
+managed:
+  enabled: false
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/chancez/cm
+  - local: protoc-gen-go-ttrpc
+    out: .
+    opt: module=github.com/chancez/cm
+inputs:
+  - directory: proto

@@ -1,0 +1,20 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Output is intentionally shared between Shim.Subscribe and the attach stream
+    # rather than duplicated as SubscribeResponse. The two carry the same thing, a
+    # run of pty bytes with a sequence number, and splitting them would mean
+    # converting between identical messages on every chunk of output.
+    - RPC_RESPONSE_STANDARD_NAME
+    # The "Service" suffix reads badly through the ttrpc generator, which appends
+    # its own: it produces ShimServiceService and RegisterServerServiceService.
+    # The services are named Shim and Server so the Go API is ShimClient and
+    # RegisterShimService.
+    - SERVICE_SUFFIX
+breaking:
+  use:
+    - FILE
