@@ -693,14 +693,13 @@ func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
 // looking for the escape bytes in the session's output. A pty echoes control characters in caret
 // notation, so the raw sequence never appears in the stream as written.
 func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
-	// Reads one focus report and prints its final byte, which is O for focus-out and I for
-	// focus-in. LC_ALL keeps od's output format predictable.
-	const script = `
-		echo READY
-		while IFS= read -r -n 3 seq; do
-			printf 'GOT:%s\n' "${seq#*[}"
-		done
-	`
+	// Echoes what it receives, and the test looks for the focus report's final byte in that echo: O
+	// for focus-out, I for focus-in.
+	//
+	// `cat` rather than the shell's read builtin. `read -n` is a bashism and /bin/sh is dash on
+	// Debian, so a version using it passed on macOS and hung on Linux, which is exactly the class of
+	// difference the Linux run exists to catch. cat needs no shell features at all.
+	const script = "echo READY; cat"
 
 	loud := &fakeTerminal{focusReporting: true}
 	rec := startShimFor(t, shimConfigFor("focus-on", script))
@@ -717,14 +716,18 @@ func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
 	defer sess.detach(att)
 	readUntil(t, att.reader, "READY")
 
+	// Both reports, then read once. A pty echoes a control character in caret notation, so the
+	// escape appears as "^[" rather than as an ESC byte, and searching for the raw sequence would
+	// never match. The parameters after it are what identify each report.
 	sess.ReportFocus(context.Background(), false)
-	if got := readUntil(t, att.reader, "GOT:O"); !strings.Contains(got, "GOT:O") {
-		t.Errorf("output = %q, want the shell to receive a focus-out report", got)
-	}
-
 	sess.ReportFocus(context.Background(), true)
-	if got := readUntil(t, att.reader, "GOT:I"); !strings.Contains(got, "GOT:I") {
-		t.Errorf("output = %q, want the shell to receive a focus-in report", got)
+
+	got := readUntil(t, att.reader, "[I")
+	if !strings.Contains(got, "[O") {
+		t.Errorf("output = %q, want the shell to have received a focus-out report", got)
+	}
+	if !strings.Contains(got, "[I") {
+		t.Errorf("output = %q, want the shell to have received a focus-in report", got)
 	}
 }
 

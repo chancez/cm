@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chancez/cm/internal/seqlog"
 )
@@ -31,19 +32,30 @@ func TestSessionPersistsOutput(t *testing.T) {
 	defer r.Close()
 	readUntil(t, r, "PERSISTED_LINE")
 
-	// Read the file back the way a later process would.
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
-	if err != nil {
-		t.Fatalf("OpenFile() error = %v", err)
-	}
-	defer f.Close()
-
-	got, _, err := f.ReadFrom(0)
-	if err != nil {
-		t.Fatalf("ReadFrom() error = %v", err)
-	}
-	if !strings.Contains(string(got), "PERSISTED_LINE") {
-		t.Errorf("persisted log = %q, want it to contain the session's output", got)
+	// Poll rather than reading once.
+	//
+	// Seeing the output on the in-memory log does not mean it has reached the file: the pump appends
+	// to both, and the disk write is a separate call that has not necessarily happened when the
+	// subscriber wakes. Reading immediately passed on macOS and was flaky under the load of a full
+	// parallel test run on Linux, which is a real ordering assumption rather than a platform quirk.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+		if err != nil {
+			t.Fatalf("OpenFile() error = %v", err)
+		}
+		got, _, err := f.ReadFrom(0)
+		f.Close()
+		if err != nil {
+			t.Fatalf("ReadFrom() error = %v", err)
+		}
+		if strings.Contains(string(got), "PERSISTED_LINE") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("persisted log = %q, want it to contain the session's output", got)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

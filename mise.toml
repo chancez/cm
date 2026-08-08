@@ -36,6 +36,22 @@ run = "go vet ./..."
 description = "Format, vet, and test"
 depends = ["fmt", "vet", "test"]
 
+[tasks.test-linux]
+description = "Run the tests on Linux in Docker"
+# Verifies the platform-specific code that a macOS-only run never compiles, and catches shell
+# assumptions, since /bin/sh is dash here rather than bash.
+run = """
+set -euo pipefail
+docker build -f Dockerfile.test -t cm-test:latest .
+docker run --rm cm-test:latest
+"""
+
+[tasks.build-linux]
+description = "Cross-compile for Linux without cgo"
+# No cgo, so no terminal rendering: screen restore and history are unavailable, everything else
+# works. A cgo cross-build needs a Linux libghostty, which is what test-linux would need to grow.
+run = "GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o bin/cm-linux-arm64 ./cmd/cm"
+
 [tasks.tools]
 description = "Install the protoc plugins pinned in go.mod"
 run = "go install google.golang.org/protobuf/cmd/protoc-gen-go github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc"

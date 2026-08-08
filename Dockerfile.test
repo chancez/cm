@@ -1,0 +1,15 @@
+# Linux test image, so the platform-specific paths get compiled and run.
+#
+# Worth having as a file rather than an ad-hoc command: cm has termios and signal handling that
+# differs per platform, and a macOS-only test run silently never compiles the Linux half. It also
+# catches shell assumptions, since /bin/sh here is dash rather than bash.
+FROM golang:1.26-bookworm
+WORKDIR /src
+# Dependencies first, so editing source does not refetch them.
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# CGO_ENABLED=0 by default: libghostty is not built in this image, and the point is to verify that
+# everything except terminal rendering works without it.
+ENV CGO_ENABLED=0
+CMD ["go", "test", "./..."]

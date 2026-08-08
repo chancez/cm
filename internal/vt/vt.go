@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Package vt wraps libghostty-vt, and is the only package in cm that uses cgo.
 //
 // Everything outside works with Go types: no Ghostty handles, no unsafe.Pointer, no result
@@ -29,6 +31,10 @@ import (
 )
 
 // Errors returned when libghostty rejects a call.
+// Available reports whether the terminal emulator was compiled in. See the !cgo build of this
+// package, where it is false.
+const Available = true
+
 var (
 	ErrOutOfMemory = errors.New("libghostty: out of memory")
 	ErrInvalid     = errors.New("libghostty: invalid value")
