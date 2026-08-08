@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/sessionenv"
 )
 
@@ -28,8 +30,61 @@ type Config struct {
 	// Empty means the default; "none" disables detaching by key.
 	DetachKey string `toml:"detach_key"`
 
-	Env EnvConfig `toml:"env"`
+	Env     EnvConfig     `toml:"env"`
+	Persist PersistConfig `toml:"persist"`
 }
+
+// PersistConfig controls whether a session's content survives a reboot.
+//
+// Only content can survive: a pty is a kernel object and a shell is a process, so both are gone
+// unconditionally. Restoring means replaying what was on screen and optionally starting something
+// fresh, never resuming a process.
+type PersistConfig struct {
+	// Enabled turns persistence on for sessions matching Sessions, or for any session started with
+	// an explicit request.
+	Enabled bool `toml:"enabled"`
+
+	// Sessions are name patterns that persist automatically, with a trailing "*" matching by
+	// prefix. Per-window sessions are the ones worth persisting; a throwaway usually is not.
+	Sessions []string `toml:"sessions"`
+
+	// OnRestore is what happens when a dead session is attached to: "shell", "none", or "command".
+	// Empty means "shell".
+	OnRestore string `toml:"on_restore"`
+
+	// SafeCommands are program names that may be re-run on restore without a per-session request.
+	//
+	// A convenience, not a safety boundary. It matches the program name only, so listing "nvim"
+	// also matches an nvim invocation that writes files. The per-session setting is the real
+	// control, and the default remains a fresh shell.
+	SafeCommands []string `toml:"safe_commands"`
+
+	// MaxLines bounds retained output per session. Zero means the default.
+	MaxLines int `toml:"max_lines"`
+	// MaxBytes is a ceiling that applies regardless of MaxLines, so one very long line cannot fill
+	// the disk. Zero means the default.
+	MaxBytes int64 `toml:"max_bytes"`
+
+	// ExpireAfter removes a dead persisted session after this long, as a Go duration. Empty means
+	// the default. Without expiry both the session list and the disk grow forever across reboots.
+	ExpireAfter string `toml:"expire_after"`
+}
+
+// RestoreMode is what happens when a dead session is attached to.
+type RestoreMode string
+
+const (
+	// RestoreShell starts a fresh shell in the recorded directory. The default, because it is safe
+	// and right for per-window sessions.
+	RestoreShell RestoreMode = "shell"
+	// RestoreNone leaves the restored content as history and starts nothing.
+	RestoreNone RestoreMode = "none"
+	// RestoreCommand re-runs the recorded command verbatim.
+	RestoreCommand RestoreMode = "command"
+)
+
+// DefaultExpireAfter is how long a dead persisted session is kept.
+const DefaultExpireAfter = 7 * 24 * time.Hour
 
 // EnvConfig controls which variables follow a client into a session.
 type EnvConfig struct {
@@ -135,4 +190,77 @@ func (c *Config) EnvPatterns() []string {
 // EnvMatcher returns a matcher for the effective environment patterns.
 func (c *Config) EnvMatcher() *sessionenv.Matcher {
 	return sessionenv.NewMatcher(c.EnvPatterns())
+}
+
+// RestoreMode returns the configured restore behavior, validating it.
+func (c *Config) RestoreMode() (RestoreMode, error) {
+	switch RestoreMode(c.Persist.OnRestore) {
+	case "", RestoreShell:
+		return RestoreShell, nil
+	case RestoreNone:
+		return RestoreNone, nil
+	case RestoreCommand:
+		return RestoreCommand, nil
+	default:
+		return RestoreShell, fmt.Errorf(
+			"on_restore = %q, want \"shell\", \"none\", or \"command\"", c.Persist.OnRestore)
+	}
+}
+
+// PersistsSession reports whether a session name persists by configuration alone.
+//
+// Patterns use the same trailing-"*" prefix form as the environment list, so one convention covers
+// both.
+func (c *Config) PersistsSession(name string) bool {
+	if !c.Persist.Enabled {
+		return false
+	}
+	return sessionenv.NewMatcher(c.Persist.Sessions).Match(name)
+}
+
+// PersistLimits returns the retention bounds for a persisted log.
+func (c *Config) PersistLimits() seqlog.FileLimits {
+	limits := seqlog.DefaultFileLimits
+	if c.Persist.MaxLines > 0 {
+		limits.MaxLines = c.Persist.MaxLines
+	}
+	if c.Persist.MaxBytes > 0 {
+		limits.MaxBytes = c.Persist.MaxBytes
+	}
+	return limits
+}
+
+// ExpireAfter returns how long a dead persisted session is kept.
+func (c *Config) ExpireAfter() (time.Duration, error) {
+	if c.Persist.ExpireAfter == "" {
+		return DefaultExpireAfter, nil
+	}
+	d, err := time.ParseDuration(c.Persist.ExpireAfter)
+	if err != nil {
+		return 0, fmt.Errorf("expire_after: %w", err)
+	}
+	if d <= 0 {
+		// Zero would mean "expire immediately", which is never what someone means by writing it.
+		// Refusing is better than deleting sessions the moment they die.
+		return 0, fmt.Errorf("expire_after must be positive, got %q", c.Persist.ExpireAfter)
+	}
+	return d, nil
+}
+
+// CommandIsSafeToRerun reports whether a recorded command may be re-run on restore.
+//
+// Matches the program name only, which is why this is documented as a convenience rather than a
+// guarantee: it cannot distinguish an editor opening a file from the same editor running a shell
+// command on startup.
+func (c *Config) CommandIsSafeToRerun(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	program := filepath.Base(argv[0])
+	for _, safe := range c.Persist.SafeCommands {
+		if program == safe {
+			return true
+		}
+	}
+	return false
 }
