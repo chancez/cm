@@ -115,9 +115,16 @@ func TestSessionShellHasControllingTerminal(t *testing.T) {
 }
 
 func TestSessionReportsInitialSize(t *testing.T) {
+	// The shell stays alive after printing, so Size() below queries a live pty.
+	//
+	// `sh -c "stty size"` exits as soon as it has printed, and the pty is released with it, so asking for
+	// the size afterwards raced the teardown. That used to appear to work: the ioctl went to a
+	// already-closed descriptor and happened to return a plausible answer, which is precisely the
+	// use-after-close this package now guards against. The guard turned a silent bug into a visible
+	// failure, so the test has to stop depending on it.
 	s, err := Start(Config{
 		Session: "test",
-		Command: []string{"/bin/sh", "-c", "stty size"},
+		Command: []string{"/bin/sh", "-c", "stty size; sleep 30"},
 		Rows:    30, Cols: 100,
 	})
 	if err != nil {

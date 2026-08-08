@@ -145,8 +145,10 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 		sig = syscall.SIGKILL
 	}
 	// A shell that has already exited is not an error here: the caller wants the session
-	// gone, and it is.
-	if err := s.session.Signal(sig, true); err != nil && !errors.Is(err, seqlog.ErrClosed) {
+	// gone, and it is. Both errors mean that, since Signal reports it one way and the pty
+	// guards report it another.
+	if err := s.session.Signal(sig, true); err != nil &&
+		!errors.Is(err, seqlog.ErrClosed) && !errors.Is(err, ErrSessionOver) {
 		return nil, err
 	}
 	s.shutdownOnce.Do(func() { close(s.shutdown) })

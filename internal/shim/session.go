@@ -280,6 +280,14 @@ func (s *Session) releasePty() {
 	})
 }
 
+// ErrSessionOver reports that a session's pty is gone, so there is nothing left to act on.
+//
+// Its own error rather than reusing seqlog.ErrClosed, which is about the output log. Sharing one
+// produced a real confusion: a resize arriving just after a shell exited failed with "output log is
+// closed", the server could not tell that from a genuine failure, and `cm run` reported
+// "sizing session x: output log is closed" for a command that had completed successfully.
+var ErrSessionOver = errors.New("session is over")
+
 // withPty runs fn on the pty fd, or reports that the session is over.
 //
 // For the ioctl callers only. See ptyMu on why Read and Write do not use this.
@@ -287,7 +295,7 @@ func (s *Session) withPty(fn func(*os.File) error) error {
 	s.ptyMu.RLock()
 	defer s.ptyMu.RUnlock()
 	if s.ptyGone {
-		return seqlog.ErrClosed
+		return ErrSessionOver
 	}
 	return fn(s.ptmx)
 }

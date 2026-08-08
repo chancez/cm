@@ -4,8 +4,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-
-	"github.com/chancez/cm/internal/seqlog"
 )
 
 // Querying or resizing a session while its pty is being closed must not touch a stale descriptor.
@@ -57,11 +55,16 @@ func TestPtyIoctlsRaceWithClose(t *testing.T) {
 		wg.Wait()
 
 		// After release every ioctl must report the session is over rather than acting on the fd.
-		if _, _, err := sess.Size(); !errors.Is(err, seqlog.ErrClosed) {
-			t.Fatalf("Size() after release error = %v, want ErrClosed", err)
+		//
+		// ErrSessionOver rather than seqlog.ErrClosed. The distinction is not cosmetic: the server has
+		// to tell "this session ended" from "something failed", and reusing the output log's error made
+		// a resize on a just-exited session surface as "output log is closed", which looked like a
+		// genuine fault and failed `cm run` for a command that had succeeded.
+		if _, _, err := sess.Size(); !errors.Is(err, ErrSessionOver) {
+			t.Fatalf("Size() after release error = %v, want ErrSessionOver", err)
 		}
-		if err := sess.Resize(24, 80, 0, 0); !errors.Is(err, seqlog.ErrClosed) {
-			t.Fatalf("Resize() after release error = %v, want ErrClosed", err)
+		if err := sess.Resize(24, 80, 0, 0); !errors.Is(err, ErrSessionOver) {
+			t.Fatalf("Resize() after release error = %v, want ErrSessionOver", err)
 		}
 	}
 }
