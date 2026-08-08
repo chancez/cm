@@ -315,3 +315,87 @@ func TestCommandTrackerRunsCountsEachCommandOnce(t *testing.T) {
 		t.Errorf("Runs = %d after a second command, want 2", got)
 	}
 }
+
+// The exit status from 133;D is recorded, and distinguishable from no status at all.
+//
+// cm parsed this from the start and exposed it nowhere, so a failing command left no trace: running `false`
+// in a session looked identical to running `true`. The parsing was already right; these pin it so the
+// plumbing above cannot drift.
+func TestCommandTrackerRecordsExitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		input        string
+		wantExited   bool
+		wantExitCode int
+	}{
+		{
+			// What kitty's zsh integration sends: `\e]133;D;<status>\a`.
+			name:         "success",
+			input:        "\x1b]133;C\x07\x1b]133;D;0\x07",
+			wantExited:   true,
+			wantExitCode: 0,
+		},
+		{
+			name:         "failure",
+			input:        "\x1b]133;C\x07\x1b]133;D;1\x07",
+			wantExited:   true,
+			wantExitCode: 1,
+		},
+		{
+			name:         "a larger status",
+			input:        "\x1b]133;C\x07\x1b]133;D;42\x07",
+			wantExited:   true,
+			wantExitCode: 42,
+		},
+		{
+			// A bare D with no status, which is legal and which kitty sends when it has none. Exited stays
+			// false, because reporting 0 here would claim a success that was never reported.
+			name:       "no status parameter",
+			input:      "\x1b]133;C\x07\x1b]133;D\x07",
+			wantExited: false,
+		},
+		{
+			// A command that has started and not finished: nothing to report yet.
+			name:       "still running",
+			input:      "\x1b]133;C\x07",
+			wantExited: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr CommandTracker
+			tr.Feed([]byte(tc.input))
+
+			got := tr.State()
+			if got.Exited != tc.wantExited {
+				t.Errorf("Exited = %v, want %v", got.Exited, tc.wantExited)
+			}
+			if tc.wantExited && got.ExitCode != tc.wantExitCode {
+				t.Errorf("ExitCode = %d, want %d", got.ExitCode, tc.wantExitCode)
+			}
+		})
+	}
+}
+
+// A new command clears the previous status, so a stale one is never reported as current.
+//
+// Without this a caller checking after a successful command could see the failure before it, which is worse
+// than no answer: it attributes one command's outcome to another.
+func TestCommandTrackerClearsStatusOnANewCommand(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte("\x1b]133;C\x07\x1b]133;D;5\x07"))
+	if got := tr.State(); !got.Exited || got.ExitCode != 5 {
+		t.Fatalf("after a failure: Exited=%v ExitCode=%d, want true and 5", got.Exited, got.ExitCode)
+	}
+
+	// A second command starts. While it runs, the previous status must not read as this one's.
+	tr.Feed([]byte("\x1b]133;C\x07"))
+	if got := tr.State(); !got.Running {
+		t.Error("Running = false after a command started")
+	}
+
+	tr.Feed([]byte("\x1b]133;D;0\x07"))
+	got := tr.State()
+	if !got.Exited || got.ExitCode != 0 {
+		t.Errorf("after a success: Exited=%v ExitCode=%d, want true and 0", got.Exited, got.ExitCode)
+	}
+}

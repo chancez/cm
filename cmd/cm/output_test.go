@@ -48,6 +48,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		"name", "state", "shell_pid", "clients", "exit_code", "title",
 		"cwd", "cwd_uri", "cwd_is_local", "created_at", "created_at_unix",
 		"busy", "command",
+		// The last command's own outcome, distinct from exit_code above, which is the session's.
+		"last_command_exit_code", "command_finished",
 		"reported_state", "reported_detail", "reported_source",
 	}
 	for _, k := range want {
@@ -422,5 +424,40 @@ func TestSessionsTableTruncatesALongDetail(t *testing.T) {
 	}
 	if strings.Contains(got, "/etc") {
 		t.Errorf("table = %q, want the tail of a long detail dropped", got)
+	}
+}
+
+// Every printable field is accepted by --field, and the flag's help lists them all.
+//
+// The two drifted before: the help named eight fields while the printer accepted sixteen, so busy, command,
+// and the reported_* trio worked and were undocumented. Both now derive from one list, and this asserts they
+// stay in step -- a field that prints but is not documented is one nobody finds.
+func TestSessionFieldNamesMatchWhatIsAccepted(t *testing.T) {
+	s := sampleWireSession("work")
+
+	names := SessionFieldNames()
+	if len(names) == 0 {
+		t.Fatal("SessionFieldNames() is empty")
+	}
+
+	for _, name := range names {
+		var buf bytes.Buffer
+		if err := printSessionInfo(&buf, s, name); err != nil {
+			t.Errorf("printSessionInfo(field=%q) error = %v, but the help lists it", name, err)
+		}
+		if buf.Len() == 0 {
+			t.Errorf("field %q printed nothing", name)
+		}
+	}
+
+	// And the table lists exactly those fields, so nothing prints in one mode and not the other.
+	var table bytes.Buffer
+	if err := printSessionInfo(&table, s, ""); err != nil {
+		t.Fatalf("printSessionInfo() error = %v", err)
+	}
+	for _, name := range names {
+		if !bytes.Contains(table.Bytes(), []byte(name)) {
+			t.Errorf("the table output is missing field %q:\n%s", name, table.String())
+		}
 	}
 }

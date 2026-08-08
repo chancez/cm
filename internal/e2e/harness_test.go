@@ -416,6 +416,21 @@ func (e *env) mustRun(args ...string) string {
 	return r.stdout
 }
 
+// sessionDetail reads one session through `cm info --json`.
+//
+// Distinct from session(), which reads the list: info is the command a person runs about one session, and the
+// fields have to be present on both paths rather than only the one a test happens to use.
+func (e *env) sessionDetail(t *testing.T, name string) sessionJSON {
+	t.Helper()
+
+	out := e.mustRun("info", name, "--json")
+	var s sessionJSON
+	if err := json.Unmarshal([]byte(out), &s); err != nil {
+		t.Fatalf("parsing info output %q: %v", out, err)
+	}
+	return s
+}
+
 // sessionJSON is the subset of `cm list --json` these tests read.
 type sessionJSON struct {
 	Name     string `json:"name"`
@@ -426,6 +441,10 @@ type sessionJSON struct {
 	// Busy and Command are what the shell reported via OSC 133.
 	Busy    bool   `json:"busy"`
 	Command string `json:"command"`
+	// LastCommandExitCode is the status of the last command the shell finished, and CommandFinished whether
+	// there was one. Separate from ExitCode, which is the session's own.
+	LastCommandExitCode int  `json:"last_command_exit_code"`
+	CommandFinished     bool `json:"command_finished"`
 	// ReportedState and ReportedDetail are what a program in the session reported about itself.
 	ReportedState  string `json:"reported_state"`
 	ReportedDetail string `json:"reported_detail"`
@@ -730,13 +749,32 @@ func requireShell(t *testing.T, path string) {
 // has nothing to do with cm. That failure is also misleading: it looks like broken detection rather than
 // a shell that was never asked to report.
 //
-// Deliberately the minimum, not a copy of kitty's integration: prompt start, and command start with the
-// cmdline extension. Those are the two markers the feature depends on, and writing them out here means
-// the test states its own preconditions.
+// Deliberately the minimum, not a copy of kitty's integration: prompt start, command start with the
+// cmdline extension, and command end with the exit status. Those are the markers the features depend on,
+// and writing them out here means the test states its own preconditions.
+//
+// The D marker carries $? and must be the first thing precmd reads, since anything run before it would
+// overwrite the status.
+//
+// It is sent only when a command actually started, tracked by _cm_ran. zsh runs precmd before the *first*
+// prompt as well, so emitting D unconditionally reports a status for a shell that has run nothing -- a fresh
+// session then looks like it just succeeded. kitty's integration guards this the same way, with its own
+// _ksi_state, which is where the approach comes from rather than being invented here.
 const osc133rc = `
 autoload -Uz add-zsh-hook
-_osc133_precmd() { printf '\033]133;A\007' }
-_osc133_preexec() { printf '\033]133;C;cmdline=%s\007' "${1// /\\ }" }
+typeset -g _cm_ran=0
+_osc133_precmd() {
+  local status_=$?
+  if (( _cm_ran )); then
+    printf '\033]133;D;%d\007' $status_
+    _cm_ran=0
+  fi
+  printf '\033]133;A\007'
+}
+_osc133_preexec() {
+  _cm_ran=1
+  printf '\033]133;C;cmdline=%s\007' "${1// /\\ }"
+}
 add-zsh-hook precmd _osc133_precmd
 add-zsh-hook preexec _osc133_preexec
 `

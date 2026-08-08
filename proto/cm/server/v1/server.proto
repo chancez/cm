@@ -191,6 +191,12 @@ message WaitResponse {
   // The session's state when the wait returned, so a caller that timed out learns what it was instead.
   bool busy = 2;
   string command = 3;
+  // Exit status of the last finished command, and whether there was one.
+  //
+  // Carried here so `cm wait --until idle` answers "did it work" in the reply that says "it finished",
+  // rather than requiring a second call that races the next command starting.
+  int32 last_command_exit_code = 8;
+  bool command_finished = 9;
   SessionState state = 4;
   int32 exit_code = 5;
 }
@@ -389,6 +395,10 @@ message Metadata {
   // later.
   bool busy = 4;
   string command = 5;
+  // Exit status of the last finished command, and whether there was one. See Session for why these are
+  // separate from the session's own status.
+  int32 last_command_exit_code = 9;
+  bool command_finished = 10;
   // What a program in the session reported about itself, which takes precedence over busy above.
   string reported_state = 6;
   string reported_detail = 7;
@@ -488,6 +498,19 @@ message Session {
   // Best effort: the cmdline parameter is an extension that zsh and bash send under kitty's shell
   // integration and other shells omit, so this can be empty while busy is true.
   string command = 13;
+
+  // Exit status of the last command the shell finished, from OSC 133;D.
+  //
+  // Distinct from exit_code above, which is the *session's* own status: that says whether the shell
+  // itself has gone, this says whether the last thing it ran succeeded. Conflating them would report a
+  // failed build as a dead session.
+  //
+  // command_finished is what makes the value readable, since zero is a real exit status and cannot
+  // double as "nothing has finished yet". False for a shell whose integration omits the status
+  // parameter, which is legal: kitty's zsh integration sends `133;D;<status>` while a bare `133;D`
+  // carries none.
+  int32 last_command_exit_code = 17;
+  bool command_finished = 18;
 }
 
 message KillRequest {

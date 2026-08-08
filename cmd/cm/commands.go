@@ -512,7 +512,7 @@ acting on a remote path locally would be wrong.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&field, "field", "",
-		"print only this field: name, state, pid, clients, title, cwd, cwd_uri, cwd_is_local")
+		"print only this field: "+strings.Join(SessionFieldNames(), ", "))
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
 }

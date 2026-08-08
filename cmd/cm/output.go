@@ -56,6 +56,17 @@ type sessionJSON struct {
 	// Command is the command line the shell reported running, when it reported one. Can be empty
 	// while Busy is true, since the cmdline parameter is an extension not every shell sends.
 	Command string `json:"command"`
+	// LastCommandExitCode is the status of the last command the shell finished, from OSC 133;D.
+	//
+	// Distinct from ExitCode, which is the session's own: that says whether the shell has gone, this says
+	// whether the last thing it ran succeeded. Conflating them would report a failed build as a dead
+	// session.
+	//
+	// CommandFinished is what makes the value readable, since zero is a real status and cannot double as
+	// "nothing has finished". False for a shell whose integration sends a bare 133;D with no status, which
+	// is legal.
+	LastCommandExitCode int32 `json:"last_command_exit_code"`
+	CommandFinished     bool  `json:"command_finished"`
 	// ReportedState is what a program in the session said about itself via `cm report`: "idle", "busy",
 	// or "blocked". Empty when nothing has reported.
 	//
@@ -81,22 +92,24 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 
 	return sessionJSON{
-		Name:           s.Name,
-		State:          stateName(s),
-		ShellPID:       s.ShellPid,
-		Clients:        int32(s.Clients),
-		ExitCode:       s.ExitCode,
-		Title:          s.Title,
-		Cwd:            cwd,
-		CwdURI:         s.CwdUri,
-		CwdIsLocal:     s.CwdIsLocal,
-		CreatedAt:      created.Format(time.RFC3339),
-		CreatedAtUnix:  s.CreatedAtUnix,
-		Busy:           s.Busy,
-		Command:        s.Command,
-		ReportedState:  s.ReportedState,
-		ReportedDetail: s.ReportedDetail,
-		ReportedSource: s.ReportedSource,
+		Name:                s.Name,
+		State:               stateName(s),
+		ShellPID:            s.ShellPid,
+		Clients:             int32(s.Clients),
+		ExitCode:            s.ExitCode,
+		Title:               s.Title,
+		Cwd:                 cwd,
+		CwdURI:              s.CwdUri,
+		CwdIsLocal:          s.CwdIsLocal,
+		CreatedAt:           created.Format(time.RFC3339),
+		CreatedAtUnix:       s.CreatedAtUnix,
+		Busy:                s.Busy,
+		Command:             s.Command,
+		LastCommandExitCode: s.LastCommandExitCode,
+		CommandFinished:     s.CommandFinished,
+		ReportedState:       s.ReportedState,
+		ReportedDetail:      s.ReportedDetail,
+		ReportedSource:      s.ReportedSource,
 	}
 }
 
@@ -249,7 +262,15 @@ func humanAge(t time.Time) string {
 // A single field prints bare, with no header or padding, because that is what a caller wants: a
 // terminal emulator opening a new window in a session's directory should not have to parse
 // anything.
-func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
+// sessionFields returns the printable fields of a session, in display order.
+//
+// One list rather than a printer and a separate help string, because the two drifted: the flag's help named
+// eight fields while the printer accepted sixteen, so busy, command, and the reported_* trio were usable and
+// undocumented. Deriving the help from this makes that impossible.
+func sessionFields(s *serverv1.Session) []struct {
+	name  string
+	value string
+} {
 	j := toSessionJSON(s)
 
 	state := j.State
@@ -257,7 +278,7 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 		state = fmt.Sprintf("exited(%d)", j.ExitCode)
 	}
 
-	fields := []struct {
+	return []struct {
 		name  string
 		value string
 	}{
@@ -271,11 +292,27 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 		{"cwd_is_local", fmt.Sprint(j.CwdIsLocal)},
 		{"created_at", j.CreatedAt},
 		{"busy", fmt.Sprint(j.Busy)},
+		{"last_command_exit_code", fmt.Sprint(j.LastCommandExitCode)},
+		{"command_finished", fmt.Sprint(j.CommandFinished)},
 		{"command", j.Command},
 		{"reported_state", j.ReportedState},
 		{"reported_detail", j.ReportedDetail},
 		{"reported_source", j.ReportedSource},
 	}
+}
+
+// SessionFieldNames lists the fields `cm info --field` accepts, for the flag's help.
+func SessionFieldNames() []string {
+	fields := sessionFields(&serverv1.Session{})
+	names := make([]string, 0, len(fields))
+	for _, f := range fields {
+		names = append(names, f.name)
+	}
+	return names
+}
+
+func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
+	fields := sessionFields(s)
 
 	if field != "" {
 		for _, f := range fields {

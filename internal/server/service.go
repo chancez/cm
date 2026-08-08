@@ -308,9 +308,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 						CwdIsLocal: meta.Cwd.IsLocal,
 						Busy: meta.Command.Running || meta.Reported.State == "busy" ||
 							meta.Reported.State == "blocked",
-						Command:        meta.Command.Command,
-						ReportedState:  meta.Reported.State,
-						ReportedDetail: meta.Reported.Detail,
+						Command:             meta.Command.Command,
+						LastCommandExitCode: int32(meta.Command.ExitCode),
+						CommandFinished:     meta.Command.Exited,
+						ReportedState:       meta.Reported.State,
+						ReportedDetail:      meta.Reported.Detail,
 					},
 				},
 			}); err != nil {
@@ -510,6 +512,12 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			cmd := sess.Command()
 			item.Busy = cmd.Running
 			item.Command = cmd.Command
+			// The outcome of the last command, distinct from the session's own status above: that says
+			// whether the shell has gone, this says whether the last thing it ran succeeded. Also not
+			// persisted, for the same reason -- a stored value would describe a command that finished
+			// before the last restart.
+			item.LastCommandExitCode = int32(cmd.ExitCode)
+			item.CommandFinished = cmd.Exited
 
 			// A program's own report about itself, which takes precedence over the derived state above.
 			if r := sess.Reported(); r.State != "" {

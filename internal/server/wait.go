@@ -208,12 +208,16 @@ func waitResult(sess *Session, ok bool) *serverv1.WaitResponse {
 	cmd := sess.Command()
 	r := sess.Reported()
 	resp := &serverv1.WaitResponse{
-		Satisfied:      ok,
-		Busy:           cmd.Running,
-		Command:        cmd.Command,
-		State:          serverv1.SessionState_SESSION_STATE_RUNNING,
-		ReportedState:  r.State,
-		ReportedDetail: r.Detail,
+		Satisfied: ok,
+		Busy:      cmd.Running,
+		Command:   cmd.Command,
+		// The outcome, so a caller that waited for idle learns whether the command worked without a
+		// second call that could race the next command starting.
+		LastCommandExitCode: int32(cmd.ExitCode),
+		CommandFinished:     cmd.Exited,
+		State:               serverv1.SessionState_SESSION_STATE_RUNNING,
+		ReportedState:       r.State,
+		ReportedDetail:      r.Detail,
 	}
 	// A report describes the session better than the derived state, so busy reflects it when present.
 	if r.State != "" {

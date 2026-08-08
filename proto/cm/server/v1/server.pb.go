@@ -733,12 +733,18 @@ type WaitResponse struct {
 	ReportedState  string `protobuf:"bytes,6,opt,name=reported_state,json=reportedState,proto3" json:"reported_state,omitempty"`
 	ReportedDetail string `protobuf:"bytes,7,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
 	// The session's state when the wait returned, so a caller that timed out learns what it was instead.
-	Busy          bool         `protobuf:"varint,2,opt,name=busy,proto3" json:"busy,omitempty"`
-	Command       string       `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
-	State         SessionState `protobuf:"varint,4,opt,name=state,proto3,enum=cm.server.v1.SessionState" json:"state,omitempty"`
-	ExitCode      int32        `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Busy    bool   `protobuf:"varint,2,opt,name=busy,proto3" json:"busy,omitempty"`
+	Command string `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
+	// Exit status of the last finished command, and whether there was one.
+	//
+	// Carried here so `cm wait --until idle` answers "did it work" in the reply that says "it finished",
+	// rather than requiring a second call that races the next command starting.
+	LastCommandExitCode int32        `protobuf:"varint,8,opt,name=last_command_exit_code,json=lastCommandExitCode,proto3" json:"last_command_exit_code,omitempty"`
+	CommandFinished     bool         `protobuf:"varint,9,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
+	State               SessionState `protobuf:"varint,4,opt,name=state,proto3,enum=cm.server.v1.SessionState" json:"state,omitempty"`
+	ExitCode            int32        `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *WaitResponse) Reset() {
@@ -804,6 +810,20 @@ func (x *WaitResponse) GetCommand() string {
 		return x.Command
 	}
 	return ""
+}
+
+func (x *WaitResponse) GetLastCommandExitCode() int32 {
+	if x != nil {
+		return x.LastCommandExitCode
+	}
+	return 0
+}
+
+func (x *WaitResponse) GetCommandFinished() bool {
+	if x != nil {
+		return x.CommandFinished
+	}
+	return false
 }
 
 func (x *WaitResponse) GetState() SessionState {
@@ -1798,6 +1818,10 @@ type Metadata struct {
 	// later.
 	Busy    bool   `protobuf:"varint,4,opt,name=busy,proto3" json:"busy,omitempty"`
 	Command string `protobuf:"bytes,5,opt,name=command,proto3" json:"command,omitempty"`
+	// Exit status of the last finished command, and whether there was one. See Session for why these are
+	// separate from the session's own status.
+	LastCommandExitCode int32 `protobuf:"varint,9,opt,name=last_command_exit_code,json=lastCommandExitCode,proto3" json:"last_command_exit_code,omitempty"`
+	CommandFinished     bool  `protobuf:"varint,10,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
 	// What a program in the session reported about itself, which takes precedence over busy above.
 	ReportedState  string `protobuf:"bytes,6,opt,name=reported_state,json=reportedState,proto3" json:"reported_state,omitempty"`
 	ReportedDetail string `protobuf:"bytes,7,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
@@ -1868,6 +1892,20 @@ func (x *Metadata) GetCommand() string {
 		return x.Command
 	}
 	return ""
+}
+
+func (x *Metadata) GetLastCommandExitCode() int32 {
+	if x != nil {
+		return x.LastCommandExitCode
+	}
+	return 0
+}
+
+func (x *Metadata) GetCommandFinished() bool {
+	if x != nil {
+		return x.CommandFinished
+	}
+	return false
 }
 
 func (x *Metadata) GetReportedState() string {
@@ -2198,9 +2236,21 @@ type Session struct {
 	//
 	// Best effort: the cmdline parameter is an extension that zsh and bash send under kitty's shell
 	// integration and other shells omit, so this can be empty while busy is true.
-	Command       string `protobuf:"bytes,13,opt,name=command,proto3" json:"command,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Command string `protobuf:"bytes,13,opt,name=command,proto3" json:"command,omitempty"`
+	// Exit status of the last command the shell finished, from OSC 133;D.
+	//
+	// Distinct from exit_code above, which is the *session's* own status: that says whether the shell
+	// itself has gone, this says whether the last thing it ran succeeded. Conflating them would report a
+	// failed build as a dead session.
+	//
+	// command_finished is what makes the value readable, since zero is a real exit status and cannot
+	// double as "nothing has finished yet". False for a shell whose integration omits the status
+	// parameter, which is legal: kitty's zsh integration sends `133;D;<status>` while a bare `133;D`
+	// carries none.
+	LastCommandExitCode int32 `protobuf:"varint,17,opt,name=last_command_exit_code,json=lastCommandExitCode,proto3" json:"last_command_exit_code,omitempty"`
+	CommandFinished     bool  `protobuf:"varint,18,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -2343,6 +2393,20 @@ func (x *Session) GetCommand() string {
 		return x.Command
 	}
 	return ""
+}
+
+func (x *Session) GetLastCommandExitCode() int32 {
+	if x != nil {
+		return x.LastCommandExitCode
+	}
+	return 0
+}
+
+func (x *Session) GetCommandFinished() bool {
+	if x != nil {
+		return x.CommandFinished
+	}
+	return false
 }
 
 type KillRequest struct {
@@ -2806,13 +2870,15 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\tR\asession\x12-\n" +
 	"\x05until\x18\x02 \x01(\x0e2\x17.cm.server.v1.WaitStateR\x05until\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xf9\x01\n" +
+	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xd9\x02\n" +
 	"\fWaitResponse\x12\x1c\n" +
 	"\tsatisfied\x18\x01 \x01(\bR\tsatisfied\x12%\n" +
 	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
 	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\x12\x12\n" +
 	"\x04busy\x18\x02 \x01(\bR\x04busy\x12\x18\n" +
-	"\acommand\x18\x03 \x01(\tR\acommand\x120\n" +
+	"\acommand\x18\x03 \x01(\tR\acommand\x123\n" +
+	"\x16last_command_exit_code\x18\b \x01(\x05R\x13lastCommandExitCode\x12)\n" +
+	"\x10command_finished\x18\t \x01(\bR\x0fcommandFinished\x120\n" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
 	"\texit_code\x18\x05 \x01(\x05R\bexitCode\"N\n" +
 	"\rDoctorRequest\x12\x16\n" +
@@ -2880,14 +2946,17 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\bdetached\x18\x05 \x01(\v2\x16.cm.server.v1.DetachedH\x00R\bdetachedB\a\n" +
 	"\x05event\"\n" +
 	"\n" +
-	"\bDetached\"\xd2\x01\n" +
+	"\bDetached\"\xb2\x02\n" +
 	"\bMetadata\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x10\n" +
 	"\x03cwd\x18\x02 \x01(\tR\x03cwd\x12 \n" +
 	"\fcwd_is_local\x18\x03 \x01(\bR\n" +
 	"cwdIsLocal\x12\x12\n" +
 	"\x04busy\x18\x04 \x01(\bR\x04busy\x12\x18\n" +
-	"\acommand\x18\x05 \x01(\tR\acommand\x12%\n" +
+	"\acommand\x18\x05 \x01(\tR\acommand\x123\n" +
+	"\x16last_command_exit_code\x18\t \x01(\x05R\x13lastCommandExitCode\x12)\n" +
+	"\x10command_finished\x18\n" +
+	" \x01(\bR\x0fcommandFinished\x12%\n" +
 	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
 	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\"q\n" +
 	"\x06Opened\x12\x18\n" +
@@ -2904,7 +2973,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vListRequest\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xed\x03\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xcd\x04\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -2923,7 +2992,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x0freported_detail\x18\x0f \x01(\tR\x0ereportedDetail\x12'\n" +
 	"\x0freported_source\x18\x10 \x01(\tR\x0ereportedSource\x12\x12\n" +
 	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
-	"\acommand\x18\r \x01(\tR\acommand\"?\n" +
+	"\acommand\x18\r \x01(\tR\acommand\x123\n" +
+	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +
+	"\x10command_finished\x18\x12 \x01(\bR\x0fcommandFinished\"?\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\"\xa1\x01\n" +

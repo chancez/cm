@@ -109,8 +109,16 @@ type waitJSON struct {
 	State   string `json:"state"`
 	Busy    bool   `json:"busy"`
 	Command string `json:"command"`
-	// ExitCode is meaningful only when state is "exited".
+	// ExitCode is meaningful only when state is "exited". It is the *session's* status.
 	ExitCode int32 `json:"exit_code"`
+	// LastCommandExitCode is the status of the last command the shell finished, and CommandFinished
+	// whether there was one.
+	//
+	// Carried in the same reply that says the wait was satisfied, so `cm wait --until idle` answers "did
+	// it work" without a second call -- which would race the next command starting and could report the
+	// wrong one.
+	LastCommandExitCode int32 `json:"last_command_exit_code"`
+	CommandFinished     bool  `json:"command_finished"`
 }
 
 // reportWait prints the outcome and reports failure as an exit status.
@@ -125,13 +133,15 @@ func reportWait(w *os.File, name, until string, resp *serverv1.WaitResponse, asJ
 
 	if asJSON {
 		if err := writeJSON(w, waitJSON{
-			Session:   name,
-			Satisfied: resp.Satisfied,
-			Until:     until,
-			State:     state,
-			Busy:      resp.Busy,
-			Command:   resp.Command,
-			ExitCode:  resp.ExitCode,
+			Session:             name,
+			Satisfied:           resp.Satisfied,
+			Until:               until,
+			State:               state,
+			Busy:                resp.Busy,
+			Command:             resp.Command,
+			ExitCode:            resp.ExitCode,
+			LastCommandExitCode: resp.LastCommandExitCode,
+			CommandFinished:     resp.CommandFinished,
 		}); err != nil {
 			return err
 		}
