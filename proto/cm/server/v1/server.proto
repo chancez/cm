@@ -27,6 +27,12 @@ service Server {
 
   // History returns a session's contents, scrollback included, for printing or piping.
   rpc History(HistoryRequest) returns (HistoryResponse);
+
+  // GetEnv returns the environment variables the session's most recent client reported.
+  //
+  // A shell inside a session cannot learn these any other way: nothing outside a process can
+  // change its environment, so the shell has to ask and apply the result itself.
+  rpc GetEnv(GetEnvRequest) returns (GetEnvResponse);
 }
 
 // AttachRequest is a client-to-server event. The first message on the stream must be an
@@ -76,6 +82,17 @@ message Open {
 
   // Environment variables to set for a newly created session, as KEY=VALUE.
   repeated string env = 11;
+
+  // Terminal-related variables from this client's own environment, as KEY -> VALUE.
+  //
+  // Recorded on every attach, not just creation. A shell in a long-lived session holds values
+  // describing the terminal that started it, and reattaching from a new terminal, or the same
+  // one after it restarted, makes those stale. kitty's KITTY_LISTEN_ON is the sharp case, since
+  // every kitten call goes through it.
+  //
+  // Distinct from env above, which sets variables for a shell being created. These are recorded
+  // for an existing shell to ask about later.
+  map<string, string> client_env = 12;
 }
 
 message Input {
@@ -211,4 +228,13 @@ message HistoryRequest {
 
 message HistoryResponse {
   bytes data = 1;
+}
+
+message GetEnvRequest {
+  string session = 1;
+}
+
+message GetEnvResponse {
+  // Variables the latest client reported, as KEY -> VALUE.
+  map<string, string> env = 1;
 }

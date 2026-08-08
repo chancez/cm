@@ -36,6 +36,7 @@ cm list                  list sessions
 cm info <session>        one session's details; --field for a single value
 cm history <session>     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching
+cm get-env [session]     print env vars from the session's latest client
 cm kill <session>...     terminate sessions
 ```
 
@@ -51,11 +52,16 @@ Working and usable: persistent sessions, attach/detach, screen and scrollback re
 reattach, multiple clients per session, resize, session survival across a server restart or
 crash, history, send-without-attach, and cwd/title tracking forwarded to clients.
 
-Not done yet: persistence across reboot, per-client environment capture, JSON output,
-configurable detach key. See `docs/` for design notes and trade-offs:
+Also tracks the terminal-related environment variables of whichever client attached most
+recently, so a long-running shell can refresh values like kitty's `KITTY_LISTEN_ON` that
+otherwise go stale when the terminal restarts. See `docs/config.md`.
+
+Not done yet: persistence across reboot, JSON output, configurable detach key. See `docs/` for
+design notes and trade-offs:
 
 - `docs/architecture.md` - why three layers, and what each owns
 - `docs/restore.md` - how screen restore works and why each detail is there
+- `docs/config.md` - the config file, and the session environment problem
 - `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
 - `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
 

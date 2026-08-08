@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 )
 
@@ -15,6 +16,7 @@ import (
 type globals struct {
 	runtimeDir string
 	stateDir   string
+	configPath string
 }
 
 // dirs resolves the directories to use, letting flags override the environment.
@@ -63,6 +65,8 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		"directory for sockets ($"+paths.Env("RUNTIME_DIR")+")")
 	pf.StringVar(&g.stateDir, "state-dir", "",
 		"directory for the database and logs ($"+paths.Env("STATE_DIR")+")")
+	pf.StringVar(&g.configPath, "config", "",
+		"configuration file ($"+paths.Env("CONFIG")+")")
 
 	root.AddCommand(
 		newAttachCommand(g),
@@ -72,6 +76,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newSendCommand(g),
 		newHistoryCommand(g),
 		newInfoCommand(g),
+		newGetEnvCommand(g),
 		newShimCommand(g),
 		newCompletionsCommand(),
 	)
@@ -113,4 +118,20 @@ func sessionNameArg(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("expected exactly one session name, got %d", len(args))
 	}
 	return paths.ValidateSessionName(args[0])
+}
+
+// config resolves and loads the configuration file.
+//
+// A missing file is not an error, since configuration is optional and every setting has a
+// default that suits the common case.
+func (g *globals) config() (*config.Config, error) {
+	path := g.configPath
+	if path == "" {
+		p, err := config.DefaultPath()
+		if err != nil {
+			return nil, err
+		}
+		path = p
+	}
+	return config.Load(path)
 }

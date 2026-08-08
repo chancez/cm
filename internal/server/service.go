@@ -37,16 +37,27 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 
 	sess, created, err := s.mgr.Open(ctx, OpenOptions{
-		Name:    open.Session,
-		Rows:    uint16(open.Rows),
-		Cols:    uint16(open.Cols),
-		Command: open.Command,
-		Dir:     open.Cwd,
-		Env:     open.Env,
-		Owned:   open.Own,
+		Name:      open.Session,
+		Rows:      uint16(open.Rows),
+		Cols:      uint16(open.Cols),
+		Command:   open.Command,
+		Dir:       open.Cwd,
+		Env:       open.Env,
+		Owned:     open.Own,
+		ClientEnv: open.ClientEnv,
 	})
 	if err != nil {
 		return err
+	}
+
+	// Record what this client's terminal looks like, on every attach rather than only on
+	// creation. A shell that has been running for days holds values describing a terminal that
+	// may have been replaced since, and this is the only record of the current one.
+	//
+	// After Open rather than before, because a session created by this call has no row to update
+	// until then.
+	if len(open.ClientEnv) > 0 {
+		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Env: open.ClientEnv})
 	}
 
 	// Resize before snapshotting, not after.
@@ -342,6 +353,14 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 		return nil, err
 	}
 	return &serverv1.HistoryResponse{Data: data}, nil
+}
+
+func (s *Service) GetEnv(ctx context.Context, req *serverv1.GetEnvRequest) (*serverv1.GetEnvResponse, error) {
+	rec, err := s.mgr.store.Get(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.GetEnvResponse{Env: rec.Env}, nil
 }
 
 // describeCommand renders an argv for display, quoting only when needed so the common case

@@ -13,6 +13,7 @@ import (
 
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/sessionenv"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -64,6 +65,11 @@ Detach with ctrl-\ , which leaves the session running.`,
 				// which is what a terminal emulator opening a window expects.
 				dir, _ = os.Getwd()
 			}
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+
 			opts := client.Options{
 				SocketPath: dirs.ServerSocket(),
 				Session:    session,
@@ -71,6 +77,9 @@ Detach with ctrl-\ , which leaves the session running.`,
 				ReadOnly:   readOnly,
 				Dir:        dir,
 				Command:    argsAfterDash(cmd, args),
+				// Recorded so a shell already running in this session can refresh values that
+				// describe the terminal, which may have been replaced since it started.
+				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
 			}
 			if setTitle {
 				// Forward the session's title to the outer terminal.

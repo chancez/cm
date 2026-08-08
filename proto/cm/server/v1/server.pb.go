@@ -226,7 +226,17 @@ type Open struct {
 	// Working directory for a newly created session. Empty means the client's cwd.
 	Cwd string `protobuf:"bytes,10,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	// Environment variables to set for a newly created session, as KEY=VALUE.
-	Env           []string `protobuf:"bytes,11,rep,name=env,proto3" json:"env,omitempty"`
+	Env []string `protobuf:"bytes,11,rep,name=env,proto3" json:"env,omitempty"`
+	// Terminal-related variables from this client's own environment, as KEY -> VALUE.
+	//
+	// Recorded on every attach, not just creation. A shell in a long-lived session holds values
+	// describing the terminal that started it, and reattaching from a new terminal, or the same
+	// one after it restarted, makes those stale. kitty's KITTY_LISTEN_ON is the sharp case, since
+	// every kitten call goes through it.
+	//
+	// Distinct from env above, which sets variables for a shell being created. These are recorded
+	// for an existing shell to ask about later.
+	ClientEnv     map[string]string `protobuf:"bytes,12,rep,name=client_env,json=clientEnv,proto3" json:"client_env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -334,6 +344,13 @@ func (x *Open) GetCwd() string {
 func (x *Open) GetEnv() []string {
 	if x != nil {
 		return x.Env
+	}
+	return nil
+}
+
+func (x *Open) GetClientEnv() map[string]string {
+	if x != nil {
+		return x.ClientEnv
 	}
 	return nil
 }
@@ -1350,6 +1367,95 @@ func (x *HistoryResponse) GetData() []byte {
 	return nil
 }
 
+type GetEnvRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Session       string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEnvRequest) Reset() {
+	*x = GetEnvRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEnvRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEnvRequest) ProtoMessage() {}
+
+func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEnvRequest.ProtoReflect.Descriptor instead.
+func (*GetEnvRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *GetEnvRequest) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+type GetEnvResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Variables the latest client reported, as KEY -> VALUE.
+	Env           map[string]string `protobuf:"bytes,1,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEnvResponse) Reset() {
+	*x = GetEnvResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEnvResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEnvResponse) ProtoMessage() {}
+
+func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEnvResponse.ProtoReflect.Descriptor instead.
+func (*GetEnvResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GetEnvResponse) GetEnv() map[string]string {
+	if x != nil {
+		return x.Env
+	}
+	return nil
+}
+
 var File_cm_server_v1_server_proto protoreflect.FileDescriptor
 
 const file_cm_server_v1_server_proto_rawDesc = "" +
@@ -1360,7 +1466,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xa8\x02\n" +
+	"\x05event\"\xa8\x03\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -1373,7 +1479,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\acommand\x18\t \x03(\tR\acommand\x12\x10\n" +
 	"\x03cwd\x18\n" +
 	" \x01(\tR\x03cwd\x12\x10\n" +
-	"\x03env\x18\v \x03(\tR\x03envB\x12\n" +
+	"\x03env\x18\v \x03(\tR\x03env\x12@\n" +
+	"\n" +
+	"client_env\x18\f \x03(\v2!.cm.server.v1.Open.ClientEnvEntryR\tclientEnv\x1a<\n" +
+	"\x0eClientEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
 	"\x10_resume_from_seq\"\x1b\n" +
 	"\x05Input\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"b\n" +
@@ -1437,17 +1548,25 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\tR\asession\x123\n" +
 	"\x06format\x18\x02 \x01(\x0e2\x1b.cm.server.v1.HistoryFormatR\x06format\"%\n" +
 	"\x0fHistoryResponse\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data*_\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\")\n" +
+	"\rGetEnvRequest\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\"\x81\x01\n" +
+	"\x0eGetEnvResponse\x127\n" +
+	"\x03env\x18\x01 \x03(\v2%.cm.server.v1.GetEnvResponse.EnvEntryR\x03env\x1a6\n" +
+	"\bEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*_\n" +
 	"\rHistoryFormat\x12\x1e\n" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
-	"\x13HISTORY_FORMAT_HTML\x10\x022\xd6\x02\n" +
+	"\x13HISTORY_FORMAT_HTML\x10\x022\x9b\x03\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
 	"\x04Kill\x12\x19.cm.server.v1.KillRequest\x1a\x1a.cm.server.v1.KillResponse\x12=\n" +
 	"\x04Send\x12\x19.cm.server.v1.SendRequest\x1a\x1a.cm.server.v1.SendResponse\x12F\n" +
-	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
+	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponse\x12C\n" +
+	"\x06GetEnv\x12\x1b.cm.server.v1.GetEnvRequest\x1a\x1c.cm.server.v1.GetEnvResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
 
 var (
 	file_cm_server_v1_server_proto_rawDescOnce sync.Once
@@ -1462,7 +1581,7 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 }
 
 var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_cm_server_v1_server_proto_goTypes = []any{
 	(HistoryFormat)(0),      // 0: cm.server.v1.HistoryFormat
 	(*AttachRequest)(nil),   // 1: cm.server.v1.AttachRequest
@@ -1484,35 +1603,43 @@ var file_cm_server_v1_server_proto_goTypes = []any{
 	(*SendResponse)(nil),    // 17: cm.server.v1.SendResponse
 	(*HistoryRequest)(nil),  // 18: cm.server.v1.HistoryRequest
 	(*HistoryResponse)(nil), // 19: cm.server.v1.HistoryResponse
-	nil,                     // 20: cm.server.v1.KillResponse.ErrorsEntry
+	(*GetEnvRequest)(nil),   // 20: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),  // 21: cm.server.v1.GetEnvResponse
+	nil,                     // 22: cm.server.v1.Open.ClientEnvEntry
+	nil,                     // 23: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                     // 24: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
 	2,  // 0: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
 	3,  // 1: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
 	4,  // 2: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
 	5,  // 3: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
-	8,  // 4: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
-	9,  // 5: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
-	10, // 6: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
-	7,  // 7: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
-	13, // 8: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	20, // 9: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	0,  // 10: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	1,  // 11: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	11, // 12: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	14, // 13: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	16, // 14: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	18, // 15: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	6,  // 16: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	12, // 17: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	15, // 18: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	17, // 19: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	19, // 20: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	16, // [16:21] is the sub-list for method output_type
-	11, // [11:16] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	22, // 4: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	8,  // 5: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
+	9,  // 6: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
+	10, // 7: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
+	7,  // 8: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
+	13, // 9: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	23, // 10: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	0,  // 11: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	24, // 12: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	1,  // 13: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	11, // 14: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	14, // 15: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	16, // 16: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	18, // 17: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	20, // 18: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	6,  // 19: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	12, // 20: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	15, // 21: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	17, // 22: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	19, // 23: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	21, // 24: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	19, // [19:25] is the sub-list for method output_type
+	13, // [13:19] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -1539,7 +1666,7 @@ func file_cm_server_v1_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

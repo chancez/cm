@@ -233,6 +233,9 @@ type OpenOptions struct {
 	// Owned records that the attaching client claims the session, so dropping its
 	// connection without detaching should end it.
 	Owned bool
+	// ClientEnv holds terminal-related variables from the attaching client, recorded so a shell
+	// in the session can refresh them later.
+	ClientEnv map[string]string
 }
 
 // Open returns the named session, creating it if necessary, and reports whether it created
@@ -307,6 +310,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Rows:       int(opts.Rows),
 		Cols:       int(opts.Cols),
 		Owned:      opts.Owned,
+		Env:        opts.ClientEnv,
 	}
 	// Record before spawning so a shim can never exist without a row describing it. A row
 	// with no shim is recoverable; a shim with no row is invisible.

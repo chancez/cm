@@ -45,6 +45,9 @@ type Options struct {
 	Dir string
 	// Env holds extra KEY=VALUE entries when creating.
 	Env []string
+	// ClientEnv holds terminal-related variables from this client's environment, recorded by the
+	// server so a shell inside the session can refresh them later.
+	ClientEnv map[string]string
 	// OnMetadata, when set, is called as the session reports its title and directory.
 	//
 	// This is how a terminal emulator learns values the shell reported to cm rather than to the
@@ -184,6 +187,7 @@ func runSession(
 		Command:       opts.Command,
 		Cwd:           opts.Dir,
 		Env:           opts.Env,
+		ClientEnv:     opts.ClientEnv,
 		ResumeFromSeq: *resumeFrom,
 	}
 	if err := stream.Send(&serverv1.AttachRequest{

@@ -13,6 +13,7 @@ type ServerService interface {
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
+	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 }
 
 type Server_AttachServer interface {
@@ -68,6 +69,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.History(ctx, &req)
 			},
+			"GetEnv": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req GetEnvRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.GetEnv(ctx, &req)
+			},
 		},
 		Streams: map[string]ttrpc.Stream{
 			"Attach": {
@@ -87,6 +95,7 @@ type ServerClient interface {
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
+	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 }
 
 type serverClient struct {
@@ -160,6 +169,14 @@ func (c *serverClient) Send(ctx context.Context, req *SendRequest) (*SendRespons
 func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*HistoryResponse, error) {
 	var resp HistoryResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "History", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) GetEnv(ctx context.Context, req *GetEnvRequest) (*GetEnvResponse, error) {
+	var resp GetEnvResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "GetEnv", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

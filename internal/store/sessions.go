@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +11,7 @@ import (
 )
 
 const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
-	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at`
+	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at, env`
 
 // Create inserts a session record.
 //
@@ -28,11 +29,11 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols, sess.Owned,
-		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(),
+		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeEnv(sess.Env),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.Name, err)
@@ -105,6 +106,7 @@ type Update struct {
 	Rows     *int
 	Cols     *int
 	Owned    *bool
+	Env      map[string]string
 }
 
 // Apply writes the update, returning ErrNotFound if the session is gone.
@@ -147,6 +149,9 @@ func (s *Store) Apply(ctx context.Context, name string, u Update) error {
 	}
 	if u.Owned != nil {
 		add("owned", *u.Owned)
+	}
+	if u.Env != nil {
+		add("env", encodeEnv(u.Env))
 	}
 	if len(sets) == 0 {
 		return nil
@@ -200,6 +205,33 @@ func (s *Store) NextName(ctx context.Context, prefix string) (string, error) {
 	return fmt.Sprintf("%s%d", prefix, n), nil
 }
 
+// encodeEnv renders captured variables for storage. An empty map is stored as an empty string
+// rather than "{}", so a row written before this column existed reads back identically.
+func encodeEnv(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(env)
+	if err != nil {
+		// Keys and values are strings, so this cannot fail; dropping the value is still better
+		// than failing the whole write for something advisory.
+		return ""
+	}
+	return string(b)
+}
+
+// decodeEnv parses stored variables, treating anything unreadable as absent.
+func decodeEnv(s string) map[string]string {
+	if s == "" {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 // scanner covers both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
@@ -213,15 +245,17 @@ func scanSession(sc scanner) (Session, error) {
 		created   int64
 		updated   int64
 		ownedFlag bool
+		envJSON   string
 	)
 	err := sc.Scan(
 		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
-		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated,
+		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated, &envJSON,
 	)
 	if err != nil {
 		return Session{}, err
 	}
+	sess.Env = decodeEnv(envJSON)
 	sess.LastSeq = uint64(lastSeq)
 	sess.State = State(state)
 	sess.Owned = ownedFlag

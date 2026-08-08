@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +38,7 @@ func sampleSession(name string) Session {
 		Rows:       40,
 		Cols:       120,
 		Owned:      true,
+		Env:        map[string]string{"KITTY_LISTEN_ON": "unix:/tmp/kitty-1", "TERM": "xterm-kitty"},
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
 	}
 }
@@ -58,7 +60,7 @@ func TestCreateAndGetRoundTrip(t *testing.T) {
 	// UpdatedAt is assigned by Create, so it cannot be predicted; copy it across and
 	// compare everything else as a whole value.
 	want.UpdatedAt = got.UpdatedAt
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Get() = %+v\nwant %+v", got, want)
 	}
 	if got.UpdatedAt.IsZero() {
@@ -116,7 +118,7 @@ func TestApplyUpdatesOnlyGivenFields(t *testing.T) {
 	want.State = newState
 	want.ExitCode = code
 	want.UpdatedAt = got.UpdatedAt
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("after Apply, Get() = %+v\nwant %+v", got, want)
 	}
 }
@@ -365,7 +367,7 @@ func TestReopenPreservesSessions(t *testing.T) {
 		t.Fatalf("Get() after reopen error = %v", err)
 	}
 	want.UpdatedAt = got.UpdatedAt
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("after reopen Get() = %+v\nwant %+v", got, want)
 	}
 

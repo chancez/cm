@@ -97,7 +97,10 @@ type Session struct {
 	Cols    int
 	// Owned records that a client claimed this session, so losing that client's
 	// connection without an explicit detach should end the session.
-	Owned     bool
+	Owned bool
+	// Env holds the environment variables the most recent client reported, so a shell inside the
+	// session can refresh values that describe a terminal which may since have been replaced.
+	Env       map[string]string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -167,5 +170,13 @@ var migrations = []string{
 		name  TEXT PRIMARY KEY,
 		value INTEGER NOT NULL
 	) STRICT;
+	`,
+
+	// Environment variables the latest client reported, as JSON.
+	//
+	// JSON in a column rather than a side table: this is read and written whole, never queried by
+	// key, so a table would add a join for no benefit.
+	`
+	ALTER TABLE sessions ADD COLUMN env TEXT NOT NULL DEFAULT '';
 	`,
 }

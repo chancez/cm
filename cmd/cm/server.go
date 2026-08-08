@@ -12,6 +12,7 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/server"
 	"github.com/chancez/cm/internal/store"
@@ -37,12 +38,16 @@ for development.`,
 			if err != nil {
 				return err
 			}
-			return runServer(cmd.Context(), dirs)
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			return runServer(cmd.Context(), dirs, cfg)
 		},
 	}
 }
 
-func runServer(ctx context.Context, dirs paths.Dirs) error {
+func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config) error {
 	if err := dirs.Ensure(); err != nil {
 		return err
 	}
@@ -62,7 +67,7 @@ func runServer(ctx context.Context, dirs paths.Dirs) error {
 	}
 	defer st.Close()
 
-	mgr, err := server.NewManager(dirs, st, newTerminal)
+	mgr, err := server.NewManager(dirs, st, terminalFactory(cfg))
 	if err != nil {
 		l.Close()
 		return err
@@ -162,16 +167,13 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 	}
 }
 
-// defaultScrollbackLines bounds retained scrollback per session.
+// terminalFactory builds the function the manager uses to create terminal models.
 //
-// Matches tmux's and zmx's default. libghostty prunes at page granularity, so the effective
-// limit is somewhat higher.
-const defaultScrollbackLines = 2000
-
-// newTerminal builds the terminal model for a session.
-//
-// This is where cgo enters the server. Keeping it a function passed to the manager means the
-// manager, and its tests, do not depend on the emulator.
-func newTerminal(rows, cols uint16) (server.Terminal, error) {
-	return vt.NewSessionTerminal(rows, cols, defaultScrollbackLines)
+// This is where cgo enters the server. Passing it in means the manager, and its tests, do not
+// depend on the emulator.
+func terminalFactory(cfg *config.Config) server.NewTerminalFunc {
+	scrollback := cfg.Scrollback()
+	return func(rows, cols uint16) (server.Terminal, error) {
+		return vt.NewSessionTerminal(rows, cols, scrollback)
+	}
 }
