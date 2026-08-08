@@ -72,6 +72,14 @@ type PersistPolicy struct {
 	CommandIsSafeToRerun func(argv []string) bool
 	// ExpireAfter removes a dead persisted session after this long.
 	ExpireAfter time.Duration
+	// ForgetUnpersistedAfter removes an ended session that saved no output after this long.
+	//
+	// Separate from ExpireAfter, and much shorter, because such a record holds nothing recoverable:
+	// its log was never written, so `cm history` can only report that the output is gone. The only
+	// reason to keep it at all is that `cm run` reads the exit status back through `list`, which
+	// takes seconds. Keeping it for the persisted-session lifetime instead means every short
+	// command a user ever runs stays in `cm list` for days, which makes the command useless.
+	ForgetUnpersistedAfter time.Duration
 }
 
 // RestoreAction is what happens when a dead session with saved content is attached to.
@@ -729,6 +737,12 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 	}
 
 	cutoff := now.Add(-m.persist.ExpireAfter)
+	// A session that saved no output is forgotten far sooner. See ForgetUnpersistedAfter.
+	unpersistedCutoff := cutoff
+	if m.persist.ForgetUnpersistedAfter > 0 {
+		unpersistedCutoff = now.Add(-m.persist.ForgetUnpersistedAfter)
+	}
+
 	removed := 0
 	for _, rec := range records {
 		if rec.State == store.StateRunning {
@@ -742,7 +756,11 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		}
 		// UpdatedAt rather than CreatedAt: what matters is how long ago the session stopped being
 		// useful, not how long ago it started.
-		if rec.UpdatedAt.After(cutoff) {
+		limit := cutoff
+		if rec.LogPath == "" {
+			limit = unpersistedCutoff
+		}
+		if rec.UpdatedAt.After(limit) {
 			continue
 		}
 

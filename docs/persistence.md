@@ -37,6 +37,7 @@ sessions = ["kitty.*"]      # name patterns that persist automatically
 on_restore = "shell"        # shell | none | command
 max_lines = 10000           # retained output per session
 expire_after = "168h"       # remove dead persisted sessions after this
+forget_unpersisted_after = "5m"  # remove ended sessions that saved nothing after this
 safe_commands = ["nvim", "vim", "less", "htop"]
 ```
 
@@ -98,6 +99,19 @@ it.
 
 A dead session with a saved log stays listed, marked restorable, so it can be found and revived.
 It is removed after `expire_after`, defaulting to a week.
+
+A session that ended *without* saving a log is a different case, and gets `forget_unpersisted_after`,
+defaulting to five minutes. Nothing about such a session can be recovered: with no log path,
+`cm history` can only report that its output is gone. The only reason to keep the record at all is
+that `cm run` reads the exit status back through `list`, which takes seconds.
+
+Two intervals rather than one because sharing them makes `cm list` useless. Every `cm run`, including
+every short command in a script, leaves a record, so a single week-long lifetime meant twenty test
+invocations buried the sessions actually being worked on. Five minutes is generous for reading an
+exit status and short enough that the list stays about live sessions.
+
+The sweep runs every minute, which is set by the shorter of the two intervals: an hourly sweep tuned
+for week-old records would leave every finished command listed until the next tick.
 
 Expiry is necessary rather than tidy: without it both the session list and the disk grow forever
 across reboots, and the session counter is already past 260 on the machine this is built for.

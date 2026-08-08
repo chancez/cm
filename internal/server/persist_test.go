@@ -562,3 +562,100 @@ func ageRecord(t *testing.T, st *store.Store, name string, when time.Time) {
 		t.Fatalf("SetUpdatedAt() error = %v", err)
 	}
 }
+
+// A session that saved no output is forgotten much sooner than a persisted one.
+//
+// Without this, every short command a user runs sits in `cm list` for the persisted-session lifetime,
+// which defaults to a week. Twenty `cm run` invocations made the list useless, and the records held
+// nothing recoverable: with no log path, `cm history` can only report that the output is gone. The
+// only reason to keep such a record at all is that `cm run` reads its exit status back through
+// `list`, which takes seconds.
+func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.ExpireAfter = 24 * time.Hour
+	policy.ForgetUnpersistedAfter = time.Minute
+	mgr.SetPersistPolicy(policy)
+	ctx := context.Background()
+
+	now := time.Now()
+
+	// Saved output, ended an hour ago: kept, since it is still worth reviving and reading.
+	logPath := dirs.SessionLog("saved")
+	writeSavedLog(t, logPath, "saved content\r\n")
+	if err := st.Create(ctx, store.Session{
+		Name:    "saved",
+		LogPath: logPath,
+		State:   store.StateExited,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// No saved output, ended an hour ago: gone, since nothing about it can be recovered.
+	if err := st.Create(ctx, store.Session{
+		Name:  "ran",
+		State: store.StateExited,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// No saved output, but only just ended: kept, or `cm run` could not read its exit status back.
+	if err := st.Create(ctx, store.Session{
+		Name:  "justran",
+		State: store.StateExited,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	ageRecord(t, st, "saved", now.Add(-time.Hour))
+	ageRecord(t, st, "ran", now.Add(-time.Hour))
+	ageRecord(t, st, "justran", now.Add(-time.Second))
+
+	removed, err := mgr.ExpireDeadSessions(ctx, now)
+	if err != nil {
+		t.Fatalf("ExpireDeadSessions() error = %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed %d sessions, want 1", removed)
+	}
+
+	if _, err := st.Get(ctx, "ran"); err == nil {
+		t.Error("an unpersisted session an hour old survived, want it forgotten")
+	}
+	for _, keep := range []string{"saved", "justran"} {
+		if _, err := st.Get(ctx, keep); err != nil {
+			t.Errorf("session %q was expired, want it kept: %v", keep, err)
+		}
+	}
+}
+
+// With no forget interval configured, an unpersisted session falls back to the persisted lifetime.
+//
+// Guards the zero value: a policy built without the field set, which is what every existing caller
+// and test does, must not start deleting records after zero seconds.
+func TestExpireUnsetForgetIntervalFallsBackToExpireAfter(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.ExpireAfter = time.Hour
+	// ForgetUnpersistedAfter deliberately left zero.
+	mgr.SetPersistPolicy(policy)
+	ctx := context.Background()
+
+	now := time.Now()
+	if err := st.Create(ctx, store.Session{Name: "ran", State: store.StateExited}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// Older than any plausible forget interval, but well inside ExpireAfter.
+	ageRecord(t, st, "ran", now.Add(-30*time.Minute))
+
+	removed, err := mgr.ExpireDeadSessions(ctx, now)
+	if err != nil {
+		t.Fatalf("ExpireDeadSessions() error = %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("removed %d sessions, want 0 with no forget interval configured", removed)
+	}
+	if _, err := st.Get(ctx, "ran"); err != nil {
+		t.Errorf("the session was expired with no forget interval set: %v", err)
+	}
+}

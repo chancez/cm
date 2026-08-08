@@ -85,6 +85,9 @@ type PersistConfig struct {
 	// ExpireAfter removes a dead persisted session after this long, as a Go duration. Empty means
 	// the default. Without expiry both the session list and the disk grow forever across reboots.
 	ExpireAfter string `toml:"expire_after"`
+	// ForgetUnpersistedAfter removes an ended session that saved no output after this long, as a Go
+	// duration. Empty means DefaultForgetUnpersistedAfter.
+	ForgetUnpersistedAfter string `toml:"forget_unpersisted_after"`
 }
 
 // RestoreMode is what happens when a dead session is attached to.
@@ -102,6 +105,14 @@ const (
 
 // DefaultExpireAfter is how long a dead persisted session is kept.
 const DefaultExpireAfter = 7 * 24 * time.Hour
+
+// DefaultForgetUnpersistedAfter is how long an ended session that saved no output is kept.
+//
+// Minutes, not days. The record holds nothing recoverable once the session ends, so its only purpose
+// is letting `cm run` read back an exit status, which takes seconds. Long enough to be generous
+// about that, short enough that `cm list` still shows the sessions a user cares about rather than
+// every command they have run this week.
+const DefaultForgetUnpersistedAfter = 5 * time.Minute
 
 // EnvConfig controls which variables follow a client into a session.
 type EnvConfig struct {
@@ -288,6 +299,24 @@ func (c *Config) ExpireAfter() (time.Duration, error) {
 		// Zero would mean "expire immediately", which is never what someone means by writing it.
 		// Refusing is better than deleting sessions the moment they die.
 		return 0, fmt.Errorf("expire_after must be positive, got %q", c.Persist.ExpireAfter)
+	}
+	return d, nil
+}
+
+// ForgetUnpersistedAfter returns how long an ended session that saved no output is kept.
+func (c *Config) ForgetUnpersistedAfter() (time.Duration, error) {
+	if c.Persist.ForgetUnpersistedAfter == "" {
+		return DefaultForgetUnpersistedAfter, nil
+	}
+	d, err := time.ParseDuration(c.Persist.ForgetUnpersistedAfter)
+	if err != nil {
+		return 0, fmt.Errorf("forget_unpersisted_after: %w", err)
+	}
+	if d <= 0 {
+		// Zero would delete a session's record the instant it ended, which would break `cm run`:
+		// it reads the exit status back from the record after the command finishes.
+		return 0, fmt.Errorf("forget_unpersisted_after must be positive, got %q",
+			c.Persist.ForgetUnpersistedAfter)
 	}
 	return d, nil
 }

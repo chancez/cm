@@ -107,14 +107,19 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	mgr.SetResizePolicy(server.ResizePolicy(resizePolicy))
 
-	if cfg.Persist.Enabled {
-		policy, err := persistPolicy(cfg)
-		if err != nil {
-			l.Close()
-			return err
-		}
-		mgr.SetPersistPolicy(policy)
+	// Always installed, even when persistence is disabled. The policy carries two separable things:
+	// which sessions save output, and how long finished records are kept. Only the first is what
+	// persist.enabled means, and gating the whole policy on it left the manager with no expiry at all,
+	// so a default install kept every finished session forever.
+	//
+	// Matches already returns false for every name when persistence is off, so nothing is persisted
+	// either way.
+	policy, err := persistPolicy(cfg)
+	if err != nil {
+		l.Close()
+		return err
 	}
+	mgr.SetPersistPolicy(policy)
 
 	// Adopt sessions whose shims survived a previous server before accepting clients, so a
 	// client that reconnects immediately finds its session already present.
@@ -125,13 +130,16 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 
 	// Expire on startup and then periodically. Startup is when a reboot's accumulation is visible,
 	// and the ticker covers a server that stays up for weeks.
-	if cfg.Persist.Enabled {
-		if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
-			// Not fatal: failing to clean up is worth reporting but not worth refusing to serve.
-			logger.Warn("expiring sessions failed", "error", err)
-		}
-		go expirePeriodically(ctx, mgr, logger)
+	//
+	// Not gated on persistence being enabled. That setting decides whether a session *saves output*,
+	// which is a different question from whether finished session records are cleaned up: every
+	// session that ends leaves a row regardless, so gating this meant a default install accumulated
+	// them forever and `cm list` filled with every command ever run.
+	if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
+		// Not fatal: failing to clean up is worth reporting but not worth refusing to serve.
+		logger.Warn("expiring sessions failed", "error", err)
 	}
+	go expirePeriodically(ctx, mgr, logger)
 
 	return server.Serve(ctx, l, server.NewService(mgr))
 }
@@ -235,9 +243,11 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 
 // expireInterval is how often dead sessions are swept while the server runs.
 //
-// Hourly rather than more often: expiry is measured in days, so a long interval costs nothing and
-// keeps a mostly-idle server mostly idle.
-const expireInterval = time.Hour
+// A minute rather than an hour. Persisted-session expiry is measured in days and would be happy with
+// any interval, but sessions that saved no output are forgotten within minutes, and an hourly sweep
+// would leave every short command sitting in `cm list` until the next tick. The sweep is a query
+// over a small table, so this still keeps an idle server idle.
+const expireInterval = time.Minute
 
 // expirePeriodically sweeps dead sessions until the context is cancelled.
 func expirePeriodically(ctx context.Context, mgr *server.Manager, logger *slog.Logger) {
@@ -269,12 +279,18 @@ func persistPolicy(cfg *config.Config) (*server.PersistPolicy, error) {
 		return nil, err
 	}
 
+	forget, err := cfg.ForgetUnpersistedAfter()
+	if err != nil {
+		return nil, err
+	}
+
 	return &server.PersistPolicy{
-		Matches:              cfg.PersistsSession,
-		Limits:               cfg.PersistLimits(),
-		OnRestore:            server.RestoreAction(mode),
-		CommandIsSafeToRerun: cfg.CommandIsSafeToRerun,
-		ExpireAfter:          expire,
+		Matches:                cfg.PersistsSession,
+		Limits:                 cfg.PersistLimits(),
+		OnRestore:              server.RestoreAction(mode),
+		CommandIsSafeToRerun:   cfg.CommandIsSafeToRerun,
+		ExpireAfter:            expire,
+		ForgetUnpersistedAfter: forget,
 	}, nil
 }
 
