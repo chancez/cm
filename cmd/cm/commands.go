@@ -81,38 +81,6 @@ func newServerCommand(g *globals) *cobra.Command {
 	}
 }
 
-// newShimCommand builds the hidden shim subcommand.
-//
-// The server re-execs this; a human never types it. Suggestions are disabled so a
-// malformed re-exec fails loudly instead of helpfully running something adjacent, and
-// interspersed args are disabled so the argv the server constructs is parsed exactly as
-// written.
-func newShimCommand(g *globals) *cobra.Command {
-	var (
-		session    string
-		rows, cols uint16
-	)
-	cmd := &cobra.Command{
-		Use:                "shim",
-		Short:              "Internal: hold a session's pty",
-		Hidden:             true,
-		Args:               cobra.NoArgs,
-		DisableSuggestions: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := paths.ValidateSessionName(session); err != nil {
-				return err
-			}
-			return fmt.Errorf("shim %s: %w", session, errNotImplemented)
-		},
-	}
-	cmd.Flags().SetInterspersed(false)
-	f := cmd.Flags()
-	f.StringVar(&session, "session", "", "session name this shim serves")
-	f.Uint16Var(&rows, "rows", 24, "initial window rows")
-	f.Uint16Var(&cols, "cols", 80, "initial window columns")
-	return cmd
-}
-
 func newCompletionsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:       "completions <shell>",

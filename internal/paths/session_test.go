@@ -72,3 +72,24 @@ func TestValidNamesProduceContainedPaths(t *testing.T) {
 		}
 	}
 }
+
+// An over-long socket path fails at bind with a bare EINVAL, so it is checked up front to
+// produce an error that names the limit and suggests a fix.
+func TestCheckSocketPath(t *testing.T) {
+	if err := CheckSocketPath("/tmp/cm-501/shim-work.sock"); err != nil {
+		t.Errorf("CheckSocketPath(short) = %v, want nil", err)
+	}
+
+	long := "/" + strings.Repeat("a", MaxSocketPathLen)
+	err := CheckSocketPath(long)
+	if err == nil {
+		t.Fatalf("CheckSocketPath(%d bytes) = nil, want an error", len(long))
+	}
+	// The message has to be actionable: the failure mode it replaces was an opaque
+	// "invalid argument" with no mention of length.
+	for _, want := range []string{"limit", Env("RUNTIME_DIR")} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
