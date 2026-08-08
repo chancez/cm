@@ -296,8 +296,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 						Title:      meta.Title,
 						Cwd:        meta.Cwd.Path,
 						CwdIsLocal: meta.Cwd.IsLocal,
-						Busy:       meta.Command.Running,
-						Command:    meta.Command.Command,
+						Busy: meta.Command.Running || meta.Reported.State == "busy" ||
+							meta.Reported.State == "blocked",
+						Command:        meta.Command.Command,
+						ReportedState:  meta.Reported.State,
+						ReportedDetail: meta.Reported.Detail,
 					},
 				},
 			}); err != nil {
@@ -487,6 +490,15 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			cmd := sess.Command()
 			item.Busy = cmd.Running
 			item.Command = cmd.Command
+
+			// A program's own report about itself, which takes precedence over the derived state above.
+			if r := sess.Reported(); r.State != "" {
+				item.ReportedState = r.State
+				item.ReportedDetail = r.Detail
+				item.ReportedSource = r.Source
+				// Reflected in busy too, so a caller reading one field still gets the better answer.
+				item.Busy = r.State != "idle"
+			}
 		}
 		out.Sessions = append(out.Sessions, item)
 	}

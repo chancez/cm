@@ -169,6 +169,37 @@ true of a process, not of a record, so a stored value would come back after a re
 command that finished long ago and a confirmation built on it would fire forever. The cost is that a
 session adopted by a new server reports idle until its next command.
 
+## State a program reports about itself
+
+`cm report --state busy|blocked|idle|clear` records what a program in a session is doing. It is visible in
+`cm list` and `cm info`, forwarded on the metadata event, and waitable with `cm wait --until blocked`.
+
+The reason it exists is that `blocked` cannot be derived. cm reads OSC 133 to know whether a command is
+running, which is enough for a shell and not enough for anything interactive: the shell reports a command
+as running whether it is computing or sitting at a prompt of its own. A coding agent is one long-running
+command from the shell's point of view, from the moment it starts until it exits, so the derived state says
+"busy" for its entire life while the agent moves between working, waiting for an answer, and done.
+
+A report takes precedence over the derived state rather than merging with it, because a program describing
+itself is better evidence than a marker its shell emitted.
+
+Nothing about this is agent-specific, and that is the design decision worth defending. cm has no list of
+known programs and no patterns matched against their output, so a program it has never heard of works
+exactly as well as one it has. The alternative, which herdr implements as a fallback for agents lacking
+hooks, is a TOML manifest of regexes per agent matched against the bottom of the screen -- versioned,
+fetched from the network, and updated whenever an agent changes its UI. Their Claude manifest was updated
+four days before this was written. Asking the program is a fixed cost; recognizing it is a treadmill.
+
+`cm report` with no session name uses `CM_SESSION`, so a hook running inside a session needs no plumbing.
+That is the one place cm reads the variable, and it does not weaken the rule about `attach` above: using it
+as the default target of a report moves nothing and retargets nothing, and an explicit name overrides it.
+
+Reports are deliberately not persisted, for the same reason busy state is not: they describe a running
+program. A value restored after a server restart would claim something needs input when it finished long
+ago, and anything waiting on that state would be released for no reason.
+
+See `contrib/hooks/` for how to wire this to a program, including a Claude Code example.
+
 ## Waiting, and why the server does it
 
 `cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from

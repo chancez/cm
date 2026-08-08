@@ -34,6 +34,12 @@ service Server {
   // change its environment, so the shell has to ask and apply the result itself.
   rpc GetEnv(GetEnvRequest) returns (GetEnvResponse);
 
+  // Report records what a program in a session says it is doing.
+  //
+  // Deliberately not agent-specific: cm has no notion of an agent, and a state a program reports is
+  // just a state. A build script, a test runner, and a coding agent's hook all use the same call.
+  rpc Report(ReportRequest) returns (ReportResponse);
+
   // Read returns a bounded, parseable view of a session's recent output.
   //
   // Distinct from History, which renders everything: a caller reading a session programmatically wants
@@ -55,6 +61,40 @@ service Server {
 }
 
 // ShutdownRequest asks the server to stop.
+// ReportedState is what a program in a session says about itself.
+//
+// Overlaps deliberately with what cm derives from OSC 133, and takes precedence over it: a program that
+// says what it is doing knows better than a shell marker does. A coding agent is the case that needs
+// this, since its shell reports one long-running command while the agent moves between working, waiting
+// for input, and done.
+enum ReportedState {
+  REPORTED_STATE_UNSPECIFIED = 0;
+  // IDLE means the program finished and is not waiting on anything.
+  REPORTED_STATE_IDLE = 1;
+  // BUSY means it is working.
+  REPORTED_STATE_BUSY = 2;
+  // BLOCKED means it needs input and will not progress until it gets some.
+  //
+  // The state OSC 133 cannot express: a shell reports a command as running whether it is computing or
+  // sitting at a prompt of its own, so only the program itself can say which.
+  REPORTED_STATE_BLOCKED = 3;
+  // CLEAR removes a report, so the session falls back to what cm derives from the shell.
+  REPORTED_STATE_CLEAR = 4;
+}
+
+message ReportRequest {
+  // Empty means the session the caller is in, from CM_SESSION.
+  string session = 1;
+  ReportedState state = 2;
+  // A short human-readable note, shown alongside the state. Optional.
+  string detail = 3;
+  // Who is reporting, for display and so one reporter's state is distinguishable from another's.
+  // Optional; free-form.
+  string source = 4;
+}
+
+message ReportResponse {}
+
 message ReadRequest {
   string session = 1;
   // How many lines from the end. Zero means everything.
@@ -77,6 +117,11 @@ enum WaitState {
   WAIT_STATE_BUSY = 2;
   // EXITED means the session ended, whatever its status.
   WAIT_STATE_EXITED = 3;
+  // BLOCKED means a program in the session reported that it needs input.
+  //
+  // Only reachable when something reports it: a shell marks a command as running whether it is computing
+  // or waiting at a prompt of its own, so this cannot be derived from OSC 133.
+  WAIT_STATE_BLOCKED = 4;
 }
 
 message WaitRequest {
@@ -92,6 +137,9 @@ message WaitRequest {
 message WaitResponse {
   // Whether the condition was reached, as opposed to the wait timing out.
   bool satisfied = 1;
+  // What a program in the session reported about itself, if anything, and the note that came with it.
+  string reported_state = 6;
+  string reported_detail = 7;
   // The session's state when the wait returned, so a caller that timed out learns what it was instead.
   bool busy = 2;
   string command = 3;
@@ -238,6 +286,9 @@ message Metadata {
   // later.
   bool busy = 4;
   string command = 5;
+  // What a program in the session reported about itself, which takes precedence over busy above.
+  string reported_state = 6;
+  string reported_detail = 7;
 }
 
 message Opened {
@@ -312,6 +363,16 @@ message Session {
   // Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
   // caller can tell a remote directory from a local one. cwd holds the decoded local path.
   string cwd_uri = 11;
+
+  // What a program in the session reported about itself, if anything: "idle", "busy", or "blocked".
+  //
+  // Empty when nothing has reported, in which case busy below is what cm derived from the shell. When
+  // both are present this one wins, since a program describing itself is better evidence than a shell
+  // marker.
+  string reported_state = 14;
+  // The note that came with the report, and who sent it. Both optional and free-form.
+  string reported_detail = 15;
+  string reported_source = 16;
 
   // Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
   //

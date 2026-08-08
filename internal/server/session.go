@@ -76,6 +76,14 @@ type Session struct {
 	// rather than state libghostty retains. A terminal has no "is a command running" to query.
 	command osc.CommandState
 
+	// reported is what a program inside the session said about itself, and takes precedence over
+	// command above.
+	//
+	// Precedence, not merging: a program that says it is blocked knows something the shell cannot
+	// express, since a shell reports a command as running whether it is computing or waiting at a prompt
+	// of its own. Empty when nothing has reported, in which case the derived state stands.
+	reported Reported
+
 	// commands parses the OSC 133 markers out of the output stream.
 	//
 	// Outside mu deliberately: it is fed only by the pump, which is the single writer to terminal
@@ -423,6 +431,7 @@ func (s *Session) noteMetadata() {
 	}
 	cwd := s.cwd
 	command := s.command
+	reported := s.reported
 	s.mu.Unlock()
 
 	if !titleChanged && !pwdChanged {
@@ -431,7 +440,7 @@ func (s *Session) noteMetadata() {
 	// The command state is included even though this call is about the title and directory: a
 	// Metadata is a snapshot of everything a session reports, so omitting it here would publish a
 	// zero value and make a client think nothing was running.
-	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: command})
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: command, Reported: reported})
 }
 
 // noteCommand records a change in what the shell reported running, and tells clients.
@@ -447,10 +456,10 @@ func (s *Session) noteCommand() {
 		return
 	}
 	s.command = state
-	title, cwd := s.title, s.cwd
+	title, cwd, reported := s.title, s.cwd, s.reported
 	s.mu.Unlock()
 
-	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: state})
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: state, Reported: reported})
 }
 
 // Command reports what the shell last said it was running.
@@ -458,6 +467,30 @@ func (s *Session) Command() osc.CommandState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.command
+}
+
+// setReported records what a program in the session said about itself, and tells clients.
+//
+// Published like the derived state, because a terminal emulator or a waiting script reacts to it the same
+// way. A zero value clears the report, so the session falls back to what cm derives.
+func (s *Session) setReported(r Reported) {
+	s.mu.Lock()
+	if r == s.reported {
+		s.mu.Unlock()
+		return
+	}
+	s.reported = r
+	title, cwd, cmd := s.title, s.cwd, s.command
+	s.mu.Unlock()
+
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: cmd, Reported: r})
+}
+
+// Reported returns what a program in the session last said about itself.
+func (s *Session) Reported() Reported {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reported
 }
 
 // CommandRuns counts the commands the shell has reported starting.
@@ -478,6 +511,9 @@ type Metadata struct {
 	Cwd   osc.Cwd
 	// Command is what the shell reported running, from OSC 133.
 	Command osc.CommandState
+	// Reported is what a program inside the session said about itself, which takes precedence over
+	// Command when set.
+	Reported Reported
 }
 
 // metaSub receives metadata changes.
@@ -518,13 +554,14 @@ func (s *Session) subscribeMetadata() *metaSub {
 
 	s.mu.Lock()
 	s.metaSubs[sub] = struct{}{}
-	current := Metadata{Title: s.title, Cwd: s.cwd, Command: s.command}
+	current := Metadata{Title: s.title, Cwd: s.cwd, Command: s.command, Reported: s.reported}
 	s.mu.Unlock()
 
 	// Command is part of the seed, and the condition below accounts for it. A subscriber that arrives
 	// while a command is already running would otherwise be told nothing about it until the shell
 	// reported again, which for a long build is the whole time it matters.
-	if current.Title != "" || current.Cwd.Path != "" || current.Command.Running {
+	if current.Title != "" || current.Cwd.Path != "" || current.Command.Running ||
+		current.Reported.State != "" {
 		sub.ch <- current
 	}
 	return sub

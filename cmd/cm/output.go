@@ -56,6 +56,17 @@ type sessionJSON struct {
 	// Command is the command line the shell reported running, when it reported one. Can be empty
 	// while Busy is true, since the cmdline parameter is an extension not every shell sends.
 	Command string `json:"command"`
+	// ReportedState is what a program in the session said about itself via `cm report`: "idle", "busy",
+	// or "blocked". Empty when nothing has reported.
+	//
+	// Takes precedence over Busy, which is derived from the shell. A program describing itself is better
+	// evidence, and "blocked" cannot be derived at all: a shell marks a command as running whether it is
+	// computing or waiting at a prompt of its own.
+	ReportedState string `json:"reported_state"`
+	// ReportedDetail and ReportedSource are the note that came with the report and who sent it. Both
+	// free-form and optional.
+	ReportedDetail string `json:"reported_detail"`
+	ReportedSource string `json:"reported_source"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -70,20 +81,37 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 
 	return sessionJSON{
-		Name:          s.Name,
-		State:         stateName(s),
-		ShellPID:      s.ShellPid,
-		Clients:       int32(s.Clients),
-		ExitCode:      s.ExitCode,
-		Title:         s.Title,
-		Cwd:           cwd,
-		CwdURI:        s.CwdUri,
-		CwdIsLocal:    s.CwdIsLocal,
-		CreatedAt:     created.Format(time.RFC3339),
-		CreatedAtUnix: s.CreatedAtUnix,
-		Busy:          s.Busy,
-		Command:       s.Command,
+		Name:           s.Name,
+		State:          stateName(s),
+		ShellPID:       s.ShellPid,
+		Clients:        int32(s.Clients),
+		ExitCode:       s.ExitCode,
+		Title:          s.Title,
+		Cwd:            cwd,
+		CwdURI:         s.CwdUri,
+		CwdIsLocal:     s.CwdIsLocal,
+		CreatedAt:      created.Format(time.RFC3339),
+		CreatedAtUnix:  s.CreatedAtUnix,
+		Busy:           s.Busy,
+		Command:        s.Command,
+		ReportedState:  s.ReportedState,
+		ReportedDetail: s.ReportedDetail,
+		ReportedSource: s.ReportedSource,
 	}
+}
+
+// truncate shortens s to at most n characters, marking that it was cut.
+//
+// For a table column only. The full value is in `cm info` and the JSON output, so nothing is lost by
+// abbreviating here.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 3 {
+		return s[:n]
+	}
+	return s[:n-3] + "..."
 }
 
 // firstWord returns the program name from a command line.
@@ -166,6 +194,17 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 		switch {
 		case state == "exited":
 			state = fmt.Sprintf("exited(%d)", s.ExitCode)
+		case state == "running" && s.ReportedState != "":
+			// A report wins over the derived state, and its detail is the useful part: "blocked" alone
+			// says a program wants something, while "blocked: needs approval" says what.
+			state = "running(" + s.ReportedState
+			if s.ReportedDetail != "" {
+				// Truncated, not reduced to its first word: a detail is a sentence a human wrote, so
+				// "needs approval" must not become "needs". A bound is still needed, since the column
+				// has to stay readable and nothing stops a reporter sending a paragraph.
+				state += ": " + truncate(s.ReportedDetail, 24)
+			}
+			state += ")"
 		case state == "running" && s.Command != "":
 			// Shown in the state column rather than as a new one, reusing the exited(0) idiom. What a
 			// session is doing belongs with whether it is alive, and a seventh column would push CWD
@@ -233,6 +272,9 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 		{"created_at", j.CreatedAt},
 		{"busy", fmt.Sprint(j.Busy)},
 		{"command", j.Command},
+		{"reported_state", j.ReportedState},
+		{"reported_detail", j.ReportedDetail},
+		{"reported_source", j.ReportedSource},
 	}
 
 	if field != "" {

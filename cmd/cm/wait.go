@@ -17,9 +17,10 @@ import (
 // A table rather than a switch so the accepted values and the error message listing them cannot drift
 // apart.
 var waitStates = map[string]serverv1.WaitState{
-	"idle":   serverv1.WaitState_WAIT_STATE_IDLE,
-	"busy":   serverv1.WaitState_WAIT_STATE_BUSY,
-	"exited": serverv1.WaitState_WAIT_STATE_EXITED,
+	"idle":    serverv1.WaitState_WAIT_STATE_IDLE,
+	"busy":    serverv1.WaitState_WAIT_STATE_BUSY,
+	"exited":  serverv1.WaitState_WAIT_STATE_EXITED,
+	"blocked": serverv1.WaitState_WAIT_STATE_BLOCKED,
 }
 
 func newWaitCommand(g *globals) *cobra.Command {
@@ -33,13 +34,19 @@ func newWaitCommand(g *globals) *cobra.Command {
 		Short: "Wait until a session reaches a state",
 		Long: `Wait until a session reaches a state.
 
-  idle    the shell is at a prompt with nothing running
-  busy    a command is running
-  exited  the session has ended
+  idle     the shell is at a prompt with nothing running
+  busy     a command is running
+  blocked  a program reported that it needs input
+  exited   the session has ended
 
 Idle and busy come from what the shell reports via OSC 133, so they need a shell
 with terminal integration loaded. A session whose shell reports nothing never
 becomes busy, and 'cm info <session> --field busy' shows what cm can see.
+
+Blocked only exists when a program reports it with 'cm report', because it cannot
+be derived: a shell marks a command as running whether it is computing or waiting
+at a prompt of its own. A report also takes precedence over the derived state for
+idle and busy, since a program describing itself is better evidence.
 
 Exits 0 when the state is reached and 1 on timeout, so it composes with && and ||:
 
@@ -57,7 +64,7 @@ request rather than polling, and cannot miss a transition the way sampling
 			}
 			state, ok := waitStates[until]
 			if !ok {
-				return fmt.Errorf("unknown state %q, want one of idle, busy, exited", until)
+				return fmt.Errorf("unknown state %q, want one of idle, busy, blocked, exited", until)
 			}
 
 			dirs, err := g.dirs()

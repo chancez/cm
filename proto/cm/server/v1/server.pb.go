@@ -28,6 +28,75 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ShutdownRequest asks the server to stop.
+// ReportedState is what a program in a session says about itself.
+//
+// Overlaps deliberately with what cm derives from OSC 133, and takes precedence over it: a program that
+// says what it is doing knows better than a shell marker does. A coding agent is the case that needs
+// this, since its shell reports one long-running command while the agent moves between working, waiting
+// for input, and done.
+type ReportedState int32
+
+const (
+	ReportedState_REPORTED_STATE_UNSPECIFIED ReportedState = 0
+	// IDLE means the program finished and is not waiting on anything.
+	ReportedState_REPORTED_STATE_IDLE ReportedState = 1
+	// BUSY means it is working.
+	ReportedState_REPORTED_STATE_BUSY ReportedState = 2
+	// BLOCKED means it needs input and will not progress until it gets some.
+	//
+	// The state OSC 133 cannot express: a shell reports a command as running whether it is computing or
+	// sitting at a prompt of its own, so only the program itself can say which.
+	ReportedState_REPORTED_STATE_BLOCKED ReportedState = 3
+	// CLEAR removes a report, so the session falls back to what cm derives from the shell.
+	ReportedState_REPORTED_STATE_CLEAR ReportedState = 4
+)
+
+// Enum value maps for ReportedState.
+var (
+	ReportedState_name = map[int32]string{
+		0: "REPORTED_STATE_UNSPECIFIED",
+		1: "REPORTED_STATE_IDLE",
+		2: "REPORTED_STATE_BUSY",
+		3: "REPORTED_STATE_BLOCKED",
+		4: "REPORTED_STATE_CLEAR",
+	}
+	ReportedState_value = map[string]int32{
+		"REPORTED_STATE_UNSPECIFIED": 0,
+		"REPORTED_STATE_IDLE":        1,
+		"REPORTED_STATE_BUSY":        2,
+		"REPORTED_STATE_BLOCKED":     3,
+		"REPORTED_STATE_CLEAR":       4,
+	}
+)
+
+func (x ReportedState) Enum() *ReportedState {
+	p := new(ReportedState)
+	*p = x
+	return p
+}
+
+func (x ReportedState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ReportedState) Descriptor() protoreflect.EnumDescriptor {
+	return file_cm_server_v1_server_proto_enumTypes[0].Descriptor()
+}
+
+func (ReportedState) Type() protoreflect.EnumType {
+	return &file_cm_server_v1_server_proto_enumTypes[0]
+}
+
+func (x ReportedState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ReportedState.Descriptor instead.
+func (ReportedState) EnumDescriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+}
+
 // WaitState is a condition a caller can wait for.
 type WaitState int32
 
@@ -39,6 +108,11 @@ const (
 	WaitState_WAIT_STATE_BUSY WaitState = 2
 	// EXITED means the session ended, whatever its status.
 	WaitState_WAIT_STATE_EXITED WaitState = 3
+	// BLOCKED means a program in the session reported that it needs input.
+	//
+	// Only reachable when something reports it: a shell marks a command as running whether it is computing
+	// or waiting at a prompt of its own, so this cannot be derived from OSC 133.
+	WaitState_WAIT_STATE_BLOCKED WaitState = 4
 )
 
 // Enum value maps for WaitState.
@@ -48,12 +122,14 @@ var (
 		1: "WAIT_STATE_IDLE",
 		2: "WAIT_STATE_BUSY",
 		3: "WAIT_STATE_EXITED",
+		4: "WAIT_STATE_BLOCKED",
 	}
 	WaitState_value = map[string]int32{
 		"WAIT_STATE_UNSPECIFIED": 0,
 		"WAIT_STATE_IDLE":        1,
 		"WAIT_STATE_BUSY":        2,
 		"WAIT_STATE_EXITED":      3,
+		"WAIT_STATE_BLOCKED":     4,
 	}
 )
 
@@ -68,11 +144,11 @@ func (x WaitState) String() string {
 }
 
 func (WaitState) Descriptor() protoreflect.EnumDescriptor {
-	return file_cm_server_v1_server_proto_enumTypes[0].Descriptor()
+	return file_cm_server_v1_server_proto_enumTypes[1].Descriptor()
 }
 
 func (WaitState) Type() protoreflect.EnumType {
-	return &file_cm_server_v1_server_proto_enumTypes[0]
+	return &file_cm_server_v1_server_proto_enumTypes[1]
 }
 
 func (x WaitState) Number() protoreflect.EnumNumber {
@@ -81,7 +157,7 @@ func (x WaitState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WaitState.Descriptor instead.
 func (WaitState) EnumDescriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{1}
 }
 
 // SessionState is a session's lifecycle stage.
@@ -125,11 +201,11 @@ func (x SessionState) String() string {
 }
 
 func (SessionState) Descriptor() protoreflect.EnumDescriptor {
-	return file_cm_server_v1_server_proto_enumTypes[1].Descriptor()
+	return file_cm_server_v1_server_proto_enumTypes[2].Descriptor()
 }
 
 func (SessionState) Type() protoreflect.EnumType {
-	return &file_cm_server_v1_server_proto_enumTypes[1]
+	return &file_cm_server_v1_server_proto_enumTypes[2]
 }
 
 func (x SessionState) Number() protoreflect.EnumNumber {
@@ -138,7 +214,7 @@ func (x SessionState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SessionState.Descriptor instead.
 func (SessionState) EnumDescriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{1}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{2}
 }
 
 // HistoryFormat selects how session contents are rendered.
@@ -178,11 +254,11 @@ func (x HistoryFormat) String() string {
 }
 
 func (HistoryFormat) Descriptor() protoreflect.EnumDescriptor {
-	return file_cm_server_v1_server_proto_enumTypes[2].Descriptor()
+	return file_cm_server_v1_server_proto_enumTypes[3].Descriptor()
 }
 
 func (HistoryFormat) Type() protoreflect.EnumType {
-	return &file_cm_server_v1_server_proto_enumTypes[2]
+	return &file_cm_server_v1_server_proto_enumTypes[3]
 }
 
 func (x HistoryFormat) Number() protoreflect.EnumNumber {
@@ -191,10 +267,117 @@ func (x HistoryFormat) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HistoryFormat.Descriptor instead.
 func (HistoryFormat) EnumDescriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{2}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{3}
 }
 
-// ShutdownRequest asks the server to stop.
+type ReportRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty means the session the caller is in, from CM_SESSION.
+	Session string        `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	State   ReportedState `protobuf:"varint,2,opt,name=state,proto3,enum=cm.server.v1.ReportedState" json:"state,omitempty"`
+	// A short human-readable note, shown alongside the state. Optional.
+	Detail string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
+	// Who is reporting, for display and so one reporter's state is distinguishable from another's.
+	// Optional; free-form.
+	Source        string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportRequest) Reset() {
+	*x = ReportRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportRequest) ProtoMessage() {}
+
+func (x *ReportRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportRequest.ProtoReflect.Descriptor instead.
+func (*ReportRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ReportRequest) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+func (x *ReportRequest) GetState() ReportedState {
+	if x != nil {
+		return x.State
+	}
+	return ReportedState_REPORTED_STATE_UNSPECIFIED
+}
+
+func (x *ReportRequest) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *ReportRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+type ReportResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportResponse) Reset() {
+	*x = ReportResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportResponse) ProtoMessage() {}
+
+func (x *ReportResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportResponse.ProtoReflect.Descriptor instead.
+func (*ReportResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{1}
+}
+
 type ReadRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Session string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
@@ -209,7 +392,7 @@ type ReadRequest struct {
 
 func (x *ReadRequest) Reset() {
 	*x = ReadRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[0]
+	mi := &file_cm_server_v1_server_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -221,7 +404,7 @@ func (x *ReadRequest) String() string {
 func (*ReadRequest) ProtoMessage() {}
 
 func (x *ReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[0]
+	mi := &file_cm_server_v1_server_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -234,7 +417,7 @@ func (x *ReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadRequest.ProtoReflect.Descriptor instead.
 func (*ReadRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{0}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ReadRequest) GetSession() string {
@@ -267,7 +450,7 @@ type ReadResponse struct {
 
 func (x *ReadResponse) Reset() {
 	*x = ReadResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[1]
+	mi := &file_cm_server_v1_server_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -279,7 +462,7 @@ func (x *ReadResponse) String() string {
 func (*ReadResponse) ProtoMessage() {}
 
 func (x *ReadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[1]
+	mi := &file_cm_server_v1_server_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -292,7 +475,7 @@ func (x *ReadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadResponse.ProtoReflect.Descriptor instead.
 func (*ReadResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{1}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ReadResponse) GetData() []byte {
@@ -317,7 +500,7 @@ type WaitRequest struct {
 
 func (x *WaitRequest) Reset() {
 	*x = WaitRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[2]
+	mi := &file_cm_server_v1_server_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -329,7 +512,7 @@ func (x *WaitRequest) String() string {
 func (*WaitRequest) ProtoMessage() {}
 
 func (x *WaitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[2]
+	mi := &file_cm_server_v1_server_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -342,7 +525,7 @@ func (x *WaitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WaitRequest.ProtoReflect.Descriptor instead.
 func (*WaitRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{2}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *WaitRequest) GetSession() string {
@@ -370,6 +553,9 @@ type WaitResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Whether the condition was reached, as opposed to the wait timing out.
 	Satisfied bool `protobuf:"varint,1,opt,name=satisfied,proto3" json:"satisfied,omitempty"`
+	// What a program in the session reported about itself, if anything, and the note that came with it.
+	ReportedState  string `protobuf:"bytes,6,opt,name=reported_state,json=reportedState,proto3" json:"reported_state,omitempty"`
+	ReportedDetail string `protobuf:"bytes,7,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
 	// The session's state when the wait returned, so a caller that timed out learns what it was instead.
 	Busy          bool         `protobuf:"varint,2,opt,name=busy,proto3" json:"busy,omitempty"`
 	Command       string       `protobuf:"bytes,3,opt,name=command,proto3" json:"command,omitempty"`
@@ -381,7 +567,7 @@ type WaitResponse struct {
 
 func (x *WaitResponse) Reset() {
 	*x = WaitResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[3]
+	mi := &file_cm_server_v1_server_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -393,7 +579,7 @@ func (x *WaitResponse) String() string {
 func (*WaitResponse) ProtoMessage() {}
 
 func (x *WaitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[3]
+	mi := &file_cm_server_v1_server_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -406,7 +592,7 @@ func (x *WaitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WaitResponse.ProtoReflect.Descriptor instead.
 func (*WaitResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{3}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WaitResponse) GetSatisfied() bool {
@@ -414,6 +600,20 @@ func (x *WaitResponse) GetSatisfied() bool {
 		return x.Satisfied
 	}
 	return false
+}
+
+func (x *WaitResponse) GetReportedState() string {
+	if x != nil {
+		return x.ReportedState
+	}
+	return ""
+}
+
+func (x *WaitResponse) GetReportedDetail() string {
+	if x != nil {
+		return x.ReportedDetail
+	}
+	return ""
 }
 
 func (x *WaitResponse) GetBusy() bool {
@@ -452,7 +652,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[4]
+	mi := &file_cm_server_v1_server_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -464,7 +664,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[4]
+	mi := &file_cm_server_v1_server_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -477,7 +677,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{4}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{6}
 }
 
 // ShutdownResponse confirms the server is stopping.
@@ -489,7 +689,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[5]
+	mi := &file_cm_server_v1_server_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +701,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[5]
+	mi := &file_cm_server_v1_server_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +714,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{5}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{7}
 }
 
 // AttachRequest is a client-to-server event. The first message on the stream must be an
@@ -534,7 +734,7 @@ type AttachRequest struct {
 
 func (x *AttachRequest) Reset() {
 	*x = AttachRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[6]
+	mi := &file_cm_server_v1_server_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -546,7 +746,7 @@ func (x *AttachRequest) String() string {
 func (*AttachRequest) ProtoMessage() {}
 
 func (x *AttachRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[6]
+	mi := &file_cm_server_v1_server_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -559,7 +759,7 @@ func (x *AttachRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachRequest.ProtoReflect.Descriptor instead.
 func (*AttachRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{6}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AttachRequest) GetEvent() isAttachRequest_Event {
@@ -695,7 +895,7 @@ type Open struct {
 
 func (x *Open) Reset() {
 	*x = Open{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[7]
+	mi := &file_cm_server_v1_server_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -707,7 +907,7 @@ func (x *Open) String() string {
 func (*Open) ProtoMessage() {}
 
 func (x *Open) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[7]
+	mi := &file_cm_server_v1_server_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -720,7 +920,7 @@ func (x *Open) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Open.ProtoReflect.Descriptor instead.
 func (*Open) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{7}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Open) GetSession() string {
@@ -837,7 +1037,7 @@ type Input struct {
 
 func (x *Input) Reset() {
 	*x = Input{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[8]
+	mi := &file_cm_server_v1_server_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -849,7 +1049,7 @@ func (x *Input) String() string {
 func (*Input) ProtoMessage() {}
 
 func (x *Input) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[8]
+	mi := &file_cm_server_v1_server_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -862,7 +1062,7 @@ func (x *Input) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Input.ProtoReflect.Descriptor instead.
 func (*Input) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{8}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Input) GetData() []byte {
@@ -884,7 +1084,7 @@ type Resize struct {
 
 func (x *Resize) Reset() {
 	*x = Resize{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[9]
+	mi := &file_cm_server_v1_server_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -896,7 +1096,7 @@ func (x *Resize) String() string {
 func (*Resize) ProtoMessage() {}
 
 func (x *Resize) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[9]
+	mi := &file_cm_server_v1_server_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -909,7 +1109,7 @@ func (x *Resize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resize.ProtoReflect.Descriptor instead.
 func (*Resize) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{9}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Resize) GetRows() uint32 {
@@ -951,7 +1151,7 @@ type Detach struct {
 
 func (x *Detach) Reset() {
 	*x = Detach{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[10]
+	mi := &file_cm_server_v1_server_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -963,7 +1163,7 @@ func (x *Detach) String() string {
 func (*Detach) ProtoMessage() {}
 
 func (x *Detach) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[10]
+	mi := &file_cm_server_v1_server_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -976,7 +1176,7 @@ func (x *Detach) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Detach.ProtoReflect.Descriptor instead.
 func (*Detach) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{10}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{12}
 }
 
 // AttachResponse is a server-to-client event.
@@ -996,7 +1196,7 @@ type AttachResponse struct {
 
 func (x *AttachResponse) Reset() {
 	*x = AttachResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[11]
+	mi := &file_cm_server_v1_server_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1208,7 @@ func (x *AttachResponse) String() string {
 func (*AttachResponse) ProtoMessage() {}
 
 func (x *AttachResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[11]
+	mi := &file_cm_server_v1_server_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1221,7 @@ func (x *AttachResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachResponse.ProtoReflect.Descriptor instead.
 func (*AttachResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{11}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AttachResponse) GetEvent() isAttachResponse_Event {
@@ -1124,7 +1324,7 @@ type Detached struct {
 
 func (x *Detached) Reset() {
 	*x = Detached{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[12]
+	mi := &file_cm_server_v1_server_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1136,7 +1336,7 @@ func (x *Detached) String() string {
 func (*Detached) ProtoMessage() {}
 
 func (x *Detached) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[12]
+	mi := &file_cm_server_v1_server_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1149,7 +1349,7 @@ func (x *Detached) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Detached.ProtoReflect.Descriptor instead.
 func (*Detached) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{12}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{14}
 }
 
 // Metadata reports what the shell has said about itself, so a client can act on it.
@@ -1170,15 +1370,18 @@ type Metadata struct {
 	// Forwarded as an event rather than left to polling so a terminal emulator can react as it happens,
 	// which is the difference between a tab that shows what is running and one that shows it a second
 	// later.
-	Busy          bool   `protobuf:"varint,4,opt,name=busy,proto3" json:"busy,omitempty"`
-	Command       string `protobuf:"bytes,5,opt,name=command,proto3" json:"command,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Busy    bool   `protobuf:"varint,4,opt,name=busy,proto3" json:"busy,omitempty"`
+	Command string `protobuf:"bytes,5,opt,name=command,proto3" json:"command,omitempty"`
+	// What a program in the session reported about itself, which takes precedence over busy above.
+	ReportedState  string `protobuf:"bytes,6,opt,name=reported_state,json=reportedState,proto3" json:"reported_state,omitempty"`
+	ReportedDetail string `protobuf:"bytes,7,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Metadata) Reset() {
 	*x = Metadata{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[13]
+	mi := &file_cm_server_v1_server_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1190,7 +1393,7 @@ func (x *Metadata) String() string {
 func (*Metadata) ProtoMessage() {}
 
 func (x *Metadata) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[13]
+	mi := &file_cm_server_v1_server_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1203,7 +1406,7 @@ func (x *Metadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Metadata.ProtoReflect.Descriptor instead.
 func (*Metadata) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{13}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Metadata) GetTitle() string {
@@ -1241,6 +1444,20 @@ func (x *Metadata) GetCommand() string {
 	return ""
 }
 
+func (x *Metadata) GetReportedState() string {
+	if x != nil {
+		return x.ReportedState
+	}
+	return ""
+}
+
+func (x *Metadata) GetReportedDetail() string {
+	if x != nil {
+		return x.ReportedDetail
+	}
+	return ""
+}
+
 type Opened struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Resolved session name, which the client needs when it asked the server to allocate
@@ -1260,7 +1477,7 @@ type Opened struct {
 
 func (x *Opened) Reset() {
 	*x = Opened{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[14]
+	mi := &file_cm_server_v1_server_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1272,7 +1489,7 @@ func (x *Opened) String() string {
 func (*Opened) ProtoMessage() {}
 
 func (x *Opened) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[14]
+	mi := &file_cm_server_v1_server_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1502,7 @@ func (x *Opened) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Opened.ProtoReflect.Descriptor instead.
 func (*Opened) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{14}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Opened) GetSession() string {
@@ -1329,7 +1546,7 @@ type Output struct {
 
 func (x *Output) Reset() {
 	*x = Output{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[15]
+	mi := &file_cm_server_v1_server_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1341,7 +1558,7 @@ func (x *Output) String() string {
 func (*Output) ProtoMessage() {}
 
 func (x *Output) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[15]
+	mi := &file_cm_server_v1_server_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1354,7 +1571,7 @@ func (x *Output) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Output.ProtoReflect.Descriptor instead.
 func (*Output) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{15}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Output) GetSeq() uint64 {
@@ -1389,7 +1606,7 @@ type Exited struct {
 
 func (x *Exited) Reset() {
 	*x = Exited{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[16]
+	mi := &file_cm_server_v1_server_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1401,7 +1618,7 @@ func (x *Exited) String() string {
 func (*Exited) ProtoMessage() {}
 
 func (x *Exited) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[16]
+	mi := &file_cm_server_v1_server_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1414,7 +1631,7 @@ func (x *Exited) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Exited.ProtoReflect.Descriptor instead.
 func (*Exited) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{16}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Exited) GetExitCode() int32 {
@@ -1434,7 +1651,7 @@ type ListRequest struct {
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[17]
+	mi := &file_cm_server_v1_server_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1446,7 +1663,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[17]
+	mi := &file_cm_server_v1_server_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1459,7 +1676,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{17}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListRequest) GetPrefix() string {
@@ -1478,7 +1695,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[18]
+	mi := &file_cm_server_v1_server_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1490,7 +1707,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[18]
+	mi := &file_cm_server_v1_server_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1503,7 +1720,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{18}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ListResponse) GetSessions() []*Session {
@@ -1536,6 +1753,15 @@ type Session struct {
 	// Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
 	// caller can tell a remote directory from a local one. cwd holds the decoded local path.
 	CwdUri string `protobuf:"bytes,11,opt,name=cwd_uri,json=cwdUri,proto3" json:"cwd_uri,omitempty"`
+	// What a program in the session reported about itself, if anything: "idle", "busy", or "blocked".
+	//
+	// Empty when nothing has reported, in which case busy below is what cm derived from the shell. When
+	// both are present this one wins, since a program describing itself is better evidence than a shell
+	// marker.
+	ReportedState string `protobuf:"bytes,14,opt,name=reported_state,json=reportedState,proto3" json:"reported_state,omitempty"`
+	// The note that came with the report, and who sent it. Both optional and free-form.
+	ReportedDetail string `protobuf:"bytes,15,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
+	ReportedSource string `protobuf:"bytes,16,opt,name=reported_source,json=reportedSource,proto3" json:"reported_source,omitempty"`
 	// Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
 	//
 	// A terminal emulator needs this to decide whether closing a window is destructive: the shell owns
@@ -1553,7 +1779,7 @@ type Session struct {
 
 func (x *Session) Reset() {
 	*x = Session{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[19]
+	mi := &file_cm_server_v1_server_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1565,7 +1791,7 @@ func (x *Session) String() string {
 func (*Session) ProtoMessage() {}
 
 func (x *Session) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[19]
+	mi := &file_cm_server_v1_server_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1578,7 +1804,7 @@ func (x *Session) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Session.ProtoReflect.Descriptor instead.
 func (*Session) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{19}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Session) GetName() string {
@@ -1658,6 +1884,27 @@ func (x *Session) GetCwdUri() string {
 	return ""
 }
 
+func (x *Session) GetReportedState() string {
+	if x != nil {
+		return x.ReportedState
+	}
+	return ""
+}
+
+func (x *Session) GetReportedDetail() string {
+	if x != nil {
+		return x.ReportedDetail
+	}
+	return ""
+}
+
+func (x *Session) GetReportedSource() string {
+	if x != nil {
+		return x.ReportedSource
+	}
+	return ""
+}
+
 func (x *Session) GetBusy() bool {
 	if x != nil {
 		return x.Busy
@@ -1685,7 +1932,7 @@ type KillRequest struct {
 
 func (x *KillRequest) Reset() {
 	*x = KillRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[20]
+	mi := &file_cm_server_v1_server_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +1944,7 @@ func (x *KillRequest) String() string {
 func (*KillRequest) ProtoMessage() {}
 
 func (x *KillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[20]
+	mi := &file_cm_server_v1_server_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +1957,7 @@ func (x *KillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillRequest.ProtoReflect.Descriptor instead.
 func (*KillRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{20}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *KillRequest) GetSessions() []string {
@@ -1738,7 +1985,7 @@ type KillResponse struct {
 
 func (x *KillResponse) Reset() {
 	*x = KillResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[21]
+	mi := &file_cm_server_v1_server_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1750,7 +1997,7 @@ func (x *KillResponse) String() string {
 func (*KillResponse) ProtoMessage() {}
 
 func (x *KillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[21]
+	mi := &file_cm_server_v1_server_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1763,7 +2010,7 @@ func (x *KillResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillResponse.ProtoReflect.Descriptor instead.
 func (*KillResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{21}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *KillResponse) GetKilled() []string {
@@ -1797,7 +2044,7 @@ type SendRequest struct {
 
 func (x *SendRequest) Reset() {
 	*x = SendRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[22]
+	mi := &file_cm_server_v1_server_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1809,7 +2056,7 @@ func (x *SendRequest) String() string {
 func (*SendRequest) ProtoMessage() {}
 
 func (x *SendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[22]
+	mi := &file_cm_server_v1_server_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1822,7 +2069,7 @@ func (x *SendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendRequest.ProtoReflect.Descriptor instead.
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{22}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SendRequest) GetSession() string {
@@ -1863,7 +2110,7 @@ type SendResponse struct {
 
 func (x *SendResponse) Reset() {
 	*x = SendResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[23]
+	mi := &file_cm_server_v1_server_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1875,7 +2122,7 @@ func (x *SendResponse) String() string {
 func (*SendResponse) ProtoMessage() {}
 
 func (x *SendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[23]
+	mi := &file_cm_server_v1_server_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1888,7 +2135,7 @@ func (x *SendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendResponse.ProtoReflect.Descriptor instead.
 func (*SendResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{23}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SendResponse) GetWait() *WaitResponse {
@@ -1908,7 +2155,7 @@ type HistoryRequest struct {
 
 func (x *HistoryRequest) Reset() {
 	*x = HistoryRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	mi := &file_cm_server_v1_server_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1920,7 +2167,7 @@ func (x *HistoryRequest) String() string {
 func (*HistoryRequest) ProtoMessage() {}
 
 func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	mi := &file_cm_server_v1_server_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1933,7 +2180,7 @@ func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
 func (*HistoryRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{24}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *HistoryRequest) GetSession() string {
@@ -1959,7 +2206,7 @@ type HistoryResponse struct {
 
 func (x *HistoryResponse) Reset() {
 	*x = HistoryResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	mi := &file_cm_server_v1_server_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1971,7 +2218,7 @@ func (x *HistoryResponse) String() string {
 func (*HistoryResponse) ProtoMessage() {}
 
 func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	mi := &file_cm_server_v1_server_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1984,7 +2231,7 @@ func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
 func (*HistoryResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{25}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *HistoryResponse) GetData() []byte {
@@ -2003,7 +2250,7 @@ type GetEnvRequest struct {
 
 func (x *GetEnvRequest) Reset() {
 	*x = GetEnvRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[26]
+	mi := &file_cm_server_v1_server_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2015,7 +2262,7 @@ func (x *GetEnvRequest) String() string {
 func (*GetEnvRequest) ProtoMessage() {}
 
 func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[26]
+	mi := &file_cm_server_v1_server_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2028,7 +2275,7 @@ func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{26}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetEnvRequest) GetSession() string {
@@ -2048,7 +2295,7 @@ type GetEnvResponse struct {
 
 func (x *GetEnvResponse) Reset() {
 	*x = GetEnvResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[27]
+	mi := &file_cm_server_v1_server_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2060,7 +2307,7 @@ func (x *GetEnvResponse) String() string {
 func (*GetEnvResponse) ProtoMessage() {}
 
 func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[27]
+	mi := &file_cm_server_v1_server_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2073,7 +2320,7 @@ func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvResponse.ProtoReflect.Descriptor instead.
 func (*GetEnvResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{27}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetEnvResponse) GetEnv() map[string]string {
@@ -2087,7 +2334,13 @@ var File_cm_server_v1_server_proto protoreflect.FileDescriptor
 
 const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
-	"\x19cm/server/v1/server.proto\x12\fcm.server.v1\"U\n" +
+	"\x19cm/server/v1/server.proto\x12\fcm.server.v1\"\x8c\x01\n" +
+	"\rReportRequest\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\x121\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x1b.cm.server.v1.ReportedStateR\x05state\x12\x16\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x16\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\"\x10\n" +
+	"\x0eReportResponse\"U\n" +
 	"\vReadRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x14\n" +
 	"\x05lines\x18\x02 \x01(\rR\x05lines\x12\x16\n" +
@@ -2098,9 +2351,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\tR\asession\x12-\n" +
 	"\x05until\x18\x02 \x01(\x0e2\x17.cm.server.v1.WaitStateR\x05until\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xa9\x01\n" +
+	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xf9\x01\n" +
 	"\fWaitResponse\x12\x1c\n" +
-	"\tsatisfied\x18\x01 \x01(\bR\tsatisfied\x12\x12\n" +
+	"\tsatisfied\x18\x01 \x01(\bR\tsatisfied\x12%\n" +
+	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
+	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\x12\x12\n" +
 	"\x04busy\x18\x02 \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\x03 \x01(\tR\acommand\x120\n" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
@@ -2152,14 +2407,16 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\bdetached\x18\x05 \x01(\v2\x16.cm.server.v1.DetachedH\x00R\bdetachedB\a\n" +
 	"\x05event\"\n" +
 	"\n" +
-	"\bDetached\"\x82\x01\n" +
+	"\bDetached\"\xd2\x01\n" +
 	"\bMetadata\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x10\n" +
 	"\x03cwd\x18\x02 \x01(\tR\x03cwd\x12 \n" +
 	"\fcwd_is_local\x18\x03 \x01(\bR\n" +
 	"cwdIsLocal\x12\x12\n" +
 	"\x04busy\x18\x04 \x01(\bR\x04busy\x12\x18\n" +
-	"\acommand\x18\x05 \x01(\tR\acommand\"q\n" +
+	"\acommand\x18\x05 \x01(\tR\acommand\x12%\n" +
+	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
+	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\"q\n" +
 	"\x06Opened\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\x12\x18\n" +
@@ -2174,7 +2431,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vListRequest\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xf4\x02\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xed\x03\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -2188,7 +2445,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\texit_code\x18\t \x01(\x05R\bexitCode\x120\n" +
 	"\x05state\x18\n" +
 	" \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x17\n" +
-	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\x12\x12\n" +
+	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\x12%\n" +
+	"\x0ereported_state\x18\x0e \x01(\tR\rreportedState\x12'\n" +
+	"\x0freported_detail\x18\x0f \x01(\tR\x0ereportedDetail\x12'\n" +
+	"\x0freported_source\x18\x10 \x01(\tR\x0ereportedSource\x12\x12\n" +
 	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\r \x01(\tR\acommand\"?\n" +
 	"\vKillRequest\x12\x1a\n" +
@@ -2219,12 +2479,19 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03env\x18\x01 \x03(\v2%.cm.server.v1.GetEnvResponse.EnvEntryR\x03env\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*h\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x97\x01\n" +
+	"\rReportedState\x12\x1e\n" +
+	"\x1aREPORTED_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13REPORTED_STATE_IDLE\x10\x01\x12\x17\n" +
+	"\x13REPORTED_STATE_BUSY\x10\x02\x12\x1a\n" +
+	"\x16REPORTED_STATE_BLOCKED\x10\x03\x12\x18\n" +
+	"\x14REPORTED_STATE_CLEAR\x10\x04*\x80\x01\n" +
 	"\tWaitState\x12\x1a\n" +
 	"\x16WAIT_STATE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fWAIT_STATE_IDLE\x10\x01\x12\x13\n" +
 	"\x0fWAIT_STATE_BUSY\x10\x02\x12\x15\n" +
-	"\x11WAIT_STATE_EXITED\x10\x03*z\n" +
+	"\x11WAIT_STATE_EXITED\x10\x03\x12\x16\n" +
+	"\x12WAIT_STATE_BLOCKED\x10\x04*z\n" +
 	"\fSessionState\x12\x1d\n" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SESSION_STATE_RUNNING\x10\x01\x12\x18\n" +
@@ -2233,14 +2500,15 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rHistoryFormat\x12\x1e\n" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
-	"\x13HISTORY_FORMAT_HTML\x10\x022\xe4\x04\n" +
+	"\x13HISTORY_FORMAT_HTML\x10\x022\xa9\x05\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
 	"\x04Kill\x12\x19.cm.server.v1.KillRequest\x1a\x1a.cm.server.v1.KillResponse\x12=\n" +
 	"\x04Send\x12\x19.cm.server.v1.SendRequest\x1a\x1a.cm.server.v1.SendResponse\x12F\n" +
 	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponse\x12C\n" +
-	"\x06GetEnv\x12\x1b.cm.server.v1.GetEnvRequest\x1a\x1c.cm.server.v1.GetEnvResponse\x12=\n" +
+	"\x06GetEnv\x12\x1b.cm.server.v1.GetEnvRequest\x1a\x1c.cm.server.v1.GetEnvResponse\x12C\n" +
+	"\x06Report\x12\x1b.cm.server.v1.ReportRequest\x1a\x1c.cm.server.v1.ReportResponse\x12=\n" +
 	"\x04Read\x12\x19.cm.server.v1.ReadRequest\x1a\x1a.cm.server.v1.ReadResponse\x12=\n" +
 	"\x04Wait\x12\x19.cm.server.v1.WaitRequest\x1a\x1a.cm.server.v1.WaitResponse\x12I\n" +
 	"\bShutdown\x12\x1d.cm.server.v1.ShutdownRequest\x1a\x1e.cm.server.v1.ShutdownResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
@@ -2257,87 +2525,93 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 	return file_cm_server_v1_server_proto_rawDescData
 }
 
-var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
+var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_cm_server_v1_server_proto_goTypes = []any{
-	(WaitState)(0),           // 0: cm.server.v1.WaitState
-	(SessionState)(0),        // 1: cm.server.v1.SessionState
-	(HistoryFormat)(0),       // 2: cm.server.v1.HistoryFormat
-	(*ReadRequest)(nil),      // 3: cm.server.v1.ReadRequest
-	(*ReadResponse)(nil),     // 4: cm.server.v1.ReadResponse
-	(*WaitRequest)(nil),      // 5: cm.server.v1.WaitRequest
-	(*WaitResponse)(nil),     // 6: cm.server.v1.WaitResponse
-	(*ShutdownRequest)(nil),  // 7: cm.server.v1.ShutdownRequest
-	(*ShutdownResponse)(nil), // 8: cm.server.v1.ShutdownResponse
-	(*AttachRequest)(nil),    // 9: cm.server.v1.AttachRequest
-	(*Open)(nil),             // 10: cm.server.v1.Open
-	(*Input)(nil),            // 11: cm.server.v1.Input
-	(*Resize)(nil),           // 12: cm.server.v1.Resize
-	(*Detach)(nil),           // 13: cm.server.v1.Detach
-	(*AttachResponse)(nil),   // 14: cm.server.v1.AttachResponse
-	(*Detached)(nil),         // 15: cm.server.v1.Detached
-	(*Metadata)(nil),         // 16: cm.server.v1.Metadata
-	(*Opened)(nil),           // 17: cm.server.v1.Opened
-	(*Output)(nil),           // 18: cm.server.v1.Output
-	(*Exited)(nil),           // 19: cm.server.v1.Exited
-	(*ListRequest)(nil),      // 20: cm.server.v1.ListRequest
-	(*ListResponse)(nil),     // 21: cm.server.v1.ListResponse
-	(*Session)(nil),          // 22: cm.server.v1.Session
-	(*KillRequest)(nil),      // 23: cm.server.v1.KillRequest
-	(*KillResponse)(nil),     // 24: cm.server.v1.KillResponse
-	(*SendRequest)(nil),      // 25: cm.server.v1.SendRequest
-	(*SendResponse)(nil),     // 26: cm.server.v1.SendResponse
-	(*HistoryRequest)(nil),   // 27: cm.server.v1.HistoryRequest
-	(*HistoryResponse)(nil),  // 28: cm.server.v1.HistoryResponse
-	(*GetEnvRequest)(nil),    // 29: cm.server.v1.GetEnvRequest
-	(*GetEnvResponse)(nil),   // 30: cm.server.v1.GetEnvResponse
-	nil,                      // 31: cm.server.v1.Open.ClientEnvEntry
-	nil,                      // 32: cm.server.v1.KillResponse.ErrorsEntry
-	nil,                      // 33: cm.server.v1.GetEnvResponse.EnvEntry
+	(ReportedState)(0),       // 0: cm.server.v1.ReportedState
+	(WaitState)(0),           // 1: cm.server.v1.WaitState
+	(SessionState)(0),        // 2: cm.server.v1.SessionState
+	(HistoryFormat)(0),       // 3: cm.server.v1.HistoryFormat
+	(*ReportRequest)(nil),    // 4: cm.server.v1.ReportRequest
+	(*ReportResponse)(nil),   // 5: cm.server.v1.ReportResponse
+	(*ReadRequest)(nil),      // 6: cm.server.v1.ReadRequest
+	(*ReadResponse)(nil),     // 7: cm.server.v1.ReadResponse
+	(*WaitRequest)(nil),      // 8: cm.server.v1.WaitRequest
+	(*WaitResponse)(nil),     // 9: cm.server.v1.WaitResponse
+	(*ShutdownRequest)(nil),  // 10: cm.server.v1.ShutdownRequest
+	(*ShutdownResponse)(nil), // 11: cm.server.v1.ShutdownResponse
+	(*AttachRequest)(nil),    // 12: cm.server.v1.AttachRequest
+	(*Open)(nil),             // 13: cm.server.v1.Open
+	(*Input)(nil),            // 14: cm.server.v1.Input
+	(*Resize)(nil),           // 15: cm.server.v1.Resize
+	(*Detach)(nil),           // 16: cm.server.v1.Detach
+	(*AttachResponse)(nil),   // 17: cm.server.v1.AttachResponse
+	(*Detached)(nil),         // 18: cm.server.v1.Detached
+	(*Metadata)(nil),         // 19: cm.server.v1.Metadata
+	(*Opened)(nil),           // 20: cm.server.v1.Opened
+	(*Output)(nil),           // 21: cm.server.v1.Output
+	(*Exited)(nil),           // 22: cm.server.v1.Exited
+	(*ListRequest)(nil),      // 23: cm.server.v1.ListRequest
+	(*ListResponse)(nil),     // 24: cm.server.v1.ListResponse
+	(*Session)(nil),          // 25: cm.server.v1.Session
+	(*KillRequest)(nil),      // 26: cm.server.v1.KillRequest
+	(*KillResponse)(nil),     // 27: cm.server.v1.KillResponse
+	(*SendRequest)(nil),      // 28: cm.server.v1.SendRequest
+	(*SendResponse)(nil),     // 29: cm.server.v1.SendResponse
+	(*HistoryRequest)(nil),   // 30: cm.server.v1.HistoryRequest
+	(*HistoryResponse)(nil),  // 31: cm.server.v1.HistoryResponse
+	(*GetEnvRequest)(nil),    // 32: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),   // 33: cm.server.v1.GetEnvResponse
+	nil,                      // 34: cm.server.v1.Open.ClientEnvEntry
+	nil,                      // 35: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                      // 36: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
-	0,  // 0: cm.server.v1.WaitRequest.until:type_name -> cm.server.v1.WaitState
-	1,  // 1: cm.server.v1.WaitResponse.state:type_name -> cm.server.v1.SessionState
-	10, // 2: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
-	11, // 3: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
-	12, // 4: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
-	13, // 5: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
-	31, // 6: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
-	17, // 7: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
-	18, // 8: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
-	19, // 9: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
-	16, // 10: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
-	15, // 11: cm.server.v1.AttachResponse.detached:type_name -> cm.server.v1.Detached
-	22, // 12: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	1,  // 13: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
-	32, // 14: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	0,  // 15: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
-	6,  // 16: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
-	2,  // 17: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	33, // 18: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
-	9,  // 19: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	20, // 20: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	23, // 21: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	25, // 22: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	27, // 23: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	29, // 24: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
-	3,  // 25: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
-	5,  // 26: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
-	7,  // 27: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
-	14, // 28: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	21, // 29: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	24, // 30: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	26, // 31: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	28, // 32: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	30, // 33: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
-	4,  // 34: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
-	6,  // 35: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
-	8,  // 36: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
-	28, // [28:37] is the sub-list for method output_type
-	19, // [19:28] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	0,  // 0: cm.server.v1.ReportRequest.state:type_name -> cm.server.v1.ReportedState
+	1,  // 1: cm.server.v1.WaitRequest.until:type_name -> cm.server.v1.WaitState
+	2,  // 2: cm.server.v1.WaitResponse.state:type_name -> cm.server.v1.SessionState
+	13, // 3: cm.server.v1.AttachRequest.open:type_name -> cm.server.v1.Open
+	14, // 4: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
+	15, // 5: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
+	16, // 6: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
+	34, // 7: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	20, // 8: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
+	21, // 9: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
+	22, // 10: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
+	19, // 11: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
+	18, // 12: cm.server.v1.AttachResponse.detached:type_name -> cm.server.v1.Detached
+	25, // 13: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	2,  // 14: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
+	35, // 15: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	1,  // 16: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
+	9,  // 17: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
+	3,  // 18: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	36, // 19: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	12, // 20: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	23, // 21: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	26, // 22: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	28, // 23: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	30, // 24: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	32, // 25: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	4,  // 26: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
+	6,  // 27: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
+	8,  // 28: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
+	10, // 29: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
+	17, // 30: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	24, // 31: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	27, // 32: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	29, // 33: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	31, // 34: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	33, // 35: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	5,  // 36: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
+	7,  // 37: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
+	9,  // 38: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
+	11, // 39: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
+	30, // [30:40] is the sub-list for method output_type
+	20, // [20:30] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -2345,14 +2619,14 @@ func file_cm_server_v1_server_proto_init() {
 	if File_cm_server_v1_server_proto != nil {
 		return
 	}
-	file_cm_server_v1_server_proto_msgTypes[6].OneofWrappers = []any{
+	file_cm_server_v1_server_proto_msgTypes[8].OneofWrappers = []any{
 		(*AttachRequest_Open)(nil),
 		(*AttachRequest_Input)(nil),
 		(*AttachRequest_Resize)(nil),
 		(*AttachRequest_Detach)(nil),
 	}
-	file_cm_server_v1_server_proto_msgTypes[7].OneofWrappers = []any{}
-	file_cm_server_v1_server_proto_msgTypes[11].OneofWrappers = []any{
+	file_cm_server_v1_server_proto_msgTypes[9].OneofWrappers = []any{}
+	file_cm_server_v1_server_proto_msgTypes[13].OneofWrappers = []any{
 		(*AttachResponse_Opened)(nil),
 		(*AttachResponse_Output)(nil),
 		(*AttachResponse_Exited)(nil),
@@ -2364,8 +2638,8 @@ func file_cm_server_v1_server_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   31,
+			NumEnums:      4,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -14,6 +14,7 @@ type ServerService interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Report(context.Context, *ReportRequest) (*ReportResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -79,6 +80,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.GetEnv(ctx, &req)
 			},
+			"Report": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ReportRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Report(ctx, &req)
+			},
 			"Read": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req ReadRequest
 				if err := unmarshal(&req); err != nil {
@@ -120,6 +128,7 @@ type ServerClient interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Report(context.Context, *ReportRequest) (*ReportResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -204,6 +213,14 @@ func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*Histo
 func (c *serverClient) GetEnv(ctx context.Context, req *GetEnvRequest) (*GetEnvResponse, error) {
 	var resp GetEnvResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "GetEnv", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Report(ctx context.Context, req *ReportRequest) (*ReportResponse, error) {
+	var resp ReportResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Report", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

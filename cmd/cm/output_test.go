@@ -23,6 +23,11 @@ func sampleWireSession(name string) *serverv1.Session {
 		State:         serverv1.SessionState_SESSION_STATE_RUNNING,
 		Busy:          true,
 		Command:       "nvim notes.md",
+		// A reported state, since it is part of the contract and the table renders it in preference to
+		// the derived one.
+		ReportedState:  "blocked",
+		ReportedDetail: "needs approval",
+		ReportedSource: "my-agent",
 	}
 }
 
@@ -43,6 +48,7 @@ func TestSessionJSONKeys(t *testing.T) {
 		"name", "state", "shell_pid", "clients", "exit_code", "title",
 		"cwd", "cwd_uri", "cwd_is_local", "created_at", "created_at_unix",
 		"busy", "command",
+		"reported_state", "reported_detail", "reported_source",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -58,19 +64,22 @@ func TestSessionJSONKeys(t *testing.T) {
 func TestSessionJSONValues(t *testing.T) {
 	got := toSessionJSON(sampleWireSession("work"))
 	want := sessionJSON{
-		Name:          "work",
-		State:         "running",
-		ShellPID:      4242,
-		Clients:       2,
-		ExitCode:      0,
-		Title:         "editing",
-		Cwd:           "/home/user/projects",
-		CwdURI:        "file://myhost/home/user/projects",
-		CwdIsLocal:    true,
-		CreatedAt:     "2023-11-14T14:13:20-08:00",
-		CreatedAtUnix: 1_700_000_000,
-		Busy:          true,
-		Command:       "nvim notes.md",
+		Name:           "work",
+		State:          "running",
+		ShellPID:       4242,
+		Clients:        2,
+		ExitCode:       0,
+		Title:          "editing",
+		Cwd:            "/home/user/projects",
+		CwdURI:         "file://myhost/home/user/projects",
+		CwdIsLocal:     true,
+		CreatedAt:      "2023-11-14T14:13:20-08:00",
+		CreatedAtUnix:  1_700_000_000,
+		Busy:           true,
+		Command:        "nvim notes.md",
+		ReportedState:  "blocked",
+		ReportedDetail: "needs approval",
+		ReportedSource: "my-agent",
 	}
 	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
 	want.CreatedAt = got.CreatedAt
@@ -346,6 +355,10 @@ func TestSessionsTableShowsTheRunningCommand(t *testing.T) {
 			s := sampleWireSession("work")
 			s.Busy = tc.busy
 			s.Command = tc.command
+			// No report, so the derived state is what shows. A report would take precedence, which the
+			// test below covers.
+			s.ReportedState = ""
+			s.ReportedDetail = ""
 
 			var buf bytes.Buffer
 			if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
@@ -355,5 +368,59 @@ func TestSessionsTableShowsTheRunningCommand(t *testing.T) {
 				t.Errorf("table = %q, want it to contain %q", buf.String(), tc.want)
 			}
 		})
+	}
+}
+
+// A reported state is shown in preference to the derived one.
+//
+// The precedence has to be visible where a person looks, not only where a script does: a session reported
+// blocked while its shell says a command is running should read as blocked, since that is the part the user
+// can act on.
+func TestSessionsTablePrefersAReportedState(t *testing.T) {
+	s := sampleWireSession("work")
+	// The shell's view and the program's view disagree, which is the normal case for an agent: one
+	// long-running command from the shell's side, several states from the program's.
+	s.Busy = true
+	s.Command = "claude"
+	s.ReportedState = "blocked"
+	s.ReportedDetail = "needs approval"
+
+	var buf bytes.Buffer
+	if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
+		t.Fatalf("printSessionsTable() error = %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "running(blocked: needs approval)") {
+		t.Errorf("table = %q, want the reported state and its detail", got)
+	}
+	if strings.Contains(got, "running(claude)") {
+		t.Errorf("table = %q, want the report to take precedence over the derived command", got)
+	}
+}
+
+// A long detail is truncated rather than reduced to its first word.
+//
+// A detail is a sentence a human wrote, so "needs approval to write a file" must not become "needs". The
+// column still has to stay readable, and the full value is in `cm info` and the JSON.
+func TestSessionsTableTruncatesALongDetail(t *testing.T) {
+	s := sampleWireSession("work")
+	s.ReportedState = "blocked"
+	s.ReportedDetail = "needs approval to write a file somewhere under /etc"
+
+	var buf bytes.Buffer
+	if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
+		t.Fatalf("printSessionsTable() error = %v", err)
+	}
+	got := buf.String()
+	// Cut, and marked as cut, rather than silently ending mid-word.
+	if !strings.Contains(got, "...") {
+		t.Errorf("table = %q, want a long detail marked as truncated", got)
+	}
+	// The beginning survives, which is the part that carries meaning.
+	if !strings.Contains(got, "needs approval") {
+		t.Errorf("table = %q, want the start of the detail kept", got)
+	}
+	if strings.Contains(got, "/etc") {
+		t.Errorf("table = %q, want the tail of a long detail dropped", got)
 	}
 }

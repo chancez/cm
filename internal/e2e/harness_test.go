@@ -95,6 +95,8 @@ type env struct {
 	runtime string
 	state   string
 	config  string
+	// session_ is exported as CM_SESSION when set, standing in for a command run from inside a session.
+	session_ string
 }
 
 // newEnv returns an isolated cm installation with no config file.
@@ -160,6 +162,9 @@ func (e *env) environ() []string {
 		// A predictable shell, so a session's own output does not depend on the developer's prompt.
 		"SHELL=/bin/sh",
 	)
+	if e.session_ != "" {
+		out = append(out, "CM_SESSION="+e.session_)
+	}
 	if e.config != "" {
 		out = append(out, "CM_CONFIG="+e.config)
 	} else {
@@ -183,6 +188,19 @@ type result struct {
 // command's status is a feature.
 func (e *env) run(args ...string) result {
 	e.t.Helper()
+	return e.runWithin(20*time.Second, args...)
+}
+
+// runInSession invokes cm with CM_SESSION set, as a hook running inside a session would see it.
+//
+// cm exports that variable into every session's shell, so a hook needs no argument to say which session it
+// is in. Reproducing that here means testing the path a hook actually takes rather than one it does not.
+func (e *env) runInSession(session string, args ...string) result {
+	e.t.Helper()
+
+	prev := e.session_
+	e.session_ = session
+	defer func() { e.session_ = prev }()
 	return e.runWithin(20*time.Second, args...)
 }
 
@@ -261,6 +279,9 @@ type sessionJSON struct {
 	// Busy and Command are what the shell reported via OSC 133.
 	Busy    bool   `json:"busy"`
 	Command string `json:"command"`
+	// ReportedState and ReportedDetail are what a program in the session reported about itself.
+	ReportedState  string `json:"reported_state"`
+	ReportedDetail string `json:"reported_detail"`
 }
 
 // list returns the sessions cm reports.

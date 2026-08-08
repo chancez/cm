@@ -171,12 +171,34 @@ func satisfied(sess *Session, until serverv1.WaitState) bool {
 		return until == serverv1.WaitState_WAIT_STATE_EXITED
 	}
 
+	// A program's own report wins over what cm derived from the shell.
+	//
+	// Better evidence, not merely newer: a shell reports one long-running command for the whole life of a
+	// coding agent, so the derived state says "busy" from start to finish while the agent moves between
+	// working, waiting for an answer, and done. Only the program knows which.
+	if r := sess.Reported(); r.State != "" {
+		switch until {
+		case serverv1.WaitState_WAIT_STATE_IDLE:
+			return r.State == "idle"
+		case serverv1.WaitState_WAIT_STATE_BUSY:
+			return r.State == "busy"
+		case serverv1.WaitState_WAIT_STATE_BLOCKED:
+			return r.State == "blocked"
+		}
+		return false
+	}
+
 	cmd := sess.Command()
 	switch until {
 	case serverv1.WaitState_WAIT_STATE_IDLE:
 		return !cmd.Running
 	case serverv1.WaitState_WAIT_STATE_BUSY:
 		return cmd.Running
+	case serverv1.WaitState_WAIT_STATE_BLOCKED:
+		// Nothing has reported, and blocked cannot be derived from a shell marker: a command is running
+		// whether it is computing or waiting at a prompt of its own. Unreachable rather than false, so a
+		// caller waiting for it is told instead of timing out.
+		return false
 	}
 	return false
 }
@@ -184,11 +206,18 @@ func satisfied(sess *Session, until serverv1.WaitState) bool {
 // waitResult builds a response describing the session as it is now.
 func waitResult(sess *Session, ok bool) *serverv1.WaitResponse {
 	cmd := sess.Command()
+	r := sess.Reported()
 	resp := &serverv1.WaitResponse{
-		Satisfied: ok,
-		Busy:      cmd.Running,
-		Command:   cmd.Command,
-		State:     serverv1.SessionState_SESSION_STATE_RUNNING,
+		Satisfied:      ok,
+		Busy:           cmd.Running,
+		Command:        cmd.Command,
+		State:          serverv1.SessionState_SESSION_STATE_RUNNING,
+		ReportedState:  r.State,
+		ReportedDetail: r.Detail,
+	}
+	// A report describes the session better than the derived state, so busy reflects it when present.
+	if r.State != "" {
+		resp.Busy = r.State != "idle"
 	}
 	if ended, code := sess.Ended(); ended {
 		resp.State = serverv1.SessionState_SESSION_STATE_EXITED
@@ -215,6 +244,8 @@ func waitStateName(s serverv1.WaitState) string {
 		return "busy"
 	case serverv1.WaitState_WAIT_STATE_EXITED:
 		return "exited"
+	case serverv1.WaitState_WAIT_STATE_BLOCKED:
+		return "blocked"
 	}
 	return "unspecified"
 }

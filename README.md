@@ -75,8 +75,17 @@ cm wait api --until exited                 # block until a session ends
 cm run --env KEY=value -- ./task           # a command in its own session
 ```
 
-`cm info <session> --field busy` reports whether a command is running, from OSC 133. See
-`docs/architecture.md`.
+A program inside a session can say what it is doing, which is how a long-running agent or build reports
+something cm cannot see for itself:
+
+```
+cm report --state blocked --detail "needs approval"   # uses CM_SESSION
+cm wait reviewer --until blocked                      # now reachable
+```
+
+Nothing about that is program-specific: cm never learns what is running, so anything that can invoke a
+command on a state change can report. `cm info <session> --field busy` reports what cm derives on its own,
+from OSC 133. See `docs/architecture.md` and `contrib/hooks/`.
 
 See `docs/` for design notes and trade-offs:
 
