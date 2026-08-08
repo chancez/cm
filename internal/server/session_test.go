@@ -23,6 +23,11 @@ type fakeTerminal struct {
 	restore  []byte
 	writeErr error
 	closed   bool
+	rows     uint16
+	cols     uint16
+	pending  [][]byte
+	title    string
+	pwd      string
 }
 
 func (f *fakeTerminal) Write(p []byte) error {
@@ -46,6 +51,39 @@ func (f *fakeTerminal) Close() error {
 	defer f.mu.Unlock()
 	f.closed = true
 	return nil
+}
+
+func (f *fakeTerminal) Resize(rows, cols uint16) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows, f.cols = rows, cols
+	return nil
+}
+
+func (f *fakeTerminal) TakePending() [][]byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.pending
+	f.pending = nil
+	return out
+}
+
+func (f *fakeTerminal) Title() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.title
+}
+
+func (f *fakeTerminal) Pwd() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pwd
+}
+
+func (f *fakeTerminal) Size() (uint16, uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rows, f.cols
 }
 
 func (f *fakeTerminal) Written() string {

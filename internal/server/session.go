@@ -84,6 +84,16 @@ type Terminal interface {
 	Write(p []byte) error
 	// Restore returns bytes that reproduce the current screen on a fresh terminal.
 	Restore() ([]byte, error)
+	// Resize changes the model's size so a restore matches the terminal showing it.
+	Resize(rows, cols uint16) error
+	// TakePending returns bytes the emulator generated that must reach the pty, such as
+	// responses to device queries. A program that asks the terminal a question blocks until
+	// answered, so these have to be delivered.
+	TakePending() [][]byte
+	// Title returns the last title the shell reported.
+	Title() string
+	// Pwd returns the last directory the shell reported, unparsed.
+	Pwd() string
 	// Close releases emulator resources.
 	Close() error
 }
@@ -158,6 +168,8 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 				s.mu.Lock()
 				s.term = nil
 				s.mu.Unlock()
+			} else {
+				s.drainPending()
 			}
 		}
 
@@ -230,6 +242,22 @@ func (s *Session) Close() {
 // having ended.
 func (s *Session) Releasing() bool { return s.releasing.Load() }
 
+// drainPending sends bytes the emulator generated back to the pty.
+//
+// These are answers to questions a program asked the terminal, such as a device status report.
+// Without this the program waits for a reply that never comes; zmx works around the same
+// problem by answering DA1 queries by hand.
+func (s *Session) drainPending() {
+	if s.term == nil {
+		return
+	}
+	for _, data := range s.term.TakePending() {
+		if err := s.Write(context.Background(), data); err != nil {
+			return
+		}
+	}
+}
+
 // Done is closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
@@ -301,12 +329,47 @@ func (s *Session) Write(ctx context.Context, data []byte) error {
 	return err
 }
 
-// Resize sets the session's window size.
+// Resize sets the session's window size, on the pty and on the terminal model.
+//
+// The model must track the pty or a restore would describe a screen of the wrong shape.
 func (s *Session) Resize(ctx context.Context, rows, cols, xpixel, ypixel uint32) error {
-	_, err := s.shim.Resize(ctx, &shimv1.ResizeRequest{
+	if _, err := s.shim.Resize(ctx, &shimv1.ResizeRequest{
 		Rows: rows, Cols: cols, XPixel: xpixel, YPixel: ypixel,
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term != nil && rows > 0 && cols > 0 {
+		if err := term.Resize(uint16(rows), uint16(cols)); err != nil {
+			return fmt.Errorf("resizing terminal model: %w", err)
+		}
+	}
+	return nil
+}
+
+// Title returns the session's title as reported by the shell.
+func (s *Session) Title() string {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return ""
+	}
+	return term.Title()
+}
+
+// Pwd returns the session's directory as reported by the shell, unparsed.
+func (s *Session) Pwd() string {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return ""
+	}
+	return term.Pwd()
 }
 
 // Shutdown terminates the session's shell and its shim.

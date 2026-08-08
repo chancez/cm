@@ -15,6 +15,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/server"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/vt"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -61,9 +62,7 @@ func runServer(ctx context.Context, dirs paths.Dirs) error {
 	}
 	defer st.Close()
 
-	// The terminal model is not wired up yet, so sessions work without screen restore.
-	// Passing nil keeps that explicit rather than silently degrading later.
-	mgr, err := server.NewManager(dirs, st, nil)
+	mgr, err := server.NewManager(dirs, st, newTerminal)
 	if err != nil {
 		l.Close()
 		return err
@@ -161,4 +160,18 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// defaultScrollbackLines bounds retained scrollback per session.
+//
+// Matches tmux's and zmx's default. libghostty prunes at page granularity, so the effective
+// limit is somewhat higher.
+const defaultScrollbackLines = 2000
+
+// newTerminal builds the terminal model for a session.
+//
+// This is where cgo enters the server. Keeping it a function passed to the manager means the
+// manager, and its tests, do not depend on the emulator.
+func newTerminal(rows, cols uint16) (server.Terminal, error) {
+	return vt.NewSessionTerminal(rows, cols, defaultScrollbackLines)
 }
