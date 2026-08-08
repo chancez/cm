@@ -1,0 +1,49 @@
+[tools]
+go = "1.26.5"
+# Only needed by the `libghostty` task to build libghostty-vt from source.
+zig = "0.16.0"
+
+[env]
+# libghostty-vt has no tagged release and its API is explicitly unstable, so pin a
+# commit. Bumping this is a deliberate act: re-run `mise run libghostty` after.
+GHOSTTY_REF = "4d605bf0d"
+GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
+GHOSTTY_PREFIX = "{{config_root}}/third_party/ghostty/zig-out"
+
+[tasks.build]
+description = "Build the cm binary"
+run = "go build -o bin/cm ./cmd/cm"
+
+[tasks.test]
+description = "Run tests"
+run = "go test ./..."
+
+[tasks.fmt]
+description = "Format Go code"
+run = "go fmt ./..."
+
+[tasks.vet]
+description = "Vet Go code"
+run = "go vet ./..."
+
+[tasks.check]
+description = "Format, vet, and test"
+depends = ["fmt", "vet", "test"]
+
+[tasks.libghostty]
+description = "Fetch and build libghostty-vt (needed once VT state lands)"
+# Ghostty's build defaults emit-xcframework to "xcodebuild on PATH", which pulls in the
+# iOS SDK at configure time and fails without full Xcode. Disabling it explicitly is
+# not redundant. See the same workaround in zmx's build.zig.
+run = """
+set -euo pipefail
+if [ ! -d "$GHOSTTY_DIR/.git" ]; then
+  git clone https://github.com/ghostty-org/ghostty.git "$GHOSTTY_DIR"
+fi
+git -C "$GHOSTTY_DIR" fetch --depth 1 origin "$GHOSTTY_REF"
+git -C "$GHOSTTY_DIR" checkout --detach FETCH_HEAD
+cd "$GHOSTTY_DIR"
+zig build -Demit-lib-vt=true -Demit-xcframework=false -Demit-macos-app=false
+"""
+sources = ["mise.toml"]
+outputs = ["third_party/ghostty/zig-out/lib/libghostty-vt.a"]
