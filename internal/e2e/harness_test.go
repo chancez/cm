@@ -33,12 +33,19 @@ import (
 	"github.com/chancez/cm/internal/store"
 )
 
-// buildOnce builds the cm binary once for the whole package rather than per test.
-var buildOnce struct {
+// buildResult caches one build of cm for the whole package rather than per test.
+type buildResult struct {
 	sync.Once
 	path string
 	err  error
 }
+
+// buildOnce is the ordinary binary, which is what almost every test uses.
+var buildOnce buildResult
+
+// versionBuildOnce is the binary built with the version override enabled, used only by the tests that need
+// two processes to disagree about their versions.
+var versionBuildOnce buildResult
 
 // cmBinary returns a path to a freshly built cm.
 //
@@ -46,26 +53,48 @@ var buildOnce struct {
 // exactly the failure mode these tests exist to avoid.
 func cmBinary(t *testing.T) string {
 	t.Helper()
+	return buildCM(t, &buildOnce, nil)
+}
 
-	buildOnce.Do(func() {
+// cmVersionBinary returns a cm built with the version override enabled.
+//
+// A separate binary because the override is behind a build tag on purpose: a released cm ignores CM_VERSION
+// entirely, so there is no way to fake a version in one. That is the right default and it means a test that
+// needs two disagreeing versions has to ask for an instrumented build explicitly.
+//
+// The alternative was building from two git tags, which is not a test: it cannot run in CI without the tags
+// present, it needs git operations to set up, and if the tags are missing it silently compares a version
+// against itself and passes.
+func cmVersionBinary(t *testing.T) string {
+	t.Helper()
+	return buildCM(t, &versionBuildOnce, []string{"-tags", paths.VersionBuildTag})
+}
+
+// buildCM builds cm once per variant and caches the path.
+func buildCM(t *testing.T, once *buildResult, extraArgs []string) string {
+	t.Helper()
+
+	once.Do(func() {
 		dir, err := os.MkdirTemp("", "cmbin")
 		if err != nil {
-			buildOnce.err = err
+			once.err = err
 			return
 		}
 		path := filepath.Join(dir, "cm")
-		cmd := exec.Command("go", "build", "-o", path, "./cmd/cm")
+		args := append([]string{"build"}, extraArgs...)
+		args = append(args, "-o", path, "./cmd/cm")
+		cmd := exec.Command("go", args...)
 		cmd.Dir = repoRoot()
 		if out, cerr := cmd.CombinedOutput(); cerr != nil {
-			buildOnce.err = &buildError{output: string(out), err: cerr}
+			once.err = &buildError{output: string(out), err: cerr}
 			return
 		}
-		buildOnce.path = path
+		once.path = path
 	})
-	if buildOnce.err != nil {
-		t.Fatalf("building cm: %v", buildOnce.err)
+	if once.err != nil {
+		t.Fatalf("building cm: %v", once.err)
 	}
-	return buildOnce.path
+	return once.path
 }
 
 type buildError struct {
@@ -97,6 +126,9 @@ type env struct {
 	config  string
 	// session_ is exported as CM_SESSION when set, standing in for a command run from inside a session.
 	session_ string
+	// version is exported as CM_VERSION when set, which only an instrumented binary honors. Used by the
+	// version-skew tests to make two processes disagree without building from two git tags.
+	version string
 }
 
 // newEnv returns an isolated cm installation with no config file.
@@ -104,6 +136,16 @@ type env struct {
 // No config on purpose: it is the default path, which is what a new user gets and what the expiry bug
 // hid in. Tests that need settings call writeConfig.
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	return newEnvWith(t, cmBinary(t), "")
+}
+
+// newEnvWith is newEnv with the binary and reported version chosen by the caller.
+//
+// Both have to be set before the first command rather than afterwards, because that command starts the
+// server: a version applied later would reach only subsequent clients while the server went on reporting the
+// real build, which is a test that passes for the wrong reason.
+func newEnvWith(t *testing.T, bin, version string) *env {
 	t.Helper()
 
 	// os.MkdirTemp with a short prefix rather than t.TempDir(), which embeds the test name and blows
@@ -115,7 +157,8 @@ func newEnv(t *testing.T) *env {
 
 	e := &env{
 		t:       t,
-		bin:     cmBinary(t),
+		bin:     bin,
+		version: version,
 		runtime: filepath.Join(root, "r"),
 		state:   filepath.Join(root, "s"),
 	}
@@ -174,6 +217,9 @@ func (e *env) environ() []string {
 	)
 	if e.session_ != "" {
 		out = append(out, "CM_SESSION="+e.session_)
+	}
+	if e.version != "" {
+		out = append(out, paths.Env(paths.VersionEnvSuffix)+"="+e.version)
 	}
 	if e.config != "" {
 		out = append(out, "CM_CONFIG="+e.config)

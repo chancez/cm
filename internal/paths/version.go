@@ -19,7 +19,15 @@ import (
 // build from the server it talks to. Protobuf ignores unknown fields, so a newer client asking an older
 // server for something it does not implement gets a zero value rather than an error, which looks like a bug
 // in the feature rather than a version difference. Being able to compare the two turns that into a warning.
+//
+// Can be overridden, but only in a binary built with the cm_test_version tag. See versionOverride.
 func Version() string {
+	// Checked first, so an override wins over anything the build recorded. Compiled out entirely without the
+	// build tag, so a released binary has no way to be told it is a version it is not.
+	if v := versionOverride(); v != "" {
+		return v
+	}
+
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
@@ -77,3 +85,16 @@ func Version() string {
 func isReleaseVersion(v string) bool {
 	return strings.HasPrefix(v, "v") && !strings.Contains(v, "-")
 }
+
+// VersionEnvSuffix names the environment variable that overrides the reported version in a test build.
+//
+// Exported so tests spell it through Env rather than hardcoding "CM_VERSION", which would break silently if
+// the prefix changed. Declared here rather than in the tagged file so a test can reference the name whether or
+// not the tag is set, and so this comment is visible when reading Version.
+const VersionEnvSuffix = "VERSION"
+
+// VersionBuildTag is the build tag that enables the override.
+//
+// Exported so a test harness building an instrumented binary names it from here rather than repeating the
+// string, which is the sort of duplication that turns "the override did not take effect" into a passing test.
+const VersionBuildTag = "cm_test_version"

@@ -123,7 +123,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// The rest of the checks, each encoding a failure that has happened here. They are independent and
 	// non-destructive, so they all run rather than stopping at the first thing found: a reader debugging a
 	// problem wants the whole picture, not the first item alphabetically.
-	findings = append(findings, checkVersionSkew(clientVersion)...)
+	findings = append(findings, m.checkVersionSkew(clientVersion)...)
 	findings = append(findings, m.checkTerminal()...)
 	findings = append(findings, m.checkSocketPath()...)
 	findings = append(findings, m.checkShellIntegration()...)
@@ -196,7 +196,7 @@ func (s *Service) Doctor(
 
 	resp := &serverv1.DoctorResponse{
 		Findings:      make([]*serverv1.Finding, 0, len(findings)),
-		ServerVersion: paths.Version(),
+		ServerVersion: s.mgr.Version(),
 	}
 	if req.Repair {
 		resp.Repaired = s.mgr.Repair(ctx, findings)

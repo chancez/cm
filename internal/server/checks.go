@@ -39,8 +39,8 @@ const (
 // client asking an older server for something it does not implement gets a zero value rather than an error.
 // `cm wait --until blocked` against a server that predates reporting does not fail; it waits forever. That
 // looks like a broken feature rather than a version difference, which is a bad hour of debugging.
-func checkVersionSkew(clientVersion string) []Finding {
-	server := paths.Version()
+func (m *Manager) checkVersionSkew(clientVersion string) []Finding {
+	server := m.Version()
 
 	switch {
 	case clientVersion == "":

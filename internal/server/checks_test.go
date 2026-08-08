@@ -19,25 +19,60 @@ import (
 // blocked` against a server that predates reporting waits forever instead of failing, which looks like a
 // broken feature.
 func TestCheckVersionSkew(t *testing.T) {
+	// A server whose version is set explicitly, so the cases below are about the comparison rather than
+	// about whatever this build happens to report. Without it "matching" would have to be spelled
+	// paths.Version(), which makes the test a tautology: it would pass even if the check compared a value
+	// against itself.
+	const serverVersion = "v1.2.3"
+
 	for _, tc := range []struct {
 		name   string
 		client string
 		want   bool
 	}{
-		{name: "matching versions", client: paths.Version(), want: false},
-		{name: "different versions", client: "some-other-build", want: true},
+		{name: "matching versions", client: serverVersion, want: false},
+		{name: "different versions", client: "v1.2.4", want: true},
 		// A client too old to send the field at all, which is itself the mismatch being looked for.
 		{name: "client reported nothing", client: "", want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := checkVersionSkew(tc.client)
+			mgr, _, _ := newTestManager(t, nil)
+			mgr.SetVersion(serverVersion)
+
+			got := mgr.checkVersionSkew(tc.client)
 			if (len(got) > 0) != tc.want {
 				t.Errorf("checkVersionSkew(%q) = %+v, want a finding = %v", tc.client, got, tc.want)
 			}
-			if len(got) > 0 && got[0].Kind != FindingVersionSkew {
+			if len(got) == 0 {
+				return
+			}
+			if got[0].Kind != FindingVersionSkew {
 				t.Errorf("kind = %q, want %q", got[0].Kind, FindingVersionSkew)
 			}
+			// Both versions are named. A warning that says only "these differ" leaves the reader to work out
+			// which side is old, and the action depends on that.
+			if !strings.Contains(got[0].Detail, serverVersion) {
+				t.Errorf("detail does not name the server version %q: %q", serverVersion, got[0].Detail)
+			}
+			if tc.client != "" && !strings.Contains(got[0].Detail, tc.client) {
+				t.Errorf("detail does not name the client version %q: %q", tc.client, got[0].Detail)
+			}
 		})
+	}
+}
+
+// A Manager with no version set reports the real build.
+//
+// The guard on the injection: SetVersion exists for tests, so the default has to be the true version. A
+// Manager that reported "" would make the skew check compare a client against nothing and flag every run.
+func TestManagerVersionDefaultsToTheBuild(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	if got, want := mgr.Version(), paths.Version(); got != want {
+		t.Errorf("Version() = %q, want the build version %q", got, want)
+	}
+	mgr.SetVersion("v9.9.9")
+	if got := mgr.Version(); got != "v9.9.9" {
+		t.Errorf("Version() after SetVersion = %q, want v9.9.9", got)
 	}
 }
 

@@ -7,19 +7,25 @@ import (
 	"time"
 )
 
+// doctorFinding is one finding in the JSON report.
+//
+// Named rather than anonymous so ofKind can return it and a test can hold one in a variable. It was written
+// inline three times before, which is the sort of duplication that makes adding a field a three-place edit.
+type doctorFinding struct {
+	Kind     string `json:"kind"`
+	Session  string `json:"session"`
+	ShimPID  int    `json:"shim_pid"`
+	ShellPID int    `json:"shell_pid"`
+	Detail   string `json:"detail"`
+	Fixable  bool   `json:"fixable"`
+}
+
 // doctorResult is the JSON shape cm doctor prints.
 type doctorResult struct {
-	ClientVersion string `json:"client_version"`
-	ServerVersion string `json:"server_version"`
-	Findings      []struct {
-		Kind     string `json:"kind"`
-		Session  string `json:"session"`
-		ShimPID  int    `json:"shim_pid"`
-		ShellPID int    `json:"shell_pid"`
-		Detail   string `json:"detail"`
-		Fixable  bool   `json:"fixable"`
-	} `json:"findings"`
-	Repaired []string `json:"repaired"`
+	ClientVersion string          `json:"client_version"`
+	ServerVersion string          `json:"server_version"`
+	Findings      []doctorFinding `json:"findings"`
+	Repaired      []string        `json:"repaired"`
 }
 
 // doctor runs the command and parses its report.
@@ -34,27 +40,26 @@ func (e *env) doctor(args ...string) (doctorResult, int) {
 	return out, r.code
 }
 
-// findings returns the findings of one kind.
-func (d doctorResult) ofKind(kind string) []struct {
-	Kind     string `json:"kind"`
-	Session  string `json:"session"`
-	ShimPID  int    `json:"shim_pid"`
-	ShellPID int    `json:"shell_pid"`
-	Detail   string `json:"detail"`
-	Fixable  bool   `json:"fixable"`
-} {
-	var out []struct {
-		Kind     string `json:"kind"`
-		Session  string `json:"session"`
-		ShimPID  int    `json:"shim_pid"`
-		ShellPID int    `json:"shell_pid"`
-		Detail   string `json:"detail"`
-		Fixable  bool   `json:"fixable"`
-	}
+// ofKind returns the findings of one kind.
+func (d doctorResult) ofKind(kind string) []doctorFinding {
+	var out []doctorFinding
 	for _, f := range d.Findings {
 		if f.Kind == kind {
 			out = append(out, f)
 		}
+	}
+	return out
+}
+
+// kinds lists every finding kind reported, for an assertion message that says what was actually found.
+//
+// Worth having because the useful failure output is the whole set: "want version-skew, got [server-errors
+// loose-dir-perms]" points at the problem, while "want version-skew, got nothing" does not say whether the
+// command ran.
+func (d doctorResult) kinds() []string {
+	out := make([]string, 0, len(d.Findings))
+	for _, f := range d.Findings {
+		out = append(out, f.Kind)
 	}
 	return out
 }

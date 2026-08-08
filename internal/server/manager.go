@@ -58,6 +58,10 @@ type Manager struct {
 	log *slog.Logger
 	// resizePolicy is applied to every session created or adopted. Empty behaves as ResizeLeader.
 	resizePolicy ResizePolicy
+	// version is what this server reports as its build. Held as a field rather than read from paths.Version
+	// at each use so a test can set up a mismatch by construction, instead of through an environment
+	// variable and a subprocess. Empty means paths.Version, which is what the real server leaves it as.
+	version string
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -130,6 +134,25 @@ func (m *Manager) SetLogger(l *slog.Logger) {
 
 // SetPersistPolicy enables persistence.
 func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }
+
+// SetVersion overrides the build this server reports.
+//
+// For tests. The behavior worth testing is what the version-skew check does when a client and server
+// disagree, and the alternative ways to arrange that are both bad: building two binaries from two git tags is
+// a manual procedure rather than a test, and a package-level variable would make the tests order-dependent.
+// A field on the Manager is neither.
+func (m *Manager) SetVersion(v string) { m.version = v }
+
+// Version reports the build this server identifies itself as.
+//
+// Falls back to paths.Version rather than storing it at construction, so a Manager built without a version
+// still reports the real one and there is no way to accidentally report the empty string.
+func (m *Manager) Version() string {
+	if m.version != "" {
+		return m.version
+	}
+	return paths.Version()
+}
 
 // persistsSession reports whether a session should write its output to disk.
 func (m *Manager) persistsSession(name string, requested bool) bool {
