@@ -155,6 +155,12 @@ func shortTempDir(t *testing.T) string {
 // startShimFor runs a real shim so the server can be exercised against the actual protocol.
 // The shim is genuinely cheap to start and the socket lifecycle is where things break, so
 // this is worth doing for real rather than faking.
+// Not suitable for anything that scans the runtime directory.
+//
+// The socket goes in a private temp dir rather than at paths.Dirs.ShimSocket, which is fine for a test that
+// dials it directly and wrong for one that expects to *find* it: `cm doctor` works by enumerating the runtime
+// directory, so a shim placed here is invisible to it and every assertion passes for the wrong reason. Use
+// startShimInRuntimeDir in doctor_test.go for those.
 func startShimFor(t *testing.T, cfg shim.Config) store.Session {
 	t.Helper()
 

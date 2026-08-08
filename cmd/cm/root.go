@@ -25,6 +25,27 @@ func (g *globals) dirs() (paths.Dirs, error) {
 	if err != nil {
 		return paths.Dirs{}, err
 	}
+
+	// The config file applies only where neither the environment nor a flag has spoken, so it is the
+	// lowest of the three precedences.
+	//
+	// The environment is read again here rather than inferred from what Default returned. Default bakes it
+	// into the result, which makes "the user set CM_RUNTIME_DIR" indistinguishable from "we fell back to a
+	// default" -- and overwriting the latter is right while overwriting the former is not.
+	//
+	// A failure to read the config is deliberately ignored rather than returned. Every command resolves
+	// directories, so a malformed config would otherwise make even `cm --help` fail; the commands that
+	// actually use configuration report the error themselves.
+	if cfg, err := g.config(); err == nil && cfg != nil {
+		if cfg.RuntimeDir != "" && os.Getenv(paths.Env("RUNTIME_DIR")) == "" {
+			d.Runtime = cfg.RuntimeDir
+		}
+		if cfg.StateDir != "" && os.Getenv(paths.Env("STATE_DIR")) == "" {
+			d.State = cfg.StateDir
+		}
+	}
+
+	// A flag beats everything, including the environment Default already applied.
 	if g.runtimeDir != "" {
 		d.Runtime = g.runtimeDir
 	}

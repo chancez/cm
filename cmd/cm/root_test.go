@@ -1,10 +1,15 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/chancez/cm/internal/paths"
 )
 
 // bindEnv is the replacement for pulling in viper, so its precedence rules are worth
@@ -131,5 +136,90 @@ func TestAttachRejectsBadSessionName(t *testing.T) {
 		if err := root.Execute(); err == nil {
 			t.Errorf("attach %q = nil error, want rejection", name)
 		}
+	}
+}
+
+// The runtime and state directories can be set three ways, and the precedence must hold.
+//
+// A flag beats the environment, which beats the config file. That ordering is what lets a test harness or a
+// one-off invocation redirect cm without editing a file, while a standing preference still lives in
+// configuration.
+//
+// Worth testing because it is silent when wrong: cm would use a different directory than the caller asked
+// for, find no sessions there, and report an empty list rather than an error.
+func TestDirsPrecedence(t *testing.T) {
+	cfgDir := t.TempDir()
+	cfgRuntime := filepath.Join(cfgDir, "from-config")
+	cfgPath := filepath.Join(cfgDir, "cm.toml")
+	if err := os.WriteFile(cfgPath, []byte("runtime_dir = "+strconv.Quote(cfgRuntime)+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// A state dir is always set, so these never touch the real one.
+	stateDir := t.TempDir()
+	t.Setenv(paths.Env("STATE_DIR"), stateDir)
+	t.Setenv(paths.Env("CONFIG"), cfgPath)
+
+	t.Run("config file when nothing else is set", func(t *testing.T) {
+		// Explicitly empty rather than unset, since an inherited value would decide the result and the test
+		// would pass based on the environment rather than the code.
+		t.Setenv(paths.Env("RUNTIME_DIR"), "")
+
+		g := &globals{}
+		got, err := g.dirs()
+		if err != nil {
+			t.Fatalf("dirs() error = %v", err)
+		}
+		if got.Runtime != cfgRuntime {
+			t.Errorf("Runtime = %q, want the config file's value %q", got.Runtime, cfgRuntime)
+		}
+	})
+
+	t.Run("environment beats the config file", func(t *testing.T) {
+		envRuntime := filepath.Join(t.TempDir(), "from-env")
+		t.Setenv(paths.Env("RUNTIME_DIR"), envRuntime)
+
+		g := &globals{}
+		got, err := g.dirs()
+		if err != nil {
+			t.Fatalf("dirs() error = %v", err)
+		}
+		if got.Runtime != envRuntime {
+			t.Errorf("Runtime = %q, want the environment's value %q", got.Runtime, envRuntime)
+		}
+	})
+
+	t.Run("flag beats the environment", func(t *testing.T) {
+		envRuntime := filepath.Join(t.TempDir(), "from-env")
+		flagRuntime := filepath.Join(t.TempDir(), "from-flag")
+		t.Setenv(paths.Env("RUNTIME_DIR"), envRuntime)
+
+		g := &globals{runtimeDir: flagRuntime}
+		got, err := g.dirs()
+		if err != nil {
+			t.Fatalf("dirs() error = %v", err)
+		}
+		if got.Runtime != flagRuntime {
+			t.Errorf("Runtime = %q, want the flag's value %q", got.Runtime, flagRuntime)
+		}
+	})
+}
+
+// A malformed config must not stop a command from resolving its directories.
+//
+// Every command calls dirs(), so returning an error here would make even `cm --help` fail on a typo in a
+// config file. The commands that actually read configuration report the problem themselves.
+func TestDirsToleratesABrokenConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "cm.toml")
+	if err := os.WriteFile(cfgPath, []byte("this is not = valid = toml\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv(paths.Env("CONFIG"), cfgPath)
+	t.Setenv(paths.Env("RUNTIME_DIR"), "")
+	t.Setenv(paths.Env("STATE_DIR"), t.TempDir())
+
+	g := &globals{}
+	if _, err := g.dirs(); err != nil {
+		t.Errorf("dirs() error = %v, want a broken config to be tolerated here", err)
 	}
 }

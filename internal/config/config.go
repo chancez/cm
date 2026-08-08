@@ -23,6 +23,18 @@ import (
 
 // Config is cm's configuration.
 type Config struct {
+	// RuntimeDir overrides where sockets live, and StateDir where the database and logs live.
+	//
+	// Non-circular, since the config file itself is found under the user's config directory rather than
+	// under either of these: reading it does not require knowing where they point.
+	//
+	// Lowest precedence of the three ways to set them. A flag beats the environment, which beats this, so a
+	// one-off invocation or a test harness can redirect cm without editing a file. The config file is for a
+	// standing preference, such as putting sockets somewhere shorter than the default to stay under the
+	// 104-byte limit on a unix socket path.
+	RuntimeDir string `toml:"runtime_dir"`
+	StateDir   string `toml:"state_dir"`
+
 	// ScrollbackLines bounds retained scrollback per session. Zero means unlimited.
 	//
 	// libghostty prunes at page granularity, so the effective limit is somewhat higher.
