@@ -59,6 +59,16 @@ type Options struct {
 	// already printed.
 	NoRestore bool
 
+	// Output, when set, receives the session's bytes instead of the terminal.
+	//
+	// For a caller that is not painting a terminal and wants to transform what it writes -- stripping escape
+	// sequences, say. The terminal is still opened, since the attachment needs its size and stdin, but nothing
+	// is written to it.
+	//
+	// A hook rather than letting the caller pass its own writer to OpenTTY, because a TTY needs an *os.File
+	// for the ioctls that report size and set raw mode, and a filter is not a file.
+	Output io.Writer
+
 	// OnAttached, when set, is called once the server has opened the session on this connection.
 	//
 	// A reliable readiness signal, which OnMetadata is not: metadata is delivered when the session reports a
@@ -235,13 +245,21 @@ func runSession(
 	}
 
 	if len(opened.Restore) > 0 {
-		// Clear first so restored state is not painted over whatever the client's own
-		// shell left on screen.
-		if err := tty.Clear(); err != nil {
-			return outcomeDone, err
-		}
-		if _, err := tty.Write(opened.Restore); err != nil {
-			return outcomeDone, err
+		if opts.Output != nil {
+			// No clear: that writes an escape sequence to a terminal, and a caller taking the bytes itself is
+			// not painting one.
+			if _, err := opts.Output.Write(opened.Restore); err != nil {
+				return outcomeDone, err
+			}
+		} else {
+			// Clear first so restored state is not painted over whatever the client's own
+			// shell left on screen.
+			if err := tty.Clear(); err != nil {
+				return outcomeDone, err
+			}
+			if _, err := tty.Write(opened.Restore); err != nil {
+				return outcomeDone, err
+			}
 		}
 	}
 	seq := opened.NextSeq
@@ -315,7 +333,11 @@ func runSession(
 				continue
 			}
 			if o := msg.resp.GetOutput(); o != nil {
-				if _, err := tty.Write(o.Data); err != nil {
+				w := io.Writer(tty)
+				if opts.Output != nil {
+					w = opts.Output
+				}
+				if _, err := w.Write(o.Data); err != nil {
 					return outcomeDone, err
 				}
 				next := o.Seq + uint64(len(o.Data))

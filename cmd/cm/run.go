@@ -29,6 +29,7 @@ func newRunCommand(g *globals) *cobra.Command {
 		persist bool
 		asJSON  bool
 		env     []string
+		quiet   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- <command>...",
@@ -36,12 +37,16 @@ func newRunCommand(g *globals) *cobra.Command {
 		Long: `Run a command in a new session, without attaching a terminal to it.
 
 The command runs on a pty, so programs that check for a terminal behave as they
-would interactively, and its output is captured as session scrollback readable
-with 'cm history'.
+would interactively.
 
-By default this waits for the command to finish and exits with its status, so it
-composes with anything that checks an exit code. --detach returns immediately and
-leaves the session running.
+By default this waits for the command to finish, prints its output, and exits with
+its status, so it composes with anything that checks an exit code. --detach returns
+immediately and leaves the session running, printing the session name instead.
+
+The output is rendered rather than raw: escape sequences are stripped, so a
+redirected build log is text rather than a file full of colour codes. Use
+'cm history --format vt' for the bytes as the program emitted them, and --quiet to
+print nothing but rely on the exit status.
 
 Unlike waiting on a shell prompt, the exit status here is the real one: the shim
 owns the process and reaps it, so nothing is inferred from output.`,
@@ -92,7 +97,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					return err
 				}
 
-				return waitForRun(ctx, cl, name, timeout, asJSON)
+				return waitForRun(ctx, cl, name, timeout, asJSON, quiet)
 			})
 		},
 	}
@@ -107,6 +112,8 @@ owns the process and reaps it, so nothing is inferred from output.`,
 	f.BoolVar(&persist, "persist", false,
 		"keep the session's output across a reboot")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
+	f.BoolVarP(&quiet, "quiet", "q", false,
+		"do not print the command's output; rely on the exit status")
 	f.StringArrayVar(&env, "env", nil,
 		"set a KEY=VALUE in the command's environment (repeatable)")
 	return cmd
@@ -192,6 +199,7 @@ func waitForRun(
 	name string,
 	timeout time.Duration,
 	asJSON bool,
+	quiet bool,
 ) error {
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -212,6 +220,24 @@ func waitForRun(
 			state := stateName(s)
 			if state == "running" {
 				break
+			}
+
+			// The command's output, printed before anything is said about its status.
+			//
+			// The ordering matters for a failing command: returning the status first means the output that
+			// explains the failure is never printed, which is the opposite of useful. Printed even when the
+			// command failed, for the same reason.
+			//
+			// Rendered rather than raw, matching `cm read`: escape sequences in a captured build log are noise
+			// at best and corrupt a redirected file at worst. `cm history --format vt` is there for the raw
+			// bytes.
+			//
+			// Skipped in JSON mode, where mixing free-form output into a structured document would break the
+			// parser that asked for JSON.
+			if !quiet && !asJSON {
+				if err := printRunOutput(ctx, cl, name); err != nil {
+					return err
+				}
 			}
 
 			if asJSON {
@@ -245,6 +271,43 @@ func waitForRun(
 		case <-time.After(runPollInterval):
 		}
 	}
+}
+
+// printRunOutput writes a finished command's captured output.
+//
+// Read with lines set to everything, since a caller running a command wants all of it: the 100-line default of
+// `cm read` is for looking at a live session, and truncating a build log to its tail would lose the error at the
+// top.
+//
+// Unwrapped, so a path or a stack frame the terminal broke to fit 80 columns comes back as one line. The width
+// is cm's own choice here -- `cm run` opens the session at 24x80 -- so rejoining is undoing something cm did
+// rather than something the program meant.
+func printRunOutput(ctx context.Context, cl serverv1.ServerClient, name string) error {
+	resp, err := cl.Read(ctx, &serverv1.ReadRequest{
+		Session: name,
+		Lines:   0,
+		Unwrap:  true,
+	})
+	if err != nil {
+		// Not fatal. The command's status is the point of this command, and failing to show its output should
+		// not turn a successful run into a failure. Reported so the absence is not silent.
+		fmt.Fprintf(os.Stderr, "warning: could not read %s output: %v\n", name, err)
+		return nil
+	}
+	if len(resp.Data) == 0 {
+		return nil
+	}
+	if _, err := os.Stdout.Write(resp.Data); err != nil {
+		return err
+	}
+	// A trailing newline when the render lacks one, so a shell prompt does not land on the same line as the
+	// last line of output.
+	if n := len(resp.Data); n > 0 && resp.Data[n-1] != '\n' {
+		if _, err := os.Stdout.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // exitCodeError carries a command's exit status so main can exit with it.

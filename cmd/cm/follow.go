@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
 
 	"golang.org/x/term"
 
+	"github.com/chancez/cm/internal/ansi"
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -29,14 +31,17 @@ func warnIfTerminal(w *os.File) {
 // building anything -- piping `cm attach --read-only` already produced the wanted behavior, so what --follow
 // adds is a name for it, the right defaults, and a stop condition.
 //
-// Raw bytes, deliberately, which is what makes this like `tail -f` and unlike `cm read`. The output carries
-// whatever the program emitted, escape sequences included, so a build that repaints a progress line looks the
-// way it did live. The cost is that it is less clean to pipe into a parser than cm read's rendered lines; use
-// cm read for that.
+// Escape sequences are stripped unless raw is set, matching `cm read`. The point of following a session is
+// usually to see what a command printed, and colour codes and cursor moves in a redirected log are noise at
+// best. --raw keeps them for the case where the sequences are the interesting part.
+//
+// Stripping is a byte filter rather than a terminal model, because a stream cannot re-render a screen per byte.
+// So output from a program that repaints in place -- a progress bar, a full-screen TUI -- comes out as every
+// frame concatenated rather than overwritten. That is the tradeoff, and why raw stays available.
 //
 // Read-only always. A follower must not be able to disturb the session it is watching, and this is called from
 // commands whose stdin is not the session's input.
-func followSession(ctx context.Context, dirs paths.Dirs, session string) error {
+func followSession(ctx context.Context, dirs paths.Dirs, session string, raw bool) error {
 	opts := client.Options{
 		Session:    session,
 		SocketPath: dirs.ServerSocket(),
@@ -47,6 +52,7 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string) error {
 		// No repaint. A follower streams what happens next; the screen as it stands now is either already
 		// printed by the caller or deliberately not wanted.
 		NoRestore: true,
+		Output:    followWriter(raw),
 	}
 
 	tty, err := client.OpenTTY(os.Stdin, os.Stdout)
@@ -87,7 +93,7 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string) error {
 // stream picks up at the session's current position. In practice they line up, because the tail ends where the
 // session is now, which is where the stream begins.
 func printTailThenFollow(
-	ctx context.Context, dirs paths.Dirs, session string, tail []byte,
+	ctx context.Context, dirs paths.Dirs, session string, tail []byte, raw bool,
 ) error {
 	if _, err := os.Stdout.Write(tail); err != nil {
 		return err
@@ -99,23 +105,31 @@ func printTailThenFollow(
 			return err
 		}
 	}
-	return followSession(ctx, dirs, session)
+	return followSession(ctx, dirs, session, raw)
+}
+
+// followWriter returns where a follower's output goes.
+//
+// Stripped by default, raw on request. Returned as a writer rather than branching at each write site so both
+// followers share one decision.
+func followWriter(raw bool) io.Writer {
+	if raw {
+		return os.Stdout
+	}
+	return ansi.NewStripper(os.Stdout)
 }
 
 // followWarning is printed when --follow writes straight to a terminal.
 //
-// A follower emits raw pty output, which for a full-screen program includes alternate-screen and
-// cursor-movement sequences aimed at a terminal this process does not own. Piped or redirected, that is
-// exactly right. On a terminal it can repaint over the shell, and the command that owns the terminal properly
-// is `cm attach --read-only`.
+// With --raw, a follower emits the session's escape sequences, which for a full-screen program includes
+// alternate-screen and cursor-movement aimed at a terminal this process does not own, so it can repaint over
+// the shell. The command that owns a terminal properly is `cm attach --read-only`.
 //
-// A warning rather than an error, because plenty of sessions emit nothing but plain lines and following one on
-// a terminal is then perfectly useful. Refusing would be the tool deciding it knows better; saying so on
-// stderr leaves the choice with the caller and keeps stdout clean for the output itself.
+// Only for --raw: stripped output is plain text and safe to print anywhere, which is why it is the default.
 func followWarning() string {
 	return fmt.Sprintf(
-		"warning: --follow writes raw session output, which can disturb a terminal; "+
-			"redirect it, or use `%s attach --read-only` to watch interactively", paths.Name)
+		"warning: --raw writes the session's escape sequences, which can disturb a terminal; "+
+			"redirect it, drop --raw, or use `%s attach --read-only` to watch interactively", paths.Name)
 }
 
 // sendAndFollow sends input, streams the session's output, and returns when the command finishes.
@@ -140,6 +154,7 @@ func sendAndFollow(
 	session, data string,
 	until serverv1.WaitState,
 	timeout time.Duration,
+	raw bool,
 ) error {
 	if err := ensureServer(ctx, dirs); err != nil {
 		return err
@@ -152,7 +167,7 @@ func sendAndFollow(
 	streamed := make(chan error, 1)
 	attached := make(chan struct{})
 	go func() {
-		streamed <- followSessionSignalling(streamCtx, dirs, session, attached)
+		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw)
 	}()
 
 	// Wait for the attachment before sending, or attaching first buys nothing.
@@ -224,7 +239,7 @@ func sendAndFollow(
 // than a visible failure. OnAttached fires on the server's Opened reply, which is unconditional and always
 // first.
 func followSessionSignalling(
-	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{},
+	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{}, raw bool,
 ) error {
 	var once sync.Once
 	opts := client.Options{
@@ -233,6 +248,7 @@ func followSessionSignalling(
 		ReadOnly:   true,
 		DetachKey:  client.DetachKeySpec{Name: "none", Disabled: true},
 		NoRestore:  true,
+		Output:     followWriter(raw),
 		OnAttached: func() {
 			once.Do(func() { close(ready) })
 		},

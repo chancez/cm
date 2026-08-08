@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -146,4 +147,95 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// `cm run` prints the command's output, with escape sequences stripped.
+//
+// It used to print nothing at all and leave the caller to run `cm read` afterwards, which surprised the first
+// person to use it: a command that runs and shows nothing looks like it did nothing. Rendered rather than raw,
+// matching cm read, so a redirected build log is text rather than a file full of colour codes.
+func TestRunPrintsStrippedOutput(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	out := e.mustRun("run", "--", "/bin/sh", "-c",
+		`printf 'plain\n'; printf '\033[31mred\033[0m\n'`)
+
+	if !strings.Contains(out, "plain") || !strings.Contains(out, "red") {
+		t.Errorf("output is missing the command's text:\n%q", out)
+	}
+	// The escape byte itself, which is what makes this rendered rather than raw. A redirected log containing
+	// these is the thing being avoided.
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("output contains escape sequences, want them stripped:\n%q", out)
+	}
+}
+
+// A failing command prints its output before its status.
+//
+// The ordering is the point. Returning the status first means the output explaining the failure is never
+// printed, which is exactly backwards for the case where output matters most.
+func TestRunPrintsOutputWhenTheCommandFails(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	r := e.run("run", "--", "/bin/sh", "-c", "echo the reason it failed; exit 3")
+
+	if r.code != 3 {
+		t.Errorf("exit code = %d, want 3", r.code)
+	}
+	if !strings.Contains(r.stdout, "the reason it failed") {
+		t.Errorf("a failing command printed no output:\nstdout: %q\nstderr: %q", r.stdout, r.stderr)
+	}
+}
+
+// --quiet prints nothing and still reports the status.
+//
+// For a caller that only wants the exit code, and for anything where the output would be noise.
+func TestRunQuietPrintsNothing(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	out := e.mustRun("run", "--quiet", "--", "/bin/sh", "-c", "echo hidden")
+	if strings.Contains(out, "hidden") {
+		t.Errorf("--quiet printed the command's output:\n%q", out)
+	}
+
+	// And the status still propagates, which is the whole reason to use --quiet rather than redirecting.
+	if r := e.run("run", "--quiet", "--", "/bin/sh", "-c", "exit 4"); r.code != 4 {
+		t.Errorf("exit code = %d with --quiet, want 4", r.code)
+	}
+}
+
+// --detach prints the session name rather than output, since there is none yet.
+//
+// The two modes are different by nature: detaching returns before the command has run, so there is nothing to
+// print but the name to look it up by.
+func TestRunDetachedStillPrintsTheSessionName(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	out := strings.TrimSpace(e.mustRun("run", "-d", "--session", "named", "--",
+		"/bin/sh", "-c", "echo later"))
+	if out != "named" {
+		t.Errorf("detached run printed %q, want the session name", out)
+	}
+}
+
+// JSON mode does not mix output into the document.
+//
+// A caller that asked for JSON is parsing it, and free-form command output in the middle would break that.
+func TestRunJSONDoesNotIncludeOutput(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	out := e.mustRun("run", "--json", "--", "/bin/sh", "-c", "echo SHOULD_NOT_APPEAR")
+	if strings.Contains(out, "SHOULD_NOT_APPEAR") {
+		t.Errorf("JSON output includes the command's output:\n%s", out)
+	}
+	// And it is still valid JSON, which is what the mode promises.
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Errorf("output is not valid JSON: %v\n%s", err, out)
+	}
 }

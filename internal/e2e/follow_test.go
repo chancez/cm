@@ -175,3 +175,66 @@ func TestSendFollowQuietWithShellIntegration(t *testing.T) {
 		t.Errorf("warned about shell integration for a session that reports:\n%s", r.stderr)
 	}
 }
+
+// Followed output has escape sequences stripped by default, and keeps them with --raw.
+//
+// The default matters more than it sounds: --follow mostly replaces a send followed by a read where the caller
+// had to guess how much to read, and a colour code in a redirected build log is noise. cm read already strips,
+// so the streaming form matching it is consistency rather than a new opinion.
+func TestFollowStripsEscapesByDefault(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.mustRun("run", "--session", "esc", "-d", "--",
+		"/bin/sh", "-c", `printf '\033[32mgreen\033[0m\n'; sleep 0.4`)
+
+	out := e.mustRunWithin(20*time.Second, "read", "--follow", "esc")
+	if !strings.Contains(out, "green") {
+		t.Errorf("output is missing the text:\n%q", out)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("escape sequences survived the default strip:\n%q", out)
+	}
+}
+
+// --raw keeps the escape sequences in the streamed half.
+//
+// For the cases where the sequences are the interesting part, such as checking what a program actually emitted.
+//
+// The escapes have to be printed after the follow starts, which took a correction: an earlier version printed
+// them first, so they only ever arrived through the rendered tail, which is stripped either way. The test then
+// failed while --raw was working, and the flag looked broken when the test was.
+func TestFollowRawKeepsEscapes(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	// A delay before the escapes, so they reach the stream rather than the tail.
+	e.mustRun("run", "--session", "rawesc", "-d", "--",
+		"/bin/sh", "-c", `sleep 1; printf '\033[32mgreen\033[0m\n'; sleep 0.3`)
+
+	out := e.mustRunWithin(20*time.Second, "read", "--follow", "--raw", "rawesc")
+	if !strings.ContainsRune(out, 0x1b) {
+		t.Errorf("--raw stripped the escape sequences from the stream:\n%q", out)
+	}
+}
+
+// The default strips escapes from the streamed half too, not only from the tail.
+//
+// The complement of the case above, and the one that would hide a stripper installed on the wrong writer: the
+// tail is rendered by the server and so is clean regardless, which means a test that only checks the tail
+// passes with no filter at all.
+func TestFollowStripsEscapesFromTheStream(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.mustRun("run", "--session", "strmesc", "-d", "--",
+		"/bin/sh", "-c", `sleep 1; printf '\033[32mgreen\033[0m\n'; sleep 0.3`)
+
+	out := e.mustRunWithin(20*time.Second, "read", "--follow", "strmesc")
+	if !strings.Contains(out, "green") {
+		t.Errorf("output is missing the streamed text:\n%q", out)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("escape sequences survived in the streamed half:\n%q", out)
+	}
+}

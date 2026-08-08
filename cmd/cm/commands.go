@@ -299,6 +299,7 @@ func newSendCommand(g *globals) *cobra.Command {
 		timeout time.Duration
 		asJSON  bool
 		follow  bool
+		raw     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "send <session> <text>...",
@@ -321,9 +322,16 @@ finishes, which is what watching a build looks like without attaching:
 
   cm send build 'make' --enter --follow
 
-It implies --wait idle, since it has to know when to stop. The output is raw, as
-the program emitted it, so it is meant for a terminal you are watching or a file
-you are keeping; use 'cm read' afterwards for something a parser will read.
+It implies --wait idle, since it has to know when to stop. Escape sequences are
+stripped, so the output is plain text: a colour code in a redirected build log is
+noise, and this is usually what replaces a send followed by a read where you had to
+guess how much to read. Use --raw to keep the sequences.
+
+What you see is everything the session printed, which includes the shell echoing the
+line it was sent and the prompt that follows. Those are the session's own output, not
+something cm adds, and suppressing them would mean not writing the input through the
+pty at all. 'cm read' afterwards renders the screen instead, if the command's output
+alone is what you want.
 
 The stream is opened before the input is sent, so nothing the command prints at
 the start is missed. Doing it the other way round loses whatever appears before the
@@ -364,8 +372,10 @@ follower connects, which for a fast command can be all of it.`,
 				return err
 			}
 			if follow {
-				warnIfTerminal(os.Stdout)
-				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout)
+				if raw {
+					warnIfTerminal(os.Stdout)
+				}
+				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout, raw)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Send(ctx, &serverv1.SendRequest{
@@ -394,6 +404,8 @@ follower connects, which for a fast command can be all of it.`,
 	f.BoolVar(&asJSON, "json", false, "print the wait result as JSON")
 	f.BoolVarP(&follow, "follow", "f", false,
 		"stream the session's output until the command finishes (implies --wait idle)")
+	f.BoolVar(&raw, "raw", false,
+		"with --follow, keep escape sequences instead of stripping them")
 	return cmd
 }
 

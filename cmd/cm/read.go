@@ -22,6 +22,7 @@ func newReadCommand(g *globals) *cobra.Command {
 		lines  int
 		wrap   bool
 		follow bool
+		raw    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "read <session>",
@@ -40,11 +41,14 @@ terminal laid them out.
 Works after a command has finished, which is the usual case for 'cm run', as long
 as the session saved its output.
 
---follow prints the last lines and then keeps streaming, like 'tail -f'. The two
-halves differ in kind: the lines already printed are a rendered screen with wrapping
-rejoined, and what follows is raw output as the program emits it, escape sequences
-included. Re-rendering on every byte would repaint rather than append, which is
-wrong for something being piped to a file.`,
+--follow prints the last lines and then keeps streaming, like 'tail -f'. Escape
+sequences are stripped from both halves, so the output stays plain text; use --raw
+to keep them.
+
+The two halves still differ in kind. The lines already printed are a rendered screen
+with wrapping rejoined, and what follows is filtered byte by byte, because a stream
+cannot re-render a screen per byte. So a program that repaints in place, like a
+progress bar, comes out as every frame in turn rather than overwritten.`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,7 +64,7 @@ wrong for something being piped to a file.`,
 			if err != nil {
 				return err
 			}
-			if follow {
+			if follow && raw {
 				warnIfTerminal(os.Stdout)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
@@ -75,7 +79,7 @@ wrong for something being piped to a file.`,
 				if follow {
 					// The tail first, then the stream. Both go to stdout, so the caller sees one continuous
 					// piece of output rather than having to stitch two commands together.
-					return printTailThenFollow(ctx, dirs, name, resp.Data)
+					return printTailThenFollow(ctx, dirs, name, resp.Data, raw)
 				}
 				if _, err := os.Stdout.Write(resp.Data); err != nil {
 					return err
@@ -94,6 +98,8 @@ wrong for something being piped to a file.`,
 	f := cmd.Flags()
 	f.BoolVarP(&follow, "follow", "f", false,
 		"keep streaming new output after the last lines")
+	f.BoolVar(&raw, "raw", false,
+		"with --follow, keep escape sequences instead of stripping them")
 	f.IntVar(&lines, "lines", defaultReadLines, "how many lines from the end (0 for everything)")
 	f.BoolVar(&wrap, "keep-wrap", false,
 		"keep soft-wrapped lines split as the terminal laid them out")
