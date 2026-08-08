@@ -95,6 +95,26 @@ cm only ever exports `CM_SESSION` into a session's shell and never reads it. Int
 the request, so attaching from inside a session creates a nested session. This matters more
 than it sounds for per-window sessions, where every manual attach is nested by construction.
 
+## Restarting the server
+
+Sessions survive a server exiting, because the shim owns the pty. `cm server stop` asks a server to
+stop and leaves every session running; the next command starts a server that adopts them through
+Reconcile. That is the upgrade path.
+
+Adoption has to rebuild the terminal model, which is the part that is easy to miss. The model lives
+in the server, so a new server starts with a blank screen, while the *resume point* recorded in the
+store points at the end of what the previous server already consumed. Consuming from there alone
+leaves the model empty, so `cm history` returned nothing and a reattaching client saw a blank screen
+even though the shell was fine.
+
+The bytes are not lost: the shim retains 4 MiB and reports its oldest retained sequence, so adoption
+replays from there up to the resume point, then hands over to the session's pump. Two details matter
+and both were bugs waiting to happen. The replay must stop exactly at the resume point, since
+overlapping by even a few bytes duplicates a *fragment* of a line rather than a whole line, which
+looks like a rendering fault. And it writes only to the terminal model, never to the client log,
+because a resuming client has already seen that output and appending it would replay old output as
+though it were new.
+
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an

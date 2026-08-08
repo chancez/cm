@@ -28,6 +28,13 @@ const shimReadyTimeout = 10 * time.Second
 // Keeping them in one namespace makes them easy to list and reap.
 const implicitPrefix = "s"
 
+// replayTimeout bounds rebuilding an adopted session's screen.
+//
+// A bound rather than none: the shim is a local socket delivering bytes it already holds, so this is
+// fast, but a wedged shim must not stop the server from starting. Losing one session's scrollback is
+// better than never accepting clients.
+const replayTimeout = 10 * time.Second
+
 // NewTerminalFunc builds the terminal model for a session.
 //
 // Injected rather than imported so the server can be built and tested without the cgo
@@ -205,10 +212,23 @@ func probeShim(ctx context.Context, socket string) (alive bool, err error) {
 }
 
 // adopt connects to an existing shim and starts consuming from fromSeq.
+//
+// The terminal model is rebuilt from the shim's retained output first. Without that step a session
+// adopted after a server restart has an empty screen: the model lives in the server, so a new server
+// starts with a blank one, and consuming from fromSeq only ever sees output produced from now on. The
+// shim still holds the earlier bytes, so the scrollback is recoverable rather than gone.
 func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) (*Session, error) {
 	term, err := m.buildTerminal(uint16(rec.Rows), uint16(rec.Cols))
 	if err != nil {
 		return nil, err
+	}
+	if term != nil {
+		if err := m.replayShimHistory(ctx, rec, fromSeq, term); err != nil {
+			// A screen that could not be rebuilt is worth reporting, but the session works without
+			// it: only restore and history are affected, which is where this started.
+			m.log.Warn("rebuilding the screen for an adopted session failed",
+				"session", rec.Name, "error", err)
+		}
 	}
 	sess, err := newSession(rec, term, fromSeq)
 	if err != nil {
@@ -226,6 +246,71 @@ func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) 
 
 	go m.watch(sess)
 	return sess, nil
+}
+
+// replayShimHistory feeds a shim's retained output into a terminal model, up to fromSeq.
+//
+// Stops at fromSeq because that is where the session's own pump takes over. Replaying past it would
+// write the same bytes twice, and a terminal fed duplicate output shows duplicated lines.
+//
+// Writes only to the model, never to the session's client log: these bytes are history that clients
+// either already saw or will receive as part of a restored screen. Appending them would replay old
+// output to an attached client as though it were new.
+func (m *Manager) replayShimHistory(
+	ctx context.Context, rec store.Session, fromSeq uint64, term Terminal,
+) error {
+	conn, shim, err := dialShim(rec.ShimSocket)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	st, err := shim.State(ctx, &shimv1.StateRequest{})
+	if err != nil {
+		return fmt.Errorf("reading shim state: %w", err)
+	}
+	if st.OldestSeq >= fromSeq {
+		// Nothing retained before where the pump will start, so there is no history to replay.
+		return nil
+	}
+
+	// Bounded, so a shim that keeps producing cannot make this loop run forever: only the bytes that
+	// existed before the pump's starting point are wanted.
+	replayCtx, cancel := context.WithTimeout(ctx, replayTimeout)
+	defer cancel()
+
+	sub, err := shim.Subscribe(replayCtx, &shimv1.SubscribeRequest{FromSeq: st.OldestSeq})
+	if err != nil {
+		return fmt.Errorf("subscribing for history: %w", err)
+	}
+
+	for {
+		out, err := sub.Recv()
+		if err != nil {
+			// Reaching the end of what is retained is the normal exit, not a failure: whatever was
+			// written before this point is what the screen is rebuilt from.
+			break
+		}
+		data := out.Data
+		// Trim the tail that the pump will deliver, so the boundary byte is written exactly once.
+		if end := out.Seq + uint64(len(data)); end > fromSeq {
+			if out.Seq >= fromSeq {
+				break
+			}
+			data = data[:fromSeq-out.Seq]
+		}
+		if err := term.Write(data); err != nil {
+			return fmt.Errorf("replaying output: %w", err)
+		}
+		if out.Seq+uint64(len(data)) >= fromSeq {
+			break
+		}
+	}
+
+	// Discard anything the emulator generated in response: those answer queries from a program that
+	// asked before this server existed, and nothing is waiting for the replies.
+	term.TakePending()
+	return nil
 }
 
 func (m *Manager) buildTerminal(rows, cols uint16) (Terminal, error) {
