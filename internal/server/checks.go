@@ -1,10 +1,8 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/chancez/cm/internal/paths"
@@ -61,63 +59,6 @@ func (m *Manager) checkVersionSkew(clientVersion string) []Finding {
 		}}
 	}
 	return nil
-}
-
-// maxLoggedErrors bounds how many log lines a finding quotes.
-//
-// A bound rather than all of them: a server that has been up for weeks can have hundreds, and a diagnostic
-// that prints hundreds of lines is one nobody reads. The log itself is available through `cm logs`.
-const maxLoggedErrors = 5
-
-// checkServerLog reports errors in the server's log.
-//
-// The log is where cm records the things it could not do anything about: a terminal model that failed and
-// disabled screen restore for a session, a store write that did not land, a session that should have been
-// reaped and was not. Every one of those is invisible in normal output by design, because the alternative was
-// interrupting the user's terminal, and the result is that nobody ever looks.
-func (m *Manager) checkServerLog() []Finding {
-	path := m.dirs.ServerLog()
-	f, err := os.Open(path)
-	if err != nil {
-		// No log is not a problem: a server that has just started may not have written one.
-		return nil
-	}
-	defer f.Close()
-
-	var (
-		lines []string
-		total int
-	)
-	sc := bufio.NewScanner(f)
-	// A long line is possible, since a logged error can embed a command line or a path.
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		// Matched on the level rather than on the word "error" anywhere, so a session named "error-repro"
-		// or a command containing it does not produce a finding.
-		if !strings.Contains(line, "level=ERROR") {
-			continue
-		}
-		total++
-		if len(lines) < maxLoggedErrors {
-			lines = append(lines, strings.TrimSpace(line))
-		}
-	}
-
-	if total == 0 {
-		return nil
-	}
-	detail := fmt.Sprintf("%d error(s) in %s", total, path)
-	if total > len(lines) {
-		detail += fmt.Sprintf(", showing the first %d", len(lines))
-	}
-	return []Finding{{
-		Kind:   FindingServerErrors,
-		Detail: detail + ":\n  " + strings.Join(lines, "\n  "),
-		// Not fixable: an error in a log is a record of something that already happened, and deleting the
-		// log would destroy the evidence rather than fix anything.
-		Fixable: false,
-	}}
 }
 
 // checkTerminal reports a build without the emulator.

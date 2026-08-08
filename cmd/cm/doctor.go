@@ -31,7 +31,10 @@ while to diagnose, because each fails silently rather than reporting an error.
   missing-shim          a session recorded as running whose shim is gone
   version-skew          client and server from different builds, where a feature
                         missing from one side waits forever instead of failing
-  server-errors         errors in the server log, which nothing else surfaces
+  server-errors         recent errors in the server and shim logs, which nothing
+                        else surfaces
+  log-warnings          recent warnings, which are the quieter and often more
+                        useful half: a degraded session rather than a failed one
   no-terminal           a build without the emulator, so reattaching shows a
                         blank screen and 'cm history' is unavailable
   long-socket-path      a runtime directory close to the limit on a unix socket
@@ -58,6 +61,10 @@ Tightening a directory mode only takes access away from other users and leaves
 cm's own behavior identical. Nothing else is repaired automatically: the rest are
 either a record of something that already happened or a decision that is not a
 diagnostic's to make.
+
+Log entries are only reported for the last 24 hours. Logs are appended to across
+server restarts, so without a window this reported problems from days ago that had
+already been resolved, on every run.
 
 Exits non-zero when anything is found, so it can gate a script.
 

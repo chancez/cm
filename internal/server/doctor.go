@@ -133,7 +133,9 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	findings = append(findings, m.checkMissingLogs(ctx)...)
 	findings = append(findings, m.checkTrackedShims(ctx)...)
 	findings = append(findings, m.checkServerSocket()...)
-	findings = append(findings, m.checkServerLog()...)
+	// Last, and with the clock passed in rather than read inside, so a test can place entries relative to a
+	// fixed now instead of sleeping.
+	findings = append(findings, m.checkLogs(time.Now())...)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Kind != findings[j].Kind {
