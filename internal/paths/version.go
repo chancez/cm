@@ -20,7 +20,7 @@ import (
 // server for something it does not implement gets a zero value rather than an error, which looks like a bug
 // in the feature rather than a version difference. Being able to compare the two turns that into a warning.
 //
-// Can be overridden, but only in a binary built with the cm_test_version tag. See versionOverride.
+// Can be overridden, but only in a binary built with the cm_testhooks tag. See versionOverride.
 func Version() string {
 	// Checked first, so an override wins over anything the build recorded. Compiled out entirely without the
 	// build tag, so a released binary has no way to be told it is a version it is not.
@@ -93,8 +93,11 @@ func isReleaseVersion(v string) bool {
 // not the tag is set, and so this comment is visible when reading Version.
 const VersionEnvSuffix = "VERSION"
 
-// VersionBuildTag is the build tag that enables the override.
+// TestHooksBuildTag is the build tag that enables the test-only overrides.
 //
 // Exported so a test harness building an instrumented binary names it from here rather than repeating the
 // string, which is the sort of duplication that turns "the override did not take effect" into a passing test.
-const VersionBuildTag = "cm_test_version"
+const TestHooksBuildTag = "cm_testhooks"
+
+// SocketWatchEnvSuffix names the environment variable that shortens the socket-watch interval in a test build.
+const SocketWatchEnvSuffix = "SOCKET_WATCH_INTERVAL"

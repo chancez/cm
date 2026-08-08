@@ -24,8 +24,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -56,7 +58,7 @@ func cmBinary(t *testing.T) string {
 	return buildCM(t, &buildOnce, nil)
 }
 
-// cmVersionBinary returns a cm built with the version override enabled.
+// cmVersionBinary returns a cm built with the test-only overrides enabled.
 //
 // A separate binary because the override is behind a build tag on purpose: a released cm ignores CM_VERSION
 // entirely, so there is no way to fake a version in one. That is the right default and it means a test that
@@ -67,7 +69,7 @@ func cmBinary(t *testing.T) string {
 // against itself and passes.
 func cmVersionBinary(t *testing.T) string {
 	t.Helper()
-	return buildCM(t, &versionBuildOnce, []string{"-tags", paths.VersionBuildTag})
+	return buildCM(t, &versionBuildOnce, []string{"-tags", paths.TestHooksBuildTag})
 }
 
 // buildCM builds cm once per variant and caches the path.
@@ -129,6 +131,10 @@ type env struct {
 	// version is exported as CM_VERSION when set, which only an instrumented binary honors. Used by the
 	// version-skew tests to make two processes disagree without building from two git tags.
 	version string
+	// extraEnv is appended to every invocation, for the other test-only overrides an instrumented binary
+	// reads. Kept as raw KEY=VALUE strings rather than a map, since that is what exec wants and the order is
+	// never interesting.
+	extraEnv []string
 }
 
 // newEnv returns an isolated cm installation with no config file.
@@ -221,6 +227,7 @@ func (e *env) environ() []string {
 	if e.version != "" {
 		out = append(out, paths.Env(paths.VersionEnvSuffix)+"="+e.version)
 	}
+	out = append(out, e.extraEnv...)
 	if e.config != "" {
 		out = append(out, "CM_CONFIG="+e.config)
 	} else {
@@ -374,6 +381,64 @@ func (e *env) waitServerGone() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// serverLogPath is where the server writes its diagnostic log.
+//
+// In the state directory rather than the runtime one, which is load-bearing for the stranded-server test: the
+// log has to survive the deletion of the runtime directory, since it is the only channel a server that can no
+// longer be reached has left.
+func (e *env) serverLogPath() string {
+	return filepath.Join(e.state, "logs", "server.log")
+}
+
+// processAlive reports whether a pid names a live process.
+//
+// Signal 0 rather than reading the process table, since it asks the kernel the question directly and does not
+// depend on parsing ps output.
+func processAlive(pid int) error {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Signal(syscall.Signal(0))
+}
+
+// killStrandedServers stops any cm process still running against this environment's directories.
+//
+// Needed because a stranded server cannot be reached by name, so the ordinary teardown, which asks politely
+// over the socket, cannot stop it. Signalling is the only channel left, and this is the one place that is the
+// right answer rather than a shortcut.
+//
+// Matched on this environment's own runtime directory, which is a fresh temp path per test, so it cannot touch
+// anything but processes this test started.
+func killStrandedServers(t *testing.T, e *env) {
+	t.Helper()
+
+	out, err := exec.Command("ps", "ax", "-o", "pid=,command=").Output()
+	if err != nil {
+		t.Logf("listing processes to clean up stranded servers failed: %v", err)
+		return
+	}
+	for line := range strings.Lines(string(out)) {
+		// Both the binary and the runtime directory have to match, so a process merely mentioning the path
+		// is not a candidate.
+		if !strings.Contains(line, e.bin) || !strings.Contains(line, e.runtime) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		pid, cerr := strconv.Atoi(fields[0])
+		if cerr != nil {
+			continue
+		}
+		// TERM, not KILL, so shims run their shutdown path and close their ptys rather than orphaning shells.
+		if p, ferr := os.FindProcess(pid); ferr == nil {
+			_ = p.Signal(syscall.SIGTERM)
+		}
 	}
 }
 

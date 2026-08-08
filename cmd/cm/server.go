@@ -320,7 +320,13 @@ const socketWatchInterval = time.Minute
 
 // watchOwnSocket logs when this server becomes unreachable, until the context is cancelled.
 func watchOwnSocket(ctx context.Context, mgr *server.Manager) {
-	t := time.NewTicker(socketWatchInterval)
+	interval := socketWatchInterval
+	// Shortened only in a build with the test hooks compiled in. A test creates the condition deliberately and
+	// then waits for it to be noticed, which a minute's interval makes impractical.
+	if d, ok := paths.SocketWatchIntervalOverride(); ok {
+		interval = d
+	}
+	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
