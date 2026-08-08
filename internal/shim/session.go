@@ -50,12 +50,20 @@ type Config struct {
 	Rows, Cols uint16
 	// LogBytes overrides DefaultLogBytes when non-zero.
 	LogBytes int
+	// PersistPath, when set, is a file the output log is also written to, so a session's content
+	// survives this process and a reboot.
+	PersistPath string
+	// PersistLimits bounds the persisted file. Ignored when PersistPath is empty.
+	PersistLimits seqlog.FileLimits
 }
 
 // Session is a running shell attached to a pty, with its output accumulating in a Log.
 type Session struct {
 	cfg Config
 	log *seqlog.Log
+	// persist mirrors output to disk when the session is configured to survive this process. Nil
+	// otherwise, which is the common case.
+	persist *seqlog.File
 
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
@@ -85,6 +93,27 @@ func Start(cfg Config) (*Session, error) {
 	}
 
 	s := &Session{cfg: cfg, log: seqlog.New(logBytes)}
+
+	if cfg.PersistPath != "" {
+		limits := cfg.PersistLimits
+		if limits.MaxLines == 0 && limits.MaxBytes == 0 {
+			limits = seqlog.DefaultFileLimits
+		}
+		// A log that cannot be opened is reported rather than ignored: the caller asked for a
+		// session whose content survives, and silently not doing that would be discovered only
+		// after a reboot, when it is too late to matter.
+		pf, err := seqlog.OpenFile(cfg.PersistPath, limits)
+		if err != nil {
+			return nil, err
+		}
+		s.persist = pf
+
+		// Continue the numbering the file already holds, so a sequence number recorded before this
+		// process started still means the same byte. Starting from zero would make every stored
+		// position wrong.
+		_, next := pf.Bounds()
+		s.log = seqlog.NewAt(logBytes, next)
+	}
 
 	ptmx, tty, err := pty.Open()
 	if err != nil {
@@ -167,6 +196,17 @@ func (s *Session) pump() {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
 			s.log.Append(buf[:n])
+			if s.persist != nil {
+				// A failed write stops persisting rather than ending the session. The shell and
+				// its live output are the valuable part; the file is a cache that improves the
+				// next reboot.
+				if perr := s.persist.Append(buf[:n]); perr != nil {
+					s.persist.Close()
+					s.mu.Lock()
+					s.persist = nil
+					s.mu.Unlock()
+				}
+			}
 		}
 		if err != nil {
 			break
@@ -192,6 +232,13 @@ func (s *Session) pump() {
 	// Closing the log releases subscribers once they have drained the final output,
 	// which is how the server learns the session is over.
 	s.log.Close()
+
+	// Flush here rather than on every append: the tail is what a restore needs most, and this is
+	// the point where losing it would matter.
+	if s.persist != nil {
+		s.persist.Close()
+	}
+
 	s.releasePty()
 }
 
