@@ -40,16 +40,17 @@ func TestCommandTrackerFollowsARealShell(t *testing.T) {
 	if changed := tr.Feed([]byte(realCommandRun)); !changed {
 		t.Error("Feed(command start) reported no change, want one")
 	}
-	want := CommandState{Running: true, Command: "sleep 1"}
+	want := CommandState{Running: true, Command: "sleep 1", Runs: 1}
 	if got := tr.State(); got != want {
 		t.Errorf("State() = %+v, want %+v", got, want)
 	}
 
-	// And finishes, with a status.
+	// And finishes, with a status. Runs stays at 1: it counts commands started, so it does not go back
+	// down, which is what lets a caller see that one ran.
 	if changed := tr.Feed([]byte(realCommandDone)); !changed {
 		t.Error("Feed(command done) reported no change, want one")
 	}
-	want = CommandState{Running: false, Command: "", ExitCode: 0, Exited: true}
+	want = CommandState{Running: false, Command: "", ExitCode: 0, Exited: true, Runs: 1}
 	if got := tr.State(); got != want {
 		t.Errorf("State() = %+v, want %+v", got, want)
 	}
@@ -105,7 +106,7 @@ func TestCommandTrackerRunningWithoutACommandLine(t *testing.T) {
 	var tr CommandTracker
 	tr.Feed([]byte("\x1b]133;C\x07"))
 
-	want := CommandState{Running: true}
+	want := CommandState{Running: true, Runs: 1}
 	if got := tr.State(); got != want {
 		t.Errorf("State() = %+v, want %+v", got, want)
 	}
@@ -125,7 +126,7 @@ func TestCommandTrackerHandlesSplitSequences(t *testing.T) {
 		tr.Feed([]byte(seq[:cut]))
 		tr.Feed([]byte(seq[cut:]))
 
-		want := CommandState{Running: true, Command: "sleep 1"}
+		want := CommandState{Running: true, Command: "sleep 1", Runs: 1}
 		if got := tr.State(); got != want {
 			t.Errorf("split at %d: State() = %+v, want %+v", cut, got, want)
 		}
@@ -259,5 +260,58 @@ func TestCommandTrackerAcceptsBothTerminators(t *testing.T) {
 				t.Errorf("State() = %+v, want a running make", got)
 			}
 		})
+	}
+}
+
+// A command whose start and end arrive together must still be counted.
+//
+// This is the case Running cannot express and the reason Runs exists. A fast command produces both
+// markers in one read, so the tracker's state goes straight from idle to idle: nothing observes it
+// running, and a caller waiting for "the command I sent finished" has no evidence it ever started.
+//
+// Found on Linux, where `true` reliably produced this, while macOS happened to split the chunk and hid
+// it. That asymmetry is worth noting: the same code passed on one platform and failed on the other for
+// reasons entirely down to read timing.
+func TestCommandTrackerCountsACommandThatNeverAppearsRunning(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte(realPromptStart))
+
+	before := tr.State().Runs
+
+	// One chunk: command start, its output, its end, and the next prompt.
+	tr.Feed([]byte(realCommandRun + "output\r\n" + realCommandDone + realPromptStart))
+
+	st := tr.State()
+	if st.Running {
+		t.Errorf("State() = %+v, want it back at a prompt", st)
+	}
+	if st.Runs != before+1 {
+		t.Errorf("Runs = %d, want %d: a command ran even though it was never observed running",
+			st.Runs, before+1)
+	}
+}
+
+// Runs must count commands, not markers.
+func TestCommandTrackerRunsCountsEachCommandOnce(t *testing.T) {
+	var tr CommandTracker
+
+	tr.Feed([]byte(realCommandRun))
+	if got := tr.State().Runs; got != 1 {
+		t.Fatalf("Runs = %d after one command, want 1", got)
+	}
+	// A repeated marker for the same command is not a new one.
+	tr.Feed([]byte(realCommandRun))
+	if got := tr.State().Runs; got != 1 {
+		t.Errorf("Runs = %d after a repeated start marker, want 1", got)
+	}
+
+	tr.Feed([]byte(realCommandDone))
+	if got := tr.State().Runs; got != 1 {
+		t.Errorf("Runs = %d after the command ended, want it to stay at 1", got)
+	}
+
+	tr.Feed([]byte("\x1b]133;C;cmdline=make\x07"))
+	if got := tr.State().Runs; got != 2 {
+		t.Errorf("Runs = %d after a second command, want 2", got)
 	}
 }

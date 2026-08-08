@@ -31,6 +31,16 @@ type CommandState struct {
 	// yet".
 	ExitCode int
 	Exited   bool
+	// Runs counts the commands the shell has reported starting.
+	//
+	// Necessary because Running alone cannot express "a command ran and finished": both that and "nothing
+	// has happened" look idle. A caller waiting for a command it just triggered needs to tell them apart,
+	// and a fast command's start and end can arrive in the same chunk of output, so there is no moment at
+	// which Running is observably true.
+	//
+	// Counted here rather than by a consumer for exactly that reason: the tracker sees every marker,
+	// while a consumer only ever sees the state left behind.
+	Runs uint64
 }
 
 // CommandTracker follows a shell's OSC 133 reports across a stream of output.
@@ -151,6 +161,11 @@ func (t *CommandTracker) apply(params []byte) {
 		t.state.Command = ""
 
 	case 'C':
+		if !t.state.Running {
+			// Counted on the transition, so a shell repeating the marker does not look like a second
+			// command.
+			t.state.Runs++
+		}
 		t.state.Running = true
 		t.state.Command = commandLine(params)
 
