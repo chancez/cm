@@ -38,10 +38,12 @@ creating a window's session and reattaching to it after a restart.
 With no name, the server allocates one and prints it, which is how a per-window
 session is created without the caller inventing names.
 
-Detach with ctrl-\ , which leaves the session running. --detach-key changes that
-for one attachment, which matters when something outside this client already
-claims the key: a multiplexer you are attaching from within sees it first, so the
-inner client never receives it.`,
+Detaching leaves the session running. The key is ctrl-\ by default, set by
+detach_key in the config file, and overridden for one attachment by --detach-key.
+
+That override matters when something outside this client already claims the key: a
+multiplexer you are attaching from within sees it first, so the inner client never
+receives it and the window closes instead of detaching.`,
 		// Only the args before "--" are the session name; everything after is the command
 		// to run, so MaximumNArgs would wrongly reject "attach x -- sh -c ...".
 		Args: func(cmd *cobra.Command, args []string) error {
