@@ -26,7 +26,7 @@ import (
 const serverStartTimeout = 10 * time.Second
 
 func newServerCommand(g *globals) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "server",
 		Short: "Run the server in the foreground",
 		Long: `Run the server in the foreground.
@@ -45,6 +45,42 @@ for development.`,
 				return err
 			}
 			return runServer(cmd.Context(), dirs, cfg, true)
+		},
+	}
+	cmd.AddCommand(newServerStopCommand(g))
+	return cmd
+}
+
+func newServerStopCommand(g *globals) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the server, leaving sessions running",
+		Long: `Stop the server. Sessions keep running.
+
+Each session's shim owns its pty, so a server exiting leaves every session intact
+and the next server adopts them. That is how an upgrade works: stop the old server,
+and the next command starts a new one that picks the sessions back up.
+
+Use 'cm kill' to end sessions themselves.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dirs, err := g.dirs()
+			if err != nil {
+				return err
+			}
+			// Deliberately not ensureServer: starting a server in order to stop it would be absurd,
+			// and "no server is running" is the state the caller asked for rather than an error.
+			conn, cl, err := connectServer(cmd.Context(), dirs)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "no server is running")
+				return nil
+			}
+			defer conn.Close()
+
+			if _, err := cl.Shutdown(cmd.Context(), &serverv1.ShutdownRequest{}); err != nil {
+				return err
+			}
+			return nil
 		},
 	}
 }

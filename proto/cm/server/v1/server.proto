@@ -33,7 +33,20 @@ service Server {
   // A shell inside a session cannot learn these any other way: nothing outside a process can
   // change its environment, so the shell has to ask and apply the result itself.
   rpc GetEnv(GetEnvRequest) returns (GetEnvResponse);
+
+  // Shutdown stops the server, leaving sessions running.
+  //
+  // Sessions survive by design: each shim owns its pty, so a server that exits leaves every
+  // session intact and the next server adopts them. That is the upgrade path, and it needs a way
+  // to ask a server to stop that does not involve finding its pid.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
+
+// ShutdownRequest asks the server to stop.
+message ShutdownRequest {}
+
+// ShutdownResponse confirms the server is stopping.
+message ShutdownResponse {}
 
 // AttachRequest is a client-to-server event. The first message on the stream must be an
 // Open; everything after it is input, a resize, or a detach.

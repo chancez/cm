@@ -14,6 +14,7 @@ type ServerService interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
 type Server_AttachServer interface {
@@ -76,6 +77,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.GetEnv(ctx, &req)
 			},
+			"Shutdown": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ShutdownRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Shutdown(ctx, &req)
+			},
 		},
 		Streams: map[string]ttrpc.Stream{
 			"Attach": {
@@ -96,6 +104,7 @@ type ServerClient interface {
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
+	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
 type serverClient struct {
@@ -177,6 +186,14 @@ func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*Histo
 func (c *serverClient) GetEnv(ctx context.Context, req *GetEnvRequest) (*GetEnvResponse, error) {
 	var resp GetEnvResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "GetEnv", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Shutdown(ctx context.Context, req *ShutdownRequest) (*ShutdownResponse, error) {
+	var resp ShutdownResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Shutdown", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

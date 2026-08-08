@@ -55,6 +55,12 @@ func Serve(ctx context.Context, l net.Listener, svc *Service) error {
 	}
 	serverv1.RegisterServerService(srv, svc)
 
+	// A Shutdown RPC cancels this rather than the caller's context, so the paths for "asked to
+	// stop" and "signalled to stop" converge on the same orderly shutdown below.
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	svc.setStop(stop)
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ctx, l) }()
 

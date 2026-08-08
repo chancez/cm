@@ -17,6 +17,33 @@ import (
 // Service adapts a Manager to the client-facing ttrpc API.
 type Service struct {
 	mgr *Manager
+	// stop ends the server. Set by Serve, so a Shutdown RPC and a signal take the same path.
+	stop atomic.Pointer[context.CancelFunc]
+}
+
+// setStop gives the service a way to end the server it is running under.
+func (s *Service) setStop(stop context.CancelFunc) {
+	s.stop.Store(&stop)
+}
+
+// Shutdown stops the server, leaving every session running.
+//
+// Sessions survive because each shim owns its pty, which is what makes a server upgrade
+// survivable for a shell. The next server adopts them through Reconcile.
+//
+// Returns before the server has finished stopping. It cannot do otherwise: replying travels over the
+// connection that shutdown closes, so waiting would mean the caller never hears back.
+func (s *Service) Shutdown(
+	_ context.Context, _ *serverv1.ShutdownRequest,
+) (*serverv1.ShutdownResponse, error) {
+	stop := s.stop.Load()
+	if stop == nil {
+		return nil, errors.New("this server cannot be shut down remotely")
+	}
+	s.mgr.log.Info("shutting down on request, leaving sessions running")
+	// Asynchronously, so this reply is sent before the connection carrying it is torn down.
+	go (*stop)()
+	return &serverv1.ShutdownResponse{}, nil
 }
 
 // NewService wraps a manager.
