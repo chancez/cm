@@ -21,6 +21,8 @@ func sampleWireSession(name string) *serverv1.Session {
 		Title:         "editing",
 		CreatedAtUnix: 1_700_000_000,
 		State:         serverv1.SessionState_SESSION_STATE_RUNNING,
+		Busy:          true,
+		Command:       "nvim notes.md",
 	}
 }
 
@@ -40,6 +42,7 @@ func TestSessionJSONKeys(t *testing.T) {
 	want := []string{
 		"name", "state", "shell_pid", "clients", "exit_code", "title",
 		"cwd", "cwd_uri", "cwd_is_local", "created_at", "created_at_unix",
+		"busy", "command",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -66,6 +69,8 @@ func TestSessionJSONValues(t *testing.T) {
 		CwdIsLocal:    true,
 		CreatedAt:     "2023-11-14T14:13:20-08:00",
 		CreatedAtUnix: 1_700_000_000,
+		Busy:          true,
+		Command:       "nvim notes.md",
 	}
 	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
 	want.CreatedAt = got.CreatedAt
@@ -276,5 +281,79 @@ func TestReportKillEmptyContainers(t *testing.T) {
 	}
 	if raw["errors"] == nil {
 		t.Error("errors is null, want an empty object")
+	}
+}
+
+// `cm info --field busy` and `--field command` are what a terminal emulator reads to decide whether
+// closing a window would interrupt something.
+//
+// Asserted specifically because these are the interface a close-confirmation hook depends on, and a
+// bare value with no header or padding is the point: a kitten should not have to parse anything.
+func TestPrintSessionInfoReportsBusyFields(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		want  string
+	}{
+		{field: "busy", want: "true\n"},
+		{field: "command", want: "nvim notes.md\n"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := printSessionInfo(&buf, sampleWireSession("work"), tc.field); err != nil {
+				t.Fatalf("printSessionInfo() error = %v", err)
+			}
+			if got := buf.String(); got != tc.want {
+				t.Errorf("--field %s = %q, want %q", tc.field, got, tc.want)
+			}
+		})
+	}
+}
+
+// An idle session must report false rather than nothing, so a caller can tell "not busy" from a
+// failed lookup.
+func TestPrintSessionInfoBusyIsFalseWhenIdle(t *testing.T) {
+	s := sampleWireSession("idle")
+	s.Busy = false
+	s.Command = ""
+
+	var buf bytes.Buffer
+	if err := printSessionInfo(&buf, s, "busy"); err != nil {
+		t.Fatalf("printSessionInfo() error = %v", err)
+	}
+	if got := buf.String(); got != "false\n" {
+		t.Errorf("--field busy on an idle session = %q, want %q", got, "false\n")
+	}
+}
+
+// The table shows what a session is running, since that is the question a list is usually asked.
+//
+// In the state column rather than a new one: a seventh column would push CWD off a normal terminal,
+// and "running(nvim)" reads the same way as the existing "exited(0)".
+func TestSessionsTableShowsTheRunningCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		busy    bool
+		command string
+		want    string
+	}{
+		// The program name only: a full command line would wreck the table, and `cm info` has it whole.
+		{name: "running a command", busy: true, command: "nvim notes.md", want: "running(nvim)"},
+		// Busy but the shell did not say what, which happens with a shell that sends a bare 133;C.
+		{name: "busy with no command reported", busy: true, command: "", want: "running(busy)"},
+		{name: "idle", busy: false, command: "", want: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := sampleWireSession("work")
+			s.Busy = tc.busy
+			s.Command = tc.command
+
+			var buf bytes.Buffer
+			if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
+				t.Fatalf("printSessionsTable() error = %v", err)
+			}
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("table = %q, want it to contain %q", buf.String(), tc.want)
+			}
+		})
 	}
 }

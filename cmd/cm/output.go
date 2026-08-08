@@ -46,6 +46,16 @@ type sessionJSON struct {
 	// CreatedAtUnix is the same instant in seconds, for callers that would otherwise parse the
 	// string back.
 	CreatedAtUnix int64 `json:"created_at_unix"`
+	// Busy reports whether a command is running rather than the shell sitting at a prompt, from
+	// OSC 133.
+	//
+	// What a terminal emulator needs to decide whether closing a window is destructive: the shell owns
+	// the pty, so the emulator only ever sees `cm attach` running and cannot tell busy from idle.
+	// False for a shell that does not report OSC 133, since nothing then says otherwise.
+	Busy bool `json:"busy"`
+	// Command is the command line the shell reported running, when it reported one. Can be empty
+	// while Busy is true, since the cmdline parameter is an extension not every shell sends.
+	Command string `json:"command"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -71,7 +81,21 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		CwdIsLocal:    s.CwdIsLocal,
 		CreatedAt:     created.Format(time.RFC3339),
 		CreatedAtUnix: s.CreatedAtUnix,
+		Busy:          s.Busy,
+		Command:       s.Command,
 	}
+}
+
+// firstWord returns the program name from a command line.
+//
+// The full command line can be arbitrarily long and would wreck the table, and the program is the part
+// that identifies what is running at a glance. `cm info` and the JSON output carry the whole thing for
+// anything that needs it.
+func firstWord(cmd string) string {
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		return cmd[:i]
+	}
+	return cmd
 }
 
 // stateName renders a session's lifecycle stage.
@@ -139,8 +163,18 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 	fmt.Fprintln(tw, "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tCWD")
 	for _, s := range sessions {
 		state := stateName(s)
-		if state == "exited" {
+		switch {
+		case state == "exited":
 			state = fmt.Sprintf("exited(%d)", s.ExitCode)
+		case state == "running" && s.Command != "":
+			// Shown in the state column rather than as a new one, reusing the exited(0) idiom. What a
+			// session is doing belongs with whether it is alive, and a seventh column would push CWD
+			// off the edge of a normal terminal.
+			state = fmt.Sprintf("running(%s)", firstWord(s.Command))
+		case state == "running" && s.Busy:
+			// Busy but the shell did not say what. Distinguished from idle, since that is the part
+			// that matters when deciding whether to close a window.
+			state = "running(busy)"
 		}
 		cwd := s.Cwd
 		if !s.CwdIsLocal && cwd != "" {
@@ -197,6 +231,8 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 		{"cwd_uri", j.CwdURI},
 		{"cwd_is_local", fmt.Sprint(j.CwdIsLocal)},
 		{"created_at", j.CreatedAt},
+		{"busy", fmt.Sprint(j.Busy)},
+		{"command", j.Command},
 	}
 
 	if field != "" {

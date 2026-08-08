@@ -1,0 +1,263 @@
+package osc
+
+import (
+	"strings"
+	"testing"
+)
+
+// The sequences a real shell sends, captured from zsh under kitty's shell integration on a pty rather
+// than written from the specification.
+//
+// This matters more than it looks. The cmdline extension is not in every shell, the escaping of spaces
+// inside it is easy to guess wrong, and a test built from what the spec permits can pass while failing
+// on what shells actually emit. Captured: 133;A, 133;C;cmdline=sleep\ 1, 133;D;0.
+const (
+	realPromptStart = "\x1b]133;A\x07"
+	realCommandRun  = "\x1b]133;C;cmdline=sleep\\ 1\x07"
+	realCommandDone = "\x1b]133;D;0\x07"
+)
+
+// The whole point: a session at a prompt is idle, and one running a command is busy.
+//
+// This is what lets a terminal emulator ask "really close this?" only when something is running. zmx
+// needed shell hooks maintaining a label for it; the shell already reports it.
+func TestCommandTrackerFollowsARealShell(t *testing.T) {
+	var tr CommandTracker
+
+	if got := tr.State(); got != (CommandState{}) {
+		t.Errorf("initial State() = %+v, want the zero state", got)
+	}
+
+	// At a prompt, nothing running.
+	if changed := tr.Feed([]byte(realPromptStart)); changed {
+		t.Error("Feed(prompt start) reported a change from the zero state, want none")
+	}
+	if got := tr.State(); got.Running {
+		t.Errorf("State() = %+v after a prompt, want Running false", got)
+	}
+
+	// A command starts.
+	if changed := tr.Feed([]byte(realCommandRun)); !changed {
+		t.Error("Feed(command start) reported no change, want one")
+	}
+	want := CommandState{Running: true, Command: "sleep 1"}
+	if got := tr.State(); got != want {
+		t.Errorf("State() = %+v, want %+v", got, want)
+	}
+
+	// And finishes, with a status.
+	if changed := tr.Feed([]byte(realCommandDone)); !changed {
+		t.Error("Feed(command done) reported no change, want one")
+	}
+	want = CommandState{Running: false, Command: "", ExitCode: 0, Exited: true}
+	if got := tr.State(); got != want {
+		t.Errorf("State() = %+v, want %+v", got, want)
+	}
+}
+
+// The reported command line must be readable, not backslash-escaped.
+//
+// The value travels inside a semicolon-separated parameter list, so a shell escapes spaces in it: the
+// captured sequence for `sleep 1` is `cmdline=sleep\ 1`. Passing that through unchanged would put
+// backslashes in front of the user in `cm list`.
+func TestCommandTrackerUnescapesTheCommandLine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seq  string
+		want string
+	}{
+		{
+			name: "escaped space",
+			seq:  "\x1b]133;C;cmdline=sleep\\ 1\x07",
+			want: "sleep 1",
+		},
+		{
+			name: "escaped semicolon, which would otherwise split the parameters",
+			seq:  "\x1b]133;C;cmdline=echo\\ a\\;b\x07",
+			want: "echo a;b",
+		},
+		{
+			name: "escaped backslash",
+			seq:  "\x1b]133;C;cmdline=grep\\ \\\\d\x07",
+			want: `grep \d`,
+		},
+		{
+			name: "nothing to unescape",
+			seq:  "\x1b]133;C;cmdline=make\x07",
+			want: "make",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr CommandTracker
+			tr.Feed([]byte(tc.seq))
+			if got := tr.State().Command; got != tc.want {
+				t.Errorf("Command = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A shell that reports no cmdline must still be known to be busy.
+//
+// The extension is what zsh and bash send under kitty's shell integration; other shells send a bare
+// 133;C. Running has to work without it, since it depends only on which marker arrived.
+func TestCommandTrackerRunningWithoutACommandLine(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte("\x1b]133;C\x07"))
+
+	want := CommandState{Running: true}
+	if got := tr.State(); got != want {
+		t.Errorf("State() = %+v, want %+v", got, want)
+	}
+}
+
+// A sequence split across two reads must still be recognized.
+//
+// Not a contrived case: a pty read is bounded by the kernel buffer rather than by anything the shell
+// intends, so any sequence can arrive in pieces. Missing one would leave a session's state wrong until
+// the next marker, which for a long-running command is the whole time it matters.
+func TestCommandTrackerHandlesSplitSequences(t *testing.T) {
+	// Every split point, since the interesting ones are inside the introducer and inside the
+	// parameters, and picking a few by hand would miss the boundary cases.
+	seq := realCommandRun
+	for cut := 1; cut < len(seq); cut++ {
+		var tr CommandTracker
+		tr.Feed([]byte(seq[:cut]))
+		tr.Feed([]byte(seq[cut:]))
+
+		want := CommandState{Running: true, Command: "sleep 1"}
+		if got := tr.State(); got != want {
+			t.Errorf("split at %d: State() = %+v, want %+v", cut, got, want)
+		}
+	}
+}
+
+// Markers mixed into ordinary output must be found, and the output itself ignored.
+func TestCommandTrackerFindsMarkersAmongOutput(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte("some output\r\n" + realCommandRun + "more output\r\n"))
+
+	if got := tr.State(); !got.Running || got.Command != "sleep 1" {
+		t.Errorf("State() = %+v, want a running sleep 1", got)
+	}
+
+	tr.Feed([]byte("still running\r\n"))
+	if got := tr.State(); !got.Running {
+		t.Errorf("State() = %+v after plain output, want it still running", got)
+	}
+}
+
+// A new prompt must clear a running command even without an end marker.
+//
+// This is the tolerance that keeps a session from being stuck as "busy" forever. A command interrupted
+// with ctrl-c, or a shell that loses its D marker, still prints a new prompt, and treating that as
+// "back at a prompt" is both true and the only recovery available. Reporting a session as busy
+// indefinitely would make a close confirmation useless, since it would always fire.
+func TestCommandTrackerPromptClearsAStuckCommand(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte(realCommandRun))
+	if !tr.State().Running {
+		t.Fatal("setup: want a running command")
+	}
+
+	// No D marker, straight to a new prompt.
+	if changed := tr.Feed([]byte(realPromptStart)); !changed {
+		t.Error("a new prompt after a lost end marker reported no change, want one")
+	}
+	if got := tr.State(); got.Running || got.Command != "" {
+		t.Errorf("State() = %+v after a new prompt, want idle with no command", got)
+	}
+}
+
+// A non-zero exit status must be preserved, and distinguishable from "nothing has finished".
+func TestCommandTrackerExitStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		seq      string
+		wantCode int
+		wantHave bool
+	}{
+		{name: "success", seq: "\x1b]133;D;0\x07", wantCode: 0, wantHave: true},
+		{name: "failure", seq: "\x1b]133;D;1\x07", wantCode: 1, wantHave: true},
+		{name: "signal-ish", seq: "\x1b]133;D;130\x07", wantCode: 130, wantHave: true},
+		// A shell may report that a command ended without saying how, and 0 must not be invented for
+		// it: that would report a failed command as successful.
+		{name: "no status given", seq: "\x1b]133;D\x07", wantCode: 0, wantHave: false},
+		{name: "unparseable status", seq: "\x1b]133;D;oops\x07", wantCode: 0, wantHave: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr CommandTracker
+			tr.Feed([]byte(realCommandRun))
+			tr.Feed([]byte(tc.seq))
+
+			st := tr.State()
+			if st.Running {
+				t.Error("still running after an end marker")
+			}
+			if st.Exited != tc.wantHave {
+				t.Errorf("Exited = %v, want %v", st.Exited, tc.wantHave)
+			}
+			if st.Exited && st.ExitCode != tc.wantCode {
+				t.Errorf("ExitCode = %d, want %d", st.ExitCode, tc.wantCode)
+			}
+		})
+	}
+}
+
+// Output with no markers must not report a change, since the caller publishes an update when one does.
+//
+// A shell producing output emits no markers at all, which is the overwhelmingly common case: reporting
+// a change per chunk would wake every subscribed client for every line of output.
+func TestCommandTrackerReportsNoChangeForPlainOutput(t *testing.T) {
+	var tr CommandTracker
+	if changed := tr.Feed([]byte("just some output\r\n")); changed {
+		t.Error("Feed(plain output) reported a change, want none")
+	}
+
+	tr.Feed([]byte(realCommandRun))
+	if changed := tr.Feed([]byte("output from the command\r\n")); changed {
+		t.Error("Feed(output while running) reported a change, want none")
+	}
+	// Repeating a marker that changes nothing is also not a change.
+	if changed := tr.Feed([]byte(realCommandRun)); changed {
+		t.Error("Feed(the same command start again) reported a change, want none")
+	}
+}
+
+// A stream that emits an introducer and then never terminates it must not grow memory without bound.
+//
+// The tracker holds back what might be an unfinished sequence, so an unterminated one is exactly the
+// case where that buffer could grow forever. A shell will not do this; a program writing raw bytes
+// might, and cm passes everything through.
+func TestCommandTrackerBoundsAnUnterminatedSequence(t *testing.T) {
+	var tr CommandTracker
+	tr.Feed([]byte("\x1b]133;C;cmdline="))
+	tr.Feed([]byte(strings.Repeat("x", maxPartial*4)))
+
+	if len(tr.partial) > maxPartial {
+		t.Errorf("retained %d bytes waiting for a terminator, want at most %d",
+			len(tr.partial), maxPartial)
+	}
+	// And the tracker still works afterwards rather than being wedged.
+	tr.Feed([]byte(realPromptStart))
+	tr.Feed([]byte(realCommandRun))
+	if got := tr.State(); !got.Running {
+		t.Errorf("State() = %+v after recovering, want a running command", got)
+	}
+}
+
+// Both OSC terminators have to work, since shells use both.
+func TestCommandTrackerAcceptsBothTerminators(t *testing.T) {
+	for _, tc := range []struct{ name, seq string }{
+		{name: "BEL", seq: "\x1b]133;C;cmdline=make\x07"},
+		{name: "ST", seq: "\x1b]133;C;cmdline=make\x1b\\"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr CommandTracker
+			tr.Feed([]byte(tc.seq))
+			if got := tr.State(); !got.Running || got.Command != "make" {
+				t.Errorf("State() = %+v, want a running make", got)
+			}
+		})
+	}
+}

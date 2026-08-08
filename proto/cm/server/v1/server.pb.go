@@ -859,7 +859,14 @@ type Metadata struct {
 	Cwd string `protobuf:"bytes,2,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	// Whether cwd exists on the client's machine. False once a session has ssh'd elsewhere, in
 	// which case acting on the path locally is wrong.
-	CwdIsLocal    bool `protobuf:"varint,3,opt,name=cwd_is_local,json=cwdIsLocal,proto3" json:"cwd_is_local,omitempty"`
+	CwdIsLocal bool `protobuf:"varint,3,opt,name=cwd_is_local,json=cwdIsLocal,proto3" json:"cwd_is_local,omitempty"`
+	// Whether a command is running, and which one, from OSC 133. See the same fields on Session.
+	//
+	// Forwarded as an event rather than left to polling so a terminal emulator can react as it happens,
+	// which is the difference between a tab that shows what is running and one that shows it a second
+	// later.
+	Busy          bool   `protobuf:"varint,4,opt,name=busy,proto3" json:"busy,omitempty"`
+	Command       string `protobuf:"bytes,5,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -913,6 +920,20 @@ func (x *Metadata) GetCwdIsLocal() bool {
 		return x.CwdIsLocal
 	}
 	return false
+}
+
+func (x *Metadata) GetBusy() bool {
+	if x != nil {
+		return x.Busy
+	}
+	return false
+}
+
+func (x *Metadata) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
 }
 
 type Opened struct {
@@ -1209,7 +1230,18 @@ type Session struct {
 	State SessionState `protobuf:"varint,10,opt,name=state,proto3,enum=cm.server.v1.SessionState" json:"state,omitempty"`
 	// Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
 	// caller can tell a remote directory from a local one. cwd holds the decoded local path.
-	CwdUri        string `protobuf:"bytes,11,opt,name=cwd_uri,json=cwdUri,proto3" json:"cwd_uri,omitempty"`
+	CwdUri string `protobuf:"bytes,11,opt,name=cwd_uri,json=cwdUri,proto3" json:"cwd_uri,omitempty"`
+	// Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
+	//
+	// A terminal emulator needs this to decide whether closing a window is destructive: the shell owns
+	// the pty, so kitty only ever sees `cm attach` running and cannot tell a busy session from an idle
+	// one. False for a shell with no OSC 133 support, since nothing then reports otherwise.
+	Busy bool `protobuf:"varint,12,opt,name=busy,proto3" json:"busy,omitempty"`
+	// The command line the shell reported running, when it reported one.
+	//
+	// Best effort: the cmdline parameter is an extension that zsh and bash send under kitty's shell
+	// integration and other shells omit, so this can be empty while busy is true.
+	Command       string `protobuf:"bytes,13,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1317,6 +1349,20 @@ func (x *Session) GetState() SessionState {
 func (x *Session) GetCwdUri() string {
 	if x != nil {
 		return x.CwdUri
+	}
+	return ""
+}
+
+func (x *Session) GetBusy() bool {
+	if x != nil {
+		return x.Busy
+	}
+	return false
+}
+
+func (x *Session) GetCommand() string {
+	if x != nil {
+		return x.Command
 	}
 	return ""
 }
@@ -1754,12 +1800,14 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\bdetached\x18\x05 \x01(\v2\x16.cm.server.v1.DetachedH\x00R\bdetachedB\a\n" +
 	"\x05event\"\n" +
 	"\n" +
-	"\bDetached\"T\n" +
+	"\bDetached\"\x82\x01\n" +
 	"\bMetadata\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x10\n" +
 	"\x03cwd\x18\x02 \x01(\tR\x03cwd\x12 \n" +
 	"\fcwd_is_local\x18\x03 \x01(\bR\n" +
-	"cwdIsLocal\"q\n" +
+	"cwdIsLocal\x12\x12\n" +
+	"\x04busy\x18\x04 \x01(\bR\x04busy\x12\x18\n" +
+	"\acommand\x18\x05 \x01(\tR\acommand\"q\n" +
 	"\x06Opened\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\x12\x18\n" +
@@ -1774,7 +1822,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vListRequest\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc6\x02\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xf4\x02\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -1788,7 +1836,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\texit_code\x18\t \x01(\x05R\bexitCode\x120\n" +
 	"\x05state\x18\n" +
 	" \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x17\n" +
-	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\"?\n" +
+	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\x12\x12\n" +
+	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
+	"\acommand\x18\r \x01(\tR\acommand\"?\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\"\xa1\x01\n" +

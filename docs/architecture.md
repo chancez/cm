@@ -141,6 +141,34 @@ vanished" is otherwise hard to attribute to a build flag.
 Restore is a port of zmx's `serializeTerminalState`. Its details are all bug fixes; see
 `docs/restore.md`.
 
+## What a session reports about itself
+
+A terminal emulator driving cm needs to know more than "this session exists". Three things are tracked
+from what the shell says in its own output, and all three are published as events as well as being
+readable with `cm info` and `cm list --json`.
+
+Title comes from OSC 2, and working directory from OSC 7, decoded rather than passed through: OSC 7
+sends a percent-encoded URI with a host, so a session that has ssh'd elsewhere reports a path that does
+not exist locally, and acting on it would open the wrong place.
+
+Whether a command is running comes from OSC 133, via `internal/osc.CommandTracker`. This is the one an
+emulator cannot work out for itself: cm owns the pty, so kitty only ever sees `cm attach` running and
+cannot tell a session sitting at a prompt from one in the middle of a build. It is what a close
+confirmation needs.
+
+Reading it from the output stream rather than asking the shell to maintain it is the difference from
+zmx, which needs `preexec`/`precmd` hooks writing a label. Two consequences beyond having no shell
+configuration to install. zmx restricts label values to `[a-zA-Z0-9-_.]`, so a command has to be
+mangled to fit and arrives lossy, while cm reports the command line as sent. And it works in a session
+whose shell has none of the user's dotfiles, since the signal comes from kitty's shell integration.
+
+The markers are events rather than state, which shapes two decisions. The tracker is stateful and
+handles sequences split across reads, because a pty read is bounded by the kernel buffer rather than by
+anything the shell intends. And the result is deliberately *not* persisted: "a command is running" is
+true of a process, not of a record, so a stored value would come back after a restart describing a
+command that finished long ago and a confirmation built on it would fire forever. The cost is that a
+session adopted by a new server reports idle until its next command.
+
 ## Known gaps
 
 Kitty graphics and OSC 8 hyperlink targets are not part of a restored screen: libghostty's
@@ -150,3 +178,6 @@ fix belongs upstream.
 A pty cannot outlive a reboot. Persisting the output log would let a session's *contents* come
 back, but the shell would be a new process. Content persistence and process persistence are
 different guarantees and should not be blurred.
+
+Busy state is unknown for a session adopted after a server restart, until its next command. It is
+derived from a live stream and not stored, for the reason above.

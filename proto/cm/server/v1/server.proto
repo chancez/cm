@@ -174,6 +174,14 @@ message Metadata {
   // Whether cwd exists on the client's machine. False once a session has ssh'd elsewhere, in
   // which case acting on the path locally is wrong.
   bool cwd_is_local = 3;
+
+  // Whether a command is running, and which one, from OSC 133. See the same fields on Session.
+  //
+  // Forwarded as an event rather than left to polling so a terminal emulator can react as it happens,
+  // which is the difference between a tab that shows what is running and one that shows it a second
+  // later.
+  bool busy = 4;
+  string command = 5;
 }
 
 message Opened {
@@ -248,6 +256,18 @@ message Session {
   // Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
   // caller can tell a remote directory from a local one. cwd holds the decoded local path.
   string cwd_uri = 11;
+
+  // Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
+  //
+  // A terminal emulator needs this to decide whether closing a window is destructive: the shell owns
+  // the pty, so kitty only ever sees `cm attach` running and cannot tell a busy session from an idle
+  // one. False for a shell with no OSC 133 support, since nothing then reports otherwise.
+  bool busy = 12;
+  // The command line the shell reported running, when it reported one.
+  //
+  // Best effort: the cmdline parameter is an extension that zsh and bash send under kitty's shell
+  // integration and other shells omit, so this can be empty while busy is true.
+  string command = 13;
 }
 
 message KillRequest {

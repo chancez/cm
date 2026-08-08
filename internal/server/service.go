@@ -296,6 +296,8 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 						Title:      meta.Title,
 						Cwd:        meta.Cwd.Path,
 						CwdIsLocal: meta.Cwd.IsLocal,
+						Busy:       meta.Command.Running,
+						Command:    meta.Command.Command,
 					},
 				},
 			}); err != nil {
@@ -478,6 +480,13 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 				item.CwdIsLocal = cwd.IsLocal
 			}
 			item.CwdUri = sess.CwdURI()
+
+			// Only from a live session, and deliberately not persisted: "a command is running right
+			// now" is true of a process, not of a record. A stored value would come back after a
+			// restart describing a command that has long since finished.
+			cmd := sess.Command()
+			item.Busy = cmd.Running
+			item.Command = cmd.Command
 		}
 		out.Sessions = append(out.Sessions, item)
 	}

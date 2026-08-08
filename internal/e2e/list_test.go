@@ -121,3 +121,81 @@ func TestRunOutputReadableAfterExit(t *testing.T) {
 		t.Errorf("history = %q, want the command's output", r.stdout)
 	}
 }
+
+// A session running a command must report itself busy, and go back to idle when it finishes.
+//
+// This is what lets a terminal emulator ask "really close this?" only when something would be lost.
+// The emulator cannot work it out itself: cm owns the pty, so all it ever sees running is `cm attach`.
+//
+// Driven with a real interactive zsh rather than a fake, because the whole feature depends on what a
+// shell actually emits. zmx needed shell hooks maintaining a label for this; cm reads OSC 133 out of
+// the output stream, so it works with no shell configuration at all.
+func TestBusyTracksTheRunningCommand(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireShell(t, "/bin/zsh")
+
+	// -i, because the markers come from the shell's interactive prompt hooks.
+	e.mustRun("run", "--session", "busy", "-d", "--", "/bin/zsh", "-i")
+
+	// Idle once the prompt is up. Polled rather than assumed: the shell has to start first.
+	e.waitFor("the session to settle at a prompt", 15*time.Second, func() bool {
+		s, ok := e.session("busy")
+		return ok && s.State == "running" && !s.Busy
+	})
+
+	e.mustRun("send", "busy", "sleep 30\n")
+	e.waitFor("the session to report itself busy", 15*time.Second, func() bool {
+		s, _ := e.session("busy")
+		return s.Busy
+	})
+
+	// And what it is running, which is the part that needs the cmdline extension.
+	if s, _ := e.session("busy"); s.Command != "sleep 30" {
+		t.Errorf("command = %q, want %q", s.Command, "sleep 30")
+	}
+
+	// Interrupting is the case where the shell may print a new prompt without reporting the command's
+	// end. A session stuck as busy forever would make a close confirmation useless, since it would
+	// always fire.
+	e.mustRun("send", "busy", "\x03")
+	e.waitFor("the session to go idle after an interrupt", 15*time.Second, func() bool {
+		s, _ := e.session("busy")
+		return !s.Busy && s.Command == ""
+	})
+}
+
+// Busy state must not be persisted: it describes a process, not a record.
+//
+// A stored value would come back after a server restart claiming a command is running when it finished
+// long ago, and a close confirmation built on it would fire for every window forever.
+func TestBusyIsNotPersistedAcrossARestart(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	requireShell(t, "/bin/zsh")
+
+	e.mustRun("run", "--session", "notstored", "-d", "--", "/bin/zsh", "-i")
+	e.waitFor("the session to settle at a prompt", 15*time.Second, func() bool {
+		s, ok := e.session("notstored")
+		return ok && !s.Busy
+	})
+	e.mustRun("send", "notstored", "sleep 60\n")
+	e.waitFor("the session to report itself busy", 15*time.Second, func() bool {
+		s, _ := e.session("notstored")
+		return s.Busy
+	})
+
+	e.restartServer()
+
+	// The command is still genuinely running, and the new server has not seen its start marker, so it
+	// reports idle. That is the correct answer for a value derived from a live stream: claiming to know
+	// would mean having stored it, which is the thing being avoided.
+	s, ok := e.session("notstored")
+	if !ok {
+		t.Fatal("the session did not survive the restart")
+	}
+	if s.Busy {
+		t.Errorf("busy = true after a restart, want false: state describing a process must not be "+
+			"restored from a record (%+v)", s)
+	}
+}

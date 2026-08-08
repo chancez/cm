@@ -258,6 +258,9 @@ type sessionJSON struct {
 	ShellPID int    `json:"shell_pid"`
 	Clients  int    `json:"clients"`
 	ExitCode int    `json:"exit_code"`
+	// Busy and Command are what the shell reported via OSC 133.
+	Busy    bool   `json:"busy"`
+	Command string `json:"command"`
 }
 
 // list returns the sessions cm reports.
@@ -375,6 +378,18 @@ func (e *env) waitForHistory(name, want string) string {
 func skipIfShort(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e tests spawn real processes; skipped under -short")
+	}
+}
+
+// requireShell skips a test when the shell it needs is not installed.
+//
+// OSC 133 markers come from a shell's interactive prompt hooks, so a test about them needs a specific
+// shell. Skipping beats failing on a machine that does not have it, and beats substituting /bin/sh,
+// which emits no markers and would make the test assert nothing.
+func requireShell(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("%s is not installed, and its prompt hooks are what emit OSC 133", path)
 	}
 }
 

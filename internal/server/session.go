@@ -69,6 +69,19 @@ type Session struct {
 	title  string
 	rawPwd string
 	cwd    osc.Cwd
+	// command is what the shell last reported about itself via OSC 133: whether a command is running
+	// and, when the shell says so, which one.
+	//
+	// Derived from the output stream rather than asked of the terminal model, because these are events
+	// rather than state libghostty retains. A terminal has no "is a command running" to query.
+	command osc.CommandState
+
+	// commands parses the OSC 133 markers out of the output stream.
+	//
+	// Outside mu deliberately: it is fed only by the pump, which is the single writer to terminal
+	// state, so it needs no lock, and taking one per chunk of output would be on the hot path. The
+	// state it produces is copied into command above, which is guarded.
+	commands osc.CommandTracker
 
 	// log records what this session does. Never nil.
 	log *slog.Logger
@@ -250,6 +263,16 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			}
 		}
 
+		// Track what the shell says about itself before the rewrite below, so the markers are read
+		// exactly as the shell sent them.
+		//
+		// This is where "is a command running" comes from. The shell reports it via OSC 133 as part of
+		// its normal output, so cm reads it in passing rather than asking the shell to maintain it: zmx
+		// needed shell hooks writing a label for the same information.
+		if s.commands.Feed(out.Data) {
+			s.noteCommand()
+		}
+
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
@@ -396,18 +419,50 @@ func (s *Session) noteMetadata() {
 		}
 	}
 	cwd := s.cwd
+	command := s.command
 	s.mu.Unlock()
 
 	if !titleChanged && !pwdChanged {
 		return
 	}
-	s.publishMetadata(Metadata{Title: title, Cwd: cwd})
+	// The command state is included even though this call is about the title and directory: a
+	// Metadata is a snapshot of everything a session reports, so omitting it here would publish a
+	// zero value and make a client think nothing was running.
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: command})
+}
+
+// noteCommand records a change in what the shell reported running, and tells clients.
+//
+// Published like title and cwd, because a terminal emulator wants the same kind of reaction to it: a
+// tab can show what is running, and a close confirmation needs to know whether anything is.
+func (s *Session) noteCommand() {
+	state := s.commands.State()
+
+	s.mu.Lock()
+	if state == s.command {
+		s.mu.Unlock()
+		return
+	}
+	s.command = state
+	title, cwd := s.title, s.cwd
+	s.mu.Unlock()
+
+	s.publishMetadata(Metadata{Title: title, Cwd: cwd, Command: state})
+}
+
+// Command reports what the shell last said it was running.
+func (s *Session) Command() osc.CommandState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.command
 }
 
 // Metadata is what a session reports about itself.
 type Metadata struct {
 	Title string
 	Cwd   osc.Cwd
+	// Command is what the shell reported running, from OSC 133.
+	Command osc.CommandState
 }
 
 // metaSub receives metadata changes.
