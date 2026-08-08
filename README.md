@@ -107,6 +107,21 @@ mise install
 mise run build
 ```
 
+That leaves the binary in `bin/cm`. To put it on your PATH:
+
+```
+mise run install                      # into ~/.local/bin
+PREFIX=/usr/local mise run install    # or anywhere else
+mise run uninstall                    # removes it again
+```
+
+The install renames into place rather than copying over the existing file, which matters more than it
+sounds. Copying onto a path whose binary has a running process gets every later invocation SIGKILLed
+on macOS: `cp` writes into the existing inode and invalidates the kernel's cached code-signature pages
+that the live process still maps. It presents as `zsh: killed  cm ls` with nothing in any log. A
+rename replaces the directory entry instead, so the new binary is a new inode, the swap is atomic, and
+an already-running server keeps working on the old one until it is restarted.
+
 Tests run on the host with `mise run test`. Two Linux runs exist, and they check different things:
 
 - `mise run test-linux-cgo` builds libghostty from source and runs everything, so screen restore,

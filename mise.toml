@@ -20,6 +20,62 @@ _.path = ["{{config_root}}/bin/tools"]
 description = "Build the cm binary"
 run = "go build -o bin/cm ./cmd/cm"
 
+[tasks.install]
+description = "Build and install cm into PREFIX (default ~/.local)"
+depends = ["build"]
+# Installs to $PREFIX/bin, defaulting to ~/.local, so `mise run install` needs no arguments and
+# PREFIX=/usr/local mise run install works for a system install.
+#
+# The rename is the whole point of having this as a task rather than a cp.
+#
+# Copying onto a path whose binary has a running process gets the new invocation SIGKILLed on macOS:
+# cp writes into the existing inode, which invalidates the kernel's cached code-signature pages that
+# the live process still maps, and every later exec of that path dies with signal 9. It presents as
+# `zsh: killed  cm ls` with nothing in any log, and it cost an hour to pin down. Verified: cp gives 137
+# three times in a row where mv gives 0, and the already-running server survives either way because it
+# holds the old inode.
+#
+# Renaming from a temporary file in the same directory is also atomic, so a concurrent exec sees either
+# the old binary or the new one, never a partial write. The temp file must be on the same filesystem for
+# rename to work, which is why it is created next to the target rather than in /tmp.
+run = """
+set -euo pipefail
+prefix="${PREFIX:-$HOME/.local}"
+bindir="$prefix/bin"
+mkdir -p "$bindir"
+
+tmp="$(mktemp "$bindir/.cm.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+cp bin/cm "$tmp"
+chmod 755 "$tmp"
+mv -f "$tmp" "$bindir/cm"
+trap - EXIT
+
+echo "installed $("$bindir/cm" --version) to $bindir/cm"
+if ! command -v cm >/dev/null 2>&1; then
+  echo "note: cm is not on PATH; add $bindir to it" >&2
+elif [ "$(command -v cm)" != "$bindir/cm" ]; then
+  echo "note: $(command -v cm) shadows $bindir/cm on PATH" >&2
+fi
+"""
+
+[tasks.uninstall]
+description = "Remove cm from PREFIX (default ~/.local)"
+# Here so the install has an inverse, and because it is the safe way to stop cm: removing the binary
+# leaves running servers and shims alone, since they hold their own inode. Stop them first with
+# `cm server stop` if that is what you want.
+run = """
+set -euo pipefail
+prefix="${PREFIX:-$HOME/.local}"
+target="$prefix/bin/cm"
+if [ -e "$target" ]; then
+  rm -f "$target"
+  echo "removed $target"
+else
+  echo "$target is not installed"
+fi
+"""
+
 [tasks.test]
 description = "Run tests"
 run = "go test ./..."
