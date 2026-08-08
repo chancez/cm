@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chancez/cm/internal/seqlog"
@@ -78,14 +79,25 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		_ = s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &rows, Cols: &cols})
 	}
 
-	// detached distinguishes a deliberate detach from a dropped connection. That
-	// difference is the whole basis of session ownership: closing a terminal window ends
-	// an owned session, while detaching leaves it running.
+	// Whether a Detach was seen is the whole basis of session ownership: closing a terminal
+	// window ends an owned session, while detaching leaves it running.
+	//
+	// This is tracked as a flag rather than inferred from how the stream ended. A dropped
+	// connection surfaces as both a receive error and a cancelled request context, racing each
+	// other, so the exit path cannot tell a detach from a disconnect on its own.
+	var sawDetach atomic.Bool
 	detached := make(chan struct{})
 	recvErr := make(chan error, 1)
 	go func() {
-		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, detached)
+		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, detached, &sawDetach)
 	}()
+
+	// reapIfAbandoned ends an owned session whose client vanished without detaching.
+	reapIfAbandoned := func() {
+		if open.Own && !sawDetach.Load() {
+			s.reapOwned(sess)
+		}
+	}
 
 	// Metadata is forwarded so a terminal emulator can retitle a tab or open a new window in the
 	// session's directory. Subscribing before the loop means the current values arrive
@@ -167,17 +179,17 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return nil
 
 		case err := <-recvErr:
-			// The client went away without detaching. If it owned the session, that is a
-			// closed window rather than a detach, so the session ends with it.
-			if open.Own {
-				s.reapOwned(sess)
-			}
+			reapIfAbandoned()
 			if err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
 			return nil
 
 		case <-ctx.Done():
+			// The request context is cancelled when the connection drops, which races with the
+			// receive loop failing. Both have to honor ownership, or an owned session would
+			// survive a closed window roughly half the time depending on which fired first.
+			reapIfAbandoned()
 			return ctx.Err()
 		}
 	}
@@ -190,6 +202,7 @@ func (s *Service) recvLoop(
 	srv serverv1.Server_AttachServer,
 	readOnly bool,
 	detached chan<- struct{},
+	sawDetach *atomic.Bool,
 ) error {
 	for {
 		req, err := srv.Recv()
@@ -199,6 +212,9 @@ func (s *Service) recvLoop(
 
 		switch {
 		case req.GetDetach() != nil:
+			// Recorded before signalling, so the exit path cannot observe the close without also
+			// seeing the flag.
+			sawDetach.Store(true)
 			close(detached)
 			return nil
 
