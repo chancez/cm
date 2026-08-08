@@ -66,6 +66,9 @@ type Session struct {
 	done      chan struct{}
 	// stopPump ends the shim subscription, which is how Close stops consuming output.
 	stopPump context.CancelFunc
+	// releasing records that this server is letting go of a still-live session, so the
+	// pump ending is not mistaken for the session ending.
+	releasing atomic.Bool
 
 	// clients counts attached clients for reporting.
 	clients atomic.Int64
@@ -170,7 +173,16 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 }
 
 // finish records the session's outcome and releases subscribers.
+//
+// Skipped entirely when the server is merely letting go of a live session: the shim is still
+// holding a running shell, and recording an outcome would tell the next server the session is
+// over when it is not.
 func (s *Session) finish() {
+	if s.releasing.Load() {
+		s.closeOnce.Do(func() { close(s.done) })
+		return
+	}
+
 	// Ask the shim why the stream ended. A shell that exited has a status worth
 	// reporting; an unreachable shim means the outcome is unknown.
 	code, exited := 0, false
@@ -204,10 +216,19 @@ func (s *Session) finish() {
 // Close stops consuming the shim's output and releases the connection, without terminating
 // the shell. Used when a server shuts down: the shim keeps running so the next server can
 // adopt it.
+//
+// Marking the session as being released first is what keeps the pump ending from being
+// recorded as the session ending. Without it, a normal server shutdown would mark every live
+// session dead and the next server would refuse to adopt them.
 func (s *Session) Close() {
+	s.releasing.Store(true)
 	s.stopPump()
 	s.conn.Close()
 }
+
+// Releasing reports whether this session is being let go while still alive, rather than
+// having ended.
+func (s *Session) Releasing() bool { return s.releasing.Load() }
 
 // Done is closed when the session ends.
 func (s *Session) Done() <-chan struct{} { return s.done }

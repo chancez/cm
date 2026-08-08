@@ -154,8 +154,18 @@ func (m *Manager) buildTerminal(rows, cols uint16) (Terminal, error) {
 func (m *Manager) watch(sess *Session) {
 	<-sess.Done()
 
-	ended, code := sess.Ended()
-	_ = ended
+	// A session this server deliberately let go of is still alive; its record must stay
+	// as-is so the next server adopts it.
+	if sess.Releasing() {
+		m.mu.Lock()
+		if m.sessions[sess.name] == sess {
+			delete(m.sessions, sess.name)
+		}
+		m.mu.Unlock()
+		return
+	}
+
+	_, code := sess.Ended()
 
 	state := store.StateExited
 	if code < 0 {
