@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -123,21 +124,16 @@ func resolveSession(args []string) (string, error) {
 }
 
 // currentEnv returns this process's environment as a map.
+//
+// Entries without an "=" are skipped rather than stored with an empty value. os.Environ should not produce any,
+// but a process can be exec'd with arbitrary strings in its environment block, and a bare name is not a
+// variable with an empty value: treating it as one would report a variable the caller never set.
 func currentEnv() map[string]string {
 	out := make(map[string]string)
 	for _, kv := range os.Environ() {
-		if k, v, ok := cut(kv); ok {
+		if k, v, ok := strings.Cut(kv, "="); ok {
 			out[k] = v
 		}
 	}
 	return out
-}
-
-func cut(kv string) (string, string, bool) {
-	for i := 0; i < len(kv); i++ {
-		if kv[i] == '=' {
-			return kv[:i], kv[i+1:], true
-		}
-	}
-	return "", "", false
 }
