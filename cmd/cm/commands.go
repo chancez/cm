@@ -22,6 +22,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		setTitle  bool
 		persist   bool
 		onRestore string
+		env       []string
 	)
 	cmd := &cobra.Command{
 		Use:   "attach [session]",
@@ -88,6 +89,10 @@ Detach with ctrl-\ , which leaves the session running.`,
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
 				Persist:   persist,
 				OnRestore: onRestore,
+				// Set on the session rather than inherited, because the shim is spawned by the server:
+				// whatever this process exported is not in the server's environment and so never
+				// reaches the shell. Only applies when this call creates the session.
+				Env: env,
 			}
 			if setTitle {
 				// Forward the session's title to the outer terminal.
@@ -117,6 +122,8 @@ Detach with ctrl-\ , which leaves the session running.`,
 		"keep this session's content across a reboot")
 	f.StringVar(&onRestore, "on-restore", "",
 		"what to do when reviving this session: shell, none, or command")
+	f.StringArrayVar(&env, "env", nil,
+		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
 	return cmd
 }
 

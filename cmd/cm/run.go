@@ -28,6 +28,7 @@ func newRunCommand(g *globals) *cobra.Command {
 		timeout time.Duration
 		persist bool
 		asJSON  bool
+		env     []string
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- <command>...",
@@ -77,6 +78,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					dir:     dir,
 					command: args,
 					persist: persist,
+					env:     env,
 				})
 				if err != nil {
 					return err
@@ -105,6 +107,8 @@ owns the process and reaps it, so nothing is inferred from output.`,
 	f.BoolVar(&persist, "persist", false,
 		"keep the session's output across a reboot")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
+	f.StringArrayVar(&env, "env", nil,
+		"set a KEY=VALUE in the command's environment (repeatable)")
 	return cmd
 }
 
@@ -113,6 +117,12 @@ type runOptions struct {
 	dir     string
 	command []string
 	persist bool
+	// env holds extra KEY=VALUE entries for the command.
+	//
+	// Set on the session rather than inherited from this process, because the shim is spawned by the
+	// server: whatever the caller exported is not in the server's environment and so never reaches the
+	// command.
+	env []string
 }
 
 // startRun opens a session running the command and returns its resolved name.
@@ -140,6 +150,10 @@ func startRun(ctx context.Context, cl serverv1.ServerClient, opts runOptions) (s
 				// disconnects immediately by design.
 				Own:     false,
 				Persist: opts.persist,
+				// Set on the session rather than inherited, because the shim is spawned by the server:
+				// whatever the caller exported is not in the server's environment and so never reaches
+				// the command.
+				Env: opts.env,
 				// Always, so `cm history` works once the command has exited, which is what this
 				// command's help promises. Without it the output is gone the moment the command
 				// finishes, which for a short command is immediately.
