@@ -26,6 +26,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		onRestore    string
 		env          []string
 		detachKeyArg string
+		noAttach     bool
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -39,6 +40,11 @@ creating a window's session and reattaching to it after a restart.
 
 With no name, the server allocates one and prints it, which is how a per-window
 session is created without the caller inventing names.
+
+--no-attach creates the session and prints its name without attaching, for
+pre-creating one that something else will attach to later. Distinct from
+'cm run -d', which needs a command and captures its output for a few minutes: this
+makes an ordinary shell session with ordinary persistence.
 
 Detaching leaves the session running. The key is ctrl-\ by default, set by
 detach_key in the config file, and overridden for one attachment by --detach-key.
@@ -111,6 +117,11 @@ receives it and the window closes instead of detaching.`,
 				// reaches the shell. Only applies when this call creates the session.
 				Env: env,
 			}
+			// Checked before anything that assumes a terminal, since this path has none.
+			if noAttach {
+				return createWithoutAttaching(cmd.Context(), dirs, opts)
+			}
+
 			if setTitle {
 				// Forward the session's title to the outer terminal.
 				//
@@ -143,6 +154,8 @@ receives it and the window closes instead of detaching.`,
 		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
 	f.StringVar(&detachKeyArg, "detach-key", "",
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
+	f.BoolVar(&noAttach, "no-attach", false,
+		"create the session and print its name without attaching")
 	return cmd
 }
 

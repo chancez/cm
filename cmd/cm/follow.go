@@ -279,3 +279,79 @@ func followSessionSignalling(
 	}
 	return nil
 }
+
+// createWithoutAttaching opens a session, prints its name, and leaves.
+//
+// For pre-creating a session something else will attach to: a terminal emulator laying out windows, or a script
+// that wants a shell waiting before it sends anything.
+//
+// Distinct from `cm run -d` in ways that matter. That needs a command, sets CaptureOutput so the output is kept
+// for a few minutes, and leaves a session whose lifetime is a finished command's. This creates an ordinary
+// session with the caller's own options -- persistence, restore behavior, environment -- so what comes back is
+// what `cm attach` would have made.
+//
+// Detaches explicitly rather than dropping the connection, matching `cm run`. Not load-bearing here, and the
+// comment claimed otherwise until it was measured: an abandoned stream only destroys a session that is owned,
+// and Own is false below, so removing the detach changes nothing observable. Kept because it states the intent
+// -- this client is leaving on purpose -- and because the reason Own is false today is a choice rather than a
+// law, so a future change that made these sessions owned would otherwise turn a tidy exit into a destroyed
+// session.
+func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
+	if err := ensureServer(ctx, dirs); err != nil {
+		return err
+	}
+
+	conn, cl, err := dialServer(dirs)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	stream, err := cl.Attach(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := stream.Send(&serverv1.AttachRequest{
+		Event: &serverv1.AttachRequest_Open{
+			Open: &serverv1.Open{
+				Session: opts.Session,
+				Command: opts.Command,
+				Cwd:     opts.Dir,
+				// A conventional size, since there is no terminal to ask. A client attaching later resizes
+				// it, and a program that checks in the meantime gets a plausible answer rather than zeros.
+				Rows: 24,
+				Cols: 80,
+				// Never owned: an owning client ends its session on disconnect, and this disconnects
+				// immediately, which would defeat the point.
+				Own:       false,
+				Persist:   opts.Persist,
+				OnRestore: opts.OnRestore,
+				Env:       opts.Env,
+				ClientEnv: opts.ClientEnv,
+				// No repaint to receive, since nothing is being painted.
+				NoRestore: true,
+			},
+		},
+	}); err != nil {
+		return err
+	}
+
+	resp, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	opened := resp.GetOpened()
+	if opened == nil {
+		return errors.New("server did not open the session")
+	}
+
+	_ = stream.Send(&serverv1.AttachRequest{
+		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}},
+	})
+
+	// The name, since the caller may not have chosen one and needs it to attach later. Printed even when the
+	// session already existed, because the useful answer to "make sure this exists" is its name either way.
+	_, err = fmt.Println(opened.Session)
+	return err
+}
