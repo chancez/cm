@@ -19,6 +19,7 @@ func newLogsCommand(g *globals) *cobra.Command {
 		follow bool
 		lines  int
 		all    bool
+		clear  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "logs [session]",
@@ -35,7 +36,13 @@ than shown, so a session that quietly stopped persisting or lost its title says
 so in the log.
 
 This is the diagnostic log, not the session's output. Use 'cm history' for what
-the shell printed.`,
+the shell printed.
+
+--clear empties the log instead of printing it, which is worth having while
+debugging: 'cm doctor' reports errors from the last 24 hours, so yesterday's
+entries obscure whether a change helped. It truncates rather than deletes, since
+the server and any shim hold the file open and writing to a deleted file would
+lose their output silently.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,6 +57,10 @@ the shell printed.`,
 					return err
 				}
 				path = dirs.ShimLog(args[0])
+			}
+
+			if clear {
+				return clearLogs(path, all)
 			}
 
 			if all {
@@ -78,6 +89,8 @@ the shell printed.`,
 		"print only the last N lines (0 for all)")
 	f.BoolVar(&all, "all", false,
 		"include the rotated previous log")
+	f.BoolVar(&clear, "clear", false,
+		"empty the log instead of printing it")
 	return cmd
 }
 
@@ -173,6 +186,41 @@ func followLog(ctx context.Context, path string) error {
 			f = nf
 		}
 	}
+}
+
+// clearLogs empties a log, and with all its rotated generation too.
+//
+// Truncates rather than removes. The server and each shim hold their log open for the life of the process, so
+// unlinking it would leave them writing to a deleted inode: their output would go nowhere and nothing would
+// report it. Verified rather than assumed -- after an unlink the path is gone while the writer keeps
+// succeeding, where after a truncation the file is still there and the next write lands in it.
+//
+// The rotated generation is removed rather than truncated, since nothing holds it open: it exists only as a
+// previous file, and leaving an empty one behind would be noise.
+//
+// A missing log is not an error. `cm logs --clear` on a fresh installation, or for a session that never
+// logged, has nothing to do and asking for that is not a mistake.
+func clearLogs(path string, all bool) error {
+	if err := truncateIfExists(path); err != nil {
+		return err
+	}
+	if all {
+		if err := os.Remove(path + ".1"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing the rotated log: %w", err)
+		}
+	}
+	return nil
+}
+
+// truncateIfExists empties a file, treating absence as success.
+func truncateIfExists(path string) error {
+	if err := os.Truncate(path, 0); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("clearing %s: %w", path, err)
+	}
+	return nil
 }
 
 // looksRotated reports whether the path now holds a different, shorter file than the open one.

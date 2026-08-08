@@ -111,6 +111,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newShimCommand(g),
 		newVersionCommand(g),
 		newConfigCommand(g),
+		newStatusCommand(g),
 		newCompletionsCommand(),
 	)
 

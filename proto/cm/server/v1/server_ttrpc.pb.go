@@ -18,6 +18,7 @@ type ServerService interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
+	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -109,6 +110,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Doctor(ctx, &req)
 			},
+			"Status": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req StatusRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Status(ctx, &req)
+			},
 			"Shutdown": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req ShutdownRequest
 				if err := unmarshal(&req); err != nil {
@@ -140,6 +148,7 @@ type ServerClient interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
+	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
 
@@ -254,6 +263,14 @@ func (c *serverClient) Wait(ctx context.Context, req *WaitRequest) (*WaitRespons
 func (c *serverClient) Doctor(ctx context.Context, req *DoctorRequest) (*DoctorResponse, error) {
 	var resp DoctorResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Doctor", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Status(ctx context.Context, req *StatusRequest) (*StatusResponse, error) {
+	var resp StatusResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Status", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

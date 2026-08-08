@@ -104,6 +104,11 @@ func (s *stubService) Doctor(
 ) (*serverv1.DoctorResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Status(
+	context.Context, *serverv1.StatusRequest,
+) (*serverv1.StatusResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Shutdown(
 	context.Context, *serverv1.ShutdownRequest,
 ) (*serverv1.ShutdownResponse, error) {

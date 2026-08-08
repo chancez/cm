@@ -59,12 +59,47 @@ service Server {
   // naming and could not read the database.
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
 
+  // Status reports facts about the running server: its pid, how long it has been up, and how many
+  // sessions it holds.
+  //
+  // Separate from Doctor rather than folded into it. Doctor runs fifteen checks, several of which probe
+  // every shim over its own socket and scan log files, which is the wrong amount of work for answering
+  // "what is running". The two also answer different questions: this reports facts, Doctor reports
+  // problems.
+  rpc Status(StatusRequest) returns (StatusResponse);
+
   // Shutdown stops the server, leaving sessions running.
   //
   // Sessions survive by design: each shim owns its pty, so a server that exits leaves every
   // session intact and the next server adopts them. That is the upgrade path, and it needs a way
   // to ask a server to stop that does not involve finding its pid.
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  // Process id of the server, so it can be found without scanning the process table.
+  int32 pid = 1;
+  // When the server started, as unix seconds. Sent as a timestamp rather than a duration so the client
+  // renders the uptime, which keeps the two from disagreeing as the reply travels.
+  int64 started_at_unix = 2;
+  // The server's own build.
+  string version = 3;
+  // Directories in use, which is the fastest way to spot a client talking to a server started with
+  // different ones.
+  string runtime_dir = 4;
+  string state_dir = 5;
+  // Session counts by state. Separate fields rather than a map so the shape is fixed and a client does
+  // not have to know which keys to expect.
+  int32 sessions_running = 6;
+  int32 sessions_exited = 7;
+  int32 sessions_dead = 8;
+  // Clients attached across every session, which says whether anything is watching.
+  int32 clients = 9;
+  // Whether this server has the terminal emulator. A server without it cannot restore a screen, and
+  // that is a property of the server rather than of the client asking.
+  bool terminal = 10;
 }
 
 // ShutdownRequest asks the server to stop.

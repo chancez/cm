@@ -61,6 +61,9 @@ cm's own behavior identical. Nothing else is repaired automatically: the rest ar
 either a record of something that already happened or a decision that is not a
 diagnostic's to make.
 
+'cm logs --clear' empties the logs, which is worth knowing here: these findings
+cover the last 24 hours, so yesterday's entries obscure whether a change helped.
+
 Log entries are only reported for the last 24 hours. Logs are appended to across
 server restarts, so without a window this reported problems from days ago that had
 already been resolved, on every run.

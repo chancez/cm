@@ -108,6 +108,32 @@ func (l *File) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Truncate discards the log's contents, keeping the same file.
+//
+// Truncation rather than removal, because a shim or server holding this file open would go on writing to a
+// deleted inode: its output would vanish with nothing to say so. Verified -- after an unlink the path is gone
+// while the writer succeeds, where after a truncation the file is still there and the next write lands in it.
+//
+// The cached size is reset with it. Write compares l.size against MaxBytes to decide when to rotate, so a
+// truncation that left it alone would make an empty log rotate on its next write and keep doing so.
+//
+// O_APPEND recomputes the offset on every write, so no sparse hole is left where the old end of the file was;
+// this was checked rather than assumed, since the alternative would be a log padded with NULs.
+func (l *File) Truncate() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.f == nil {
+		// Closed, so there is nothing to keep in sync and the file is not being written to.
+		return os.Truncate(l.path, 0)
+	}
+	if err := l.f.Truncate(0); err != nil {
+		return err
+	}
+	l.size = 0
+	return nil
+}
+
 // rotateLocked moves the current file aside and starts a new one.
 func (l *File) rotateLocked() error {
 	if err := l.f.Close(); err != nil {

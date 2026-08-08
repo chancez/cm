@@ -432,6 +432,36 @@ func (e *env) appendLog(path string, lines ...string) {
 	}
 }
 
+// readFileOrEmpty returns a file's contents, or "" if it is not there.
+//
+// Absence is not an error here: callers poll for a log to appear or to be emptied, and a missing file is a
+// legitimate state in both directions.
+func (e *env) readFileOrEmpty(path string) string {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(body)
+}
+
+// processIsServer reports whether a pid is this environment's cm server.
+//
+// Matched on the command line, which has to name both this test's binary and its runtime directory. Needed
+// because "the pid is alive" is satisfied by any process the test can signal, so a report of the wrong pid
+// would pass: what makes this specific is that no other process carries this temp path.
+func processIsServer(t *testing.T, pid int, e *env) bool {
+	t.Helper()
+
+	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Logf("inspecting pid %d failed: %v", pid, err)
+		return false
+	}
+	line := string(out)
+	return strings.Contains(line, e.bin) && strings.Contains(line, e.runtime) &&
+		strings.Contains(line, "server")
+}
+
 // processAlive reports whether a pid names a live process.
 //
 // Signal 0 rather than reading the process table, since it asks the kernel the question directly and does not
