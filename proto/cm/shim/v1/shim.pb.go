@@ -666,7 +666,19 @@ func (x *ShutdownRequest) GetSignal() int32 {
 }
 
 type ShutdownResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Processes still alive a moment after the signal was sent, as pids.
+	//
+	// Empty is the normal case and is also what an older shim returns, so a server cannot tell "nothing
+	// leaked" from "this shim does not report leaks". That is acceptable here because the field only ever
+	// adds a warning: absence means no warning rather than a false claim of success.
+	//
+	// Reported rather than escalated. The shim signals what it was asked to and says what survived, which
+	// leaves the decision with the caller: a job deliberately trapping SIGHUP to finish writing a file
+	// should not be SIGKILLed by the shim on its own initiative.
+	SurvivingPids []int32 `protobuf:"varint,1,rep,packed,name=surviving_pids,json=survivingPids,proto3" json:"surviving_pids,omitempty"`
+	// The process group that was signalled, for a diagnostic that can name it.
+	SignalledPgid int32 `protobuf:"varint,2,opt,name=signalled_pgid,json=signalledPgid,proto3" json:"signalled_pgid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -699,6 +711,20 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
 	return file_cm_shim_v1_shim_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ShutdownResponse) GetSurvivingPids() []int32 {
+	if x != nil {
+		return x.SurvivingPids
+	}
+	return nil
+}
+
+func (x *ShutdownResponse) GetSignalledPgid() int32 {
+	if x != nil {
+		return x.SignalledPgid
+	}
+	return 0
 }
 
 var File_cm_shim_v1_shim_proto protoreflect.FileDescriptor
@@ -742,8 +768,10 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\x0eSignalResponse\"?\n" +
 	"\x0fShutdownRequest\x12\x14\n" +
 	"\x05force\x18\x01 \x01(\bR\x05force\x12\x16\n" +
-	"\x06signal\x18\x02 \x01(\x05R\x06signal\"\x12\n" +
-	"\x10ShutdownResponse2\x8c\x03\n" +
+	"\x06signal\x18\x02 \x01(\x05R\x06signal\"`\n" +
+	"\x10ShutdownResponse\x12%\n" +
+	"\x0esurviving_pids\x18\x01 \x03(\x05R\rsurvivingPids\x12%\n" +
+	"\x0esignalled_pgid\x18\x02 \x01(\x05R\rsignalledPgid2\x8c\x03\n" +
 	"\x04Shim\x12<\n" +
 	"\x05State\x12\x18.cm.shim.v1.StateRequest\x1a\x19.cm.shim.v1.StateResponse\x12?\n" +
 	"\tSubscribe\x12\x1c.cm.shim.v1.SubscribeRequest\x1a\x12.cm.shim.v1.Output0\x01\x12<\n" +

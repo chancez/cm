@@ -139,4 +139,17 @@ message ShutdownRequest {
   int32 signal = 2;
 }
 
-message ShutdownResponse {}
+message ShutdownResponse {
+  // Processes still alive a moment after the signal was sent, as pids.
+  //
+  // Empty is the normal case and is also what an older shim returns, so a server cannot tell "nothing
+  // leaked" from "this shim does not report leaks". That is acceptable here because the field only ever
+  // adds a warning: absence means no warning rather than a false claim of success.
+  //
+  // Reported rather than escalated. The shim signals what it was asked to and says what survived, which
+  // leaves the decision with the caller: a job deliberately trapping SIGHUP to finish writing a file
+  // should not be SIGKILLed by the shim on its own initiative.
+  repeated int32 surviving_pids = 1;
+  // The process group that was signalled, for a diagnostic that can name it.
+  int32 signalled_pgid = 2;
+}

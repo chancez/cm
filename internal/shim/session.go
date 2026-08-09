@@ -13,8 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
@@ -420,13 +423,100 @@ func (s *Session) Signal(sig syscall.Signal, group bool) error {
 		return syscall.Kill(shellPID, sig)
 	}
 
-	target := shellPID
-	if pgrp, err := s.foregroundGroup(); err == nil && pgrp > 0 {
-		target = pgrp
-	}
+	target := s.signalTarget(shellPID)
 	// Negating targets the process group. The child called setsid, so neither its own group nor a
 	// foreground group under its terminal can reach the shim.
 	return syscall.Kill(-target, sig)
+}
+
+// signalTarget returns the process group a grouped signal should go to.
+//
+// The pty's foreground group when it can be read, since that is what the line discipline delivers a
+// keypress to, and the shell's own group otherwise. See Signal for why the difference matters.
+func (s *Session) signalTarget(shellPID int) int {
+	if pgrp, err := s.foregroundGroup(); err == nil && pgrp > 0 {
+		return pgrp
+	}
+	return shellPID
+}
+
+// SignalAndCheck signals the session's process group and reports which of its processes survived.
+//
+// Exists because the signal cm sends by default is a request. SIGHUP can be ignored, and when it is,
+// `cm kill` reports the session killed while a process keeps holding a pty -- the resource macOS caps at
+// 511 system-wide, whose exhaustion surfaces as "device not configured" in something unrelated. The leak
+// was silent, and this is where it stops being: the shim is the only place that still knows the pty and
+// the process group, since the record is deleted immediately afterwards and nothing else can attribute a
+// stray process to cm.
+//
+// Deliberately reports rather than escalates. A job trapping SIGHUP to finish writing a file is doing
+// something legitimate, and a shim that killed it anyway would break that to tidy up. The caller decides,
+// which is what `cm kill --signal` is for.
+//
+// The wait is a fixed short grace rather than a configurable one. It is only here to let a process that
+// is going to die actually die, so tuning it would invite treating it as a shutdown timeout, which it is
+// not: nothing waits on the result except a warning.
+func (s *Session) SignalAndCheck(sig syscall.Signal, grace time.Duration) (pgid int, surviving []int, err error) {
+	s.mu.Lock()
+	shellPID := 0
+	if !s.exited && s.cmd.Process != nil {
+		shellPID = s.cmd.Process.Pid
+	}
+	s.mu.Unlock()
+	if shellPID == 0 {
+		return 0, nil, seqlog.ErrClosed
+	}
+
+	// Read before signalling. Afterwards the job may be gone, and with it the answer to which group was
+	// signalled, which is the part a diagnostic needs to name.
+	pgid = s.signalTarget(shellPID)
+	members := processGroupMembers(pgid)
+
+	if err := syscall.Kill(-pgid, sig); err != nil {
+		return pgid, nil, err
+	}
+
+	// SIGKILL cannot be caught, so anything still present after it is a kernel-level wait rather than a
+	// process declining to leave. Checking anyway rather than special-casing: an unkillable process is
+	// worth reporting too, and the grace period is short.
+	time.Sleep(grace)
+
+	for _, pid := range members {
+		// Signal 0 asks whether the process exists without delivering anything.
+		if syscall.Kill(pid, 0) == nil {
+			surviving = append(surviving, pid)
+		}
+	}
+	return pgid, surviving, nil
+}
+
+// processGroupMembers returns the pids in a process group.
+//
+// Through pgrep rather than a sysctl or /proc walk, because those differ per platform and this is only
+// ever used to name pids in a warning. A missing or failing pgrep therefore degrades to reporting no
+// leak, which loses a diagnostic rather than breaking a kill.
+//
+// Read before the signal is sent, since afterwards the members are exactly what is being asked about.
+func processGroupMembers(pgid int) []int {
+	if pgid <= 0 {
+		return nil
+	}
+	out, err := exec.Command("pgrep", "-g", strconv.Itoa(pgid)).Output()
+	if err != nil {
+		return nil
+	}
+	self := os.Getpid()
+	var pids []int
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid == self {
+			// The shim is never in the signalled group, since the child called setsid, but excluding
+			// it costs nothing and a shim reporting itself as a leak would be absurd.
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids
 }
 
 // foregroundGroup asks the pty which process group currently owns the terminal.

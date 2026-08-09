@@ -423,10 +423,22 @@ func (m *Manager) watch(sess *Session) {
 		ExitCode: &code,
 		LastSeq:  &seq,
 	}); err != nil {
-		// This one matters: without it the next server sees a session as running and tries to adopt
-		// a shim that is gone.
-		m.log.Error("recording session outcome failed",
-			"session", sess.name, "state", state, "error", err)
+		// A record that is already gone is the expected outcome of a kill, not a failure.
+		//
+		// Kill deletes the row and then this runs when the pump notices the shell exited, so the two
+		// race by design and the delete usually wins. Logged as an error, it made `cm doctor` report an
+		// error on every healthy `cm kill` -- which is worse than saying nothing, because a diagnostic
+		// that cries wolf teaches people to ignore it.
+		//
+		// Anything else still matters: without the write, the next server sees a session as running and
+		// tries to adopt a shim that is gone.
+		if errors.Is(err, store.ErrNotFound) {
+			m.log.Debug("session record was already removed when its outcome was recorded",
+				"session", sess.name, "state", state)
+		} else {
+			m.log.Error("recording session outcome failed",
+				"session", sess.name, "state", state, "error", err)
+		}
 	}
 	m.log.Info("session ended", "session", sess.name, "state", state, "exit_code", code)
 
@@ -880,7 +892,9 @@ func (m *Manager) Clients(name string) int64 {
 // Without force, an unreachable shim is left recorded rather than forgotten: it may be
 // busy rather than dead, and forgetting it would orphan a live shell. force exists for the
 // case where the user knows better.
-func (m *Manager) Kill(ctx context.Context, name string, force bool, sig int32) error {
+func (m *Manager) Kill(
+	ctx context.Context, name string, force bool, sig int32,
+) (surviving []int32, err error) {
 	m.mu.Lock()
 	sess, live := m.sessions[name]
 	m.mu.Unlock()
@@ -896,11 +910,13 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool, sig int32) 
 		// Found as a flaky `cm kill --all` reporting "stopping d5: ttrpc: closed" under -race, which widens
 		// the window enough to hit. Checked after the call rather than before, because before is its own
 		// race: the shell can exit between the check and the RPC.
-		if err := sess.Shutdown(ctx, force, sig); err != nil && !force {
+		left, err := sess.Shutdown(ctx, force, sig)
+		if err != nil && !force {
 			if ended, _ := sess.Ended(); !ended {
-				return fmt.Errorf("stopping %s: %w", name, err)
+				return nil, fmt.Errorf("stopping %s: %w", name, err)
 			}
 		}
+		surviving = left
 		// Give the shim a moment to exit so its socket is gone before returning, which
 		// lets the name be reused immediately.
 		select {
@@ -908,12 +924,12 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool, sig int32) 
 		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
 		}
-		return m.store.Delete(ctx, name)
+		return surviving, m.store.Delete(ctx, name)
 	}
 
 	rec, err := m.store.Get(ctx, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Not in the registry: try the shim directly in case another server started it.
@@ -921,23 +937,27 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool, sig int32) 
 		conn, shim, dialErr := dialShim(rec.ShimSocket)
 		if dialErr == nil {
 			defer conn.Close()
-			if _, err := shim.Shutdown(ctx, &shimv1.ShutdownRequest{
+			resp, err := shim.Shutdown(ctx, &shimv1.ShutdownRequest{
 				Force:  force,
 				Signal: sig,
-			}); err != nil && !force {
-				return fmt.Errorf("stopping %s: %w", name, err)
+			})
+			if err != nil && !force {
+				return nil, fmt.Errorf("stopping %s: %w", name, err)
 			}
-			return m.store.Delete(ctx, name)
+			if resp != nil {
+				surviving = resp.SurvivingPids
+			}
+			return surviving, m.store.Delete(ctx, name)
 		}
 		if !force {
-			return fmt.Errorf("cannot reach shim for %s: %w", name, dialErr)
+			return nil, fmt.Errorf("cannot reach shim for %s: %w", name, dialErr)
 		}
 	}
 
 	if rec.State == store.StateRunning && !force {
-		return fmt.Errorf("shim for %s is unreachable; use --force to forget it", name)
+		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", name)
 	}
-	return m.store.Delete(ctx, name)
+	return nil, m.store.Delete(ctx, name)
 }
 
 // ExpireDeadSessions removes dead sessions older than the configured age, along with their logs.

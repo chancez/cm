@@ -54,7 +54,7 @@ func TestKillSucceedsWhenTheShimIsAlreadyGone(t *testing.T) {
 	}
 
 	// Without force, which is what `cm kill` and `cm kill --all` send by default.
-	if err := mgr.Kill(ctx, "quick", false, 0); err != nil {
+	if _, err := mgr.Kill(ctx, "quick", false, 0); err != nil {
 		t.Errorf("Kill() error = %v, want nil: the shell has already exited, so the caller's intent is met",
 			err)
 	}
