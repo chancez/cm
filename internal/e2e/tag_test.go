@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,63 @@ func TestTagsAtCreationAndFiltering(t *testing.T) {
 	// filtering rather than the tags being ignored.
 	if _, ok := e.session("plain"); !ok {
 		t.Error("the untagged session is missing from an unfiltered list")
+	}
+}
+
+// Every command that can create a session must apply --tag.
+//
+// This caught a real bug: `attach --no-attach` builds its own Open message rather than going through
+// the client's, so it silently dropped the tags while `run` and a plain `attach` kept them. There are
+// three hand-built Open messages, and nothing makes them agree, so a field added to one is missing from
+// the others until something checks. A tag set on creation and never seen again is the kind of failure
+// that looks like the user's mistake.
+func TestEveryCreationPathAppliesTags(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "run",
+			args: []string{"run", "--session", "via-run", "--tag", "path=run",
+				"-d", "--", "/bin/sh", "-c", "sleep 120"},
+		},
+		{
+			// The path that was broken.
+			name: "attach --no-attach",
+			args: []string{"attach", "--no-attach", "via-attach", "--tag", "path=attach",
+				"--", "/bin/sh", "-c", "sleep 120"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e.mustRun(tc.args...)
+		})
+	}
+
+	// Asserted by listing rather than per-session, so a path that stored nothing shows up as a missing
+	// row instead of an empty map that could be mistaken for something else.
+	//
+	// Sorted before comparing: `list` orders by creation time and breaks ties by name, and these are
+	// created in the same second, so the order depends on the names rather than on the argument order
+	// here.
+	got := e.tagNames("path")
+	sort.Strings(got)
+	if want := []string{"via-attach", "via-run"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("list --tag path = %v, want both creation paths tagged: %v", got, want)
+	}
+
+	for _, name := range []string{"via-run", "via-attach"} {
+		s, ok := e.session(name)
+		if !ok {
+			t.Fatalf("session %s is missing", name)
+		}
+		if len(s.Tags) == 0 {
+			t.Errorf("session %s has no tags, want the ones it was created with", name)
+		}
 	}
 }
 

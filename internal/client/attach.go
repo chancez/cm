@@ -27,6 +27,33 @@ const (
 	inputReadSize = 4096
 )
 
+// Open builds the Open message these options describe.
+//
+// Exists because there is more than one way to create a session -- an interactive attach, and
+// `attach --no-attach`, which has no terminal to wire up and so does not go through Attach at all --
+// and each used to build its own Open. Nothing made the two agree, so a field added to one was
+// silently missing from the other: that is how `--tag` came to work everywhere except
+// `--no-attach`, where the tags were accepted, validated, and then dropped on the floor.
+//
+// The fields left unset are the ones a caller must supply because only it knows them: Rows and Cols
+// come from a terminal or a convention, and ResumeFromSeq only means anything to a reconnecting
+// client.
+func (o Options) Open(session string) *serverv1.Open {
+	return &serverv1.Open{
+		Session:   session,
+		Own:       o.Own,
+		ReadOnly:  o.ReadOnly,
+		Command:   o.Command,
+		Cwd:       o.Dir,
+		Env:       o.Env,
+		ClientEnv: o.ClientEnv,
+		Persist:   o.Persist,
+		OnRestore: o.OnRestore,
+		Tags:      o.Tags,
+		NoRestore: o.NoRestore,
+	}
+}
+
 // Options configures an attachment.
 type Options struct {
 	// SocketPath is the server's socket.
@@ -239,22 +266,10 @@ func runSession(
 	}
 
 	rows, cols := tty.Size()
-	open := &serverv1.Open{
-		Session:       result.Session,
-		Rows:          uint32(rows),
-		Cols:          uint32(cols),
-		Own:           opts.Own,
-		ReadOnly:      opts.ReadOnly,
-		Command:       opts.Command,
-		Cwd:           opts.Dir,
-		Env:           opts.Env,
-		ClientEnv:     opts.ClientEnv,
-		Persist:       opts.Persist,
-		OnRestore:     opts.OnRestore,
-		Tags:          opts.Tags,
-		NoRestore:     opts.NoRestore,
-		ResumeFromSeq: *resumeFrom,
-	}
+	open := opts.Open(result.Session)
+	open.Rows = uint32(rows)
+	open.Cols = uint32(cols)
+	open.ResumeFromSeq = *resumeFrom
 	if err := stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Open{Open: open},
 	}); err != nil {
