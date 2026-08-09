@@ -128,7 +128,7 @@ to whichever finishes first instead of polling for it.`,
 	// hand-written version omitted blocked while the command accepted it, so the one state cm cannot derive
 	// for itself -- and the whole reason for the report mechanism -- was undiscoverable from the help.
 	f.StringVar(&until, "until", "idle", "state to wait for: "+strings.Join(waitStateNames(), ", "))
-	f.DurationVar(&timeout, "timeout", 0, "give up after this long (0 waits indefinitely)")
+	addTimeoutFlag(f, &timeout)
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"wait on the sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&any, "any", false,

@@ -606,8 +606,7 @@ follower connects, which for a fast command can be all of it.`,
 		"send a key rather than text: ctrl-c, enter, up, f5, alt-x (repeatable, in order)")
 	f.StringVar(&until, "wait", "",
 		"after sending, wait until the session is idle, busy, blocked, or exited")
-	f.DurationVar(&timeout, "timeout", 0,
-		"give up waiting after this long (0 waits indefinitely)")
+	addTimeoutFlag(f, &timeout)
 	f.BoolVar(&asJSON, "json", false, "print the wait result as JSON")
 	f.BoolVarP(&follow, "follow", "f", false,
 		"stream the session's output until the command finishes (implies --wait idle)")

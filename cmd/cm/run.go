@@ -148,8 +148,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 	f.StringVar(&dir, "dir", "", "working directory for the command")
 	f.BoolVarP(&detach, "detach", "d", false,
 		"return as soon as the command starts, printing the session name")
-	f.DurationVar(&timeout, "timeout", 0,
-		"give up waiting after this long (0 waits indefinitely)")
+	addTimeoutFlag(f, &timeout)
 	f.BoolVar(&persist, "persist", false,
 		"keep the session's output across a reboot")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
