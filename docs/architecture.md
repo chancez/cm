@@ -203,6 +203,61 @@ ago, and anything waiting on that state would be released for no reason.
 
 See `contrib/hooks/` for how to wire this to a program, including a Claude Code example.
 
+## Tags
+
+`cm tag NAME key=value` labels a session, and `cm list --tag key=value` filters on it. Tags are also set
+at creation with `--tag` on `attach` and `run`, and they show in `cm list`, `cm info`, and the JSON output.
+
+They exist because a name groups a session one way and often cannot group it at all. A per-window session
+is named from a server counter, so it is called `s17` and `cm list --prefix` has nothing to match on. Even
+a deliberately named session belongs to several groupings at once -- a project, a worktree, the fan-out
+that created it -- while its name says one thing. And a name cannot change, since the store keys on it and
+the shim socket derives from it, so a session that turns out to be something else keeps a misleading name;
+a tag can be corrected. That makes tags a cheap partial answer to the rename gap below.
+
+Four decisions are worth recording, because each had a defensible alternative.
+
+**Key/value, not bare labels.** A bare set of strings would cover filtering, which is the immediate use.
+It would not cover a program remembering something about itself, which is what the custom-resumption idea
+in `ideas.md` needs -- `claude --resume <id>` requires somewhere to put the id, and that file already
+concludes the store has nowhere for it and that borrowing `Command` or `Env` would be wrong. One mechanism
+that serves both is better than adding a second one later. A key with an empty value is legal, so `--tag
+review` still reads as a plain label.
+
+**A JSON column, not a side table.** This is the opposite conclusion from the same shape of data
+elsewhere: the `env` column's migration justifies JSON on it never being queried by key, and tags *are*
+queried by key, which is normally the argument for a table. It is still wrong at this size. Session counts
+are in the tens, every caller that filters already holds the whole list, and expiry and `doctor` list
+unfiltered anyway, so a join and a cascade delete would make a linear scan over twenty rows asymptotically
+better and practically slower. Filtering happens in Go for the same reason. Revisit if sessions ever number
+in the thousands.
+
+**Persisted, unlike a report.** A report describes a running program, so restoring one would claim
+something needs input long after it finished. A tag describes the session, so it survives a server restart
+and is carried across a session being recreated. That inheritance sits *above* the persistence gate in
+`inheritForRestore`, which matters: the old record is deleted whether or not it had a saved log, so gating
+tags on persistence would drop them silently on an install with persistence off, and on any session whose
+shell exited and was attached to again. Recorded tags merge with what the caller asks for, caller winning
+per key, so retagging one thing does not discard the rest.
+
+**The character set is a security boundary, not a style rule.** Keys and values allow letters, digits,
+`-`, `_`, `.`, and `/`, up to 63 bytes each, and 63 is what a DNS label allows so it is a limit users have
+met before. The restriction excludes escape sequences, and that is the point: a tag is supplied by whoever
+creates a session and printed straight to the terminal of whoever runs `cm list`, so an unfiltered value
+could retitle or repaint their window. Validation is server-side as well as in the CLI, because the socket
+is the trust boundary and the CLI is one client of many. The same set keeps a tag unquoted in a shell and
+unambiguous in a selector, since neither `=` nor `,` is in it.
+
+Repeating `--tag` narrows rather than widens: two terms select the sessions that have both. There is
+deliberately no negation or set membership. A full selector grammar is familiar from elsewhere and is more
+syntax than filtering tens of sessions justifies, and it can be added later without changing what already
+works. A malformed selector is an error rather than a silent match of everything, which would be the
+dangerous default for a future `cm kill --tag`.
+
+**cm never interprets a key.** No tag changes how a session is treated. Config keyed off a tag would be
+fine, since the person writing the config chose the key, but cm inferring meaning from one is the same
+mistake as scraping a screen to work out what is running.
+
 ## Waiting, and why the server does it
 
 `cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from

@@ -35,15 +35,13 @@ downgrade the shim logs and nobody reads; and a session whose reported state has
 implausibly long, which usually means a reporter crashed between its start and end report and left the
 session permanently un-waitable.
 
-**Session groups or tags.** With one session per terminal window, `cm list` grows with the day. Names
-carry the meaning today (`review-api`, `build`), which works and is why this has not been urgent. A
-`--tag` or a naming convention with prefix filters would make "everything for this project" addressable.
-The cheap version already exists: `cm list --prefix`.
-
 **Session rename.** A name is chosen when a session is created and cannot change, so a session that turns
 out to be something else keeps a misleading name for its lifetime. The store keys on the name and the shim
 socket is derived from it, so a rename is either a store migration plus a socket move, or a display name
 kept separate from the identity. The second is much cheaper and probably right.
+
+Less pressing now that tags exist, since a mislabelled session can be retagged without being renamed. What
+remains is only the display: `cm attach` and every other command still take the original name.
 
 ## Driving sessions programmatically
 
@@ -132,13 +130,16 @@ notion of a session it is wrong in a specific way -- what should come back is no
 
 So this needs two things, and they are separable. First, a way for a program to tell cm something to
 remember about itself, which is the same shape as `cm report` but persisted rather than describing a live
-state: `cm annotate` or an extension to `report` with a `--persist` flag. Second, a restore command that can
-refer to it, which means either a template (`claude --resume {{.session_id}}`) or storing the full argv to
-re-run instead of the one that was started.
+state. Second, a restore command that can refer to it, which means either a template
+(`claude --resume {{.session_id}}`) or storing the full argv to re-run instead of the one that was started.
 
-The store has no free-form metadata today. `Command` is documented as being for display, and `Env` is the
-client-environment map with its own owner and semantics, so borrowing either would be a mistake. This wants
-its own column.
+The first half now exists: tags are persisted free-form key/values, and a program can set one on itself
+with `cm tag cm.dev/session-id=abc123` from a hook. That was a reason to make tags key/value rather than
+bare labels, so this needs no `cm annotate` and no new column. What is left is the second half, the
+templating, plus deciding how a restore command refers to a tag and what happens when the tag it names is
+absent. Note the character set: a tag value allows only letters, digits, `-`, `_`, `.`, and `/`, which
+covers a uuid but not an arbitrary opaque token, so a program with a rich id may need to be told to hand
+over something narrower.
 
 Worth noting what it unlocks, because it is more than convenience: an agent that survives a reboot with its
 conversation intact is a different thing from one that comes back empty in the right directory. It is also

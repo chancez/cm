@@ -219,6 +219,25 @@ The `&` and `wait` are the point. `cm send --wait` blocks until that agent's tur
 
 Give each session a name describing its job. Names are how you address them, they appear in `cm list`, and a session outlives the conversation that made it.
 
+### Tag a fan-out so you can address it as a group
+
+The loops above repeat the name list three times, which only works because you generated the names and still have them. Tag the sessions instead and ask cm which they were:
+
+```bash
+run="review-$$"
+for area in api ui docs; do
+  cm attach --no-attach "review-$area" --tag "run=$run" --tag "area=$area" -- <agent-command>
+done
+
+# The group, whatever it turned out to contain.
+sessions=$(cm list --tag "run=$run" --json | jq -r '.[].name')
+for s in $sessions; do cm wait "$s" --until blocked --timeout 60s; done
+```
+
+Worth it when the set is not a literal list you wrote: sessions created in more than one place, or names the server allocated, which `--prefix` cannot match at all. Repeating `--tag` narrows, so `--tag "run=$run" --tag area=ui` picks one out of the group.
+
+Tags are metadata, and cm does not interpret them: no key changes how a session behaves. Keys and values allow letters, digits, `-`, `_`, `.`, and `/`, up to 63 bytes, so use `run=abc123` rather than anything with spaces or punctuation in it. Set them at creation as above, or afterwards with `cm tag <name> key=value`, which also works on a session that has already exited.
+
 ## Environment and working directory
 
 The server spawns sessions, so a variable exported in your own process does not reach one. Pass it explicitly:
@@ -253,6 +272,12 @@ cm kill --all           # every session cm knows
 Kill the sessions you created when the work is done. A session left running holds a pty and a process.
 
 Do not `cm kill --all` or `cm server stop` unless you are certain nothing else is using cm: the user's own interactive sessions live in the same server, and stopping it or killing everything takes their work with it. Kill by name.
+
+If you tagged a fan-out, that tag is the safe version of `--all`: it names exactly the sessions you created and nothing of the user's.
+
+```bash
+cm kill $(cm list --tag "run=$run" --json | jq -r '.[].name')
+```
 
 ## When something looks wrong
 
