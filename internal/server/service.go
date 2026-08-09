@@ -625,11 +625,39 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	return &serverv1.SendResponse{Wait: wait, ShellReports: runsBefore > 0}, nil
 }
 
-func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
-	sess, live := s.mgr.Get(req.Session)
+// readableSession returns the session to render from, or nil to read from disk instead.
+//
+// Not the same question as "is it in the registry", which is what this replaced and why `cm run` would
+// occasionally print nothing at all.
+//
+// A session's terminal model is discarded the moment its shell exits, but the session is removed from the
+// registry by a separate goroutine afterwards. Between those two events it is still found here while having
+// nothing left to render, so rendering it returns empty rather than falling back to the log on disk. The window
+// is short, which is what made this look like flakiness rather than a bug: `cm run` printed nothing in 4 runs
+// out of 40, and re-reading immediately afterwards returned the output, because by then the removal had
+// happened. Widening the window by delaying the removal made it fail every time, which is what identified it.
+//
+// Treating an ended session as not-live closes it, since the on-disk log holds the same bytes and is complete:
+// the shim appends unbuffered before it reports the exit, so anything the command printed is already there.
+//
+// Checked via Ended rather than by looking for a nil terminal, so the decision does not depend on a field
+// another goroutine owns, and so a session built without an emulator still takes the same path it always did.
+func (s *Service) readableSession(name string) *Session {
+	sess, live := s.mgr.Get(name)
 	if !live {
-		// A session that has ended leaves the registry, so its terminal model is gone. If it was
-		// persisting, its output is still on disk and can be replayed, which is what makes reading a
+		return nil
+	}
+	if ended, _ := sess.Ended(); ended {
+		return nil
+	}
+	return sess
+}
+
+func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
+	sess := s.readableSession(req.Session)
+	if sess == nil {
+		// A session that has ended has no terminal model, whether or not it has left the registry yet. If it
+		// was persisting, its output is still on disk and can be replayed, which is what makes reading a
 		// finished command's output possible at all.
 		data, err := s.mgr.HistoryFromDisk(ctx, req.Session, req.Format)
 		if err != nil {
@@ -661,8 +689,8 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 // programmatically wants the tail, and wants soft-wrapped lines rejoined so a path the terminal broke to
 // fit its width is one line again.
 func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
-	sess, live := s.mgr.Get(req.Session)
-	if !live {
+	sess := s.readableSession(req.Session)
+	if sess == nil {
 		// A finished session is the common case here, not an edge one: `cm run` waits for its command, so
 		// the session has already ended by the time anything reads its output.
 		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap, req.Raw)
