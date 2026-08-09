@@ -92,6 +92,14 @@ type Session struct {
 	// state it produces is copied into command above, which is guarded.
 	commands osc.CommandTracker
 
+	// reports parses cm's own OSC sequence out of the output stream, which is how a shell integration
+	// reports what OSC 133 cannot express.
+	//
+	// Outside mu for the same reason as commands, and fed from the same place. What it produces goes
+	// into reported above, so a sequence and a `cm report` call end up in exactly the same field: the
+	// sequence is a faster transport for the same statement, not a second kind of state.
+	reports osc.ReportTracker
+
 	// log records what this session does. Never nil.
 	log *slog.Logger
 
@@ -285,6 +293,14 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			s.noteCommand()
 		}
 
+		// cm's own sequence, read from the same stream for the same reason: a shell integration writes it
+		// straight to the pty, which costs nothing, where shelling out to `cm report` from a prompt hook
+		// costs about 23ms twice per command. That was measured before choosing this design, and it is the
+		// whole reason the sequence exists rather than only the command.
+		if s.reports.Feed(out.Data) {
+			s.noteReport()
+		}
+
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
@@ -468,6 +484,28 @@ func (s *Session) Command() osc.CommandState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.command
+}
+
+// noteReport applies a report the shell integration wrote into the output stream.
+//
+// Routed through setReported so a sequence and a `cm report` call are indistinguishable once received.
+// They are two transports for one statement, and keeping one destination means a waiter cannot see
+// different behavior depending on which the reporter happened to use.
+//
+// "clear" becomes the zero value, which is how setReported already expresses "nothing has reported": the
+// session falls back to what cm derives from OSC 133. Mapping it here rather than storing "clear" as a
+// state keeps that vocabulary out of everything downstream, none of which should have to know that one
+// state name means the absence of a state.
+func (s *Session) noteReport() {
+	r, ok := s.reports.Take()
+	if !ok {
+		return
+	}
+	if r.State == "clear" {
+		s.setReported(Reported{})
+		return
+	}
+	s.setReported(Reported{State: r.State, Detail: r.Detail, Source: r.Source})
 }
 
 // setReported records what a program in the session said about itself, and tells clients.

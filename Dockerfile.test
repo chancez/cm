@@ -4,6 +4,12 @@
 # differs per platform, and a macOS-only test run silently never compiles the Linux half. It also
 # catches shell assumptions, since /bin/sh here is dash rather than bash.
 FROM golang:1.26-bookworm
+# The shells the integration ships a script for. Installed rather than left to skip: each script is a
+# separate implementation of one wire format, and every one of them has had its own bug, so a skipped
+# shell is a script nothing checks on the platform most likely to differ.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zsh fish \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 # Dependencies first, so editing source does not refetch them.
 COPY go.mod go.sum ./

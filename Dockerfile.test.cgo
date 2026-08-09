@@ -48,8 +48,9 @@ RUN cd /src/ghostty && zig build \
 
 FROM golang:1.26-bookworm
 # zsh, because the OSC 133 tests need a shell that emits the markers, and skipping them here would leave
-# the feature verified on macOS only. python3 is what those tests use to print an over-long line.
-RUN apt-get update && apt-get install -y --no-install-recommends zsh python3 \
+# the feature verified on macOS only. fish for the same reason, since the shell integration ships a script
+# per shell and each has had its own bug. python3 is what those tests use to print an over-long line.
+RUN apt-get update && apt-get install -y --no-install-recommends zsh fish python3 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./

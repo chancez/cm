@@ -113,6 +113,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newConfigCommand(g),
 		newStatusCommand(g),
 		newCompletionsCommand(),
+		newShellInitCommand(),
 	)
 
 	return root

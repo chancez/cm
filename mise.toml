@@ -4,6 +4,11 @@ protoc = "35.1"
 buf = "1.72.0"
 # Only needed by the `libghostty` task to build libghostty-vt from source.
 zig = "0.16.0"
+# Pinned so the shell-integration tests exercise fish rather than skipping it. bash and zsh are not here
+# on purpose: both ship with macOS and every Linux image used for these tests, and pinning a second copy
+# would test a shell nobody runs cm under. fish is the one a machine may genuinely lack, and a skipped
+# test that looks like a pass is how a broken script ships.
+"aqua:fish-shell/fish-shell" = "4.8.1"
 
 [env]
 # libghostty-vt has no tagged release and its API is explicitly unstable, so pin a
