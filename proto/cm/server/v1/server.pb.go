@@ -554,7 +554,25 @@ type ReadRequest struct {
 	Raw bool `protobuf:"varint,4,opt,name=raw,proto3" json:"raw,omitempty"`
 	// Whether to rejoin soft-wrapped lines. A line the terminal broke to fit its width is one line to the
 	// program that wrote it, so splitting it puts a newline inside a path or a stack frame.
-	Unwrap        bool `protobuf:"varint,3,opt,name=unwrap,proto3" json:"unwrap,omitempty"`
+	Unwrap bool `protobuf:"varint,3,opt,name=unwrap,proto3" json:"unwrap,omitempty"`
+	// Return output from where the last N commands began, rather than a count of lines.
+	//
+	// Anchored at the shell's prompt marker, so each block opens with the prompt and the echoed command
+	// line. That is what makes reading several commands useful: their outputs run together otherwise, and
+	// a caller cannot tell where one ended. Zero means this is not being used.
+	//
+	// A count of commands rather than a sequence number, deliberately. cm has two sequence-number spaces
+	// and mixing them corrupts output, so a number a caller has to hold onto is a hazard; a command count
+	// is also what a person and a script actually think in.
+	//
+	// Mutually exclusive with lines, which is a different bound on the same read.
+	SinceCommands uint32 `protobuf:"varint,5,opt,name=since_commands,json=sinceCommands,proto3" json:"since_commands,omitempty"`
+	// Return only the most recent command's own output, with no prompt or echoed command line.
+	//
+	// The parser's counterpart to since_commands: that produces a transcript, this produces just what the
+	// program printed. Well defined for one command only, which is why it is a separate field rather than
+	// a mode of the other.
+	LastOutput    bool `protobuf:"varint,6,opt,name=last_output,json=lastOutput,proto3" json:"last_output,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -613,6 +631,20 @@ func (x *ReadRequest) GetRaw() bool {
 func (x *ReadRequest) GetUnwrap() bool {
 	if x != nil {
 		return x.Unwrap
+	}
+	return false
+}
+
+func (x *ReadRequest) GetSinceCommands() uint32 {
+	if x != nil {
+		return x.SinceCommands
+	}
+	return 0
+}
+
+func (x *ReadRequest) GetLastOutput() bool {
+	if x != nil {
+		return x.LastOutput
 	}
 	return false
 }
@@ -3035,12 +3067,15 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05state\x18\x02 \x01(\x0e2\x1b.cm.server.v1.ReportedStateR\x05state\x12\x16\n" +
 	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\tR\x06source\"\x10\n" +
-	"\x0eReportResponse\"g\n" +
+	"\x0eReportResponse\"\xaf\x01\n" +
 	"\vReadRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x14\n" +
 	"\x05lines\x18\x02 \x01(\rR\x05lines\x12\x10\n" +
 	"\x03raw\x18\x04 \x01(\bR\x03raw\x12\x16\n" +
-	"\x06unwrap\x18\x03 \x01(\bR\x06unwrap\"\"\n" +
+	"\x06unwrap\x18\x03 \x01(\bR\x06unwrap\x12%\n" +
+	"\x0esince_commands\x18\x05 \x01(\rR\rsinceCommands\x12\x1f\n" +
+	"\vlast_output\x18\x06 \x01(\bR\n" +
+	"lastOutput\"\"\n" +
 	"\fReadResponse\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"u\n" +
 	"\vWaitRequest\x12\x18\n" +

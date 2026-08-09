@@ -108,6 +108,19 @@ type Session struct {
 	// sequence is a faster transport for the same statement, not a second kind of state.
 	reports osc.ReportTracker
 
+	// boundaries records where each command's output begins, so a caller can read back the last N
+	// commands instead of guessing with a line count.
+	//
+	// Guarded by boundariesMu rather than left unlocked like the two trackers above, and the difference
+	// is not an inconsistency: those are written by the pump and read only through fields it copies
+	// under mu, while this is read directly by whichever goroutine is serving a Read RPC. One writer
+	// and many readers still needs a lock.
+	//
+	// Its own mutex rather than mu, because a read of the boundaries must not contend with the
+	// metadata that every chunk of output touches.
+	boundariesMu sync.Mutex
+	boundaries   *osc.BoundaryTracker
+
 	// log records what this session does. Never nil.
 	log *slog.Logger
 
@@ -242,6 +255,9 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		term:        term,
 		recent:      seqlog.NewAt(DefaultRecentBytes, fromSeq),
 		metaSubs:    make(map[*metaSub]struct{}),
+		// Positioned at the same offset as the log, since a session adopted after a server restart
+		// resumes partway in and a tracker starting from zero would place every boundary wrongly.
+		boundaries: newBoundaryTrackerAt(fromSeq),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		lastSeq:     fromSeq,
@@ -313,6 +329,17 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
 		data := osc.RewritePromptRedraw(out.Data)
+
+		// Command boundaries come from the rewritten bytes, not the originals.
+		//
+		// This is the load-bearing ordering in this function, and getting it wrong is silent. The log
+		// below numbers exactly these bytes, and RewritePromptRedraw can make a prompt marker nine bytes
+		// longer than the shell sent, so feeding the pre-rewrite chunk instead would drift every
+		// recorded position by nine bytes per prompt and a read would start mid-sequence. Fed here
+		// rather than beside s.commands.Feed above for that reason alone.
+		s.boundariesMu.Lock()
+		s.boundaries.Feed(data)
+		s.boundariesMu.Unlock()
 
 		// Appending both records the output for later subscribers and wakes current ones.
 		// A slow client cannot stall the session: it simply falls behind and is told there
@@ -542,6 +569,89 @@ func (s *Session) Reported() Reported {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reported
+}
+
+// SnapshotFrom returns the session's retained output from a sequence number.
+//
+// Raw bytes, so a caller can either render them or hand them over as they are. Rendering needs a
+// terminal model built at the right size, which the manager owns rather than the session, since a
+// session's own model holds the *current* screen and replaying into it would corrupt what clients see.
+//
+// gap reports that output at or after from had already been trimmed, so the result starts later than
+// asked for.
+func (s *Session) SnapshotFrom(from uint64) (data []byte, gap bool) {
+	return s.recent.Snapshot(from)
+}
+
+// Size reports the dimensions to render a snapshot at.
+//
+// From the record rather than from a live client, because a snapshot may cover output produced when a
+// different client was attached, or none was. The record is what the session was created or last
+// resized at, which is the width the bytes were wrapped for. Falls back to a conventional size, matching
+// what the replay-from-disk path does for the same reason.
+func (s *Session) Size() (rows, cols uint16) {
+	rows, cols = uint16(s.record.Rows), uint16(s.record.Cols)
+	if rows == 0 || cols == 0 {
+		return 24, 80
+	}
+	return rows, cols
+}
+
+// newBoundaryTrackerAt builds a boundary tracker positioned at a starting offset.
+//
+// A helper rather than two lines inline, so the pairing of construction and positioning is in one place:
+// a tracker built without SetPosition silently records every boundary as an offset from zero, which for
+// an adopted session is wrong by however far into its life the server restarted.
+func newBoundaryTrackerAt(fromSeq uint64) *osc.BoundaryTracker {
+	t := osc.NewBoundaryTracker(0)
+	t.SetPosition(fromSeq)
+	return t
+}
+
+// ErrNoCommandBoundaries reports that a session has never bracketed a command, so there is no position
+// to read back from.
+//
+// Its own error because the cause is almost never "nothing ran". A shell with no OSC 133 integration
+// loaded reports no markers at all, which is the same condition `cm doctor`'s no-shell-integration check
+// exists for, and returning empty output would look like a command that printed nothing.
+var ErrNoCommandBoundaries = errors.New("session has not reported any command boundaries")
+
+// SinceCommands returns the position where the last n command blocks begin.
+//
+// Anchored at the prompt, so a read from here includes the prompt and the echoed command line. That is
+// what makes reading several commands useful: their outputs concatenated with nothing between them
+// cannot be told apart.
+//
+// available reports how many command blocks are known when n exceeds them, so a caller can say how many
+// there are rather than quietly returning fewer than asked for.
+func (s *Session) SinceCommands(n int) (seq uint64, available int, err error) {
+	s.boundariesMu.Lock()
+	defer s.boundariesMu.Unlock()
+
+	seq, available, ok := s.boundaries.SinceCommands(n)
+	if ok {
+		return seq, available, nil
+	}
+	if available == 0 {
+		return 0, 0, ErrNoCommandBoundaries
+	}
+	return 0, available, fmt.Errorf(
+		"only %d command(s) are known for session %s", available, s.name)
+}
+
+// LastOutput returns the position where the most recent command's own output begins.
+//
+// Excludes the prompt and the echoed command line, unlike SinceCommands, which is the difference between
+// a transcript and something a parser can read directly.
+func (s *Session) LastOutput() (uint64, error) {
+	s.boundariesMu.Lock()
+	defer s.boundariesMu.Unlock()
+
+	seq, ok := s.boundaries.LastOutput()
+	if !ok {
+		return 0, ErrNoCommandBoundaries
+	}
+	return seq, nil
 }
 
 // CommandRuns counts the commands the shell has reported starting.

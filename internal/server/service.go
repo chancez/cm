@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/input"
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
@@ -716,8 +717,21 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 // programmatically wants the tail, and wants soft-wrapped lines rejoined so a path the terminal broke to
 // fit its width is one line again.
 func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
+	if req.SinceCommands > 0 && req.LastOutput {
+		return nil, errors.New("since_commands and last_output cannot both be set")
+	}
+
 	sess := s.readableSession(req.Session)
 	if sess == nil {
+		if req.SinceCommands > 0 || req.LastOutput {
+			// Command boundaries live in memory alongside the session, so a session that has ended has
+			// none. Reported plainly rather than falling back to a line count, since quietly answering a
+			// different question than the one asked is how a caller comes to trust output that does not
+			// mean what it thinks.
+			return nil, fmt.Errorf(
+				"session %s has ended, so its command boundaries are gone; read it by lines instead",
+				req.Session)
+		}
 		// A finished session is the common case here, not an edge one: `cm run` waits for its command, so
 		// the session has already ended by the time anything reads its output.
 		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap, req.Raw)
@@ -725,6 +739,10 @@ func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv
 			return nil, err
 		}
 		return &serverv1.ReadResponse{Data: data}, nil
+	}
+
+	if req.SinceCommands > 0 || req.LastOutput {
+		return s.readFromCommand(sess, req)
 	}
 
 	if req.Raw {
@@ -740,6 +758,53 @@ func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv
 		return nil, err
 	}
 	return &serverv1.ReadResponse{Data: data}, nil
+}
+
+// readFromCommand serves a read anchored at a command boundary rather than a line count.
+//
+// Renders from a slice of the session's log rather than from its terminal model, because a model holds
+// the current screen: it cannot answer "what did the command before this one print", and the earlier
+// output may have scrolled off it entirely while still being in the log.
+func (s *Service) readFromCommand(
+	sess *Session, req *serverv1.ReadRequest,
+) (*serverv1.ReadResponse, error) {
+	var (
+		from uint64
+		err  error
+	)
+	if req.LastOutput {
+		from, err = sess.LastOutput()
+	} else {
+		from, _, err = sess.SinceCommands(int(req.SinceCommands))
+	}
+	if err != nil {
+		if errors.Is(err, ErrNoCommandBoundaries) {
+			// The cause is almost always a shell with no OSC 133 integration rather than a session that
+			// has run nothing, and the symptom otherwise looks like a command that printed nothing. The
+			// same condition `cm doctor`'s no-shell-integration check exists for, so the message points
+			// at it.
+			return nil, fmt.Errorf(
+				"session %s has not reported any commands, so there is no boundary to read from; "+
+					"its shell needs OSC 133 integration loaded (see `%s doctor`)",
+				req.Session, paths.Name)
+		}
+		return nil, err
+	}
+
+	data, gap := sess.SnapshotFrom(from)
+	if gap {
+		// Reported rather than silently serving less. A read anchored at a command boundary that begins
+		// mid-command is worse than a short one, because the caller believes it has the whole output.
+		s.mgr.log.Warn("command output partly aged out of the buffer",
+			"session", req.Session, "from_seq", from)
+	}
+
+	rows, cols := sess.Size()
+	rendered, err := s.mgr.RenderSnapshot(data, rows, cols, req.Unwrap, req.Raw)
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.ReadResponse{Data: rendered}, nil
 }
 
 func (s *Service) GetEnv(ctx context.Context, req *serverv1.GetEnvRequest) (*serverv1.GetEnvResponse, error) {
