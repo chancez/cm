@@ -33,11 +33,13 @@ without redrawing.
 ```
 cm attach [session]      attach, creating the session if needed (ctrl-\ detaches)
 cm list                  list sessions; --tag/--prefix to filter
-cm info <session>        one session's details; --field for a single value
+cm info [session]        one session's details; --field for a single value
 cm tag [session] k=v     label a session so it can be grouped and filtered
-cm history <session>     print contents including scrollback; --format=plain|vt|html
+cm history [session]     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching
 cm run -- <command>      run a command in a session and exit with its status
+cm wait [session]        block until a session reaches a state
+cm read [session]        print a session's recent output
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log
 cm kill <session>...     terminate sessions
@@ -56,6 +58,18 @@ cm run --tag project=cm --tag role=build -- make      # label at creation
 cm tag s17 project=cm                                 # or afterwards
 cm list --tag project=cm                              # repeating --tag narrows
 ```
+
+`--tag` then selects on `list`, `kill`, `wait`, `read`, `history`, and `info`, so a group
+created together can be driven as one:
+
+```
+cm wait --tag run=abc --until idle    # concurrently, all of them; --any for the first
+cm read --tag run=abc                 # each session's output under its own header
+cm kill --tag run=abc                 # the safe form of --all: only what matched
+```
+
+A selector matching nothing is an error rather than a silent success, which is what makes
+`cm kill --tag` safe to put in a teardown script.
 
 A server starts automatically when needed, so there is normally no reason to run `cm server`.
 

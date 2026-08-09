@@ -221,7 +221,7 @@ Give each session a name describing its job. Names are how you address them, the
 
 ### Tag a fan-out so you can address it as a group
 
-The loops above repeat the name list three times, which only works because you generated the names and still have them. Tag the sessions instead and ask cm which they were:
+The loops above repeat the name list three times, which only works because you generated the names and still have them. Tag the sessions instead and address the group directly, which removes two of the three loops:
 
 ```bash
 run="review-$$"
@@ -229,12 +229,22 @@ for area in api ui docs; do
   cm attach --no-attach "review-$area" --tag "run=$run" --tag "area=$area" -- <agent-command>
 done
 
-# The group, whatever it turned out to contain.
-sessions=$(cm list --tag "run=$run" --json | jq -r '.[].name')
-for s in $sessions; do cm wait "$s" --until blocked --timeout 60s; done
+cm wait --tag "run=$run" --until blocked --timeout 60s   # all of them, concurrently
+cm read --tag "run=$run" --lines 200                     # each under its own header
+cm kill --tag "run=$run"                                 # tear the group down
 ```
 
-Worth it when the set is not a literal list you wrote: sessions created in more than one place, or names the server allocated, which `--prefix` cannot match at all. Repeating `--tag` narrows, so `--tag "run=$run" --tag area=ui` picks one out of the group.
+`--tag` selects on `list`, `kill`, `wait`, `read`, `history`, and `info`. Three things about it are worth knowing before relying on it:
+
+- **`cm wait --tag` waits concurrently and requires all of them.** It exits 0 only if every session reached the state, which is what makes `cm wait --tag ... && cm read --tag ...` correct. Add `--any` to return as soon as the first one does, for reacting to whichever finishes first. Verified: five sessions each sleeping three seconds complete in 3.02s, not 15s.
+- **A selector matching nothing is an error.** So a typo in `--tag run=abc` fails loudly instead of looking like a group with no output, and `cm kill --tag` cannot report success having killed nothing.
+- **`cm kill --tag` is the safe form of `cm kill --all`.** It only reaches what the selector matched, so it cannot touch the user's own sessions. Prefer it for teardown.
+
+Two combinations are refused, because their output would be broken rather than just ugly: `cm read --follow` and `cm history --format=html` each need one session. Name it for those.
+
+You still need the `&`/`wait` pattern for the *sends*, since `cm send --wait` is per session and there is no `send --tag` (broadcasting keystrokes to several shells is rarely what you want).
+
+Worth tagging when the set is not a literal list you wrote: sessions created in more than one place, or names the server allocated, which `--prefix` cannot match at all. Repeating `--tag` narrows, so `--tag "run=$run" --tag area=ui` picks one out of the group.
 
 Tags are metadata, and cm does not interpret them: no key changes how a session behaves. Keys and values allow letters, digits, `-`, `_`, `.`, and `/`, up to 63 bytes, so use `run=abc123` rather than anything with spaces or punctuation in it. Set them at creation as above, or afterwards with `cm tag <name> key=value`, which also works on a session that has already exited.
 
@@ -273,10 +283,10 @@ Kill the sessions you created when the work is done. A session left running hold
 
 Do not `cm kill --all` or `cm server stop` unless you are certain nothing else is using cm: the user's own interactive sessions live in the same server, and stopping it or killing everything takes their work with it. Kill by name.
 
-If you tagged a fan-out, that tag is the safe version of `--all`: it names exactly the sessions you created and nothing of the user's.
+If you tagged a fan-out, that tag is the safe version of `--all`: it reaches exactly the sessions you created and nothing of the user's.
 
 ```bash
-cm kill $(cm list --tag "run=$run" --json | jq -r '.[].name')
+cm kill --tag "run=$run"
 ```
 
 ## When something looks wrong

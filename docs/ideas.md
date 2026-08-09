@@ -65,9 +65,13 @@ appears" writes a polling loop around `cm read`, which is exactly the sampling t
 to avoid, and it can miss output that scrolls past between samples. A `--match` or `--regex` on the server
 side would be a small addition to the existing wait machinery.
 
-**Waiting on several sessions.** Fanning out to N agents means N waits, which shell-backgrounding handles
-adequately (see `skills/cm/SKILL.md`). A `cm wait --any` or `--all` over a list would make the common
-orchestration a single call, and would let a caller react to whichever finished first rather than polling.
+**Waiting on several sessions.** Done: `cm wait --tag` waits on a group concurrently, requiring every
+session by default and returning on the first with `--any`. See `docs/architecture.md`.
+
+What is still open is waiting on an arbitrary *list* of names rather than a group that shares a tag. Tags
+covered the case that motivated this, since a fan-out is usually created together and can be labelled as it
+is, and a caller with a list of unrelated names can still background one wait each. Worth revisiting only if
+something needs to wait on sessions it did not create and cannot tag.
 
 **Idempotent send.** `cm send` writes to a pty; if the call fails partway there is no way to know how much
 arrived, and no way to retry safely. This has not bitten anything yet, and would matter for a caller

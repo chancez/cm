@@ -251,12 +251,60 @@ unambiguous in a selector, since neither `=` nor `,` is in it.
 Repeating `--tag` narrows rather than widens: two terms select the sessions that have both. There is
 deliberately no negation or set membership. A full selector grammar is familiar from elsewhere and is more
 syntax than filtering tens of sessions justifies, and it can be added later without changing what already
-works. A malformed selector is an error rather than a silent match of everything, which would be the
-dangerous default for a future `cm kill --tag`.
+works. A malformed selector is an error rather than a silent match of everything, which is the dangerous
+default for `cm kill --tag`.
 
 **cm never interprets a key.** No tag changes how a session is treated. Config keyed off a tag would be
 fine, since the person writing the config chose the key, but cm inferring meaning from one is the same
 mistake as scraping a screen to work out what is running.
+
+### Which commands take a selector
+
+`--tag` selects on `list`, `kill`, `wait`, `read`, `history`, and `info`. It is not uniform, and the
+omissions are decisions rather than gaps.
+
+`send` does not take one: broadcasting keystrokes to N shells is a footgun, and `--wait` cannot mean
+anything sane across N sessions. `attach` and `run` already use `--tag` to mean "label what you create",
+and one flag must not also mean "select" on the same command. `get-env` and `report` describe one session
+by nature.
+
+Three rules are shared by every command that accepts both a name and a selector, and they live in one
+place rather than being restated per command. A name and a selector together is refused, since there is no
+reading of `cm read foo --tag bar` that is not a confusion about which applies. A selector matching nothing
+is an error, because "no sessions matched" and "acted on all of them" must never be indistinguishable --
+`cm kill --tag run=typo` exiting 0 having killed nothing looks exactly like a successful teardown. And
+neither a name nor a selector is an error rather than a default to everything.
+
+Selectors are expanded client-side into names, which is the same choice `cm kill --all` already made: the
+server keeps one meaning per request, so a kill is always "kill these names" and a wait is always "wait for
+this session". Expanding server-side would mean the same expansion in every handler, each a place where an
+empty match could silently become everything.
+
+**`kill --tag` is the safe form of `--all`.** It names exactly what matched, so a script tearing down its
+own fan-out cannot reach sessions someone else is using. Unlike `--all`, an empty match is an error:
+`--all` on an empty server is a satisfied request, while an empty selector is usually a typo.
+
+**`wait --tag` requires every session by default, and waits concurrently.** A partial success has to be a
+failure, or `cm wait --tag ... && collect` would collect from sessions still working; `--any` returns on
+the first instead. The waits run in parallel because a sequential collector takes the sum of their
+durations and throws away the parallelism the sessions already have -- the same trap the `cm` skill
+documents for `cm send --wait`. One connection carries all of them, since ttrpc multiplexes calls behind
+its own send lock and the server subscribes per session. Measured: five sessions each sleeping three
+seconds complete in 3.02s rather than 15s, and `--any` over a group whose other session never exits
+returns in 9ms rather than running out a 20s timeout.
+
+**Output from several sessions is headed with `=== name ===`**, matching what `skills/cm/SKILL.md` already
+tells an agent to write by hand around a fan-out's results. Headed whenever a selector chose the session,
+including a single match, since the caller did not know which session it would be; a named session prints
+bare, so piping one session's output is unchanged. `cm info --field` stays bare either way, because a field
+is what a script reads.
+
+Two combinations are refused because the output would be broken rather than merely ugly. `read --follow`
+is an endless stream, so N of them interleave with no way to tell them apart and no header can mark a
+stream that never ends. `history --format=html` produces a whole document per session, and several
+concatenated is not a document at all. `cm info --json` returns an array for a selector and an object for a
+named session, so an existing `cm info NAME --json | jq .cwd` keeps working while a selector composes with
+`.[]`.
 
 ## Waiting, and why the server does it
 
