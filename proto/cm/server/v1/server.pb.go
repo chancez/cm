@@ -2725,10 +2725,24 @@ func (x *Session) GetTags() map[string]string {
 type KillRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Sessions []string               `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
-	// Remove the session record even if its shim cannot be reached. Without this, an
-	// unreachable shim is left alone: it may be busy rather than dead, and discarding the
-	// record would orphan it permanently.
-	Force         bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	// Remove the session record even if its shim cannot be reached, and end the session with SIGKILL
+	// rather than SIGHUP.
+	//
+	// Without the first, an unreachable shim is left alone: it may be busy rather than dead, and
+	// discarding the record would orphan it permanently. The second half is what makes the flag mean "be
+	// maximally forceful", so a caller that has decided a session must go does not need two flags to say
+	// it.
+	Force bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	// Signal to end the session with, overriding the default.
+	//
+	// Zero means SIGHUP, or SIGKILL when force is set. Exists because the default is a request rather
+	// than a guarantee: a job that ignores SIGHUP survives it, and `cm kill` then reports success having
+	// left a process holding a pty. A caller that knows what it is stopping can name the signal instead
+	// of reaching for force, which also discards bookkeeping.
+	//
+	// A number rather than an enum, for the same reason SignalRequest uses one: the set is
+	// platform-defined.
+	Signal        int32 `protobuf:"varint,3,opt,name=signal,proto3" json:"signal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2775,6 +2789,13 @@ func (x *KillRequest) GetForce() bool {
 		return x.Force
 	}
 	return false
+}
+
+func (x *KillRequest) GetSignal() int32 {
+	if x != nil {
+		return x.Signal
+	}
+	return 0
 }
 
 type KillResponse struct {
@@ -3340,10 +3361,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"?\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"W\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
-	"\x05force\x18\x02 \x01(\bR\x05force\"\xa1\x01\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\x12\x16\n" +
+	"\x06signal\x18\x03 \x01(\x05R\x06signal\"\xa1\x01\n" +
 	"\fKillResponse\x12\x16\n" +
 	"\x06killed\x18\x01 \x03(\tR\x06killed\x12>\n" +
 	"\x06errors\x18\x02 \x03(\v2&.cm.server.v1.KillResponse.ErrorsEntryR\x06errors\x1a9\n" +

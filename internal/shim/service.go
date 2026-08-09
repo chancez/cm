@@ -143,6 +143,12 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 	if req.Force {
 		sig = syscall.SIGKILL
 	}
+	// An explicit signal wins over what force selected. Checked after force rather than before so a
+	// request carrying both is unambiguous, and zero keeps meaning "not specified", which is what an
+	// older server sends.
+	if req.Signal > 0 {
+		sig = syscall.Signal(req.Signal)
+	}
 	// A shell that has already exited is not an error here: the caller wants the session
 	// gone, and it is. Both errors mean that, since Signal reports it one way and the pty
 	// guards report it another.

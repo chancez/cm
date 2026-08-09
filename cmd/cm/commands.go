@@ -314,11 +314,30 @@ func newKillCommand(g *globals) *cobra.Command {
 		asJSON  bool
 		all     bool
 		tagArgs []string
+		sigSpec string
 	)
 	cmd := &cobra.Command{
 		Use:   "kill <session>...",
 		Short: "Terminate sessions and their shells",
 		Long: `Terminate sessions and their shells.
+
+The session is ended with SIGHUP by default, sent to its foreground process group
+so a running job goes too. That is a request rather than a guarantee: a job that
+ignores SIGHUP survives it, and this then reports the session killed while a
+process keeps holding its pty.
+
+--signal names a different one when that happens, or when a program needs a
+particular signal to shut down cleanly:
+
+  cm kill build --signal term
+  cm kill build --signal kill    # what --force sends
+  cm kill build --signal 9
+
+--force means be maximally forceful, which is two things: end the session with
+SIGKILL, and forget it even if its shim cannot be reached. The second is why it is
+not the default -- an unreachable shim may be busy rather than dead, and discarding
+the record would orphan it and its pty permanently. Reach for --signal when the
+goal is only a stronger signal.
 
 --all kills every session the server knows, which is what a test harness or a
 teardown script wants: killing by name means enumerating them first, and a
@@ -351,6 +370,13 @@ selector matching nothing is an error rather than a silent success.`,
 			}
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
+			}
+			var sig int32
+			if sigSpec != "" {
+				var err error
+				if sig, err = parseSignal(sigSpec); err != nil {
+					return err
+				}
 			}
 			for _, name := range args {
 				if err := paths.ValidateSessionName(name); err != nil {
@@ -391,7 +417,11 @@ selector matching nothing is an error rather than a silent success.`,
 						return fmt.Errorf("no sessions match %s", describeSelectors(tagArgs))
 					}
 				}
-				resp, err := cl.Kill(ctx, &serverv1.KillRequest{Sessions: names, Force: force})
+				resp, err := cl.Kill(ctx, &serverv1.KillRequest{
+					Sessions: names,
+					Force:    force,
+					Signal:   sig,
+				})
 				if err != nil {
 					return err
 				}
@@ -401,7 +431,9 @@ selector matching nothing is an error rather than a silent success.`,
 	}
 	f := cmd.Flags()
 	f.BoolVar(&force, "force", false,
-		"forget the session even if its shim cannot be reached")
+		"end the session with SIGKILL, and forget it even if its shim cannot be reached")
+	f.StringVar(&sigSpec, "signal", "",
+		"signal to end the session with, by name or number (default hup, or kill with --force)")
 	f.BoolVar(&all, "all", false, "kill every session")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"kill the sessions with this tag, as key or key=value (repeatable, all must match)")

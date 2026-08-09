@@ -126,6 +126,17 @@ message SignalResponse {}
 message ShutdownRequest {
   // Skip the graceful SIGHUP-then-wait and kill immediately.
   bool force = 1;
+  // Signal to end the session with, overriding what force selects.
+  //
+  // Zero means "not specified", which is what an older server sends and what keeps this additive: a
+  // shim reading zero falls back to force, so the two fields cannot disagree about a request neither
+  // side has an opinion on.
+  //
+  // The reverse direction matters more and cannot be fixed here. An older shim ignores this field
+  // entirely and honors force alone, so a newer server asking for a specific signal gets SIGHUP or
+  // SIGKILL from it instead. That is a degradation rather than a failure, and the server logs it
+  // rather than pretending the signal was delivered.
+  int32 signal = 2;
 }
 
 message ShutdownResponse {}

@@ -249,7 +249,7 @@ func TestKillWithoutForceKeepsUnreachableRecord(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	if err := mgr.Kill(ctx, "unreachable", false); err == nil {
+	if err := mgr.Kill(ctx, "unreachable", false, 0); err == nil {
 		t.Error("Kill() without force = nil error, want a refusal to forget a maybe-live shim")
 	}
 	if _, err := st.Get(ctx, "unreachable"); err != nil {
@@ -257,7 +257,7 @@ func TestKillWithoutForceKeepsUnreachableRecord(t *testing.T) {
 	}
 
 	// force is the escape hatch for when the user knows better.
-	if err := mgr.Kill(ctx, "unreachable", true); err != nil {
+	if err := mgr.Kill(ctx, "unreachable", true, 0); err != nil {
 		t.Errorf("Kill() with force error = %v, want nil", err)
 	}
 	if _, err := st.Get(ctx, "unreachable"); !errors.Is(err, store.ErrNotFound) {
@@ -267,7 +267,7 @@ func TestKillWithoutForceKeepsUnreachableRecord(t *testing.T) {
 
 func TestKillMissingSessionReportsNotFound(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
-	if err := mgr.Kill(context.Background(), "nope", false); !errors.Is(err, store.ErrNotFound) {
+	if err := mgr.Kill(context.Background(), "nope", false, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("Kill() error = %v, want ErrNotFound", err)
 	}
 }

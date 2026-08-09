@@ -461,7 +461,7 @@ func (s *Service) reapOwned(sess *Session) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s.mgr.log.Info("owning client vanished, ending session", "session", sess.name)
-	if err := s.mgr.Kill(ctx, sess.name, true); err != nil {
+	if err := s.mgr.Kill(ctx, sess.name, true, 0); err != nil {
 		// A session that should have been reaped and was not becomes a leak the user has to notice
 		// on their own, so it is logged even though nothing can be done here.
 		s.mgr.log.Error("reaping owned session failed", "session", sess.name, "error", err)
@@ -589,7 +589,7 @@ func sessionState(st store.State) serverv1.SessionState {
 func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
 	for _, name := range req.Sessions {
-		if err := s.mgr.Kill(ctx, name, req.Force); err != nil {
+		if err := s.mgr.Kill(ctx, name, req.Force, req.Signal); err != nil {
 			// The map is already keyed by name, so a message that repeats it reads as
 			// `nosuch: "nosuch": session not found`. Strip the redundant prefix.
 			resp.Errors[name] = trimNamePrefix(err.Error(), name)
