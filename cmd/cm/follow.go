@@ -378,27 +378,21 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 		return err
 	}
 
+	// Built from the options rather than field by field, so a field added to Open reaches this path too.
+	// Listing them here is what let `--tag` work everywhere except this command.
+	open := opts.Open(opts.Session)
+	// A conventional size, since there is no terminal to ask. A client attaching later resizes it, and a
+	// program that checks in the meantime gets a plausible answer rather than zeros.
+	open.Rows = 24
+	open.Cols = 80
+	// Never owned: an owning client ends its session on disconnect, and this disconnects immediately,
+	// which would defeat the point.
+	open.Own = false
+	// No repaint to receive, since nothing is being painted.
+	open.NoRestore = true
+
 	if err := stream.Send(&serverv1.AttachRequest{
-		Event: &serverv1.AttachRequest_Open{
-			Open: &serverv1.Open{
-				Session: opts.Session,
-				Command: opts.Command,
-				Cwd:     opts.Dir,
-				// A conventional size, since there is no terminal to ask. A client attaching later resizes
-				// it, and a program that checks in the meantime gets a plausible answer rather than zeros.
-				Rows: 24,
-				Cols: 80,
-				// Never owned: an owning client ends its session on disconnect, and this disconnects
-				// immediately, which would defeat the point.
-				Own:       false,
-				Persist:   opts.Persist,
-				OnRestore: opts.OnRestore,
-				Env:       opts.Env,
-				ClientEnv: opts.ClientEnv,
-				// No repaint to receive, since nothing is being painted.
-				NoRestore: true,
-			},
-		},
+		Event: &serverv1.AttachRequest_Open{Open: open},
 	}); err != nil {
 		return err
 	}
