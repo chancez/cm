@@ -489,6 +489,32 @@ will produce no further output.
 A plain substring, not a pattern. Substring covers the case that motivated this, and a regex on a stream
 raises anchoring questions worth deciding separately.
 
+**`send --match` and `run --match` exist for the ordering, not for convenience.** The subscription is armed
+before the input is written, so a command that prints and finishes faster than a second request could arrive
+is still caught. A caller composing `send` with a separate `wait --match` cannot close that window from
+outside, which is why the flag lives on the send request rather than only on Wait. It matters most on the
+reuse path of `cm run`: waiting for the shell to be idle needs OSC 133, so a `/bin/sh` session could only be
+bounded by a timeout, and the `cm` skill documented that workaround. Measured -- the state form took its whole
+3s timeout, the match form returned in 14ms.
+
+**The shell's echo is skipped, and that is not an optimisation.** Writing to a pty makes the shell echo the
+line back, and the echo contains the command, so a pattern naming anything in the command matched the echo
+rather than the output: `send 'sh -c "sleep 2; echo UNIQUEWORD"' --match UNIQUEWORD` resolved in 11ms while
+the real output arrived 2s later. That is the same class of wrong answer as a wait for idle satisfied by the
+idle a session was already in -- a result handed back before the work happened -- and it is the match-wait
+counterpart of the `afterInput` qualifier a state wait uses.
+
+The skip is a budget in *text* bytes rather than the echo matched as a string, because a terminal does not
+echo verbatim: it wraps, and a shell with line editing redraws the line as it goes. A byte count is robust to
+both. The cost is that it over-shoots by whatever the terminal added or removed -- a stripped carriage return
+already makes the text one byte shorter than what was written -- so a few bytes of real output can be
+consumed with it. Acceptable because the pattern a caller waits for arrives in the output that follows, not
+within a few bytes of the prompt, and pinned by a test so a change to the accounting is visible.
+
+`--match` with `--follow` is refused. Follow stops when its wait resolves, and a match resolving mid-command
+would cut the stream off partway through output the caller was watching, which reads as truncation rather
+than as the flag working.
+
 ## Timeouts
 
 `--timeout` bounds `cm wait`, `cm send --wait`, `cm run`, and `cm read --follow`. It reached the last of
