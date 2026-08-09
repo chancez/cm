@@ -54,11 +54,20 @@ without a shell echoing it, or that stripped the echoed line and prompt, would r
 post-processing step. The catch is that "the command's own output" is not well defined once a shell is
 involved, which is why `cm run` reports what it does today.
 
-**Structured output boundaries.** A caller reading a session cannot tell where one command's output ends
-and the next begins, so it guesses with `--lines` or a marker in the command. cm already knows: OSC 133
-brackets every command, and the sequence numbers are recorded. Exposing "the output of the last command"
-or "output since sequence N" would replace the guessing. This is the highest-value idea in this file and
-the one most likely to be built next.
+**Structured output boundaries.** Done: `cm read --since-commands N` and `--last-output`. See
+`docs/architecture.md`.
+
+Worth recording what changed on the way, since this entry proposed "output since sequence N" and that is
+deliberately not what was built. A sequence number at the CLI is a hazard rather than a convenience: cm
+has two sequence-number spaces, mixing them corrupts output, and a stale position read from the wrong
+place silently rather than failing. A command count is also what a person and a script actually think in.
+The wire carries the resolved position, and nothing asks a user for one.
+
+What is still open, and was not obvious until this existed: boundaries live in memory with the session,
+so a server restart forgets the ones before it and an ended session has none at all. Persisting them
+would mean writing a position per command to the store, which is a row on the hot path for something only
+read back interactively. `cm run` already covers the ended-session case by saving output, so the gap is
+narrow: reading back a command that ran before the last server restart.
 
 **Waiting on more than state.** `cm wait` takes a state. A caller that wants "wait until this text
 appears" writes a polling loop around `cm read`, which is exactly the sampling the server-side wait exists

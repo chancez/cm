@@ -93,10 +93,16 @@ Sessions can be driven without attaching, which is what makes cm usable from a s
 
 ```
 cm send build 'make' --enter --wait idle   # send, then wait for it to finish
+cm read build --since-commands 1           # what the last command printed, prompt and all
+cm read build --last-output                # just its output, for a parser
 cm read build --lines 50                   # the recent tail, soft wrap rejoined
 cm wait api --until exited                 # block until a session ends
 cm run --env KEY=value -- ./task           # a command in its own session
 ```
+
+`--since-commands N` reads back by command rather than by guessing a line count: cm brackets
+every command with OSC 133, so it knows where each one began. Each block opens with the prompt
+and the echoed command line, which is what lets you tell several commands apart.
 
 A program inside a session can say what it is doing, which is how a long-running agent or build reports
 something cm cannot see for itself:
