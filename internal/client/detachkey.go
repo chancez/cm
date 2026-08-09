@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+
+	"github.com/chancez/cm/internal/input"
 )
 
 // DetachKeySpec describes the key that detaches a client.
@@ -47,7 +49,7 @@ func ParseDetachKey(spec string) (DetachKeySpec, error) {
 	}
 
 	c := rest[0]
-	code, ok := controlCode(c)
+	code, ok := input.ControlCode(c)
 	if !ok {
 		return DetachKeySpec{}, fmt.Errorf("no control code exists for ctrl-%c", c)
 	}
@@ -57,33 +59,6 @@ func ParseDetachKey(spec string) (DetachKeySpec, error) {
 		Sequences: encodingsFor(c),
 		Name:      "ctrl-" + string(c),
 	}, nil
-}
-
-// controlCode returns the byte a terminal sends for ctrl plus the given character.
-//
-// Letters map to 1..26. The punctuation entries are the remaining control codes, which exist
-// because ctrl-\ and ctrl-] are common choices and would otherwise be unavailable.
-func controlCode(c byte) (byte, bool) {
-	switch {
-	case c >= 'a' && c <= 'z':
-		return c - 'a' + 1, true
-	case c == '@' || c == ' ':
-		return 0x00, true
-	case c == '[':
-		return 0x1B, true
-	case c == '\\':
-		return 0x1C, true
-	case c == ']':
-		return 0x1D, true
-	case c == '^':
-		return 0x1E, true
-	case c == '_':
-		return 0x1F, true
-	case c == '?':
-		return 0x7F, true
-	default:
-		return 0, false
-	}
 }
 
 // encodingsFor returns the CSI forms a terminal may send instead of the control byte.

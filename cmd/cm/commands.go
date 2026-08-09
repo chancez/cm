@@ -15,6 +15,7 @@ import (
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/config"
+	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
 	"github.com/chancez/cm/internal/tags"
@@ -416,11 +417,37 @@ func newSendCommand(g *globals) *cobra.Command {
 		asJSON  bool
 		follow  bool
 		raw     bool
+		keys    []string
 	)
 	cmd := &cobra.Command{
-		Use:   "send <session> <text>...",
+		Use:   "send <session> [text]...",
 		Short: "Send input to a session without attaching",
 		Long: `Send input to a session without attaching.
+
+Text is written to the pty exactly as typing it would be, so the session's own
+echo and prompt appear in its output.
+
+--key sends a keystroke instead of characters, which text cannot express:
+
+  cm send build --key ctrl-c              # interrupt what is running
+  cm send agent --key escape             # leave a program's insert mode
+  cm send agent 'yes' --key enter        # type, then press enter
+  cm send menu --key down --key down --key enter
+
+Accepts ctrl-c (or c-c, or ^C), alt-x, named keys like enter, tab, escape,
+backspace, delete, up, down, left, right, home, end, pageup, pagedown, and f1
+through f12. Repeat it to send several in order; keys are sent after any text.
+
+An unknown key name is an error rather than being sent as text. That matters
+because the failure is otherwise silent: 'cm send build ctrl-c' types the
+characters "ctrl-c" onto the command line and the build keeps running, which reads
+as cm having ignored the request.
+
+--key goes through the pty, so it reaches whatever has the terminal in the state a
+keypress would. Use 'cm signal' instead when the target is the process rather than
+the keyboard: a program that reads ctrl-c as a byte rather than as an interrupt
+will not stop for --key, and a session with no foreground job has nothing to
+interrupt.
 
 --wait blocks until the session reaches a state after the input lands, which is
 how a script or an agent runs something and then reads the result:
@@ -452,7 +479,17 @@ alone is what you want.
 The stream is opened before the input is sent, so nothing the command prints at
 the start is missed. Doing it the other way round loses whatever appears before the
 follower connects, which for a fast command can be all of it.`,
-		Args:              cobra.MinimumNArgs(2),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return errors.New("a session name is required")
+			}
+			// Text is optional only because --key can supply the input instead. Without either there is
+			// nothing to send, and silently sending an empty string would look like it worked.
+			if len(args) == 1 && len(keys) == 0 {
+				return errors.New("nothing to send; give text or use --key")
+			}
+			return nil
+		},
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -460,6 +497,18 @@ follower connects, which for a fast command can be all of it.`,
 				return err
 			}
 			data := strings.Join(args[1:], " ")
+
+			// Keys after any text, so `--key ctrl-c` interrupts what is running and
+			// `cm send s 'make' --key enter` types then presses. A caller wanting the other order can
+			// make two calls; guessing an interleaving from flag position would be worse than a fixed
+			// rule, since cobra does not preserve it.
+			if len(keys) > 0 {
+				encoded, err := input.ParseKeys(keys)
+				if err != nil {
+					return err
+				}
+				data += string(encoded)
+			}
 			if newline {
 				// Carriage return, not newline: a shell at its prompt has the pty in raw
 				// mode, where CR is what accept-line is bound to.
@@ -521,6 +570,8 @@ follower connects, which for a fast command can be all of it.`,
 	f := cmd.Flags()
 	f.BoolVarP(&newline, "enter", "n", false,
 		"append a carriage return so the shell runs the input")
+	f.StringArrayVar(&keys, "key", nil,
+		"send a key rather than text: ctrl-c, enter, up, f5, alt-x (repeatable, in order)")
 	f.StringVar(&until, "wait", "",
 		"after sending, wait until the session is idle, busy, blocked, or exited")
 	f.DurationVar(&timeout, "timeout", 0,
