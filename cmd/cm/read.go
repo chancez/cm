@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -19,13 +19,14 @@ const defaultReadLines = 100
 
 func newReadCommand(g *globals) *cobra.Command {
 	var (
-		lines  int
-		wrap   bool
-		follow bool
-		raw    bool
+		lines   int
+		wrap    bool
+		follow  bool
+		raw     bool
+		tagArgs []string
 	)
 	cmd := &cobra.Command{
-		Use:   "read <session>",
+		Use:   "read [session]",
 		Short: "Print a session's recent output",
 		Long: `Print the tail of a session's output as plain text.
 
@@ -54,15 +55,15 @@ The two halves still differ in kind. The lines already printed are a rendered sc
 with wrapping rejoined, and what follows is filtered byte by byte, because a stream
 cannot re-render a screen per byte. So a program that repaints in place, like a
 progress bar, comes out as every frame in turn rather than overwritten.`,
-		Args:              cobra.ExactArgs(1),
+		// At most one name, since --tag supplies the rest.
+		Args:              sessionOrTagArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			if err := paths.ValidateSessionName(name); err != nil {
-				return err
-			}
 			if lines < 0 {
 				lines = 0
+			}
+			if err := validateSelectors(tagArgs); err != nil {
+				return err
 			}
 
 			dirs, err := g.dirs()
@@ -82,29 +83,52 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 				defer closeLog.Close()
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				resp, err := cl.Read(ctx, &serverv1.ReadRequest{
-					Session: name,
-					Lines:   uint32(lines),
-					Unwrap:  !wrap,
-					Raw:     raw,
-				})
+				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
 				if err != nil {
 					return err
 				}
-				if follow {
-					// The tail first, then the stream. Both go to stdout, so the caller sees one continuous
-					// piece of output rather than having to stitch two commands together.
-					return printTailThenFollow(ctx, dirs, name, resp.Data, raw, logger)
+				if follow && len(names) > 1 {
+					// Refused rather than interleaved. Following is an endless stream, so N of them would
+					// produce lines from several sessions mixed together with no way to tell them apart,
+					// and the per-session header this command uses cannot mark a stream that never ends.
+					return fmt.Errorf(
+						"--follow needs one session, but --tag matched %d; follow one by name", len(names))
 				}
-				if _, err := os.Stdout.Write(resp.Data); err != nil {
-					return err
-				}
-				// A trailing newline when the render lacks one, so the shell prompt does not land on the
-				// same line as the last output. The formatter trims trailing whitespace, so this is the
-				// common case rather than a rarity.
-				if n := len(resp.Data); n > 0 && resp.Data[n-1] != '\n' {
-					_, err := os.Stdout.Write([]byte{'\n'})
-					return err
+
+				for i, name := range names {
+					// Headed whenever a selector chose the session, including a single match: the caller did
+					// not know which session it would be, so the name is part of the answer. A named session
+					// prints bare, so piping one session's output is unchanged.
+					if fromSelector {
+						if err := writeSessionHeader(os.Stdout, name, i == 0); err != nil {
+							return err
+						}
+					}
+					resp, err := cl.Read(ctx, &serverv1.ReadRequest{
+						Session: name,
+						Lines:   uint32(lines),
+						Unwrap:  !wrap,
+						Raw:     raw,
+					})
+					if err != nil {
+						return err
+					}
+					if follow {
+						// The tail first, then the stream. Both go to stdout, so the caller sees one
+						// continuous piece of output rather than having to stitch two commands together.
+						return printTailThenFollow(ctx, dirs, name, resp.Data, raw, logger)
+					}
+					if _, err := os.Stdout.Write(resp.Data); err != nil {
+						return err
+					}
+					// A trailing newline when the render lacks one, so the shell prompt does not land on the
+					// same line as the last output. The formatter trims trailing whitespace, so this is the
+					// common case rather than a rarity.
+					if n := len(resp.Data); n > 0 && resp.Data[n-1] != '\n' {
+						if _, err := os.Stdout.Write([]byte{'\n'}); err != nil {
+							return err
+						}
+					}
 				}
 				return nil
 			})
@@ -118,5 +142,7 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 	f.IntVar(&lines, "lines", defaultReadLines, "how many lines from the end (0 for everything)")
 	f.BoolVar(&wrap, "keep-wrap", false,
 		"keep soft-wrapped lines split as the terminal laid them out")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"read the sessions with this tag, as key or key=value (repeatable, all must match)")
 	return cmd
 }
