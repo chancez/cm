@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -78,6 +79,12 @@ type sessionJSON struct {
 	// free-form and optional.
 	ReportedDetail string `json:"reported_detail"`
 	ReportedSource string `json:"reported_source"`
+	// Tags are the caller's own labels for this session, set at creation or with `cm tag`.
+	//
+	// A map rather than the "k=v,k" string the table prints, since a script filtering on one key
+	// should not have to parse a rendering meant for a column. Always present, and empty rather than
+	// null for a session with no tags, so `jq '.[].tags.project'` does not have to special-case it.
+	Tags map[string]string `json:"tags"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -89,6 +96,12 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	cwd := s.Cwd
 	if !s.CwdIsLocal {
 		cwd = ""
+	}
+
+	// Empty rather than null, so a script indexing into it needs no nil check.
+	sessionTags := s.Tags
+	if sessionTags == nil {
+		sessionTags = map[string]string{}
 	}
 
 	return sessionJSON{
@@ -110,6 +123,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedState:       s.ReportedState,
 		ReportedDetail:      s.ReportedDetail,
 		ReportedSource:      s.ReportedSource,
+		Tags:                sessionTags,
 	}
 }
 
@@ -200,8 +214,31 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 	}
 	sortSessions(sessions)
 
+	// The tags column appears only when something is tagged.
+	//
+	// Not unconditional, because the existing note about a seventh column is still true: CWD is a
+	// full path and is last, so anything added before it pushes it off the edge of a normal terminal.
+	// Someone who does not use tags should not pay for the feature in width, and someone who does has
+	// asked for the column by tagging something.
+	//
+	// Keyed on the whole list rather than per row, so the header and the rows agree and the columns
+	// stay aligned.
+	showTags := false
+	for _, s := range sessions {
+		if len(s.Tags) > 0 {
+			showTags = true
+			break
+		}
+	}
+
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tCWD")
+	header := "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tCWD"
+	if showTags {
+		// Before CWD rather than after it: a path is the one field that can be arbitrarily long, so
+		// anything placed after it is unlikely to line up on a normal terminal.
+		header = "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tTAGS\tCWD"
+	}
+	fmt.Fprintln(tw, header)
 	for _, s := range sessions {
 		state := stateName(s)
 		switch {
@@ -234,9 +271,18 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 			// somewhere, which an empty column would not convey.
 			cwd += " (remote)"
 		}
+		age := humanAge(time.Unix(s.CreatedAtUnix, 0))
+		if showTags {
+			// Truncated for the same reason the reported detail is: the column has to stay readable,
+			// and nothing bounds how many tags a session carries even though each one is bounded.
+			// `cm info` and the JSON output carry the whole set.
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
+				s.Name, s.ShellPid, s.Clients, state, age,
+				truncate(tags.Format(s.Tags), 32), cwd)
+			continue
+		}
 		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\n",
-			s.Name, s.ShellPid, s.Clients, state,
-			humanAge(time.Unix(s.CreatedAtUnix, 0)), cwd)
+			s.Name, s.ShellPid, s.Clients, state, age, cwd)
 	}
 	return tw.Flush()
 }
@@ -298,6 +344,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"reported_state", j.ReportedState},
 		{"reported_detail", j.ReportedDetail},
 		{"reported_source", j.ReportedSource},
+		// Rendered as "k=v,k" here rather than as a map, since --field prints one bare value for a
+		// script to read. The JSON output carries the map for anything that wants the structure.
+		{"tags", tags.Format(j.Tags)},
 	}
 }
 

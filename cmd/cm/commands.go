@@ -17,6 +17,7 @@ import (
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
+	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -31,6 +32,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		env          []string
 		detachKeyArg string
 		noAttach     bool
+		tagArgs      []string
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -77,6 +79,10 @@ receives it and the window closes instead of detaching.`,
 					return err
 				}
 			}
+			sessionTags, err := tags.ParseAll(tagArgs)
+			if err != nil {
+				return err
+			}
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
@@ -116,6 +122,7 @@ receives it and the window closes instead of detaching.`,
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
 				Persist:   persist,
 				OnRestore: onRestore,
+				Tags:      sessionTags,
 				// Set on the session rather than inherited, because the shim is spawned by the server:
 				// whatever this process exported is not in the server's environment and so never
 				// reaches the shell. Only applies when this call creates the session.
@@ -162,6 +169,8 @@ receives it and the window closes instead of detaching.`,
 		"what to do when reviving this session: shell, none, or command")
 	f.StringArrayVar(&env, "env", nil,
 		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"label the new session, as key or key=value (repeatable, ignored when reattaching)")
 	f.StringVar(&detachKeyArg, "detach-key", "",
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
@@ -245,21 +254,41 @@ func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error 
 
 func newListCommand(g *globals) *cobra.Command {
 	var (
-		prefix string
-		asJSON bool
+		prefix  string
+		asJSON  bool
+		tagArgs []string
 	)
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List sessions",
-		Args:    cobra.NoArgs,
+		Long: `List sessions.
+
+--tag filters by the labels set with 'cm tag' or --tag at creation. Repeating it
+narrows rather than widens, so asking for two tags lists the sessions that have
+both:
+
+  cm ls --tag project=cm --tag role=reviewer
+
+A bare key matches whatever its value is, so --tag project lists everything that
+belongs to some project.
+
+Tags group sessions that a name cannot. A per-window session is named by the
+server, so it is called "s17" and --prefix has nothing to match on, and a session
+belongs to several groupings at once while its name only says one thing.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Parsed client-side too, so a typo is reported the same way whether or not a server is
+			// running, and the error names the character that was wrong.
+			if _, err := tags.ParseSelector(tagArgs); err != nil {
+				return err
+			}
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix})
+				resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix, Tags: tagArgs})
 				if err != nil {
 					return err
 				}
@@ -272,6 +301,8 @@ func newListCommand(g *globals) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&prefix, "prefix", "", "only sessions whose name starts with this")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"only sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
 }

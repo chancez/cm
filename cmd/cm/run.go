@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -33,6 +34,7 @@ func newRunCommand(g *globals) *cobra.Command {
 		env     []string
 		quiet   bool
 		raw     bool
+		tagArgs []string
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- <command>...",
@@ -83,6 +85,10 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			if dir == "" {
 				dir, _ = os.Getwd()
 			}
+			sessionTags, err := tags.ParseAll(tagArgs)
+			if err != nil {
+				return err
+			}
 
 			dirs, err := g.dirs()
 			if err != nil {
@@ -99,6 +105,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					command: args,
 					persist: persist,
 					env:     env,
+					tags:    sessionTags,
 				})
 				if err != nil {
 					return err
@@ -152,6 +159,8 @@ owns the process and reaps it, so nothing is inferred from output.`,
 		"keep escape sequences in the output instead of stripping them")
 	f.StringArrayVar(&env, "env", nil,
 		"set a KEY=VALUE in the command's environment (repeatable)")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"label the session, as key or key=value (repeatable, ignored when reusing a session)")
 	return cmd
 }
 
@@ -166,6 +175,8 @@ type runOptions struct {
 	// server: whatever the caller exported is not in the server's environment and so never reaches the
 	// command.
 	env []string
+	// tags label the session, for grouping a fan-out of runs and addressing it as a unit.
+	tags map[string]string
 }
 
 // startRun opens a session running the command and returns its resolved name.
@@ -206,6 +217,9 @@ func startRun(
 				// whatever the caller exported is not in the server's environment and so never reaches
 				// the command.
 				Env: opts.env,
+				// Only applied when this call creates the session. Reusing a name sends the command
+				// to a shell that is already running, and its tags were set when it was created.
+				Tags: opts.tags,
 				// Always, so `cm history` works once the command has exited, which is what this
 				// command's help promises. Without it the output is gone the moment the command
 				// finishes, which for a short command is immediately.

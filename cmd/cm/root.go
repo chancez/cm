@@ -99,6 +99,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newWaitCommand(g),
 		newReadCommand(g),
 		newReportCommand(g),
+		newTagCommand(g),
 		newDoctorCommand(g),
 		newKillCommand(g),
 		newServerCommand(g),

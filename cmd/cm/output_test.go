@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ func sampleWireSession(name string) *serverv1.Session {
 		ReportedState:  "blocked",
 		ReportedDetail: "needs approval",
 		ReportedSource: "my-agent",
+		Tags:           map[string]string{"project": "cm", "review": ""},
 	}
 }
 
@@ -51,6 +53,7 @@ func TestSessionJSONKeys(t *testing.T) {
 		// The last command's own outcome, distinct from exit_code above, which is the session's.
 		"last_command_exit_code", "command_finished",
 		"reported_state", "reported_detail", "reported_source",
+		"tags",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -82,10 +85,13 @@ func TestSessionJSONValues(t *testing.T) {
 		ReportedState:  "blocked",
 		ReportedDetail: "needs approval",
 		ReportedSource: "my-agent",
+		Tags:           map[string]string{"project": "cm", "review": ""},
 	}
 	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
 	want.CreatedAt = got.CreatedAt
-	if got != want {
+	// DeepEqual rather than ==, since the struct now holds a map. Still the whole value, which is the
+	// point: a field-by-field check passes while the rest of the struct is wrong.
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
 	}
 	if !strings.HasPrefix(got.CreatedAt, "2023-11-14") && !strings.HasPrefix(got.CreatedAt, "2023-11-15") {

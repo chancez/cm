@@ -100,6 +100,11 @@ For a coding agent, wire this to whatever hook the agent already has for
 }
 
 // reportTarget resolves which session a report is about.
+func reportTarget(args []string) (string, error) {
+	return sessionTarget(args, "report about")
+}
+
+// sessionTarget resolves an optional session argument, defaulting to the calling session.
 //
 // Falls back to CM_SESSION so a hook running inside a session needs no plumbing: the variable is already
 // exported into every session's shell, and a hook that had to be told its own session name would need the
@@ -108,8 +113,11 @@ For a coding agent, wire this to whatever hook the agent already has for
 // This is the one place cm reads CM_SESSION, and it does not weaken the rule it looks like it breaks.
 // That rule is about `attach`: zmx treats the variable as a request to *switch* the parent terminal's
 // session, so attaching from inside one hijacks the window it was run from. Using it as the default
-// target of a report does not move or retarget anything, and an explicit name always overrides it.
-func reportTarget(args []string) (string, error) {
+// target of a report or a tag does not move or retarget anything, and an explicit name always overrides
+// it.
+//
+// verb names what the caller wanted to do, so the error says which command had nothing to act on.
+func sessionTarget(args []string, verb string) (string, error) {
 	if len(args) > 0 && args[0] != "" {
 		return args[0], nil
 	}
@@ -117,6 +125,6 @@ func reportTarget(args []string) (string, error) {
 		return name, nil
 	}
 	return "", fmt.Errorf(
-		"no session given and %s is not set, so there is no session to report about",
-		paths.SessionEnv())
+		"no session given and %s is not set, so there is no session to %s",
+		paths.SessionEnv(), verb)
 }

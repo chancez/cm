@@ -51,6 +51,9 @@ type Options struct {
 	Persist bool
 	// OnRestore overrides the configured restore behavior for this session.
 	OnRestore string
+	// Tags label a session being created, for grouping and filtering. Ignored when attaching to a
+	// session that already exists, since an attach is not how tags are changed.
+	Tags map[string]string
 	// DetachKey is the key that detaches. Zero value means the default.
 	DetachKey DetachKeySpec
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
@@ -248,6 +251,7 @@ func runSession(
 		ClientEnv:     opts.ClientEnv,
 		Persist:       opts.Persist,
 		OnRestore:     opts.OnRestore,
+		Tags:          opts.Tags,
 		NoRestore:     opts.NoRestore,
 		ResumeFromSeq: *resumeFrom,
 	}
