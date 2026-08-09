@@ -59,6 +59,13 @@ service Server {
   // naming and could not read the database.
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
 
+  // Tag sets or removes a session's tags.
+  //
+  // Separate from Attach because tagging an existing session must not require attaching to it: a
+  // caller correcting a tag has no terminal to wire up, and opening an attach stream to change
+  // metadata would create the session if the name were wrong.
+  rpc Tag(TagRequest) returns (TagResponse);
+
   // Status reports facts about the running server: its pid, how long it has been up, and how many
   // sessions it holds.
   //
@@ -332,6 +339,10 @@ message Open {
   // `cm run` sets this so `cm history` works once the command has exited, while leaving the session
   // eligible for prompt cleanup rather than the week a persisted session is kept.
   bool capture_output = 15;
+
+  // Tags to attach to a newly created session. Ignored when attaching to one that exists, since an
+  // attach is not how tags are changed; Tag is.
+  map<string, string> tags = 17;
 }
 
 message Input {
@@ -439,9 +450,38 @@ message Exited {
   int32 exit_code = 1;
 }
 
+message TagRequest {
+  // Empty means the session the caller is in, from CM_SESSION.
+  string session = 1;
+  // Tags to set, replacing any existing value for the same key. A key with an empty value is a
+  // valid tag, so this cannot express removal; remove does.
+  map<string, string> set = 2;
+  // Keys to remove. A key that is not present is not an error, since the caller's intent is
+  // satisfied either way.
+  repeated string remove = 3;
+  // Discard every existing tag before applying set, so a caller can define the whole set rather
+  // than editing it.
+  bool replace = 4;
+}
+
+message TagResponse {
+  // The session's tags after the change, so a caller does not need a second call to see the result.
+  map<string, string> tags = 1;
+}
+
 message ListRequest {
   // Only sessions whose name matches this prefix. Empty matches all.
   string prefix = 1;
+  // Only sessions carrying all of these tags, as "key" or "key=value". A bare key matches whatever
+  // its value is.
+  //
+  // Repeated terms narrow rather than widen: a caller asking for two tags wants the sessions that
+  // have both. There is deliberately no negation or set membership, which would be more selector
+  // grammar than filtering tens of sessions justifies and can be added later without changing this.
+  //
+  // Strings rather than a map so a bare key is expressible: a map entry with an empty value cannot
+  // distinguish "has this key" from "has this key set to empty".
+  repeated string tags = 2;
 }
 
 message ListResponse {
@@ -518,6 +558,16 @@ message Session {
   // carries none.
   int32 last_command_exit_code = 17;
   bool command_finished = 18;
+
+  // The caller's own key/value labels for this session.
+  //
+  // Persisted, unlike the reported state above: a report describes a running program, while a tag
+  // describes the session, so it must survive a server restart and a reboot restore.
+  //
+  // cm never interprets a key. There is no tag that changes how a session is treated, because
+  // inferring meaning from one would be the same mistake as scraping a screen to work out what is
+  // running.
+  map<string, string> tags = 19;
 }
 
 message KillRequest {

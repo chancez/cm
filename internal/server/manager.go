@@ -17,6 +17,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -465,6 +466,9 @@ type OpenOptions struct {
 	// OnRestore overrides the configured restore behavior for this session. Empty means the
 	// configured default.
 	OnRestore RestoreAction
+	// Tags are the caller's own labels for a newly created session. Ignored when the session
+	// already exists, since an attach is not how tags are changed.
+	Tags map[string]string
 
 	// restoreFrom is a saved log to replay before the session starts producing output. Set
 	// internally when reviving a dead session, never by a caller.
@@ -537,6 +541,26 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 // new attach wins, because the user asking for something specific outranks what a previous
 // incarnation happened to be doing.
 func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOptions {
+	// Tags first, and deliberately not gated on persistence below. The record is about to be deleted
+	// whether or not it had a log, so a session whose shell exited and is attached to again would
+	// otherwise silently lose its tags, and it would lose them on a plain install where persistence
+	// is off entirely. Tags describe the session rather than its content, so they survive on their
+	// own terms.
+	//
+	// Merged with the caller's rather than replaced by them, with the caller winning per key.
+	// Replacing wholesale would mean that retagging one thing on reattach dropped every other tag,
+	// which is not what asking for one tag says.
+	if len(rec.Tags) > 0 {
+		merged := make(map[string]string, len(rec.Tags)+len(opts.Tags))
+		for k, v := range rec.Tags {
+			merged[k] = v
+		}
+		for k, v := range opts.Tags {
+			merged[k] = v
+		}
+		opts.Tags = merged
+	}
+
 	if m.persist == nil || rec.LogPath == "" {
 		return opts
 	}
@@ -618,6 +642,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Cols:       int(opts.Cols),
 		Owned:      opts.Owned,
 		Env:        opts.ClientEnv,
+		Tags:       opts.Tags,
 		// Records why there is a log, which is what expiry keys off.
 		PersistRequested: requested,
 	}
@@ -791,6 +816,52 @@ func (m *Manager) List(ctx context.Context, prefix string) ([]store.Session, err
 		}
 	}
 	return records, nil
+}
+
+// SetTags changes a session's tags, returning the resulting set.
+//
+// The read and the write are not in one transaction, so two callers editing the same session at the
+// same time can lose one edit. Accepted rather than solved: tags are edited by hand or by a script
+// that knows what it wants, the store serializes writes to a single connection anyway, and a
+// compare-and-swap would push a version number into an API where nothing else needs one. What is
+// avoided is worse: applying set and remove as separate writes, which would leave a session
+// half-retagged if the second failed.
+func (m *Manager) SetTags(
+	ctx context.Context, name string, set map[string]string, remove []string, replace bool,
+) (map[string]string, error) {
+	rec, err := m.store.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Non-nil even when the result is empty, since that is what tells the store to clear the column
+	// rather than leave it alone.
+	next := map[string]string{}
+	if !replace {
+		for k, v := range rec.Tags {
+			next[k] = v
+		}
+	}
+	for k, v := range set {
+		next[k] = v
+	}
+	// After set, so removing and setting the same key in one call removes it. Either order is
+	// defensible; this one is chosen because remove is the more specific instruction.
+	for _, k := range remove {
+		delete(next, k)
+	}
+
+	if err := m.store.Apply(ctx, name, store.Update{Tags: next}); err != nil {
+		return nil, err
+	}
+	m.log.Info("tagged session", "session", name, "tags", tags.Format(next))
+
+	if len(next) == 0 {
+		// Reported the way the store reads it back, so a caller sees the same thing whether it
+		// checks the response or lists afterwards.
+		return nil, nil
+	}
+	return next, nil
 }
 
 // Clients reports how many clients are attached to a session.

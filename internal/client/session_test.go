@@ -219,6 +219,9 @@ func (c *fakeClient) Report(
 ) (*serverv1.ReportResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Tag(context.Context, *serverv1.TagRequest) (*serverv1.TagResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Read(context.Context, *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
 	panic("unused")
 }

@@ -1323,6 +1323,9 @@ type Open struct {
 	// `cm run` sets this so `cm history` works once the command has exited, while leaving the session
 	// eligible for prompt cleanup rather than the week a persisted session is kept.
 	CaptureOutput bool `protobuf:"varint,15,opt,name=capture_output,json=captureOutput,proto3" json:"capture_output,omitempty"`
+	// Tags to attach to a newly created session. Ignored when attaching to one that exists, since an
+	// attach is not how tags are changed; Tag is.
+	Tags          map[string]string `protobuf:"bytes,17,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1467,6 +1470,13 @@ func (x *Open) GetCaptureOutput() bool {
 		return x.CaptureOutput
 	}
 	return false
+}
+
+func (x *Open) GetTags() map[string]string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
 }
 
 type Input struct {
@@ -2119,17 +2129,147 @@ func (x *Exited) GetExitCode() int32 {
 	return 0
 }
 
+type TagRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Empty means the session the caller is in, from CM_SESSION.
+	Session string `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	// Tags to set, replacing any existing value for the same key. A key with an empty value is a
+	// valid tag, so this cannot express removal; remove does.
+	Set map[string]string `protobuf:"bytes,2,rep,name=set,proto3" json:"set,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Keys to remove. A key that is not present is not an error, since the caller's intent is
+	// satisfied either way.
+	Remove []string `protobuf:"bytes,3,rep,name=remove,proto3" json:"remove,omitempty"`
+	// Discard every existing tag before applying set, so a caller can define the whole set rather
+	// than editing it.
+	Replace       bool `protobuf:"varint,4,opt,name=replace,proto3" json:"replace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TagRequest) Reset() {
+	*x = TagRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TagRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TagRequest) ProtoMessage() {}
+
+func (x *TagRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TagRequest.ProtoReflect.Descriptor instead.
+func (*TagRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *TagRequest) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+func (x *TagRequest) GetSet() map[string]string {
+	if x != nil {
+		return x.Set
+	}
+	return nil
+}
+
+func (x *TagRequest) GetRemove() []string {
+	if x != nil {
+		return x.Remove
+	}
+	return nil
+}
+
+func (x *TagRequest) GetReplace() bool {
+	if x != nil {
+		return x.Replace
+	}
+	return false
+}
+
+type TagResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The session's tags after the change, so a caller does not need a second call to see the result.
+	Tags          map[string]string `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TagResponse) Reset() {
+	*x = TagResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TagResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TagResponse) ProtoMessage() {}
+
+func (x *TagResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TagResponse.ProtoReflect.Descriptor instead.
+func (*TagResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *TagResponse) GetTags() map[string]string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
 type ListRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Only sessions whose name matches this prefix. Empty matches all.
-	Prefix        string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Prefix string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// Only sessions carrying all of these tags, as "key" or "key=value". A bare key matches whatever
+	// its value is.
+	//
+	// Repeated terms narrow rather than widen: a caller asking for two tags wants the sessions that
+	// have both. There is deliberately no negation or set membership, which would be more selector
+	// grammar than filtering tens of sessions justifies and can be added later without changing this.
+	//
+	// Strings rather than a map so a bare key is expressible: a map entry with an empty value cannot
+	// distinguish "has this key" from "has this key set to empty".
+	Tags          []string `protobuf:"bytes,2,rep,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	mi := &file_cm_server_v1_server_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2141,7 +2281,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[24]
+	mi := &file_cm_server_v1_server_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2154,7 +2294,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{24}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListRequest) GetPrefix() string {
@@ -2162,6 +2302,13 @@ func (x *ListRequest) GetPrefix() string {
 		return x.Prefix
 	}
 	return ""
+}
+
+func (x *ListRequest) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
 }
 
 type ListResponse struct {
@@ -2173,7 +2320,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	mi := &file_cm_server_v1_server_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2185,7 +2332,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[25]
+	mi := &file_cm_server_v1_server_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2198,7 +2345,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{25}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListResponse) GetSessions() []*Session {
@@ -2263,13 +2410,22 @@ type Session struct {
 	// carries none.
 	LastCommandExitCode int32 `protobuf:"varint,17,opt,name=last_command_exit_code,json=lastCommandExitCode,proto3" json:"last_command_exit_code,omitempty"`
 	CommandFinished     bool  `protobuf:"varint,18,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The caller's own key/value labels for this session.
+	//
+	// Persisted, unlike the reported state above: a report describes a running program, while a tag
+	// describes the session, so it must survive a server restart and a reboot restore.
+	//
+	// cm never interprets a key. There is no tag that changes how a session is treated, because
+	// inferring meaning from one would be the same mistake as scraping a screen to work out what is
+	// running.
+	Tags          map[string]string `protobuf:"bytes,19,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
 	*x = Session{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[26]
+	mi := &file_cm_server_v1_server_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2281,7 +2437,7 @@ func (x *Session) String() string {
 func (*Session) ProtoMessage() {}
 
 func (x *Session) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[26]
+	mi := &file_cm_server_v1_server_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2294,7 +2450,7 @@ func (x *Session) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Session.ProtoReflect.Descriptor instead.
 func (*Session) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{26}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *Session) GetName() string {
@@ -2423,6 +2579,13 @@ func (x *Session) GetCommandFinished() bool {
 	return false
 }
 
+func (x *Session) GetTags() map[string]string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
 type KillRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Sessions []string               `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
@@ -2436,7 +2599,7 @@ type KillRequest struct {
 
 func (x *KillRequest) Reset() {
 	*x = KillRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[27]
+	mi := &file_cm_server_v1_server_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2448,7 +2611,7 @@ func (x *KillRequest) String() string {
 func (*KillRequest) ProtoMessage() {}
 
 func (x *KillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[27]
+	mi := &file_cm_server_v1_server_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2461,7 +2624,7 @@ func (x *KillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillRequest.ProtoReflect.Descriptor instead.
 func (*KillRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{27}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *KillRequest) GetSessions() []string {
@@ -2489,7 +2652,7 @@ type KillResponse struct {
 
 func (x *KillResponse) Reset() {
 	*x = KillResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[28]
+	mi := &file_cm_server_v1_server_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2501,7 +2664,7 @@ func (x *KillResponse) String() string {
 func (*KillResponse) ProtoMessage() {}
 
 func (x *KillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[28]
+	mi := &file_cm_server_v1_server_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2514,7 +2677,7 @@ func (x *KillResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillResponse.ProtoReflect.Descriptor instead.
 func (*KillResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{28}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *KillResponse) GetKilled() []string {
@@ -2548,7 +2711,7 @@ type SendRequest struct {
 
 func (x *SendRequest) Reset() {
 	*x = SendRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[29]
+	mi := &file_cm_server_v1_server_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2560,7 +2723,7 @@ func (x *SendRequest) String() string {
 func (*SendRequest) ProtoMessage() {}
 
 func (x *SendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[29]
+	mi := &file_cm_server_v1_server_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2573,7 +2736,7 @@ func (x *SendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendRequest.ProtoReflect.Descriptor instead.
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{29}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *SendRequest) GetSession() string {
@@ -2621,7 +2784,7 @@ type SendResponse struct {
 
 func (x *SendResponse) Reset() {
 	*x = SendResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[30]
+	mi := &file_cm_server_v1_server_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2633,7 +2796,7 @@ func (x *SendResponse) String() string {
 func (*SendResponse) ProtoMessage() {}
 
 func (x *SendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[30]
+	mi := &file_cm_server_v1_server_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2646,7 +2809,7 @@ func (x *SendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendResponse.ProtoReflect.Descriptor instead.
 func (*SendResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{30}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SendResponse) GetShellReports() bool {
@@ -2673,7 +2836,7 @@ type HistoryRequest struct {
 
 func (x *HistoryRequest) Reset() {
 	*x = HistoryRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[31]
+	mi := &file_cm_server_v1_server_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2685,7 +2848,7 @@ func (x *HistoryRequest) String() string {
 func (*HistoryRequest) ProtoMessage() {}
 
 func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[31]
+	mi := &file_cm_server_v1_server_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2698,7 +2861,7 @@ func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
 func (*HistoryRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{31}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *HistoryRequest) GetSession() string {
@@ -2724,7 +2887,7 @@ type HistoryResponse struct {
 
 func (x *HistoryResponse) Reset() {
 	*x = HistoryResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[32]
+	mi := &file_cm_server_v1_server_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2736,7 +2899,7 @@ func (x *HistoryResponse) String() string {
 func (*HistoryResponse) ProtoMessage() {}
 
 func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[32]
+	mi := &file_cm_server_v1_server_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2749,7 +2912,7 @@ func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
 func (*HistoryResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{32}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *HistoryResponse) GetData() []byte {
@@ -2768,7 +2931,7 @@ type GetEnvRequest struct {
 
 func (x *GetEnvRequest) Reset() {
 	*x = GetEnvRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[33]
+	mi := &file_cm_server_v1_server_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2780,7 +2943,7 @@ func (x *GetEnvRequest) String() string {
 func (*GetEnvRequest) ProtoMessage() {}
 
 func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[33]
+	mi := &file_cm_server_v1_server_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2793,7 +2956,7 @@ func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{33}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *GetEnvRequest) GetSession() string {
@@ -2813,7 +2976,7 @@ type GetEnvResponse struct {
 
 func (x *GetEnvResponse) Reset() {
 	*x = GetEnvResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[34]
+	mi := &file_cm_server_v1_server_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2825,7 +2988,7 @@ func (x *GetEnvResponse) String() string {
 func (*GetEnvResponse) ProtoMessage() {}
 
 func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[34]
+	mi := &file_cm_server_v1_server_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2838,7 +3001,7 @@ func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvResponse.ProtoReflect.Descriptor instead.
 func (*GetEnvResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{34}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *GetEnvResponse) GetEnv() map[string]string {
@@ -2919,7 +3082,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xa7\x04\n" +
+	"\x05event\"\x92\x05\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -2940,8 +3103,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\apersist\x18\r \x01(\bR\apersist\x12\x1d\n" +
 	"\n" +
 	"on_restore\x18\x0e \x01(\tR\tonRestore\x12%\n" +
-	"\x0ecapture_output\x18\x0f \x01(\bR\rcaptureOutput\x1a<\n" +
+	"\x0ecapture_output\x18\x0f \x01(\bR\rcaptureOutput\x120\n" +
+	"\x04tags\x18\x11 \x03(\v2\x1c.cm.server.v1.Open.TagsEntryR\x04tags\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
+	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
 	"\x10_resume_from_seq\"\x1b\n" +
@@ -2985,11 +3152,26 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
 	"\x03gap\x18\x03 \x01(\bR\x03gap\"%\n" +
 	"\x06Exited\x12\x1b\n" +
-	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"%\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"\xc5\x01\n" +
+	"\n" +
+	"TagRequest\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\x123\n" +
+	"\x03set\x18\x02 \x03(\v2!.cm.server.v1.TagRequest.SetEntryR\x03set\x12\x16\n" +
+	"\x06remove\x18\x03 \x03(\tR\x06remove\x12\x18\n" +
+	"\areplace\x18\x04 \x01(\bR\areplace\x1a6\n" +
+	"\bSetEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x7f\n" +
+	"\vTagResponse\x127\n" +
+	"\x04tags\x18\x01 \x03(\v2#.cm.server.v1.TagResponse.TagsEntryR\x04tags\x1a7\n" +
+	"\tTagsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"9\n" +
 	"\vListRequest\x12\x16\n" +
-	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"A\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
+	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xcd\x04\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xbb\x05\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -3010,7 +3192,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\r \x01(\tR\acommand\x123\n" +
 	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +
-	"\x10command_finished\x18\x12 \x01(\bR\x0fcommandFinished\"?\n" +
+	"\x10command_finished\x18\x12 \x01(\bR\x0fcommandFinished\x123\n" +
+	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x1a7\n" +
+	"\tTagsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"?\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\"\xa1\x01\n" +
@@ -3061,7 +3247,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rHistoryFormat\x12\x1e\n" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
-	"\x13HISTORY_FORMAT_HTML\x10\x022\xb3\x06\n" +
+	"\x13HISTORY_FORMAT_HTML\x10\x022\xef\x06\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
@@ -3072,7 +3258,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06Report\x12\x1b.cm.server.v1.ReportRequest\x1a\x1c.cm.server.v1.ReportResponse\x12=\n" +
 	"\x04Read\x12\x19.cm.server.v1.ReadRequest\x1a\x1a.cm.server.v1.ReadResponse\x12=\n" +
 	"\x04Wait\x12\x19.cm.server.v1.WaitRequest\x1a\x1a.cm.server.v1.WaitResponse\x12C\n" +
-	"\x06Doctor\x12\x1b.cm.server.v1.DoctorRequest\x1a\x1c.cm.server.v1.DoctorResponse\x12C\n" +
+	"\x06Doctor\x12\x1b.cm.server.v1.DoctorRequest\x1a\x1c.cm.server.v1.DoctorResponse\x12:\n" +
+	"\x03Tag\x12\x18.cm.server.v1.TagRequest\x1a\x19.cm.server.v1.TagResponse\x12C\n" +
 	"\x06Status\x12\x1b.cm.server.v1.StatusRequest\x1a\x1c.cm.server.v1.StatusResponse\x12I\n" +
 	"\bShutdown\x12\x1d.cm.server.v1.ShutdownRequest\x1a\x1e.cm.server.v1.ShutdownResponseB3Z1github.com/chancez/cm/proto/cm/server/v1;serverv1b\x06proto3"
 
@@ -3089,7 +3276,7 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 }
 
 var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_cm_server_v1_server_proto_goTypes = []any{
 	(ReportedState)(0),       // 0: cm.server.v1.ReportedState
 	(WaitState)(0),           // 1: cm.server.v1.WaitState
@@ -3119,20 +3306,26 @@ var file_cm_server_v1_server_proto_goTypes = []any{
 	(*Opened)(nil),           // 25: cm.server.v1.Opened
 	(*Output)(nil),           // 26: cm.server.v1.Output
 	(*Exited)(nil),           // 27: cm.server.v1.Exited
-	(*ListRequest)(nil),      // 28: cm.server.v1.ListRequest
-	(*ListResponse)(nil),     // 29: cm.server.v1.ListResponse
-	(*Session)(nil),          // 30: cm.server.v1.Session
-	(*KillRequest)(nil),      // 31: cm.server.v1.KillRequest
-	(*KillResponse)(nil),     // 32: cm.server.v1.KillResponse
-	(*SendRequest)(nil),      // 33: cm.server.v1.SendRequest
-	(*SendResponse)(nil),     // 34: cm.server.v1.SendResponse
-	(*HistoryRequest)(nil),   // 35: cm.server.v1.HistoryRequest
-	(*HistoryResponse)(nil),  // 36: cm.server.v1.HistoryResponse
-	(*GetEnvRequest)(nil),    // 37: cm.server.v1.GetEnvRequest
-	(*GetEnvResponse)(nil),   // 38: cm.server.v1.GetEnvResponse
-	nil,                      // 39: cm.server.v1.Open.ClientEnvEntry
-	nil,                      // 40: cm.server.v1.KillResponse.ErrorsEntry
-	nil,                      // 41: cm.server.v1.GetEnvResponse.EnvEntry
+	(*TagRequest)(nil),       // 28: cm.server.v1.TagRequest
+	(*TagResponse)(nil),      // 29: cm.server.v1.TagResponse
+	(*ListRequest)(nil),      // 30: cm.server.v1.ListRequest
+	(*ListResponse)(nil),     // 31: cm.server.v1.ListResponse
+	(*Session)(nil),          // 32: cm.server.v1.Session
+	(*KillRequest)(nil),      // 33: cm.server.v1.KillRequest
+	(*KillResponse)(nil),     // 34: cm.server.v1.KillResponse
+	(*SendRequest)(nil),      // 35: cm.server.v1.SendRequest
+	(*SendResponse)(nil),     // 36: cm.server.v1.SendResponse
+	(*HistoryRequest)(nil),   // 37: cm.server.v1.HistoryRequest
+	(*HistoryResponse)(nil),  // 38: cm.server.v1.HistoryResponse
+	(*GetEnvRequest)(nil),    // 39: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),   // 40: cm.server.v1.GetEnvResponse
+	nil,                      // 41: cm.server.v1.Open.ClientEnvEntry
+	nil,                      // 42: cm.server.v1.Open.TagsEntry
+	nil,                      // 43: cm.server.v1.TagRequest.SetEntry
+	nil,                      // 44: cm.server.v1.TagResponse.TagsEntry
+	nil,                      // 45: cm.server.v1.Session.TagsEntry
+	nil,                      // 46: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                      // 47: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
 	0,  // 0: cm.server.v1.ReportRequest.state:type_name -> cm.server.v1.ReportedState
@@ -3143,48 +3336,54 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	19, // 5: cm.server.v1.AttachRequest.input:type_name -> cm.server.v1.Input
 	20, // 6: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
 	21, // 7: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
-	39, // 8: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
-	25, // 9: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
-	26, // 10: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
-	27, // 11: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
-	24, // 12: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
-	23, // 13: cm.server.v1.AttachResponse.detached:type_name -> cm.server.v1.Detached
-	30, // 14: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	2,  // 15: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
-	40, // 16: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	1,  // 17: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
-	11, // 18: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
-	3,  // 19: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	41, // 20: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
-	17, // 21: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	28, // 22: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	31, // 23: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	33, // 24: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	35, // 25: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	37, // 26: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
-	6,  // 27: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
-	8,  // 28: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
-	10, // 29: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
-	12, // 30: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
-	4,  // 31: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
-	15, // 32: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
-	22, // 33: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	29, // 34: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	32, // 35: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	34, // 36: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	36, // 37: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	38, // 38: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
-	7,  // 39: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
-	9,  // 40: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
-	11, // 41: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
-	13, // 42: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
-	5,  // 43: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
-	16, // 44: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
-	33, // [33:45] is the sub-list for method output_type
-	21, // [21:33] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	41, // 8: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	42, // 9: cm.server.v1.Open.tags:type_name -> cm.server.v1.Open.TagsEntry
+	25, // 10: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
+	26, // 11: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
+	27, // 12: cm.server.v1.AttachResponse.exited:type_name -> cm.server.v1.Exited
+	24, // 13: cm.server.v1.AttachResponse.metadata:type_name -> cm.server.v1.Metadata
+	23, // 14: cm.server.v1.AttachResponse.detached:type_name -> cm.server.v1.Detached
+	43, // 15: cm.server.v1.TagRequest.set:type_name -> cm.server.v1.TagRequest.SetEntry
+	44, // 16: cm.server.v1.TagResponse.tags:type_name -> cm.server.v1.TagResponse.TagsEntry
+	32, // 17: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	2,  // 18: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
+	45, // 19: cm.server.v1.Session.tags:type_name -> cm.server.v1.Session.TagsEntry
+	46, // 20: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	1,  // 21: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
+	11, // 22: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
+	3,  // 23: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	47, // 24: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	17, // 25: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	30, // 26: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	33, // 27: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	35, // 28: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	37, // 29: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	39, // 30: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	6,  // 31: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
+	8,  // 32: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
+	10, // 33: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
+	12, // 34: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
+	28, // 35: cm.server.v1.Server.Tag:input_type -> cm.server.v1.TagRequest
+	4,  // 36: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
+	15, // 37: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
+	22, // 38: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	31, // 39: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	34, // 40: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	36, // 41: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	38, // 42: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	40, // 43: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	7,  // 44: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
+	9,  // 45: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
+	11, // 46: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
+	13, // 47: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
+	29, // 48: cm.server.v1.Server.Tag:output_type -> cm.server.v1.TagResponse
+	5,  // 49: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
+	16, // 50: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
+	38, // [38:51] is the sub-list for method output_type
+	25, // [25:38] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -3212,7 +3411,7 @@ func file_cm_server_v1_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   38,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

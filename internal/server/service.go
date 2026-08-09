@@ -12,6 +12,7 @@ import (
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -64,6 +65,12 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	if open == nil {
 		return errors.New("first message on an attach stream must be Open")
 	}
+	// Validated here as well as in the CLI, because this is the trust boundary: the CLI is one
+	// client of many, and a tag reaching the store unchecked would be printed to the terminal of
+	// whoever runs `cm list`. That is the whole reason the character set excludes escape sequences.
+	if err := tags.Validate(open.Tags); err != nil {
+		return err
+	}
 
 	sess, created, err := s.mgr.Open(ctx, OpenOptions{
 		Name:          open.Session,
@@ -77,6 +84,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		Persist:       open.Persist,
 		CaptureOutput: open.CaptureOutput,
 		OnRestore:     RestoreAction(open.OnRestore),
+		Tags:          open.Tags,
 	})
 	if err != nil {
 		return err
@@ -460,6 +468,13 @@ func (s *Service) reapOwned(sess *Session) {
 }
 
 func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv1.ListResponse, error) {
+	// Parsed before the query so a malformed selector is an error rather than a silent match of
+	// everything, which would be the wrong answer for `cm kill --tag`.
+	selector, err := tags.ParseSelector(req.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	records, err := s.mgr.List(ctx, req.Prefix)
 	if err != nil {
 		return nil, err
@@ -467,6 +482,12 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 
 	out := &serverv1.ListResponse{Sessions: make([]*serverv1.Session, 0, len(records))}
 	for _, rec := range records {
+		// Filtered in Go rather than SQL because the tags live in a JSON column, and at these
+		// session counts a scan is cheaper than teaching sqlite to index inside it. See the
+		// migration for why the column is shaped that way.
+		if !selector.Match(rec.Tags) {
+			continue
+		}
 		item := &serverv1.Session{
 			Name:          rec.Name,
 			ShellPid:      int32(rec.ShellPID),
@@ -478,6 +499,9 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			Exited:        rec.State != store.StateRunning,
 			ExitCode:      int32(rec.ExitCode),
 			State:         sessionState(rec.State),
+			// From the record rather than the live session: tags are metadata the store owns, so
+			// unlike cwd or the reported state there is no fresher copy in the registry.
+			Tags: rec.Tags,
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.Name); live {
