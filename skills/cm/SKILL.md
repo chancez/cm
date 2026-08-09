@@ -119,7 +119,9 @@ cm send worker 'make' --enter --wait idle        # block until done, then read
 
 `--follow` and `--wait idle` both need to know when the command ended, which cm learns either from OSC 133 or from the program reporting its own state. **A program that is not a shell emits no OSC 133**, so unless it reports, waiting for `idle` waits forever; cm prints a warning saying so. For those, either use `--timeout`, or make the program report (below). This is the single most common way an orchestration hangs.
 
-Always pass `--timeout` when driving something whose reporting you have not confirmed. It converts a hang into an answer.
+Always pass `--timeout` when driving something whose reporting you have not confirmed. It converts a hang into an answer. It works on `wait`, `send --wait`, `run`, and `read --follow`, which is every command that can block.
+
+What a timeout *means* differs by command, and it matters for how you check the result. `wait` and `run` exit non-zero: they were asked for a result and did not get one, so a timeout is a failure. `read --follow` exits zero: it printed what the session produced and then stopped, which is what you asked for. So do not treat a followed read's success as proof the program finished -- use `cm wait` when you need to know that.
 
 ## Wait instead of sleeping
 
