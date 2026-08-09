@@ -306,6 +306,60 @@ concatenated is not a document at all. `cm info --json` returns an array for a s
 named session, so an existing `cm info NAME --json | jq .cwd` keeps working while a selector composes with
 `.[]`.
 
+## Reading output back by command
+
+`cm read --since-commands N` returns everything from where the last N commands began, and
+`--last-output` returns only what the most recent one printed. Before this, a caller reading a session
+guessed with `--lines` or planted a marker in the command, even though cm brackets every command with
+OSC 133 and already had the answer.
+
+**Commands, not sequence numbers, at the CLI.** The obvious design is "output since sequence N", and it
+is worse. There are two sequence-number spaces here and mixing them corrupts output, so a number a caller
+holds onto is a hazard; worse, a position from the wrong space reads from the wrong place *silently*
+rather than failing. A command count also matches how a person and a script think about a session.
+`ReadRequest` carries the resolved position, so the wire keeps the precision and nothing asks a user for
+one.
+
+**Two anchors, because there are two questions.** `--since-commands` anchors at the shell's `133;A`
+prompt marker, so each block opens with the prompt and the command line the shell echoed. That is what
+makes reading several commands useful at all: consecutive outputs run together with nothing between them,
+so a caller cannot tell where one ended, which is the exact problem this feature exists to remove. The
+delimiter comes from the shell rather than from cm, so no separator format has to be invented or parsed.
+`--last-output` anchors at `133;C` instead, giving a parser just the program's output with none of the
+shell's text. Well defined for one command only, which is why it is a separate flag rather than a mode of
+the other.
+
+**Boundaries are recorded from the rewritten bytes.** `internal/osc.BoundaryTracker` is separate from
+`CommandTracker` for one reason, and it is the sharpest trap in this feature. `CommandTracker` is fed the
+shell's output *before* `RewritePromptRedraw`, which is right for reading markers as the shell sent them.
+The log numbers bytes *after* the rewrite, and the rewrite appends nine bytes to a prompt marker carrying
+no `redraw` parameter. A position taken from the pre-rewrite stream therefore drifts from the log by nine
+bytes per prompt, silently, and the drift grows over a session's life. Same hazard as the two
+sequence-number spaces above, reached from a new direction.
+
+**Rendered from a slice of the log, not from the session's model.** The session's terminal model holds the
+*current* screen, which attached clients are looking at, so replaying historical bytes into it would
+corrupt their view -- and older output may have scrolled off it while still being in the log. So a read
+takes a slice of the log and replays it into a throwaway terminal. `seqlog.Snapshot` exists for this and
+is `Subscribe`'s non-blocking counterpart: following blocks for output that has not arrived, and a bounded
+read must not, or a quiet session hangs it.
+
+**Three failures are reported rather than papered over.** A session whose shell has no OSC 133 has no
+boundaries, so the error says so and points at `cm doctor`; returning empty output would look like a
+command that printed nothing, which sends someone to debug their program instead of their shell
+configuration. Asking for more commands than are known says how many there are. An ended session has no
+boundaries at all, since they live in memory with it, so that is an error rather than a silent fallback to
+a line count -- answering a different question than the one asked is how a caller comes to trust output
+that does not mean what it thinks.
+
+`--lines` cannot be combined with either, and the two cannot be combined with each other: they are
+different bounds on the same read, and "the last 3 commands but only 50 lines" does not say which wins.
+
+History is bounded at 64 blocks per session, since a long-lived shell runs commands indefinitely. The
+bound is deliberately looser than the output buffer's, so a boundary usually outlives the bytes it points
+at: a boundary whose output has been trimmed still says the command existed, which beats claiming it never
+ran. A read that begins before the retained bytes logs that its view is short.
+
 ## Waiting, and why the server does it
 
 `cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from

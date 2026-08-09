@@ -174,7 +174,7 @@ Use `cm send --wait`, in one call, rather than sending and then waiting separate
 cm attach --no-attach reviewer -- <agent-command>
 cm wait reviewer --until blocked --timeout 60s              # it is up and wants input
 cm send reviewer 'Review the current diff.' --enter --wait idle --timeout 10m
-cm read reviewer --lines 200
+cm read reviewer --since-commands 1
 ```
 
 The single call is what makes this correct, and the reason is worth knowing because the alternative fails in a way that looks like success. `cm send --wait` arms the wait *before* writing the input and requires evidence that something happened afterwards, so it cannot be satisfied by the state the session was already in.
@@ -189,7 +189,7 @@ For an agent that does not report, fall back to `--timeout` and a content check:
 
 ```bash
 cm send reviewer 'Review the diff.' --enter
-cm read reviewer --lines 200 | grep -q 'DONE' || cm read reviewer --lines 400
+cm read reviewer --since-commands 1 | grep -q 'DONE' || sleep 5
 ```
 
 ## Several agents at once
@@ -211,7 +211,7 @@ done
 wait
 
 for area in api ui docs; do
-  echo "=== $area ==="; cm read "review-$area" --lines 200
+  echo "=== $area ==="; cm read "review-$area" --since-commands 1
 done
 ```
 
@@ -230,7 +230,7 @@ for area in api ui docs; do
 done
 
 cm wait --tag "run=$run" --until blocked --timeout 60s   # all of them, concurrently
-cm read --tag "run=$run" --lines 200                     # each under its own header
+cm read --tag "run=$run" --since-commands 1              # each under its own header
 cm kill --tag "run=$run"                                 # tear the group down
 ```
 
@@ -263,10 +263,16 @@ cm exports `CM_SESSION` into every session, so a program inside knows which sess
 
 ## Reading output: which command
 
-- `cm read <name>` renders recent output as text, rejoining lines the terminal soft-wrapped. Default 100 lines; `--lines 0` for everything. Use this by default.
+- `cm read <name> --since-commands N` returns everything since the last N commands started, each block opening with the prompt and the command line. **Prefer this** when the question is "what happened": a line count is a guess, and this is the actual boundary.
+- `cm read <name> --last-output` returns only what the last command printed, with no prompt or echoed command line. Use it when a script is parsing the result.
+- `cm read <name>` renders recent output as text, rejoining lines the terminal soft-wrapped. Default 100 lines; `--lines 0` for everything. Use this when the command boundaries are not available.
 - `cm read --follow` prints the tail then streams, like `tail -f`.
 - `cm history <name>` renders everything including scrollback, with `--format vt` for colours or `--format html` for markup.
 - `--raw` on either gives the bytes the program emitted rather than the text they rendered to.
+
+The command-boundary forms need the session's shell to report OSC 133, which is what brackets a command. They say so rather than returning empty output if it does not, and `cm doctor` diagnoses it. They also cannot answer for a session that has already ended, since the boundaries live with the running session: for `cm run`, whose session is gone by the time you read it, use `--lines`.
+
+Neither combines with `--lines`, which is a different bound on the same read.
 
 Prefer rendered text. Escape sequences in captured output are noise at best, and writing them into a file corrupts it.
 
