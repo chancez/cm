@@ -640,6 +640,20 @@ message KillResponse {
   repeated string killed = 1;
   // Sessions that could not be killed, keyed by name.
   map<string, string> errors = 2;
+  // Sessions whose processes survived the signal, keyed by name, with the pids still alive.
+  //
+  // Reported rather than folded into errors, because the kill did not fail: the session is gone from cm's
+  // view and the record is deleted. What is left is a process holding a pty that nothing will reattach
+  // to, which is a warning about a leak rather than a failed request.
+  //
+  // Empty is also what an older shim reports, so this cannot distinguish "nothing survived" from "the
+  // shim does not check". That only ever costs a warning, which is why it needs no capability probe.
+  map<string, SurvivingProcesses> surviving = 3;
+}
+
+// SurvivingProcesses lists pids that outlived a signal.
+message SurvivingProcesses {
+  repeated int32 pids = 1;
 }
 
 message SendRequest {

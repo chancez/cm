@@ -1212,9 +1212,18 @@ const (
 )
 
 // Shutdown terminates the session's shell and its shim.
-func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) error {
-	_, err := s.shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force, Signal: sig})
-	return err
+func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) (surviving []int32, err error) {
+	resp, err := s.shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force, Signal: sig})
+	if err != nil {
+		return nil, err
+	}
+	// Empty from an older shim as well as from a clean shutdown, which the proto notes. That ambiguity
+	// only ever costs a warning, so it is not worth a capability probe.
+	if len(resp.SurvivingPids) > 0 {
+		s.log.Warn("processes survived the shutdown signal",
+			"pgid", resp.SignalledPgid, "surviving", resp.SurvivingPids)
+	}
+	return resp.SurvivingPids, nil
 }
 
 // State queries the shim directly, which is the authority on whether a session is alive.

@@ -149,15 +149,49 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 	if req.Signal > 0 {
 		sig = syscall.Signal(req.Signal)
 	}
-	// A shell that has already exited is not an error here: the caller wants the session
-	// gone, and it is. Both errors mean that, since Signal reports it one way and the pty
-	// guards report it another.
-	if err := s.session.Signal(sig, true); err != nil &&
-		!errors.Is(err, seqlog.ErrClosed) && !errors.Is(err, ErrSessionOver) {
+	// Signalled through the checking form so a process that declines to leave is reported rather than
+	// left as a silent leak. This is the only place that still knows the pty and the process group: the
+	// server deletes the session record immediately afterwards, and a stray process then cannot be
+	// attributed to cm at all.
+	//
+	// A shell that has already exited is not an error here: the caller wants the session gone, and it
+	// is. Both errors mean that, since Signal reports it one way and the pty guards report it another.
+	pgid, surviving, err := s.session.SignalAndCheck(sig, shutdownGrace)
+	if err != nil && !errors.Is(err, seqlog.ErrClosed) && !errors.Is(err, ErrSessionOver) {
 		return nil, err
 	}
+	if len(surviving) > 0 {
+		// Logged here as well as returned, because the two reach different people. The reply lets `cm
+		// kill` warn the caller now; the log is what is left to find afterwards, when the symptom is an
+		// unrelated program failing to allocate a terminal.
+		s.session.log.Warn("processes survived the shutdown signal",
+			"signal", sig, "pgid", pgid, "surviving", surviving,
+			"hint", "they hold a pty; use a stronger signal")
+	}
 	s.shutdownOnce.Do(func() { close(s.shutdown) })
-	return &shimv1.ShutdownResponse{}, nil
+	return &shimv1.ShutdownResponse{
+		SurvivingPids: int32s(surviving),
+		SignalledPgid: int32(pgid),
+	}, nil
+}
+
+// shutdownGrace is how long the shim waits before checking what survived its signal.
+//
+// Short on purpose. It exists only to let a process that is going to die actually die, so it must not be
+// mistaken for a shutdown timeout: nothing waits on the outcome except a warning, and the shim still exits
+// either way.
+const shutdownGrace = 250 * time.Millisecond
+
+// int32s converts pids for the wire.
+func int32s(pids []int) []int32 {
+	if len(pids) == 0 {
+		return nil
+	}
+	out := make([]int32, 0, len(pids))
+	for _, p := range pids {
+		out = append(out, int32(p))
+	}
+	return out
 }
 
 // Listen creates the shim's socket.

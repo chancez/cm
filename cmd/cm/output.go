@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -438,6 +440,23 @@ type killJSON struct {
 	Killed []string `json:"killed"`
 	// Errors maps a session name to why it could not be killed.
 	Errors map[string]string `json:"errors"`
+	// Surviving maps a session name to pids that outlived the signal.
+	//
+	// Separate from Errors because the kill did not fail: the session is gone and its record deleted.
+	// What remains is a process holding a pty nothing will reattach to, which is a leak to warn about.
+	// A caller that treats any survivor as failure can check this; one that does not is unaffected,
+	// which is why it does not set the exit status.
+	Surviving map[string][]int32 `json:"surviving"`
+}
+
+// sortedKeys returns a map's keys in a stable order, so repeated output does not reshuffle.
+func sortedKeys(m map[string][]int32) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // reportKill writes a kill result, and returns an error when any session failed.
@@ -445,13 +464,16 @@ type killJSON struct {
 // The error is returned even in JSON mode, so a script can check the exit status rather than having
 // to inspect the payload, while still getting the detail if it wants it.
 func reportKill(w io.Writer, resp *serverv1.KillResponse, asJSON bool) error {
-	out := killJSON{Killed: resp.Killed, Errors: resp.Errors}
+	out := killJSON{Killed: resp.Killed, Errors: resp.Errors, Surviving: map[string][]int32{}}
 	if out.Killed == nil {
 		// An empty array rather than null, so a script can iterate unconditionally.
 		out.Killed = []string{}
 	}
 	if out.Errors == nil {
 		out.Errors = map[string]string{}
+	}
+	for name, sp := range resp.Surviving {
+		out.Surviving[name] = sp.Pids
 	}
 
 	if asJSON {
@@ -461,6 +483,17 @@ func reportKill(w io.Writer, resp *serverv1.KillResponse, asJSON bool) error {
 	} else {
 		for _, name := range out.Killed {
 			fmt.Fprintf(w, "killed %s\n", name)
+		}
+		// To stderr, and after the killed lines, so a script reading stdout for names is unaffected
+		// while a person sees the warning next to what it refers to.
+		//
+		// Named as a leak rather than as a failure, and it names the fix: the pty a survivor holds is a
+		// capped resource, and the symptom of exhausting it appears somewhere unrelated.
+		for _, name := range sortedKeys(out.Surviving) {
+			fmt.Fprintf(os.Stderr,
+				"%s: warning: %s left process(es) %v running, still holding a pty; "+
+					"retry with a stronger --signal\n",
+				paths.Name, name, out.Surviving[name])
 		}
 	}
 
