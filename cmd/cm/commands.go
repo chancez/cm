@@ -309,9 +309,10 @@ belongs to several groupings at once while its name only says one thing.`,
 
 func newKillCommand(g *globals) *cobra.Command {
 	var (
-		force  bool
-		asJSON bool
-		all    bool
+		force   bool
+		asJSON  bool
+		all     bool
+		tagArgs []string
 	)
 	cmd := &cobra.Command{
 		Use:   "kill <session>...",
@@ -320,11 +321,20 @@ func newKillCommand(g *globals) *cobra.Command {
 
 --all kills every session the server knows, which is what a test harness or a
 teardown script wants: killing by name means enumerating them first, and a
-missed one leaves a shell and its pty behind.`,
+missed one leaves a shell and its pty behind.
+
+--tag kills the sessions carrying a tag, which is the safe form of --all for
+anything that created its own sessions:
+
+  cm kill --tag run=abc123
+
+It names exactly what the selector matches, so a script tearing down its own
+fan-out cannot reach sessions somebody else is using, which --all would. A
+selector matching nothing is an error rather than a silent success.`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if all {
+			if all || len(tagArgs) > 0 {
 				if len(args) > 0 {
-					return errors.New("--all takes no session names")
+					return errors.New("--all and --tag take no session names")
 				}
 				return nil
 			}
@@ -332,6 +342,15 @@ missed one leaves a shell and its pty behind.`,
 		},
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if all && len(tagArgs) > 0 {
+				// Refused rather than resolved. --all means every session and --tag means a subset, so
+				// one of the two was a mistake and guessing which would kill either too much or too
+				// little.
+				return errors.New("--all and --tag cannot be combined; --all is already every session")
+			}
+			if err := validateSelectors(tagArgs); err != nil {
+				return err
+			}
 			for _, name := range args {
 				if err := paths.ValidateSessionName(name); err != nil {
 					return err
@@ -343,7 +362,8 @@ missed one leaves a shell and its pty behind.`,
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names := args
-				if all {
+				switch {
+				case all:
 					// Enumerated here rather than server-side, so --all is exactly "kill these names" and
 					// the server keeps one meaning for a kill request. Nothing is killed if the list is
 					// empty, which is the right answer for a server with no sessions.
@@ -358,6 +378,17 @@ missed one leaves a shell and its pty behind.`,
 					if len(names) == 0 {
 						return nil
 					}
+				case len(tagArgs) > 0:
+					// Unlike --all, a selector matching nothing is an error. --all on an empty server is a
+					// satisfied request, while a selector that matched nothing is usually a typo, and
+					// exiting 0 there would let a teardown script report success having killed nothing.
+					names, err = resolveSelector(ctx, cl, tagArgs)
+					if err != nil {
+						return err
+					}
+					if len(names) == 0 {
+						return fmt.Errorf("no sessions match %s", describeSelectors(tagArgs))
+					}
 				}
 				resp, err := cl.Kill(ctx, &serverv1.KillRequest{Sessions: names, Force: force})
 				if err != nil {
@@ -371,6 +402,8 @@ missed one leaves a shell and its pty behind.`,
 	f.BoolVar(&force, "force", false,
 		"forget the session even if its shim cannot be reached")
 	f.BoolVar(&all, "all", false, "kill every session")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"kill the sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
 }
@@ -481,7 +514,7 @@ follower connects, which for a fast command can be all of it.`,
 				if resp.GetWait() == nil {
 					return nil
 				}
-				return reportWait(os.Stdout, name, until, resp.GetWait(), asJSON)
+				return reportWait(os.Stdout, os.Stderr, name, until, resp.GetWait(), asJSON)
 			})
 		},
 	}
@@ -502,11 +535,12 @@ follower connects, which for a fast command can be all of it.`,
 
 func newInfoCommand(g *globals) *cobra.Command {
 	var (
-		field  string
-		asJSON bool
+		field   string
+		asJSON  bool
+		tagArgs []string
 	)
 	cmd := &cobra.Command{
-		Use:   "info <session>",
+		Use:   "info [session]",
 		Short: "Print one session's details",
 		Long: `Print details for a single session.
 
@@ -515,43 +549,94 @@ opening a new window in a session's directory needs the path with no header,
 padding, or parsing.
 
 cwd is empty when the session has reported a directory on another host, since
-acting on a remote path locally would be wrong.`,
-		Args:              sessionNameArg,
+acting on a remote path locally would be wrong.
+
+--tag prints every session carrying a tag. With --field the values print one per
+line, so a selector plus a field is a list of that field across the group:
+
+  cm info --tag run=abc123 --field cwd`,
+		// At most one name, since --tag supplies the rest.
+		Args:              sessionOrTagArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateSelectors(tagArgs); err != nil {
+				return err
+			}
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
+				if err != nil {
+					return err
+				}
 				resp, err := cl.List(ctx, &serverv1.ListRequest{})
 				if err != nil {
 					return err
 				}
+				// Indexed rather than scanned per name, so N sessions cost one pass instead of N.
+				byName := make(map[string]*serverv1.Session, len(resp.Sessions))
 				for _, s := range resp.Sessions {
-					if s.Name != args[0] {
-						continue
-					}
-					if asJSON {
-						return writeJSON(os.Stdout, toSessionJSON(s))
-					}
-					return printSessionInfo(os.Stdout, s, field)
+					byName[s.Name] = s
 				}
-				return fmt.Errorf("session %q not found", args[0])
+
+				found := make([]*serverv1.Session, 0, len(names))
+				for _, name := range names {
+					s, ok := byName[name]
+					if !ok {
+						// Only reachable for a named session: a selector's names came from this same
+						// server, though a session could still end in between.
+						return fmt.Errorf("session %q not found", name)
+					}
+					found = append(found, s)
+				}
+
+				if asJSON {
+					// An array for a selector and a bare object for one named session, so an existing
+					// `cm info NAME --json | jq .cwd` keeps working while a selector composes with `.[]`.
+					if fromSelector {
+						out := make([]sessionJSON, 0, len(found))
+						for _, s := range found {
+							out = append(out, toSessionJSON(s))
+						}
+						return writeJSON(os.Stdout, out)
+					}
+					return writeJSON(os.Stdout, toSessionJSON(found[0]))
+				}
+
+				for i, s := range found {
+					// A field prints bare even from a selector, so `--tag ... --field cwd` is a list of
+					// paths rather than a headed report a caller would have to strip.
+					if fromSelector && field == "" {
+						if err := writeSessionHeader(os.Stdout, s.Name, i == 0); err != nil {
+							return err
+						}
+					}
+					if err := printSessionInfo(os.Stdout, s, field); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&field, "field", "",
 		"print only this field: "+strings.Join(SessionFieldNames(), ", "))
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"print the sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
 }
 
 func newHistoryCommand(g *globals) *cobra.Command {
-	var format string
+	var (
+		format  string
+		tagArgs []string
+	)
 	cmd := &cobra.Command{
-		Use:   "history <session>",
+		Use:   "history [session]",
 		Short: "Print a session's contents, scrollback included",
 		Long: `Print a session's contents, including scrollback.
 
@@ -561,8 +646,13 @@ styling; --format=html produces styled markup.
 The whole thing, always. 'cm read' is the bounded form: it takes --lines, rejoins
 soft-wrapped lines, and with --raw gives the emitted bytes of just the tail, which
 this cannot do. What only lives here is --format=html, since neither rendered text nor
-raw bytes can carry styling as markup.`,
-		Args:              sessionNameArg,
+raw bytes can carry styling as markup.
+
+--tag prints every session carrying a tag, each under a header naming it. Not
+available with --format=html, which produces a whole document per session that
+cannot be concatenated into valid markup.`,
+		// At most one name, since --tag supplies the rest.
+		Args:              sessionOrTagArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var f serverv1.HistoryFormat
@@ -576,25 +666,55 @@ raw bytes can carry styling as markup.`,
 			default:
 				return fmt.Errorf("unknown format %q, want plain, vt, or html", format)
 			}
+			if err := validateSelectors(tagArgs); err != nil {
+				return err
+			}
 
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				resp, err := cl.History(ctx, &serverv1.HistoryRequest{
-					Session: args[0],
-					Format:  f,
-				})
+				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
 				if err != nil {
 					return err
 				}
-				_, err = os.Stdout.Write(resp.Data)
-				return err
+				// Refused rather than emitted, because the output would be broken in a way that is not
+				// obvious: each session's HTML is a complete document with its own head and styles, so
+				// several in a row is not a document at all. Checked against the count rather than the flag
+				// so a selector matching exactly one still works.
+				if f == serverv1.HistoryFormat_HISTORY_FORMAT_HTML && len(names) > 1 {
+					return fmt.Errorf(
+						"--format=html needs one session, but --tag matched %d; "+
+							"each session's HTML is a whole document and they cannot be concatenated",
+						len(names))
+				}
+
+				for i, name := range names {
+					if fromSelector {
+						if err := writeSessionHeader(os.Stdout, name, i == 0); err != nil {
+							return err
+						}
+					}
+					resp, err := cl.History(ctx, &serverv1.HistoryRequest{
+						Session: name,
+						Format:  f,
+					})
+					if err != nil {
+						return err
+					}
+					if _, err := os.Stdout.Write(resp.Data); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "plain", "output format: plain, vt, or html")
+	f := cmd.Flags()
+	f.StringVar(&format, "format", "plain", "output format: plain, vt, or html")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"print the sessions with this tag, as key or key=value (repeatable, all must match)")
 	return cmd
 }
 
