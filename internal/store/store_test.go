@@ -39,6 +39,7 @@ func sampleSession(name string) Session {
 		Cols:       120,
 		Owned:      true,
 		Env:        map[string]string{"KITTY_LISTEN_ON": "unix:/tmp/kitty-1", "TERM": "xterm-kitty"},
+		Tags:       map[string]string{"project": "cm", "role": "reviewer", "review": ""},
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
 	}
 }
@@ -142,6 +143,103 @@ func TestApplyEmptyUpdateIsNoop(t *testing.T) {
 	// build updates conditionally without checking whether any field was set.
 	if err := s.Apply(ctx, "noop", Update{}); err != nil {
 		t.Errorf("Apply(empty) error = %v, want nil", err)
+	}
+}
+
+// Applying tags replaces the whole set, so a tag can be removed rather than only added.
+func TestApplyReplacesTheWholeTagSet(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	orig := sampleSession("tagged")
+	if err := s.Create(ctx, orig); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// The new set drops "role" and "review" and changes "project", which a merge could not express.
+	replacement := map[string]string{"project": "zmx"}
+	if err := s.Apply(ctx, "tagged", Update{Tags: replacement}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	got, err := s.Get(ctx, "tagged")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := orig
+	want.Tags = replacement
+	want.UpdatedAt = got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after Apply, Get() = %+v\nwant %+v", got, want)
+	}
+}
+
+// A nil map leaves tags alone while an empty one clears them.
+//
+// The distinction is what makes removing the last tag possible. Treating both as "no change" would
+// leave a session permanently tagged once it had one tag, and treating both as "clear" would wipe
+// the tags on every unrelated update, since the manager applies updates constantly for cwd and
+// title.
+func TestApplyDistinguishesNilTagsFromEmpty(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	orig := sampleSession("keep")
+	if err := s.Create(ctx, orig); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// A nil map, alongside another field, is the shape every ordinary update has.
+	title := "something else"
+	if err := s.Apply(ctx, "keep", Update{Title: &title, Tags: nil}); err != nil {
+		t.Fatalf("Apply(nil tags) error = %v", err)
+	}
+	got, err := s.Get(ctx, "keep")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := orig
+	want.Title = title
+	want.UpdatedAt = got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after Apply with nil tags, Get() = %+v\nwant %+v", got, want)
+	}
+
+	// An empty but non-nil map clears them.
+	if err := s.Apply(ctx, "keep", Update{Tags: map[string]string{}}); err != nil {
+		t.Fatalf("Apply(empty tags) error = %v", err)
+	}
+	got, err = s.Get(ctx, "keep")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	// Read back as nil rather than an empty map: an empty set is stored as the empty string, which
+	// is what a row written before this column existed also holds, so the two must decode alike.
+	want.Tags = nil
+	want.UpdatedAt = got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after Apply with empty tags, Get() = %+v\nwant %+v", got, want)
+	}
+}
+
+// A session created with no tags reads back as nil, matching a row that predates the column.
+func TestCreateWithoutTags(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	orig := sampleSession("untagged")
+	orig.Tags = nil
+	if err := s.Create(ctx, orig); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got, err := s.Get(ctx, "untagged")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := orig
+	want.UpdatedAt = got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Get() = %+v\nwant %+v", got, want)
 	}
 }
 

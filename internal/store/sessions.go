@@ -12,7 +12,7 @@ import (
 
 const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at, env,
-	persist_requested`
+	persist_requested, tags`
 
 // Create inserts a session record.
 //
@@ -30,12 +30,12 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols, sess.Owned,
-		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeEnv(sess.Env),
-		sess.PersistRequested,
+		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
+		sess.PersistRequested, encodeStringMap(sess.Tags),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.Name, err)
@@ -109,6 +109,14 @@ type Update struct {
 	Cols     *int
 	Owned    *bool
 	Env      map[string]string
+	// Tags replaces the session's whole tag set rather than merging into it, so removing a tag is
+	// expressible. A nil map leaves them alone; an empty but non-nil map clears them, which is what
+	// removing the last tag does.
+	//
+	// Whole-set rather than per-key edits because the caller already has to read the current tags to
+	// decide what the new set is, and two callers merging concurrently into the same row would lose
+	// one of the edits either way.
+	Tags map[string]string
 }
 
 // Apply writes the update, returning ErrNotFound if the session is gone.
@@ -153,7 +161,10 @@ func (s *Store) Apply(ctx context.Context, name string, u Update) error {
 		add("owned", *u.Owned)
 	}
 	if u.Env != nil {
-		add("env", encodeEnv(u.Env))
+		add("env", encodeStringMap(u.Env))
+	}
+	if u.Tags != nil {
+		add("tags", encodeStringMap(u.Tags))
 	}
 	if len(sets) == 0 {
 		return nil
@@ -207,13 +218,15 @@ func (s *Store) NextName(ctx context.Context, prefix string) (string, error) {
 	return fmt.Sprintf("%s%d", prefix, n), nil
 }
 
-// encodeEnv renders captured variables for storage. An empty map is stored as an empty string
-// rather than "{}", so a row written before this column existed reads back identically.
-func encodeEnv(env map[string]string) string {
-	if len(env) == 0 {
+// encodeStringMap renders a map column for storage. An empty map is stored as an empty string
+// rather than "{}", so a row written before the column existed reads back identically.
+//
+// Shared by the env and tags columns, which are both maps read and written whole.
+func encodeStringMap(m map[string]string) string {
+	if len(m) == 0 {
 		return ""
 	}
-	b, err := json.Marshal(env)
+	b, err := json.Marshal(m)
 	if err != nil {
 		// Keys and values are strings, so this cannot fail; dropping the value is still better
 		// than failing the whole write for something advisory.
@@ -222,8 +235,8 @@ func encodeEnv(env map[string]string) string {
 	return string(b)
 }
 
-// decodeEnv parses stored variables, treating anything unreadable as absent.
-func decodeEnv(s string) map[string]string {
+// decodeStringMap parses a stored map column, treating anything unreadable as absent.
+func decodeStringMap(s string) map[string]string {
 	if s == "" {
 		return nil
 	}
@@ -249,16 +262,19 @@ func scanSession(sc scanner) (Session, error) {
 		ownedFlag bool
 		envJSON   string
 		requested bool
+		tagsJSON  string
 	)
 	err := sc.Scan(
 		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated, &envJSON, &requested,
+		&tagsJSON,
 	)
 	if err != nil {
 		return Session{}, err
 	}
-	sess.Env = decodeEnv(envJSON)
+	sess.Env = decodeStringMap(envJSON)
+	sess.Tags = decodeStringMap(tagsJSON)
 	sess.LastSeq = uint64(lastSeq)
 	sess.State = State(state)
 	sess.Owned = ownedFlag

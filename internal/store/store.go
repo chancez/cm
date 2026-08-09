@@ -108,7 +108,13 @@ type Session struct {
 	PersistRequested bool
 	// Env holds the environment variables the most recent client reported, so a shell inside the
 	// session can refresh values that describe a terminal which may since have been replaced.
-	Env       map[string]string
+	Env map[string]string
+	// Tags are the caller's own key/value labels for this session, used to group and filter it.
+	//
+	// Persisted, unlike a report: a report describes a running program and would come back after a
+	// restart describing one that has since finished, while a tag describes the session itself and
+	// has to survive. cm never interprets a key.
+	Tags      map[string]string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -196,5 +202,18 @@ var migrations = []string{
 	// occupy `cm list` for the week a deliberately persisted session gets.
 	`
 	ALTER TABLE sessions ADD COLUMN persist_requested INTEGER NOT NULL DEFAULT 0;
+	`,
+
+	// The caller's own key/value labels, as JSON.
+	//
+	// JSON in a column again, but not for the reason the env column gives. That one is justified by
+	// never being queried by key, and tags *are* queried by key, which is normally the argument for a
+	// side table. It is still the wrong shape here: session counts are in the tens, every caller that
+	// filters already holds the whole list in memory, and expiry and doctor both list unfiltered
+	// anyway. A side table would add a join and a cascade delete to make a linear scan over twenty
+	// rows asymptotically better, which at this size it is not. Revisit if sessions ever number in
+	// the thousands.
+	`
+	ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT '';
 	`,
 }
