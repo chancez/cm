@@ -411,6 +411,21 @@ the resource macOS caps at 511 system-wide, whose exhaustion surfaces as "device
 unrelated. Measured against a binary built before the foreground-group change, which leaks the same job,
 so this is long-standing rather than new.
 
+**A signal that does not work is reported rather than leaked.** The shim enumerates the process group
+before signalling, waits 250ms, and reports which pids are still alive. `cm kill` warns on stderr with the
+pids and names the fix, the JSON output carries them in their own field, and the shim logs it -- which is
+what `cm doctor` already surfaces, since its log check scans shim logs for exactly this kind of thing. No
+new check was needed.
+
+The shim is the only place this can be detected. It still holds the pty and knows the process group; the
+server deletes the session record immediately afterwards, so a stray process can no longer be attributed to
+cm at all. Doctor cannot find it later either, and deliberately so: `Diagnose` is scoped to cm's runtime
+directory and database because scanning the process table for anything that looks like a shim can be fooled
+and could kill something that is not cm's.
+
+It reports rather than escalates. A job trapping SIGHUP to finish writing a file is doing something
+legitimate, and a shim that killed it anyway to tidy up would break that. The caller decides.
+
 `--force` was already the escalation, and that was its undocumented half: it means SIGKILL *and* forget a
 record whose shim cannot be reached. Splitting those into two flags was the alternative considered.
 `--signal` made it unnecessary, since it expresses the escalation directly and leaves `--force` meaning

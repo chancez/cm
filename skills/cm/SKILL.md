@@ -320,7 +320,7 @@ Do not `cm kill --all` or `cm server stop` unless you are certain nothing else i
 cm kill worker --signal term    # or kill, for anything that ignores term
 ```
 
-That matters for cleanup specifically: a surviving process holds a pty, and those are a capped resource, so a leaked one eventually breaks something unrelated.
+cm tells you when this happens rather than leaving you to notice: a kill that leaves something running warns on stderr with the pids, and `cm doctor` reports it afterwards. That matters for cleanup specifically, because a surviving process holds a pty, and those are a capped resource, so a leaked one eventually breaks something unrelated.
 
 If you tagged a fan-out, that tag is the safe version of `--all`: it reaches exactly the sessions you created and nothing of the user's.
 
