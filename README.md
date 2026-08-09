@@ -39,7 +39,7 @@ cm history [session]     print contents including scrollback; --format=plain|vt|
 cm send <session> <text> send input without attaching; --key for ctrl-c, arrows, ...
 cm run -- <command>      run a command in a session and exit with its status
 cm wait [session]        block until a session reaches a state
-cm read [session]        print a session's recent output
+cm read [session]        print a session's recent output; --follow --timeout to stream
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log
 cm signal [session] <s>  signal a session's foreground job (int, term, ...)

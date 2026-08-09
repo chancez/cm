@@ -69,21 +69,12 @@ would mean writing a position per command to the store, which is a row on the ho
 read back interactively. `cm run` already covers the ended-session case by saving output, so the gap is
 narrow: reading back a command that ran before the last server restart.
 
-**A timeout on everything that can block.** `--timeout` exists on `cm wait`, `cm send --wait`, and
-`cm run`, and nowhere else. The gap that matters is `cm read --follow`, which streams until the session ends
-and has no bound at all: an agent that follows a session whose program never exits waits forever, and the
-`cm` skill already has to say "always pass --timeout when driving something whose reporting you have not
-confirmed" precisely because a missing bound turns a hang into the default failure.
+**A timeout on everything that can block.** Done: `cm read --follow --timeout`, plus one shared definition
+for the flag that wait, send, and run already had. See `docs/architecture.md`.
 
-Two things to decide, and the second is the interesting one. Which commands need it: `read --follow` clearly,
-`attach` arguably not since a person is watching, and `kill` and `signal` complete promptly by construction.
-And what a timeout should *do* -- `cm wait` exits 1 and reports the state it saw, which is right for a wait,
-while a follower timing out has already printed useful output and should probably exit 0 having stopped
-following rather than claim failure. Those are different meanings for one flag name, which is worth settling
-before adding it in more places.
-
-Worth doing as one pass rather than per command, so the flag means the same thing everywhere, and cheap: the
-plumbing is a context deadline in each case.
+What the entry asked to settle first turned out to be the whole design: a deadline does not mean the same
+thing everywhere. wait and run exit non-zero because they were asked for a result; a follower exits zero
+because a deadline is simply being told to stop, and failing would make a caller discard output it received.
 
 **Waiting on more than state.** `cm wait` takes a state. A caller that wants "wait until this text
 appears" writes a polling loop around `cm read`, which is exactly the sampling the server-side wait exists

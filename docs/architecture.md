@@ -438,6 +438,39 @@ binary that spawned it -- honors `force` alone. The degradation is one-way and r
 ended is an error rather than a silent success, since a signal needs a process to receive it; a session
 that ends between the lookup and the delivery is not, because the caller wanted it stopped and it is.
 
+## Timeouts
+
+`--timeout` bounds `cm wait`, `cm send --wait`, `cm run`, and `cm read --follow`. It reached the last of
+those late, which is the one that mattered: a follow streamed until the session ended, so following a
+program that never exits waited forever, and the `cm` skill had to tell callers to always pass a timeout
+because a missing bound was the default failure.
+
+**A deadline does not mean the same thing on every command, and that is deliberate.** `cm wait` and `cm run`
+exit non-zero: each was asked for a result and could not produce one, so a timeout is a failure to report.
+`cm read --follow` exits zero: it was asked to print output until told to stop, and a deadline is being told
+to stop, so it has already delivered everything the session produced. Failing there would make a caller
+discard output it successfully received.
+
+The cost of that split is worth stating: exit status alone cannot distinguish "the session ended" from "my
+timeout expired". That is the right trade for bounding a follow so it cannot hang, and `cm wait` is what
+answers the question when the distinction matters.
+
+The follower's zero status does not come from where it looks like it comes from. `client.Attach` already
+treats a cancelled or expired context as a deliberate detach and returns no error at all, so the deadline
+arm in `followSession` is not what produces it -- verified by disabling that arm, which changed nothing. The
+arm stays so the behavior holds if that path changes, and the test guards the contract rather than the
+implementation.
+
+`--timeout` on `cm read` is refused without `--follow`. Every other form returns as soon as the server
+answers, so a timeout would bound something that cannot hang, and accepting it quietly would confirm a
+caller's belief that it was protected against a hang that was never possible.
+
+Zero means no bound, which needs a helper rather than an inline `context.WithTimeout`: that call with a zero
+duration produces an already-expired deadline, so passing an unset flag straight through would make every
+command fail instantly. One `withTimeout` makes that impossible to get wrong per call site, and one
+`addTimeoutFlag` keeps the help text from drifting -- it had already drifted into three different phrasings
+across three commands.
+
 ## Waiting, and why the server does it
 
 `cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from
