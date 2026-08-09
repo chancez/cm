@@ -605,7 +605,18 @@ func (*SignalResponse) Descriptor() ([]byte, []int) {
 type ShutdownRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Skip the graceful SIGHUP-then-wait and kill immediately.
-	Force         bool `protobuf:"varint,1,opt,name=force,proto3" json:"force,omitempty"`
+	Force bool `protobuf:"varint,1,opt,name=force,proto3" json:"force,omitempty"`
+	// Signal to end the session with, overriding what force selects.
+	//
+	// Zero means "not specified", which is what an older server sends and what keeps this additive: a
+	// shim reading zero falls back to force, so the two fields cannot disagree about a request neither
+	// side has an opinion on.
+	//
+	// The reverse direction matters more and cannot be fixed here. An older shim ignores this field
+	// entirely and honors force alone, so a newer server asking for a specific signal gets SIGHUP or
+	// SIGKILL from it instead. That is a degradation rather than a failure, and the server logs it
+	// rather than pretending the signal was delivered.
+	Signal        int32 `protobuf:"varint,2,opt,name=signal,proto3" json:"signal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -645,6 +656,13 @@ func (x *ShutdownRequest) GetForce() bool {
 		return x.Force
 	}
 	return false
+}
+
+func (x *ShutdownRequest) GetSignal() int32 {
+	if x != nil {
+		return x.Signal
+	}
+	return 0
 }
 
 type ShutdownResponse struct {
@@ -721,9 +739,10 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\rSignalRequest\x12\x16\n" +
 	"\x06signal\x18\x01 \x01(\x05R\x06signal\x12#\n" +
 	"\rprocess_group\x18\x02 \x01(\bR\fprocessGroup\"\x10\n" +
-	"\x0eSignalResponse\"'\n" +
+	"\x0eSignalResponse\"?\n" +
 	"\x0fShutdownRequest\x12\x14\n" +
-	"\x05force\x18\x01 \x01(\bR\x05force\"\x12\n" +
+	"\x05force\x18\x01 \x01(\bR\x05force\x12\x16\n" +
+	"\x06signal\x18\x02 \x01(\x05R\x06signal\"\x12\n" +
 	"\x10ShutdownResponse2\x8c\x03\n" +
 	"\x04Shim\x12<\n" +
 	"\x05State\x12\x18.cm.shim.v1.StateRequest\x1a\x19.cm.shim.v1.StateResponse\x12?\n" +

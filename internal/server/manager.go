@@ -880,7 +880,7 @@ func (m *Manager) Clients(name string) int64 {
 // Without force, an unreachable shim is left recorded rather than forgotten: it may be
 // busy rather than dead, and forgetting it would orphan a live shell. force exists for the
 // case where the user knows better.
-func (m *Manager) Kill(ctx context.Context, name string, force bool) error {
+func (m *Manager) Kill(ctx context.Context, name string, force bool, sig int32) error {
 	m.mu.Lock()
 	sess, live := m.sessions[name]
 	m.mu.Unlock()
@@ -896,7 +896,7 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool) error {
 		// Found as a flaky `cm kill --all` reporting "stopping d5: ttrpc: closed" under -race, which widens
 		// the window enough to hit. Checked after the call rather than before, because before is its own
 		// race: the shell can exit between the check and the RPC.
-		if err := sess.Shutdown(ctx, force); err != nil && !force {
+		if err := sess.Shutdown(ctx, force, sig); err != nil && !force {
 			if ended, _ := sess.Ended(); !ended {
 				return fmt.Errorf("stopping %s: %w", name, err)
 			}
@@ -921,7 +921,10 @@ func (m *Manager) Kill(ctx context.Context, name string, force bool) error {
 		conn, shim, dialErr := dialShim(rec.ShimSocket)
 		if dialErr == nil {
 			defer conn.Close()
-			if _, err := shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force}); err != nil && !force {
+			if _, err := shim.Shutdown(ctx, &shimv1.ShutdownRequest{
+				Force:  force,
+				Signal: sig,
+			}); err != nil && !force {
 				return fmt.Errorf("stopping %s: %w", name, err)
 			}
 			return m.store.Delete(ctx, name)

@@ -1212,8 +1212,8 @@ const (
 )
 
 // Shutdown terminates the session's shell and its shim.
-func (s *Session) Shutdown(ctx context.Context, force bool) error {
-	_, err := s.shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force})
+func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) error {
+	_, err := s.shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force, Signal: sig})
 	return err
 }
 

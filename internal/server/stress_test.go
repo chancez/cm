@@ -177,7 +177,7 @@ func TestConcurrentReaderCloseWhileBlocked(t *testing.T) {
 	if !ok {
 		t.Fatal("session was not adopted")
 	}
-	t.Cleanup(func() { _ = mgr.Kill(context.Background(), "quiet", true) })
+	t.Cleanup(func() { _ = mgr.Kill(context.Background(), "quiet", true, 0) })
 
 	var wg sync.WaitGroup
 	for range stressRounds {
@@ -248,7 +248,7 @@ func TestConcurrentMetadataSubscribers(t *testing.T) {
 	if !ok {
 		t.Fatal("session was not adopted")
 	}
-	t.Cleanup(func() { _ = mgr.Kill(context.Background(), "meta", true) })
+	t.Cleanup(func() { _ = mgr.Kill(context.Background(), "meta", true, 0) })
 
 	var wg sync.WaitGroup
 
@@ -327,7 +327,7 @@ func TestConcurrentKillWithAttachedClients(t *testing.T) {
 		}()
 	}
 
-	if err := mgr.Kill(ctx, "doomed", true); err != nil {
+	if err := mgr.Kill(ctx, "doomed", true, 0); err != nil {
 		t.Fatalf("Kill() error = %v", err)
 	}
 

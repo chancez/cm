@@ -616,10 +616,24 @@ message Session {
 
 message KillRequest {
   repeated string sessions = 1;
-  // Remove the session record even if its shim cannot be reached. Without this, an
-  // unreachable shim is left alone: it may be busy rather than dead, and discarding the
-  // record would orphan it permanently.
+  // Remove the session record even if its shim cannot be reached, and end the session with SIGKILL
+  // rather than SIGHUP.
+  //
+  // Without the first, an unreachable shim is left alone: it may be busy rather than dead, and
+  // discarding the record would orphan it permanently. The second half is what makes the flag mean "be
+  // maximally forceful", so a caller that has decided a session must go does not need two flags to say
+  // it.
   bool force = 2;
+  // Signal to end the session with, overriding the default.
+  //
+  // Zero means SIGHUP, or SIGKILL when force is set. Exists because the default is a request rather
+  // than a guarantee: a job that ignores SIGHUP survives it, and `cm kill` then reports success having
+  // left a process holding a pty. A caller that knows what it is stopping can name the signal instead
+  // of reaching for force, which also discards bookkeeping.
+  //
+  // A number rather than an enum, for the same reason SignalRequest uses one: the set is
+  // platform-defined.
+  int32 signal = 3;
 }
 
 message KillResponse {
