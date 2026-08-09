@@ -43,7 +43,7 @@ cm read [session]        print a session's recent output
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log
 cm signal [session] <s>  signal a session's foreground job (int, term, ...)
-cm kill <session>...     terminate sessions
+cm kill <session>...     terminate sessions; --signal to escalate past SIGHUP
 ```
 
 Session names complete dynamically once `cm completions zsh` is installed.
