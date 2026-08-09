@@ -120,6 +120,31 @@ blocked. A `cm watch` streaming state changes, or a configurable command run on 
 terminal emulator or a notifier react. The server already publishes these internally to attached clients,
 so the plumbing exists; what is missing is a client-facing form.
 
+Deliberately not built yet, and the reasons are worth having before someone starts.
+
+*It cannot promise not to miss transitions.* `metaSub` is buffered to a depth of one and coalescing, so a
+command like `true` starts and finishes between two reads and collapses into a single event. That is already
+recorded in `wait.go`, and it is why `awaitState` compares a counter rather than watching for the session to
+*be* busy. A stream of state changes has no counter to fall back on, so `cm watch` would show "idle" twice
+for a fast command and silently omit that anything ran. Acceptable for a notifier, which cares about a
+`blocked` that persists rather than every edge; not acceptable for anything reconstructing what happened,
+and the entry should say so rather than let it be discovered halfway through.
+
+*Most of what it would serve is already served.* "Tell me when an agent needs input" is `cm wait --until
+blocked`, over a group with `--tag`. "React to a session ending" is `--until exited`. What is left that is
+genuinely only `watch`: reacting without knowing which session in advance, reacting repeatedly without
+re-invoking, and a consumer that is not attached. The plumbing "already exists" precisely because the
+existing consumer is the attach stream, so a terminal integration -- the party most likely to want this --
+already receives these events today.
+
+*What would justify it* is a concrete consumer that is not attached: a notifier daemon, or the dotfiles
+integration wanting to react to `blocked` without holding an attachment. Until one exists this would be a
+second delivery path for something already delivered.
+
+Note also that it does not reuse the output matcher `cm wait --match` is built on, despite an earlier claim
+in `docs/architecture.md` that it would. State changes come from the metadata subscription; "has this text
+appeared" is a different question.
+
 ## Bigger expansions
 
 Each of these is a larger change than anything above, and each has a specific reason it is not a small one.

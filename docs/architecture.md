@@ -458,14 +458,23 @@ Output is not part of that, so a session can print for an hour with no metadata 
 into that loop would only be evaluated when something unrelated happened. The match loop subscribes to the
 output log instead.
 
-**The matcher is a shared seam.** `cm watch` will want the same question answered at the same moment and
-differ only in what it does with the answer, so a second implementation would be a second copy of two
-non-obvious bugs. A match can straddle a chunk boundary, since a pty read is bounded by the kernel buffer
-and "DONE" arrives as "DO" then "NE" often enough to matter; the matcher keeps `len(pattern)-1` bytes of
-tail for that. And escape sequences sit between the characters, so a coloured `DO\x1b[0mNE` matches nothing
-byte-wise while a person plainly sees DONE; one stateful `ansi.Stripper` handles that, including an escape
-split across chunks. A chunk that is entirely escape sequences must not clear the tail, or a repainting
-program breaks a match spanning its repaint.
+**The matcher is its own type, and it handles two non-obvious bugs.** A match can straddle a chunk
+boundary, since a pty read is bounded by the kernel buffer and "DONE" arrives as "DO" then "NE" often
+enough to matter; the matcher keeps `len(pattern)-1` bytes of tail for that. And escape sequences sit
+between the characters, so a coloured `DO\x1b[0mNE` matches nothing byte-wise while a person plainly sees
+DONE; one stateful `ansi.Stripper` handles that, including an escape split across chunks. A chunk that is
+entirely escape sequences must not clear the tail, or a repainting program breaks a match spanning its
+repaint.
+
+It is shared by the two callers that exist -- a bare `Wait` and a `Send` -- through `matchOn`, which takes
+the subscription rather than opening one, because *when* to subscribe is the part that differs and must not
+be decided in one place.
+
+An earlier version of this section claimed the matcher was a seam for a future `cm watch`. That was wrong
+and is corrected here rather than quietly dropped, because it is the kind of claim that gets built on:
+`watch` would stream *state* changes, which come from the metadata subscription, and "has this text
+appeared" is a different question. The matcher would only serve `watch` if it grew an output-matching
+mode.
 
 Rendered by default, with `--match-raw` as the modifier rather than a `--match-raw` flag name, following how
 `--raw` already works on `read`, `history`, and `send`. Raw changes whether a pattern can match at all
