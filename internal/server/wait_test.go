@@ -539,3 +539,44 @@ func TestSendWaitDoesNotResolveBeforeTheWorkStarts(t *testing.T) {
 		t.Error("wait was satisfied by the state the session was already in, before its work began")
 	}
 }
+
+// A wait must report how far the server has consumed the session's output.
+//
+// A follower needs this to know when it has caught up. The wait returning means the command finished, which is
+// not the same as its output having reached the client: the bytes are still travelling over the stream, and a
+// caller that stops following on the reply truncates them. `cm run` on a reused session lost the command's
+// output that way about a third of the time, presenting as a line containing only the shell's echo of the
+// input.
+//
+// Asserted on both paths, since `cm send --wait` is the one that needed it and a bare `cm wait` returning zero
+// would give a follower no position to drain to.
+func TestWaitReportsTheConsumedPosition(t *testing.T) {
+	svc, sess := waitFixture(t, "seq", "sleep 30")
+	ctx := context.Background()
+
+	// A consumed position, as the pump sets after reading from the shim. Written directly because the pump
+	// is what advances it and this test is about the value being reported, not about how it got there.
+	const want = 4242
+	sess.mu.Lock()
+	sess.lastSeq = want
+	sess.mu.Unlock()
+
+	// Idle, so the wait is satisfied and returns a reply to inspect.
+	setBusy(sess, false, "")
+
+	resp, err := svc.Wait(ctx, &serverv1.WaitRequest{
+		Session:   "seq",
+		Until:     serverv1.WaitState_WAIT_STATE_IDLE,
+		TimeoutMs: 2000,
+	})
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if !resp.Satisfied {
+		t.Fatal("wait was not satisfied")
+	}
+	if resp.LastSeq != want {
+		t.Errorf("LastSeq = %d, want %d: without it a follower has no position to drain to and cuts the "+
+			"stream off mid-output", resp.LastSeq, want)
+	}
+}

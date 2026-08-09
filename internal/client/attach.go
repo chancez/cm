@@ -90,6 +90,15 @@ type Options struct {
 	// This is how a terminal emulator learns values the shell reported to cm rather than to the
 	// terminal, so it can retitle a tab or open a new window in the right place.
 	OnMetadata func(SessionMetadata)
+
+	// OnOutput, when set, is called after each chunk of output is written, with the position one past its
+	// last byte.
+	//
+	// Exists so a follower can tell when it has caught up to a position it learned elsewhere. `cm send
+	// --follow` knows from the wait's reply how far the server had consumed, but not how much of that has
+	// reached it; without this it stopped following as soon as the wait returned and truncated whatever was
+	// still in flight, losing the command's output about a third of the time.
+	OnOutput func(next uint64)
 }
 
 // SessionMetadata is what a session reports about itself.
@@ -362,6 +371,11 @@ func runSession(
 				}
 				next := o.Seq + uint64(len(o.Data))
 				*resumeFrom = &next
+				if opts.OnOutput != nil {
+					// After the write, so a caller told it has reached a position can rely on the bytes up
+					// to there having been delivered.
+					opts.OnOutput(next)
+				}
 			}
 
 		case data, ok := <-input:

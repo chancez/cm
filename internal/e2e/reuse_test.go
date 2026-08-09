@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,10 +25,9 @@ func TestRunReusesAnExistingSession(t *testing.T) {
 	args := append([]string{"run", "--session", "reused", "-d"}, e.withOSC133()...)
 	args = append(args, "--", "/bin/zsh", "-i")
 	e.mustRun(args...)
-	e.waitFor("the shell to reach its first prompt", 20*time.Second, func() bool {
-		s, ok := e.session("reused")
-		return ok && s.State == "running"
-	})
+	// The prompt, not just the session being "running": zsh has to finish starting its line editor before
+	// it will read what is sent, and input that arrives first is mangled rather than lost.
+	e.waitForPrompt("reused")
 
 	out := e.mustRunWithin(30*time.Second, "run", "--session", "reused", "--", "echo REUSED_RAN")
 	if !strings.Contains(out, "REUSED_RAN") {
@@ -54,10 +54,9 @@ func TestRunReuseKeepsShellState(t *testing.T) {
 	args := append([]string{"run", "--session", "stateful", "-d"}, e.withOSC133()...)
 	args = append(args, "--", "/bin/zsh", "-i")
 	e.mustRun(args...)
-	e.waitFor("the shell to reach its first prompt", 20*time.Second, func() bool {
-		s, ok := e.session("stateful")
-		return ok && s.State == "running"
-	})
+	// The prompt, not just the session being "running": zsh has to finish starting its line editor before
+	// it will read what is sent, and input that arrives first is mangled rather than lost.
+	e.waitForPrompt("stateful")
 
 	// A variable set in one call, read in the next. A directory would work too; a variable is unambiguous,
 	// since nothing else could set it.
@@ -142,4 +141,45 @@ func TestAttachNoAttachThenAttach(t *testing.T) {
 		s, ok := e.session("later")
 		return ok && s.Clients == 1
 	})
+}
+
+// A reused session's command output must arrive in full, not be truncated when the wait returns.
+//
+// The bug this pins: `cm run --session NAME` on an existing session printed only the shell's echo of the
+// input -- "eecho $MARKER" and nothing more -- about a third of the time on a session's first reuse.
+//
+// It looked like mangled input, and the doubled first character made a shell timing problem the obvious
+// suspect. It was not. The session's own output was always correct; what was lost was the tail of the
+// *stream*. `cm send --follow` cancels its follower as soon as the send-and-wait returns, and the wait
+// returning means the command finished, not that its output has crossed the socket. Whatever had not been
+// read yet was discarded.
+//
+// The fix drains to the position the wait reports before cancelling, so this asserts on the whole line
+// rather than the exit status: the status was always right, which is why nothing caught it.
+//
+// Repeated because the truncation is a race. A single pass passed against the broken code roughly two times
+// in three.
+func TestRunReuseDoesNotTruncateOutput(t *testing.T) {
+	skipIfShort(t)
+	requireShell(t, "/bin/zsh")
+	e := newEnv(t)
+
+	// A fresh session per iteration, because the truncation happens on a session's *first* reuse. Reusing
+	// one that has already run something is reliably fine, which is why a loop against a single warm session
+	// passes against the broken code and asserts nothing.
+	osc := e.withOSC133()
+	for i := range 5 {
+		name := "notrunc" + strconv.Itoa(i)
+		args := append([]string{"run", "--session", name, "-d"}, osc...)
+		args = append(args, "--", "/bin/zsh", "-i")
+		e.mustRun(args...)
+		e.waitForPrompt(name)
+
+		want := "TRUNC_TAG_" + strconv.Itoa(i)
+		out := e.mustRunWithin(30*time.Second, "run", "--session", name, "--", "echo "+want)
+		if !strings.Contains(out, want) {
+			t.Fatalf("run %d printed no output for `echo %s`, so the stream was cut before it arrived:\n%q",
+				i, want, out)
+		}
+	}
 }

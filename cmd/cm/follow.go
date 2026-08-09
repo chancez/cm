@@ -18,6 +18,13 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
+// drainTimeout bounds how long a follower waits to catch up to the server's position after a wait returns.
+//
+// Generous relative to what it covers, which is a local socket delivering bytes the server already holds, and
+// bounded because the alternative to giving up is hanging. A follower whose stream has already ended will never
+// reach the target, so this is what turns that into a return rather than a wedge.
+const drainTimeout = 2 * time.Second
+
 // warnIfTerminal prints followWarning when w is a terminal.
 func warnIfTerminal(w *os.File) {
 	if term.IsTerminal(int(w.Fd())) {
@@ -167,10 +174,27 @@ func sendAndFollow(
 	streamCtx, stopStream := context.WithCancel(ctx)
 	defer stopStream()
 
+	// seen tracks how far the follower has written, so the stream can be drained to a known point rather
+	// than cut off. Guarded because the follower runs on its own goroutine.
+	var seenMu sync.Mutex
+	var seen uint64
+	caughtUp := make(chan struct{})
+	var caughtUpOnce sync.Once
+	// target is the position to drain to, set once the wait returns. Zero means not yet known.
+	var target uint64
+
 	streamed := make(chan error, 1)
 	attached := make(chan struct{})
 	go func() {
-		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw, log)
+		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw, log, func(next uint64) {
+			seenMu.Lock()
+			seen = next
+			reached := target != 0 && seen >= target
+			seenMu.Unlock()
+			if reached {
+				caughtUpOnce.Do(func() { close(caughtUp) })
+			}
+		})
 	}()
 
 	// Wait for the attachment before sending, or attaching first buys nothing.
@@ -222,6 +246,41 @@ func sendAndFollow(
 			session, paths.Name)
 	}
 
+	// Drain before stopping, so output still in flight is not thrown away.
+	//
+	// This is the fix for `cm run` on a reused session losing the command's output about a third of the time.
+	// The wait returning means the command finished, not that its output has arrived: the bytes travel server
+	// to client over the same stream, and cancelling the follower on the reply discarded whatever had not yet
+	// been read. It presented as a truncated line -- the shell's echo of the input and nothing else -- which
+	// looked like mangled input rather than a lost tail.
+	//
+	// The wait reports how far the server had consumed, so there is a definite position to wait for rather
+	// than a sleep. Bounded, because a follower that has already stopped will never reach it, and a caller
+	// waiting forever for a stream that is gone would be worse than a rare truncation.
+	if resp != nil && resp.GetWait() != nil {
+		if last := resp.GetWait().LastSeq; last > 0 {
+			seenMu.Lock()
+			target = last
+			reached := seen >= target
+			seenMu.Unlock()
+			if reached {
+				caughtUpOnce.Do(func() { close(caughtUp) })
+			}
+
+			select {
+			case <-caughtUp:
+			case <-time.After(drainTimeout):
+				// Caught up as far as it is going to. Not an error: the command's status is the point, and
+				// the output that did arrive has been printed.
+			case err := <-streamed:
+				// The follower ended on its own, which is the ordinary path when the session exits. Put the
+				// result back so the receive below still finds it.
+				streamed <- err
+			case <-ctx.Done():
+			}
+		}
+	}
+
 	// Stopped whether or not the send failed, so a failure does not leave the stream running.
 	stopStream()
 	streamErr := <-streamed
@@ -243,6 +302,7 @@ func sendAndFollow(
 // first.
 func followSessionSignalling(
 	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{}, raw bool, log *slog.Logger,
+	onOutput func(uint64),
 ) error {
 	var once sync.Once
 	opts := client.Options{
@@ -256,6 +316,7 @@ func followSessionSignalling(
 		OnAttached: func() {
 			once.Do(func() { close(ready) })
 		},
+		OnOutput: onOutput,
 	}
 
 	tty, err := client.OpenTTY(os.Stdin, os.Stdout)

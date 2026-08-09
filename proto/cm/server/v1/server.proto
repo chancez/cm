@@ -199,6 +199,13 @@ message WaitResponse {
   bool command_finished = 9;
   SessionState state = 4;
   int32 exit_code = 5;
+  // How much of the session's output the server had consumed when the wait returned.
+  //
+  // A follower needs this to know when it has caught up. The wait says the command finished, which is not
+  // the same as its output having reached the client: bytes are still in flight over the stream, and a
+  // caller that stops following the moment the wait returns truncates them. `cm run` on a reused session
+  // lost the command's output that way about a third of the time.
+  uint64 last_seq = 10;
 }
 
 message DoctorRequest {

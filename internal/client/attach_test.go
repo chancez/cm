@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -425,6 +426,83 @@ func TestAttachResendsOptionsOnReconnect(t *testing.T) {
 		}
 		if !open.ReadOnly {
 			t.Errorf("Open %d has ReadOnly = false, want it preserved across the reconnect", i+1)
+		}
+	}
+}
+
+// OnOutput must report the position one past each chunk, after that chunk has been written.
+//
+// This is what lets a follower tell when it has caught up to a position it learned elsewhere, and it is the
+// mechanism behind `cm send --follow` draining rather than being cut off mid-stream. Without it, `cm run` on a
+// reused session lost the command's output about a third of the time: the wait returning means the command
+// finished, not that its output has crossed the socket, so cancelling the follower on the reply discarded
+// whatever had not been read.
+//
+// The ordering is the part worth asserting. A caller told it has reached a position acts on the bytes up to
+// there, so the callback firing before the write would let it act on output it had not yet received.
+func TestAttachReportsOutputPositions(t *testing.T) {
+	svc := &stubService{handle: func(_ int, srv serverv1.Server_AttachServer) error {
+		if err := sendOpened(srv, "test", 100); err != nil {
+			return err
+		}
+		for _, chunk := range []string{"one", "two!"} {
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Output{Output: &serverv1.Output{
+					Seq: 100, Data: []byte(chunk),
+				}},
+			}); err != nil {
+				return err
+			}
+		}
+		return srv.Send(&serverv1.AttachResponse{
+			Event: &serverv1.AttachResponse_Exited{Exited: &serverv1.Exited{ExitCode: 0}},
+		})
+	}}
+	socket := serveStub(t, svc)
+	tty, opts := attachOpts(t, socket)
+
+	// Where the follower's output goes, so what was written can be compared against what was reported.
+	var written bytes.Buffer
+	var mu sync.Mutex
+	var positions []uint64
+	// seenAt records how much had been written when each position was reported, which is what pins the
+	// ordering rather than merely the values.
+	var seenAt []int
+
+	opts.Output = &written
+	opts.OnOutput = func(next uint64) {
+		mu.Lock()
+		defer mu.Unlock()
+		positions = append(positions, next)
+		seenAt = append(seenAt, written.Len())
+	}
+
+	if _, err := Attach(context.Background(), tty, opts); err != nil {
+		t.Fatalf("Attach() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Seq is the chunk's start, so the reported position is one past its last byte.
+	wantPositions := []uint64{103, 104}
+	if len(positions) != len(wantPositions) {
+		t.Fatalf("positions = %v, want %v", positions, wantPositions)
+	}
+	for i := range wantPositions {
+		if positions[i] != wantPositions[i] {
+			t.Errorf("positions = %v, want %v", positions, wantPositions)
+			break
+		}
+	}
+
+	// After the write, not before: 3 bytes written when the first fired, 7 when the second did.
+	wantSeenAt := []int{3, 7}
+	for i := range wantSeenAt {
+		if seenAt[i] != wantSeenAt[i] {
+			t.Errorf("bytes written when each position was reported = %v, want %v; a position reported "+
+				"before its write would let a caller act on output it has not received", seenAt, wantSeenAt)
+			break
 		}
 	}
 }

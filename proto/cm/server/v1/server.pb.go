@@ -743,8 +743,15 @@ type WaitResponse struct {
 	CommandFinished     bool         `protobuf:"varint,9,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
 	State               SessionState `protobuf:"varint,4,opt,name=state,proto3,enum=cm.server.v1.SessionState" json:"state,omitempty"`
 	ExitCode            int32        `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// How much of the session's output the server had consumed when the wait returned.
+	//
+	// A follower needs this to know when it has caught up. The wait says the command finished, which is not
+	// the same as its output having reached the client: bytes are still in flight over the stream, and a
+	// caller that stops following the moment the wait returns truncates them. `cm run` on a reused session
+	// lost the command's output that way about a third of the time.
+	LastSeq       uint64 `protobuf:"varint,10,opt,name=last_seq,json=lastSeq,proto3" json:"last_seq,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WaitResponse) Reset() {
@@ -836,6 +843,13 @@ func (x *WaitResponse) GetState() SessionState {
 func (x *WaitResponse) GetExitCode() int32 {
 	if x != nil {
 		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *WaitResponse) GetLastSeq() uint64 {
+	if x != nil {
+		return x.LastSeq
 	}
 	return 0
 }
@@ -2870,7 +2884,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\tR\asession\x12-\n" +
 	"\x05until\x18\x02 \x01(\x0e2\x17.cm.server.v1.WaitStateR\x05until\x12\x1d\n" +
 	"\n" +
-	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xd9\x02\n" +
+	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xf4\x02\n" +
 	"\fWaitResponse\x12\x1c\n" +
 	"\tsatisfied\x18\x01 \x01(\bR\tsatisfied\x12%\n" +
 	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
@@ -2880,7 +2894,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x16last_command_exit_code\x18\b \x01(\x05R\x13lastCommandExitCode\x12)\n" +
 	"\x10command_finished\x18\t \x01(\bR\x0fcommandFinished\x120\n" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
-	"\texit_code\x18\x05 \x01(\x05R\bexitCode\"N\n" +
+	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x19\n" +
+	"\blast_seq\x18\n" +
+	" \x01(\x04R\alastSeq\"N\n" +
 	"\rDoctorRequest\x12\x16\n" +
 	"\x06repair\x18\x01 \x01(\bR\x06repair\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\"\x86\x01\n" +

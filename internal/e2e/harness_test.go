@@ -777,7 +777,37 @@ _osc133_preexec() {
 }
 add-zsh-hook precmd _osc133_precmd
 add-zsh-hook preexec _osc133_preexec
+PS1='` + promptMarker + `> '
 `
+
+// promptMarker is the prompt the test zshrc sets, and the signal that the shell is ready for input.
+//
+// A fixed, distinctive string rather than whatever zsh defaults to, because a test needs to *wait* for the
+// prompt and so has to recognize it. The default prompt contains the hostname and cwd, which differ per
+// machine and per test.
+// No % in it: zsh's prompt expansion treats % as an escape introducer, so a marker ending in one arrives
+// with it consumed and never matches. Found by reading the bytes cm renders rather than assuming.
+const promptMarker = "CM_TEST_READY"
+
+// waitForPrompt blocks until a session's shell has printed its prompt and is ready for input.
+//
+// Waiting for `state == "running"` is not the same thing and was a real source of flakiness. A session is
+// running the moment its process exists, while zsh still has to load its rc files and start its line editor;
+// input written in between is read by the terminal driver before zle is listening, and the first character
+// gets echoed twice. It presented as `cm run --session x -- 'echo $MARKER'` sending `eecho $MARKER`, which
+// the shell then reports as a command not found -- about one run in ten.
+//
+// The prompt is the only honest signal that the shell will read what it is sent, which is why the test rc
+// sets a recognizable one. Waiting for OSC 133 state instead would not do: a shell at its first prompt is
+// idle, which is indistinguishable from a shell that has not started.
+//
+// Only for sessions created with withOSC133, since promptMarker comes from that rc.
+func (e *env) waitForPrompt(session string) {
+	e.t.Helper()
+	e.waitFor(session+" to reach its first prompt", 30*time.Second, func() bool {
+		return strings.Contains(e.run("read", session).stdout, promptMarker)
+	})
+}
 
 // withOSC133 returns the flags that make a session's shell report OSC 133.
 //
