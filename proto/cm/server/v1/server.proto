@@ -157,6 +157,26 @@ message ReadRequest {
   // Whether to rejoin soft-wrapped lines. A line the terminal broke to fit its width is one line to the
   // program that wrote it, so splitting it puts a newline inside a path or a stack frame.
   bool unwrap = 3;
+
+  // Return output from where the last N commands began, rather than a count of lines.
+  //
+  // Anchored at the shell's prompt marker, so each block opens with the prompt and the echoed command
+  // line. That is what makes reading several commands useful: their outputs run together otherwise, and
+  // a caller cannot tell where one ended. Zero means this is not being used.
+  //
+  // A count of commands rather than a sequence number, deliberately. cm has two sequence-number spaces
+  // and mixing them corrupts output, so a number a caller has to hold onto is a hazard; a command count
+  // is also what a person and a script actually think in.
+  //
+  // Mutually exclusive with lines, which is a different bound on the same read.
+  uint32 since_commands = 5;
+
+  // Return only the most recent command's own output, with no prompt or echoed command line.
+  //
+  // The parser's counterpart to since_commands: that produces a transcript, this produces just what the
+  // program printed. Well defined for one command only, which is why it is a separate field rather than
+  // a mode of the other.
+  bool last_output = 6;
 }
 
 message ReadResponse {

@@ -146,3 +146,34 @@ func (l *Log) Bounds() (oldest, next uint64) {
 	defer l.mu.Unlock()
 	return l.oldest, l.oldest + uint64(len(l.buf))
 }
+
+// Snapshot returns the retained bytes from a sequence number, without waiting for more.
+//
+// Distinct from Subscribe, which exists to follow a stream and blocks for output that has not arrived.
+// A caller rendering what a command has printed so far wants the opposite: whatever is there now, and
+// no waiting. Using a Reader for that means either blocking forever on a session that has gone quiet or
+// guessing a timeout, both of which turn a bounded read into a hang.
+//
+// gap reports that bytes at or after from had already been dropped, so the result begins later than
+// asked. That matters more here than for a follower: replaying from a hole cannot reconstruct the state
+// the missing bytes established, and for a read anchored at a command boundary it means the command's
+// output has partly aged out of the buffer.
+func (l *Log) Snapshot(from uint64) (data []byte, gap bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	end := l.oldest + uint64(len(l.buf))
+	if from >= end {
+		// Nothing yet. Not an error: a command that has just started has printed nothing, and an empty
+		// read is the honest answer.
+		return nil, false
+	}
+	if from < l.oldest {
+		from, gap = l.oldest, true
+	}
+	// Copied rather than aliased, since the buffer is trimmed from the front under this same lock and a
+	// retained slice would shift out from under the caller.
+	out := make([]byte, end-from)
+	copy(out, l.buf[from-l.oldest:])
+	return out, gap
+}

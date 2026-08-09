@@ -1041,6 +1041,53 @@ func (m *Manager) ReadFromDisk(
 	})
 }
 
+// RenderSnapshot turns a slice of a live session's output into text.
+//
+// Replayed into a throwaway terminal rather than rendered from the session's own model, and that is the
+// point rather than an implementation detail: the session's model holds the *current* screen, which is
+// what attached clients are looking at, so writing historical bytes into it would corrupt their view.
+// A fresh model also means the result describes only the bytes asked for, instead of whatever the
+// screen happened to contain.
+//
+// raw returns the bytes as the program emitted them, skipping the model entirely. Nothing needs
+// rendering in that case, and building a terminal to hand back its input would only risk changing it.
+func (m *Manager) RenderSnapshot(
+	data []byte, rows, cols uint16, unwrap, raw bool,
+) ([]byte, error) {
+	if raw {
+		return data, nil
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	if m.newTerminal == nil {
+		// Consistent with the other read paths: without an emulator the bytes cannot be rendered, and
+		// handing back raw output where plain text was asked for would be wrong rather than degraded.
+		return nil, errors.New("terminal rendering is unavailable, so output cannot be rendered")
+	}
+	if rows == 0 || cols == 0 {
+		rows, cols = 24, 80
+	}
+
+	term, err := m.newTerminal(rows, cols)
+	if err != nil {
+		return nil, err
+	}
+	defer term.Close()
+
+	if err := term.Write(data); err != nil {
+		return nil, fmt.Errorf("replaying output: %w", err)
+	}
+	// Discard anything the emulator generated in response: those answer queries from a program that is
+	// not listening to this model.
+	term.TakePending()
+
+	// Everything the slice produced, with no line bound. The slice is already bounded by the command
+	// boundary it started at, so a line count would be a second, unrelated limit -- which is why the
+	// CLI refuses to combine them.
+	return term.Tail(0, unwrap)
+}
+
 // replayFromDisk rebuilds a finished session's screen from its saved log and hands it to render.
 //
 // Necessary because a session that ends leaves the registry, taking its terminal model with it, so there

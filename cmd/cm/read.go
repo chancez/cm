@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,6 +25,8 @@ func newReadCommand(g *globals) *cobra.Command {
 		follow  bool
 		raw     bool
 		tagArgs []string
+		since   int
+		lastOut bool
 	)
 	cmd := &cobra.Command{
 		Use:   "read [session]",
@@ -54,13 +57,47 @@ sequences are stripped from both halves unless --raw is given.
 The two halves still differ in kind. The lines already printed are a rendered screen
 with wrapping rejoined, and what follows is filtered byte by byte, because a stream
 cannot re-render a screen per byte. So a program that repaints in place, like a
-progress bar, comes out as every frame in turn rather than overwritten.`,
+progress bar, comes out as every frame in turn rather than overwritten.
+
+--since-commands bounds the read by commands instead of lines, which is what you
+want when the question is "what happened", not "how much":
+
+  cm read build --since-commands 1    # the last command, prompt and all
+  cm read build --since-commands 3    # the last three
+
+Each block opens with the shell's prompt and the command line it echoed, so several
+commands read like a CI log and you can tell where one ended. That is the reason it
+is anchored there: outputs alone, run together, cannot be separated.
+
+--last-output gives the opposite, for a script rather than a person: only what the
+most recent command printed, with no prompt and no echoed command line.
+
+Both need the shell's OSC 133 integration loaded, since that is what brackets a
+command. A session that reports none has no boundaries to read from and says so
+rather than returning empty. They also cannot be combined with --lines, which is a
+different bound on the same read, and they cannot answer for a session that has
+already ended, since boundaries live with the running session.`,
 		// At most one name, since --tag supplies the rest.
 		Args:              sessionOrTagArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if lines < 0 {
 				lines = 0
+			}
+			if since < 0 {
+				return fmt.Errorf("--since-commands must be positive, got %d", since)
+			}
+			if since > 0 && lastOut {
+				// Both anchor the read at a command boundary, but at different ones, so one of the two was
+				// a mistake rather than a combination to resolve.
+				return errors.New("--since-commands and --last-output cannot be combined; " +
+					"--since-commands includes the prompt and command line, --last-output does not")
+			}
+			// Refused rather than given a precedence. They are two unrelated bounds on the same read, and
+			// "the last 3 commands but only 50 lines" does not say which wins.
+			if (since > 0 || lastOut) && cmd.Flags().Changed("lines") {
+				return errors.New("--lines cannot be combined with --since-commands or --last-output; " +
+					"a command boundary and a line count are different bounds on the same read")
 			}
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
@@ -109,6 +146,9 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 						Lines:   uint32(lines),
 						Unwrap:  !wrap,
 						Raw:     raw,
+						// Zero when unused, which is what tells the server a line count applies instead.
+						SinceCommands: uint32(since),
+						LastOutput:    lastOut,
 					})
 					if err != nil {
 						return err
@@ -144,5 +184,9 @@ progress bar, comes out as every frame in turn rather than overwritten.`,
 		"keep soft-wrapped lines split as the terminal laid them out")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"read the sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.IntVar(&since, "since-commands", 0,
+		"print output from where the last N commands began, prompt and command line included")
+	f.BoolVar(&lastOut, "last-output", false,
+		"print only the last command's own output, without the prompt or command line")
 	return cmd
 }
