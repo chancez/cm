@@ -69,7 +69,13 @@ cm attach --no-attach build --dir /path/to/repo    # a persistent shell
 cm run --session build --timeout 10m -- 'make -j4'
 ```
 
-That shell also needs to emit OSC 133 for `cm run` to know the command finished. `/bin/sh` does not, so pass `--timeout`: without one the reuse path waits indefinitely, having already produced the output. See the OSC 133 note above.
+That shell also needs to emit OSC 133 for `cm run` to know the command finished. `/bin/sh` does not, so either have the command print something recognizable and wait for it, or fall back to a timeout:
+
+```bash
+cm run --session build --match 'BUILD OK' --timeout 10m -- 'make -j4 && echo BUILD OK'
+```
+
+`--match` is the better answer where you control what the command prints: it returns when the text appears rather than after a fixed wait. Without it the reuse path waits for the shell to be idle, which such a session never reports, so `--timeout` is doing all the work and is a sleep rather than a wait.
 
 ## Drive a long-running or interactive program
 
@@ -215,16 +221,15 @@ If you must wait separately, wait for `idle` with `send --wait`, and treat a sta
 For an agent or program that does not report, wait on its output instead of polling:
 
 ```bash
-cm wait reviewer --match 'DONE' --timeout 10m &   # start the wait first
-wait_pid=$!
-cm send reviewer 'Review the diff. Print DONE when finished.' --enter
-wait $wait_pid                                    # returns when DONE appears
+cm send reviewer 'Review the diff. Print DONE when finished.' --enter --match 'DONE' --timeout 10m
 cm read reviewer --lines 200
 ```
 
-`--match` is the only wait that needs nothing from what is running, so it is the answer whenever a program emits no OSC 133 and has no hook wired up. It is a plain substring, matched against the rendered text, so colour codes between the characters do not defeat it.
+`--match` needs nothing from what is running, so it is the answer whenever a program emits no OSC 133 and has no hook wired up. It is a plain substring, matched against the rendered text, so colour codes between the characters do not defeat it. It works on `send`, `run`, and `wait`.
 
-**Start the wait before sending.** Only output arriving after the call counts, so `cm send` followed by `cm wait --match` is a race: a fast command prints and finishes before the wait subscribes, and the wait then blocks until its timeout on output it already missed. That is the same ordering `cm send --wait` handles for you server-side, and the reason it exists -- use `send --wait` when the session reports OSC 133, and this pattern when it does not.
+**Prefer `send --match` over `wait --match` for work you are about to start.** One request, and the server arms the wait before writing the input, so a command that prints and finishes instantly is still caught. `cm send` followed by a separate `cm wait --match` is a race you cannot close from outside: the output is already past by the time the wait subscribes. Use `cm wait --match` for a session something *else* is driving, and start it before the work if you can.
+
+`send --match` also steps over the shell's echo of the command you sent, so a pattern naming something in the command itself still waits for the real output rather than resolving on the echo.
 
 Prefer this over a `cm read | grep` loop either way: polling can miss output that scrolls past between samples, which is the whole reason waiting happens server-side.
 
