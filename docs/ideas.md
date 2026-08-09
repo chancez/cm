@@ -76,10 +76,14 @@ What the entry asked to settle first turned out to be the whole design: a deadli
 thing everywhere. wait and run exit non-zero because they were asked for a result; a follower exits zero
 because a deadline is simply being told to stop, and failing would make a caller discard output it received.
 
-**Waiting on more than state.** `cm wait` takes a state. A caller that wants "wait until this text
-appears" writes a polling loop around `cm read`, which is exactly the sampling the server-side wait exists
-to avoid, and it can miss output that scrolls past between samples. A `--match` or `--regex` on the server
-side would be a small addition to the existing wait machinery.
+**Waiting on more than state.** Done: `cm wait --match`, with `--match-raw` for the emitted bytes. See
+`docs/architecture.md`.
+
+Plain substring rather than a regex, deferred rather than rejected: substring covers "did it print DONE",
+and a regex on a stream raises anchoring questions -- whether `^` means start of line or start of output --
+that deserve their own thought. The matcher is a seam rather than inline code precisely so a regex, or a
+`cm watch` consuming the same evaluation, needs no second implementation of the chunk-splitting and
+escape-sequence handling.
 
 **Waiting on several sessions.** Done: `cm wait --tag` waits on a group concurrently, requiring every
 session by default and returning on the first with `--any`. See `docs/architecture.md`.
