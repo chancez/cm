@@ -17,7 +17,8 @@ const (
 	FindingVersionSkew = "version-skew"
 	// FindingServerErrors is errors in the server's log.
 	FindingServerErrors = "server-errors"
-	// FindingNoTerminal is a build without the terminal emulator.
+	// FindingNoTerminal is a server running without a terminal emulator, which no ordinary build produces
+	// now that cgo is required.
 	FindingNoTerminal = "no-terminal"
 	// FindingLongSocketPath is a runtime directory close to the limit on a unix socket path.
 	FindingLongSocketPath = "long-socket-path"
@@ -63,9 +64,9 @@ func (m *Manager) checkVersionSkew(clientVersion string) []Finding {
 
 // checkTerminal reports a build without the emulator.
 //
-// A no-cgo build loses screen restore on reattach and `cm history` while everything else works. The server
-// logs that once at startup, which is exactly the sort of message nobody sees, and the symptom is a reattach
-// showing a blank screen: indistinguishable from a bug in restore.
+// Kept after cgo became mandatory, because a Manager can still be constructed without a terminal factory and
+// the symptom is a reattach showing a blank screen, which is indistinguishable from a bug in restore. It should
+// no longer fire on a real installation, so if it does, something is wrong rather than merely unsupported.
 func (m *Manager) checkTerminal() []Finding {
 	if m.newTerminal != nil {
 		return nil

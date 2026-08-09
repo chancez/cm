@@ -143,7 +143,6 @@ func TestSendWaitResolvesForFastCommands(t *testing.T) {
 func TestReadReturnsABoundedUnwrappedTail(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 	requireShell(t, "/bin/zsh")
 	// The shell reports OSC 133 because the test says so, not because the machine happens to be
 	// configured for it.

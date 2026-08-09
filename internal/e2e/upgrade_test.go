@@ -19,7 +19,6 @@ import (
 func TestClientReconnectsAcrossAServerRestart(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "upgrade", "--", "/bin/sh")
 	c.waitReady()
@@ -75,7 +74,6 @@ func TestClientReconnectsAcrossAServerRestart(t *testing.T) {
 func TestInputTypedDuringAnOutageIsNotLost(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "buffered", "--", "/bin/sh")
 	c.waitReady()
@@ -113,7 +111,6 @@ func TestInputTypedDuringAnOutageIsNotLost(t *testing.T) {
 func TestOutputDuringAnOutageIsDeliveredOnReconnect(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "catchup", "--", "/bin/sh")
 	c.waitReady()
@@ -141,7 +138,6 @@ func TestOutputDuringAnOutageIsDeliveredOnReconnect(t *testing.T) {
 func TestClientSurvivesRepeatedRestarts(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "repeat", "--", "/bin/sh")
 	c.waitReady()

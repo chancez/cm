@@ -18,7 +18,6 @@ import (
 func TestSessionSurvivesServerRestartWithScrollback(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "keeper", "-d", "--",
 		"/bin/sh", "-c", "echo BEFORE_RESTART; sleep 120")
@@ -62,7 +61,6 @@ func TestSessionSurvivesServerRestartWithScrollback(t *testing.T) {
 func TestAdoptedSessionStillAcceptsInput(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "live", "-d", "--", "/bin/sh", "-c", "echo READY; cat")
 	e.waitForHistory("live", "READY")
@@ -94,7 +92,6 @@ func TestAdoptedSessionStillAcceptsInput(t *testing.T) {
 func TestScrollbackSurvivesRepeatedRestarts(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "many", "-d", "--",
 		"/bin/sh", "-c", "echo FIRST_LINE; sleep 120")

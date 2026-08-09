@@ -7,34 +7,31 @@ import (
 	"github.com/chancez/cm/internal/vt"
 )
 
-// A build without the emulator must hand the manager a nil factory rather than one that errors.
+// terminalFactory must return a working factory, since cgo is required.
 //
-// The distinction is the whole point. The manager treats nil as "run without a terminal model" and
-// keeps sessions, attach, detach, and persistence working, losing only screen restore and history.
-// A factory that returns an error instead fails at session *creation*, so `cm run` and `cm attach`
-// both die outright: the degradation stops being partial. That is what a CGO_ENABLED=0 binary
-// actually did, and it looked like a broken build rather than a missing feature.
-func TestTerminalFactoryNilWithoutCgo(t *testing.T) {
+// This used to assert the opposite branch too: that a build without the emulator handed the manager a *nil*
+// factory rather than one that errors, so sessions kept working and only screen restore was lost. That branch
+// is gone with the no-cgo build, which was retired because the degraded mode was not worth having -- `cm read`,
+// `cm history`, and restore are most of what cm does, and a build where they quietly return nothing is worse
+// than one that does not compile.
+//
+// What is left is worth keeping: the factory has to produce a terminal, or "the emulator is available" means
+// nothing.
+func TestTerminalFactoryProducesATerminal(t *testing.T) {
 	cfg := &config.Config{}
 	got := terminalFactory(cfg)
-
-	if vt.Available {
-		if got == nil {
-			t.Fatal("terminalFactory() = nil with the emulator available, want a factory")
-		}
-		// And it produces a working terminal, otherwise "available" means nothing.
-		term, err := got(24, 80)
-		if err != nil {
-			t.Fatalf("factory(24, 80) error = %v, want a terminal", err)
-		}
-		term.Close()
-		return
+	if got == nil {
+		t.Fatal("terminalFactory() = nil, want a factory now that cgo is required")
+	}
+	if !vt.Available {
+		t.Fatal("vt.Available = false, want true now that cgo is required")
 	}
 
-	if got != nil {
-		t.Fatal("terminalFactory() returned a factory in a build without cgo, " +
-			"want nil so the manager runs without a terminal model")
+	term, err := got(24, 80)
+	if err != nil {
+		t.Fatalf("factory(24, 80) error = %v, want a terminal", err)
 	}
+	term.Close()
 }
 
 // Expiry has to be configured even when persistence is disabled.

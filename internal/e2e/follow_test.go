@@ -247,7 +247,6 @@ func TestFollowStripsEscapesFromTheStream(t *testing.T) {
 func TestReadRawPrintsEmittedBytes(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "rawread", "--",
 		"/bin/sh", "-c", `printf '\033[31mred\033[0m\n'; echo plain`)
@@ -273,7 +272,6 @@ func TestReadRawPrintsEmittedBytes(t *testing.T) {
 func TestReadRawRespectsLines(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "rawlines", "--",
 		"/bin/sh", "-c", "echo one; echo two; echo three")
@@ -302,7 +300,6 @@ func TestReadRawRespectsLines(t *testing.T) {
 func TestHistoryHTMLPreservesStyling(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "styled", "--",
 		"/bin/sh", "-c", `printf '\033[1mbold\033[0m\n'`)
@@ -325,7 +322,6 @@ func TestHistoryHTMLPreservesStyling(t *testing.T) {
 func TestReadRawOnALiveSession(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	// Still running when read, which is what puts it on the live path.
 	e.mustRun("run", "--session", "liveraw", "-d", "--",

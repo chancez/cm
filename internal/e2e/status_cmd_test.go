@@ -133,7 +133,6 @@ func TestStatusDoesNotStartAServer(t *testing.T) {
 func TestStatusCountsAttachedClients(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	if got := e.cmStatus(); got.Clients != 0 {
 		t.Fatalf("clients = %d before attaching, want 0", got.Clients)

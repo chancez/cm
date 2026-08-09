@@ -118,25 +118,28 @@ though it were new.
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an
-upstream API break is one package to fix, and the other layers stay buildable without cgo,
-which matters because the shim needs no terminal emulation.
+upstream API break is one package to fix.
 
 The server holds terminal state behind an interface with an injected constructor, so fanout,
-reconnect, and ownership logic are testable without the emulator, and a session still works
-without one, minus screen restore.
+reconnect, and ownership logic are testable without the emulator. The server's own tests use a
+nil constructor for exactly that.
 
-That claim is checked rather than asserted. `internal/vt` has a `!cgo` stub, so
-`CGO_ENABLED=0 go test ./...` fails if cgo leaks into another package, and `mise run test-linux`
-runs the suite that way in Docker. The stub is a stub, not a fallback: it reports that the
-emulator is unavailable, and the wiring in `cmd/cm` checks `vt.Available` and passes the manager a
-nil constructor, which the manager already treats as "run without a terminal model".
+cgo is required, and that is a deliberate reversal. There used to be a `!cgo` stub for this package
+and a no-cgo Linux image to exercise it, so that `CGO_ENABLED=0 go test ./...` proved cgo had not
+leaked into another package and a build without the emulator degraded rather than broke.
 
-The distinction matters more than it looks. A constructor that *errors* instead of being absent
-fails at session creation, since that is where it is called, so a build without cgo could not
-start a session at all rather than merely losing screen restore. What a no-cgo build loses is
-screen restore on reattach and `cm history`; sessions, attach, detach, multi-client, and
-persistence all work. The server logs the downgrade once at startup, because "my scrollback
-vanished" is otherwise hard to attribute to a build flag.
+The degraded mode was not worth its cost. `cm read`, `cm history`, and screen restore on reattach are
+most of what cm is for, and all three need the emulator, so what the stub produced was a build whose
+central commands returned empty *successfully*. That failed silently twice in ways that took real time
+to attribute: once when `cm run` printed nothing, and once when a test's readiness check could never be
+satisfied because it was waiting on rendered output that would never come. Both looked like bugs in cm.
+
+The containment claim is still true and still worth keeping; it is simply no longer checked by building
+without cgo.
+
+A `CGO_ENABLED=0` build fails on purpose, and `internal/vt/requires_cgo.go` exists only to say why. Without
+it the error is "build constraints exclude all Go files in internal/vt", which describes the symptom rather
+than the cause and sends the reader looking for a build tag that is not there.
 
 Restore is a port of zmx's `serializeTerminalState`. Its details are all bug fixes; see
 `docs/restore.md`.

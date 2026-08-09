@@ -57,9 +57,9 @@ type versionJSON struct {
 func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 	out := versionJSON{
 		Client: paths.Version(),
-		// Reported because a no-cgo build silently loses screen restore and history, and the symptom is a
-		// blank screen on reattach, which looks like a bug in restore rather than a build without the
-		// emulator.
+		// Reported even though cgo is now required, so a client talking to a server built differently sees
+		// the answer rather than assuming it. A server without the emulator shows a blank screen on
+		// reattach, which looks like a bug in restore rather than a build problem.
 		Terminal: vt.Available,
 		Go:       runtime.Version(),
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,

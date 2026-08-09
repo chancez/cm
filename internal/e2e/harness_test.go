@@ -789,23 +789,28 @@ PS1='` + promptMarker + `> '
 // with it consumed and never matches. Found by reading the bytes cm renders rather than assuming.
 const promptMarker = "CM_TEST_READY"
 
-// waitForPrompt blocks until a session's shell has printed its prompt and is ready for input.
+// waitForPrompt blocks until a session's shell is ready to read input.
 //
 // Waiting for `state == "running"` is not the same thing and was a real source of flakiness. A session is
 // running the moment its process exists, while zsh still has to load its rc files and start its line editor;
 // input written in between is read by the terminal driver before zle is listening, and the first character
-// gets echoed twice. It presented as `cm run --session x -- 'echo $MARKER'` sending `eecho $MARKER`, which
-// the shell then reports as a command not found -- about one run in ten.
+// gets echoed twice.
 //
-// The prompt is the only honest signal that the shell will read what it is sent, which is why the test rc
-// sets a recognizable one. Waiting for OSC 133 state instead would not do: a shell at its first prompt is
-// idle, which is indistinguishable from a shell that has not started.
+// Readiness is proved with a round-trip rather than by looking for the prompt in the session's output, which
+// was the first attempt and turned three passing tests into 30-second timeouts on the then-current no-cgo
+// Linux image: `cm read` renders through the terminal emulator, so without one it returned empty successfully
+// and the wait could never be satisfied. cgo is required now, but a round-trip is still the better signal --
+// it proves the shell read and ran the input rather than that something was painted.
 //
-// Only for sessions created with withOSC133, since promptMarker comes from that rc.
+// A `send --wait idle` that succeeds proves the whole path: the shell read the input, ran it, and reported
+// through OSC 133 that it was done. The server tracks those markers from the raw stream, so this needs no
+// emulator. `true` is used because it changes nothing about the session.
+//
+// Only for sessions created with withOSC133, since without those markers the wait has nothing to resolve on.
 func (e *env) waitForPrompt(session string) {
 	e.t.Helper()
-	e.waitFor(session+" to reach its first prompt", 30*time.Second, func() bool {
-		return strings.Contains(e.run("read", session).stdout, promptMarker)
+	e.waitFor(session+" to be ready for input", 30*time.Second, func() bool {
+		return e.run("send", session, "true", "--enter", "--wait", "idle", "--timeout", "2s").code == 0
 	})
 }
 
@@ -828,26 +833,4 @@ func (e *env) withOSC133() []string {
 		e.t.Fatalf("WriteFile() error = %v", err)
 	}
 	return []string{"--env", "ZDOTDIR=" + dir}
-}
-
-// requireTerminal skips a test that needs the terminal emulator.
-//
-// A build without cgo has no emulator, so screen restore on reattach and `cm history` genuinely do not
-// work: the server says "terminal rendering is unavailable" and that is correct behavior, not a bug to
-// assert around. Everything else about a session still works, which is what the rest of these tests
-// cover.
-//
-// Checked at runtime by asking the binary rather than with a build tag, because the test binary and the
-// cm binary it drives are compiled separately: this package could be built with cgo while cm was not.
-func requireTerminal(t *testing.T, e *env) {
-	t.Helper()
-
-	// A session that has ended is the cheapest way to ask, since reading its history needs the
-	// emulator either way.
-	e.mustRun("run", "--session", "cgoprobe", "--", "/bin/sh", "-c", "echo probe")
-	r := e.run("history", "cgoprobe")
-	e.run("kill", "cgoprobe")
-	if r.code != 0 && strings.Contains(r.stderr, "terminal rendering is unavailable") {
-		t.Skip("cm was built without cgo, so screen restore and history are unavailable")
-	}
 }

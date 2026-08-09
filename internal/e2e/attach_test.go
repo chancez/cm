@@ -79,11 +79,13 @@ func attachOnPty(t *testing.T, e *env, args ...string) *ptyClient {
 // ignoring input, and it is a real ordering requirement rather than a test artifact: anything driving
 // cm programmatically has to wait for it to be ready.
 //
-// Waits for the shell's prompt rather than for anything cm emits. The escape sequences a client writes
-// on attach come from the emulator serializing a screen, so a build without cgo sends none of them and
-// waiting for a cursor-home would hang: on Linux without cgo the pty showed only "# ".
+// Waits for the shell's prompt rather than for anything cm emits, because a prompt is the real readiness
+// signal: it means the shell is accepting commands, which is the thing being waited for.
 //
-// A prompt is the real readiness signal anyway, since it means the shell is accepting commands.
+// Waiting on cm's own output would be waiting on the wrong layer. The escape sequences a client writes on
+// attach come from the emulator serializing a screen, so they say a screen was painted rather than that the
+// shell is listening -- and back when a no-cgo build existed they were absent entirely, so this hung with only
+// "# " on the pty.
 func (c *ptyClient) waitReady() {
 	c.t.Helper()
 	// Both common prompt endings, since the shell here is whatever /bin/sh is: "$ " for a user and "# "
@@ -168,7 +170,6 @@ func TestAttachDetachReattachRepaintsScreen(t *testing.T) {
 	e := newEnv(t)
 	// The repainted screen comes from the emulator serializing terminal state, so this test is about
 	// rendering. The ownership tests below are not, and deliberately have no such guard.
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "paint", "--", "/bin/sh")
 	c.waitReady()
@@ -290,7 +291,6 @@ func TestOwnedSessionSurvivesADeliberateDetach(t *testing.T) {
 func TestAttachDetachKeyFlagOverridesTheDefault(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	// ctrl-o rather than the default ctrl-\.
 	c := attachOnPty(t, e, "customkey", "--detach-key", "ctrl-o", "--", "/bin/sh")

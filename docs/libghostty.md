@@ -15,9 +15,11 @@ and never sees a `Ghostty*` handle, an `unsafe.Pointer`, or a `GhosttyResult`. E
 translated at the boundary, and C memory is freed there.
 
 This is worth enforcing rather than merely intending. The API is unstable by upstream's
-own description, so a breaking change should mean editing one package. It also keeps
-`CGO_ENABLED=0` builds of the other layers possible, which matters because the shim
-needs no terminal emulation at all.
+own description, so a breaking change should mean editing one package.
+
+It no longer keeps `CGO_ENABLED=0` builds possible: cgo is required, and the `!cgo` stub that
+used to prove the containment was retired along with the degraded build it enabled. See
+`docs/architecture.md` for why.
 
 ## Why cgo is not a performance problem here
 

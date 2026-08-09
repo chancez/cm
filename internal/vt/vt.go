@@ -1,12 +1,15 @@
-//go:build cgo
-
 // Package vt wraps libghostty-vt, and is the only package in cm that uses cgo.
 //
 // Everything outside works with Go types: no Ghostty handles, no unsafe.Pointer, no result
-// codes. That containment is deliberate. libghostty's API is unstable by upstream's own
-// description, so a breaking change should mean editing one package, and the other layers
-// stay buildable with CGO_ENABLED=0, which matters because the shim needs no terminal
-// emulation at all.
+// codes. That containment is deliberate: libghostty's API is unstable by upstream's own
+// description, so a breaking change should mean editing one package.
+//
+// cgo is required. There was a stub standing in for this package without it, on the theory that cm should
+// degrade rather than fail, and the degraded build was not worth having: `cm read`, `cm history`, and screen
+// restore on reattach are most of what cm is for, and all three need the emulator. What the stub actually
+// produced was a build where those commands returned empty *successfully*, which is a worse failure than not
+// building -- it cost two debugging sessions, once when `cm run` printed nothing and once when a readiness
+// check could never be satisfied, both times looking like a bug in cm rather than a missing emulator.
 //
 // libghostty provides parsing, screen and scrollback state with reflow, and formatting screen
 // contents back out as escape sequences. It does not provide a pty, process spawning, or an
@@ -31,8 +34,11 @@ import (
 )
 
 // Errors returned when libghostty rejects a call.
-// Available reports whether the terminal emulator was compiled in. See the !cgo build of this
-// package, where it is false.
+// Available reports whether the terminal emulator is compiled in.
+//
+// Always true now that cgo is required. Kept as a constant rather than deleted because `cm version` and
+// `cm status` report it, and a client talking to a server built differently still wants to see the answer
+// rather than assume it.
 const Available = true
 
 var (

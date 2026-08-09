@@ -115,7 +115,6 @@ func firstExisting(paths ...string) string {
 func TestRunCapturesOutput(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	name := strings.TrimSpace(e.mustRun("run", "--session", "captured", "-d", "--",
 		"/bin/sh", "-c", "echo CAPTURED_OUTPUT"))

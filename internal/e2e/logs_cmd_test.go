@@ -217,7 +217,6 @@ func TestOrdinaryUseLogsNoWarnings(t *testing.T) {
 func TestOwningClientStillWaitsForTheDetachAck(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	c := attachOnPty(t, e, "ownedsess", "--own", "--", "/bin/sh")
 	c.waitReady()

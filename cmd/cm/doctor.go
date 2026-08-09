@@ -34,7 +34,7 @@ while to diagnose, because each fails silently rather than reporting an error.
                         else surfaces
   log-warnings          recent warnings, which are the quieter and often more
                         useful half: a degraded session rather than a failed one
-  no-terminal           a build without the emulator, so reattaching shows a
+  no-terminal           a server with no emulator, so reattaching shows a
                         blank screen and 'cm history' is unavailable
   long-socket-path      a runtime directory close to the limit on a unix socket
                         path, which fails as an unexplained EINVAL

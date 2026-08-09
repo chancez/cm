@@ -88,11 +88,11 @@ func TestDoctorReportsVersionsAndAHealthySetup(t *testing.T) {
 	// Only findings about the installation's own state are asserted, not the exit code.
 	//
 	// Several checks are legitimately true of a test environment and have nothing to do with what this test
-	// is about: a no-cgo build reports no-terminal, and a deep temp directory can report long-socket-path.
+	// is about: a deep temp directory can report long-socket-path, and a session whose shell emits no OSC 133
+	// reports no-shell-integration.
 	// Asserting a zero exit made this fail on the Linux image for a correct reason, which is a test asserting
 	// its environment rather than the code.
 	environmental := map[string]bool{
-		"no-terminal":          true,
 		"long-socket-path":     true,
 		"no-shell-integration": true,
 	}

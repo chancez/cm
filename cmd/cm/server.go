@@ -236,13 +236,6 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	// happens when the runtime directory is deleted underneath it: it keeps listening on an inode nothing can
 	// name while every later command starts a second server.
 	mgr.SetServerSocketInode(socketInode)
-	if !vt.Available {
-		// Sessions, attach, detach, and persistence all work; screen restore on reattach and
-		// `cm history` do not. Logged rather than silent, because "my scrollback vanished" is hard
-		// to attribute to a build flag after the fact.
-		logger.Warn("built without cgo: screen restore and history are unavailable")
-	}
-
 	resizePolicy, err := cfg.Resize()
 	if err != nil {
 		l.Close()
@@ -467,13 +460,9 @@ func persistPolicy(cfg *config.Config) (*server.PersistPolicy, error) {
 // This is where cgo enters the server. Passing it in means the manager, and its tests, do not
 // depend on the emulator.
 //
-// Returns nil in a build without cgo, which the manager treats as "run without a terminal model".
-// Returning a function that always errors instead would be worse than useless: session creation
-// calls it, so every session would fail to start rather than merely losing screen restore.
+// Always returns a factory: cgo is required, so the emulator is always present. The manager still accepts a
+// nil one, which is what its own tests use.
 func terminalFactory(cfg *config.Config) server.NewTerminalFunc {
-	if !vt.Available {
-		return nil
-	}
 	scrollback := cfg.Scrollback()
 	return func(rows, cols uint16) (server.Terminal, error) {
 		return vt.NewSessionTerminal(rows, cols, scrollback)

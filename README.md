@@ -122,20 +122,19 @@ that the live process still maps. It presents as `zsh: killed  cm ls` with nothi
 rename replaces the directory entry instead, so the new binary is a new inode, the swap is atomic, and
 an already-running server keeps working on the old one until it is restarted.
 
-Tests run on the host with `mise run test`. Two Linux runs exist, and they check different things:
+Tests run on the host with `mise run test`, and on Linux in Docker with `mise run test-linux`. The
+Linux run matters because a macOS-only run never compiles the Linux paths, and `/bin/sh` there is dash
+rather than bash, which has caught real bugs. It builds libghostty from source, so screen restore,
+history, and adoption-with-scrollback are covered rather than skipped.
 
-- `mise run test-linux-cgo` builds libghostty from source and runs everything, so screen restore,
-  history, and adoption-with-scrollback are covered. This is the one to use before trusting a change
-  to anything platform-specific.
-- `mise run test-linux` builds without cgo. The tests that need rendering skip themselves, so this
-  covers less, and it is the only thing that verifies cm degrades rather than breaks when the
-  emulator is absent.
+cgo is required. There was a second, no-cgo Linux image and a `!cgo` stub for `internal/vt`, on the
+theory that cm should degrade rather than break without the emulator. Both were retired: `cm read`,
+`cm history`, and screen restore are most of what cm does, and a build where they return empty
+*successfully* is a worse outcome than one that does not build. It also cost real debugging time
+twice, each time looking like a bug in cm rather than a missing emulator.
 
-Both matter: a macOS-only run never compiles the Linux paths, and `/bin/sh` there is dash rather than
-bash, which has caught real bugs.
+A `CGO_ENABLED=0` build fails deliberately, with an error naming the reason.
 
-`mise run build-linux` cross-compiles without cgo. Such a build has no terminal emulator, so screen
-restore on reattach and `cm history` are unavailable while everything else works. See
-`docs/architecture.md`.
+`mise run build-linux` checks that the Linux build compiles, using the same image.
 
 `go test -short` skips the end-to-end tests, which spawn real processes and ptys.

@@ -67,7 +67,6 @@ sessions = ["never-matches-*"]
 expire_after = "168h"
 forget_unpersisted_after = "1m"
 `)
-	requireTerminal(t, e)
 
 	e.mustRun("run", "--session", "asked", "--persist", "--", "/bin/sh", "-c", "echo KEPT")
 	e.mustRun("run", "--session", "casual", "--", "/bin/sh", "-c", "echo TRANSIENT")
@@ -103,7 +102,6 @@ forget_unpersisted_after = "1m"
 func TestRunOutputReadableAfterExit(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	// Waits for the command, so by the time this returns the session has already ended. That is the
 	// case that was broken.

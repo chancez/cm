@@ -131,7 +131,6 @@ func TestAttachNoAttachPrintsAnAllocatedName(t *testing.T) {
 func TestAttachNoAttachThenAttach(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	requireTerminal(t, e)
 
 	e.mustRunWithin(20*time.Second, "attach", "--no-attach", "later")
 
