@@ -90,8 +90,8 @@ func TestWaitManyRunsConcurrently(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	start := time.Now()
-	err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, false, true)
+	err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, false, true)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("waitMany() error = %v", err)
@@ -119,8 +119,8 @@ func TestWaitManyAllRequiresEverySession(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, false, true)
+	err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, false, true)
 	if err == nil {
 		t.Fatal("waitMany() = nil with one session unsatisfied, want a non-zero exit")
 	}
@@ -137,8 +137,8 @@ func TestWaitManyAllSucceedsWhenEverySessionReaches(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	if err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, false, true); err != nil {
+	if err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, false, true); err != nil {
 		t.Errorf("waitMany() error = %v, want nil when all are satisfied", err)
 	}
 }
@@ -159,8 +159,8 @@ func TestWaitManyAnyReturnsOnTheFirst(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	start := time.Now()
-	err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, true, true)
+	err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, true, true)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("waitMany(--any) error = %v", err)
@@ -186,8 +186,8 @@ func TestWaitManyAnyWithNoSessionSatisfied(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, true, true)
+	err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, true, true)
 	if err == nil {
 		t.Fatal("waitMany(--any) = nil with nothing satisfied, want a non-zero exit")
 	}
@@ -212,8 +212,8 @@ func TestWaitManyAnyDoesNotReportCancelledSiblings(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if err := waitMany(context.Background(), &stdout, &stderr, cl, names, "idle",
-		serverv1.WaitState_WAIT_STATE_IDLE, 0, true, true); err != nil {
+	if err := waitMany(context.Background(), &stdout, &stderr, cl, names,
+		waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE, until: "idle"}, 0, true, true); err != nil {
 		t.Fatalf("waitMany(--any) error = %v, want the cancellation ignored", err)
 	}
 }

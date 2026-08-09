@@ -41,11 +41,13 @@ func waitStateNames() []string {
 
 func newWaitCommand(g *globals) *cobra.Command {
 	var (
-		until   string
-		timeout time.Duration
-		asJSON  bool
-		tagArgs []string
-		any     bool
+		until    string
+		timeout  time.Duration
+		asJSON   bool
+		tagArgs  []string
+		any      bool
+		match    string
+		matchRaw bool
 	)
 	cmd := &cobra.Command{
 		Use:   "wait [session]",
@@ -76,6 +78,28 @@ Waiting is done by the server from the session's own output, so this costs one
 request rather than polling, and cannot miss a transition the way sampling
 'cm list' can.
 
+--match waits for text instead of a state, which is the only form that needs
+nothing from what is running:
+
+  cm wait build --match 'BUILD OK' --timeout 5m
+
+Every state above comes from OSC 133 or from a program calling 'cm report', so a
+session running something with neither could otherwise only be polled -- and a
+polling loop can miss output that scrolls past between samples, which is exactly
+what waiting server-side exists to avoid.
+
+A plain substring, not a pattern. Matched against the rendered text, so escape
+sequences between the characters do not defeat it: a program that colours its output
+writes DO<esc>NE, and you meant the DONE you would see. --match-raw matches the
+emitted bytes instead, for when the sequences are what you are looking for.
+
+Only output arriving after the call counts. Text the session printed earlier does
+not satisfy it, for the same reason a wait for idle is not satisfied by the idle it
+started in; use 'cm read' to look at what already happened.
+
+--match cannot be combined with --until, since "idle and also matching" and "idle or
+matching" are both plausible readings of the pair.
+
 --tag waits on every session carrying a tag, which is what a fan-out needs:
 
   cm wait --tag run=abc123 --until idle            # all of them
@@ -89,9 +113,27 @@ to whichever finishes first instead of polling for it.`,
 		Args:              sessionOrTagArg,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			state, ok := waitStates[until]
-			if !ok {
-				return fmt.Errorf("unknown state %q, want one of %s", until, strings.Join(waitStateNames(), ", "))
+			// --until has a default, so "was it set" cannot be read from its value. Asked of the flag set
+			// instead, or a caller passing only --match would be told it conflicts with a state they never
+			// chose.
+			untilSet := cmd.Flags().Changed("until")
+			if match != "" && untilSet {
+				return errors.New("--match and --until cannot be combined; " +
+					"--match waits on output and --until waits on a state")
+			}
+			if matchRaw && match == "" {
+				return errors.New("--match-raw only applies with --match")
+			}
+
+			target := waitTarget{match: match, matchRaw: matchRaw}
+			if match == "" {
+				var ok bool
+				target.state, ok = waitStates[until]
+				if !ok {
+					return fmt.Errorf("unknown state %q, want one of %s",
+						until, strings.Join(waitStateNames(), ", "))
+				}
+				target.until = until
 			}
 			if any && len(tagArgs) == 0 {
 				// --any describes which of several sessions, so it means nothing for one. Refused rather
@@ -117,9 +159,9 @@ to whichever finishes first instead of polling for it.`,
 				if len(names) == 1 {
 					// One session takes the single-session path even when a selector chose it, so the
 					// output and the exit status are exactly what naming it would have given.
-					return waitOne(ctx, os.Stdout, os.Stderr, cl, names[0], until, state, timeout, asJSON)
+					return waitOne(ctx, os.Stdout, os.Stderr, cl, names[0], target, timeout, asJSON)
 				}
-				return waitMany(ctx, os.Stdout, os.Stderr, cl, names, until, state, timeout, any, asJSON)
+				return waitMany(ctx, os.Stdout, os.Stderr, cl, names, target, timeout, any, asJSON)
 			})
 		},
 	}
@@ -129,6 +171,10 @@ to whichever finishes first instead of polling for it.`,
 	// for itself -- and the whole reason for the report mechanism -- was undiscoverable from the help.
 	f.StringVar(&until, "until", "idle", "state to wait for: "+strings.Join(waitStateNames(), ", "))
 	addTimeoutFlag(f, &timeout)
+	f.StringVar(&match, "match", "",
+		"wait until this text appears in the session's output, instead of waiting for a state")
+	f.BoolVar(&matchRaw, "match-raw", false,
+		"match the bytes the program emitted rather than the text they rendered to")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"wait on the sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&any, "any", false,
@@ -137,13 +183,38 @@ to whichever finishes first instead of polling for it.`,
 	return cmd
 }
 
+// waitTarget describes what a wait is waiting for.
+//
+// One value rather than four parallel parameters, because waitOne and waitMany both take all of them and
+// pass them straight through: a match, its raw modifier, a state, and the state's spelling for display.
+// Adding --match to the parameter lists would have made two six-argument calls whose order is easy to get
+// wrong and impossible to check.
+type waitTarget struct {
+	// match is the text to wait for, empty when waiting on a state.
+	match string
+	// matchRaw matches the emitted bytes rather than the rendered text.
+	matchRaw bool
+	// state is the state to wait for, unset when matching.
+	state serverv1.WaitState
+	// until is how the state was spelled, for messages. Empty when matching.
+	until string
+}
+
+// describe names what is being waited for, for a diagnostic.
+func (t waitTarget) describe() string {
+	if t.match != "" {
+		return fmt.Sprintf("output matching %q", t.match)
+	}
+	return t.until
+}
+
 // waitOne waits on a single session.
 func waitOne(
 	ctx context.Context,
 	stdout, stderr io.Writer,
 	cl serverv1.ServerClient,
-	name, until string,
-	state serverv1.WaitState,
+	name string,
+	target waitTarget,
 	timeout time.Duration,
 	asJSON bool,
 ) error {
@@ -152,13 +223,15 @@ func waitOne(
 	// that and report a context error rather than "not yet".
 	resp, err := cl.Wait(ctx, &serverv1.WaitRequest{
 		Session:   name,
-		Until:     state,
+		Until:     target.state,
+		Match:     target.match,
+		MatchRaw:  target.matchRaw,
 		TimeoutMs: uint64(timeout.Milliseconds()),
 	})
 	if err != nil {
 		return err
 	}
-	return reportWait(stdout, stderr, name, until, resp, asJSON)
+	return reportWait(stdout, stderr, name, target.describe(), resp, asJSON)
 }
 
 // waitMany waits on several sessions at once, returning when all are satisfied or, with any, when the
@@ -177,8 +250,7 @@ func waitMany(
 	stdout, stderr io.Writer,
 	cl serverv1.ServerClient,
 	names []string,
-	until string,
-	state serverv1.WaitState,
+	target waitTarget,
 	timeout time.Duration,
 	any, asJSON bool,
 ) error {
@@ -200,7 +272,9 @@ func waitMany(
 		go func(name string) {
 			resp, err := cl.Wait(ctx, &serverv1.WaitRequest{
 				Session:   name,
-				Until:     state,
+				Until:     target.state,
+				Match:     target.match,
+				MatchRaw:  target.matchRaw,
 				TimeoutMs: uint64(timeout.Milliseconds()),
 			})
 			results <- outcome{name: name, resp: resp, err: err}
@@ -223,7 +297,7 @@ func waitMany(
 		if any && res.resp.Satisfied {
 			// The first to reach the state ends the wait, reported in the single-session form: what the
 			// caller wants is which one, and what it was doing.
-			return reportWait(stdout, stderr, res.name, until, res.resp, asJSON)
+			return reportWait(stdout, stderr, res.name, target.describe(), res.resp, asJSON)
 		}
 	}
 	if firstErr != nil {
@@ -232,7 +306,7 @@ func waitMany(
 	// Either every session was required and they have all been collected, or --any ran out of sessions
 	// without one being satisfied. Both report the whole set, since the useful information on a failure
 	// is which sessions did not get there.
-	return reportWaitMany(stdout, stderr, names, got, until, asJSON)
+	return reportWaitMany(stdout, stderr, names, got, target.describe(), asJSON)
 }
 
 // waitJSON is the JSON shape of a wait result.

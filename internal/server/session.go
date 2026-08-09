@@ -859,6 +859,21 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	return s.newAttachmentLocked(from, restore), nil
 }
 
+// SubscribeOutput follows the session's output from its current position.
+//
+// Distinct from attaching, which also registers a client for sizing, counts toward the session's client
+// total, and can restore a screen. A caller that only wants to observe bytes -- a match wait, and later a
+// watch -- must do none of those: registering as a client would make a wait for output change which
+// terminal owns the session's size, and would report a session as attached when nothing is watching it.
+//
+// From the current end rather than from the oldest retained byte, because a wait asks about what happens
+// next. Starting from history would satisfy a wait for text the session printed before the caller asked,
+// which is the same mistake as a wait satisfied by the state a session was already in.
+func (s *Session) SubscribeOutput() *seqlog.Reader {
+	_, next := s.recent.Bounds()
+	return s.recent.Subscribe(next)
+}
+
 // newAttachmentLocked builds an attachment and registers it for sizing.
 //
 // One place rather than at each return, because there are two paths out of attach and the earlier

@@ -697,6 +697,25 @@ type WaitRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Session string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
 	Until   WaitState              `protobuf:"varint,2,opt,name=until,proto3,enum=cm.server.v1.WaitState" json:"until,omitempty"`
+	// Wait until this text appears in the session's output, instead of waiting for a state.
+	//
+	// The only wait that needs nothing from what is running. Every state cm can wait for comes from OSC 133
+	// or from a program calling Report, so a session running something with neither -- which is most
+	// programs -- could previously only be polled, and a polling loop can miss output that scrolls past
+	// between samples. That is exactly what a server-side wait exists to avoid.
+	//
+	// A plain substring, not a pattern. Matched against the rendered text by default, so escape sequences
+	// between the characters do not defeat it: a program that colours its output writes "DO\x1b[0mNE", and a
+	// caller means the DONE they would see.
+	//
+	// Mutually exclusive with until, which is refused rather than combined: "idle and also matching" and
+	// "idle or matching" are both plausible readings of the pair, so neither is assumed.
+	Match string `protobuf:"bytes,11,opt,name=match,proto3" json:"match,omitempty"`
+	// Match the bytes the program emitted rather than the text they rendered to.
+	//
+	// For the case where the escape sequences are what is being looked for. Changes whether a pattern can
+	// match at all rather than how anything is displayed, so it is a deliberate modifier.
+	MatchRaw bool `protobuf:"varint,12,opt,name=match_raw,json=matchRaw,proto3" json:"match_raw,omitempty"`
 	// How long to wait before giving up. Zero waits indefinitely.
 	//
 	// Milliseconds rather than a duration string: this crosses a wire, and an integer needs no parser on
@@ -748,6 +767,20 @@ func (x *WaitRequest) GetUntil() WaitState {
 		return x.Until
 	}
 	return WaitState_WAIT_STATE_UNSPECIFIED
+}
+
+func (x *WaitRequest) GetMatch() string {
+	if x != nil {
+		return x.Match
+	}
+	return ""
+}
+
+func (x *WaitRequest) GetMatchRaw() bool {
+	if x != nil {
+		return x.MatchRaw
+	}
+	return false
 }
 
 func (x *WaitRequest) GetTimeoutMs() uint64 {
@@ -3263,10 +3296,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\vlast_output\x18\x06 \x01(\bR\n" +
 	"lastOutput\"\"\n" +
 	"\fReadResponse\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"u\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"\xa8\x01\n" +
 	"\vWaitRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12-\n" +
-	"\x05until\x18\x02 \x01(\x0e2\x17.cm.server.v1.WaitStateR\x05until\x12\x1d\n" +
+	"\x05until\x18\x02 \x01(\x0e2\x17.cm.server.v1.WaitStateR\x05until\x12\x14\n" +
+	"\x05match\x18\v \x01(\tR\x05match\x12\x1b\n" +
+	"\tmatch_raw\x18\f \x01(\bR\bmatchRaw\x12\x1d\n" +
 	"\n" +
 	"timeout_ms\x18\x03 \x01(\x04R\ttimeoutMs\"\xf4\x02\n" +
 	"\fWaitResponse\x12\x1c\n" +

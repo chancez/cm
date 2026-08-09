@@ -210,6 +210,25 @@ enum WaitState {
 message WaitRequest {
   string session = 1;
   WaitState until = 2;
+  // Wait until this text appears in the session's output, instead of waiting for a state.
+  //
+  // The only wait that needs nothing from what is running. Every state cm can wait for comes from OSC 133
+  // or from a program calling Report, so a session running something with neither -- which is most
+  // programs -- could previously only be polled, and a polling loop can miss output that scrolls past
+  // between samples. That is exactly what a server-side wait exists to avoid.
+  //
+  // A plain substring, not a pattern. Matched against the rendered text by default, so escape sequences
+  // between the characters do not defeat it: a program that colours its output writes "DO\x1b[0mNE", and a
+  // caller means the DONE they would see.
+  //
+  // Mutually exclusive with until, which is refused rather than combined: "idle and also matching" and
+  // "idle or matching" are both plausible readings of the pair, so neither is assumed.
+  string match = 11;
+  // Match the bytes the program emitted rather than the text they rendered to.
+  //
+  // For the case where the escape sequences are what is being looked for. Changes whether a pattern can
+  // match at all rather than how anything is displayed, so it is a deliberate modifier.
+  bool match_raw = 12;
   // How long to wait before giving up. Zero waits indefinitely.
   //
   // Milliseconds rather than a duration string: this crosses a wire, and an integer needs no parser on

@@ -23,8 +23,18 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 	if req.Session == "" {
 		return nil, errors.New("a session name is required")
 	}
-	if req.Until == serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
-		return nil, errors.New("a state to wait for is required")
+	// Refused rather than combined. "idle and also matching" and "idle or matching" are both plausible
+	// readings, so neither is assumed, matching how --lines and --since-commands are handled on read.
+	if req.Match != "" && req.Until != serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
+		return nil, errors.New("match and a state cannot both be waited for")
+	}
+	if req.Match == "" && req.Until == serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
+		return nil, errors.New("a state to wait for, or text to match, is required")
+	}
+	if req.MatchRaw && req.Match == "" {
+		// Refused rather than ignored: a caller passing it believes it is changing how something is
+		// matched, and there is nothing being matched.
+		return nil, errors.New("match_raw only applies with match")
 	}
 
 	sess, live := s.mgr.Get(req.Session)
@@ -34,6 +44,14 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 		rec, err := s.mgr.store.Get(ctx, req.Session)
 		if err != nil {
 			return nil, err
+		}
+		if req.Match != "" {
+			// A match waits on output that has not been produced yet, and an ended session will produce
+			// none. Said plainly rather than waiting out the timeout, and pointing at the command that can
+			// answer from what was saved.
+			return nil, fmt.Errorf(
+				"session %s has ended, so no further output will match; read its output instead",
+				req.Session)
 		}
 		if req.Until == serverv1.WaitState_WAIT_STATE_EXITED {
 			return &serverv1.WaitResponse{
@@ -54,6 +72,12 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 	// where the transition happens in between and the wait then blocks until its timeout, having missed
 	// the thing it was waiting for. Subscribing first means a change is either already in the seeded
 	// value or arrives on the channel.
+	if req.Match != "" {
+		// A separate loop, because a match wakes on output while a state wait wakes on metadata. See
+		// awaitMatch.
+		return s.awaitMatch(ctx, sess, req.Match, req.MatchRaw, req.TimeoutMs)
+	}
+
 	sub := sess.subscribeMetadata()
 	defer sess.unsubscribeMetadata(sub)
 
