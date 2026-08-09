@@ -912,7 +912,16 @@ func (m *Manager) Kill(
 		// race: the shell can exit between the check and the RPC.
 		left, err := sess.Shutdown(ctx, force, sig)
 		if err != nil && !force {
-			if ended, _ := sess.Ended(); !ended {
+			// Two ways to recognize a session that has already gone, because they can arrive in either
+			// order and only one of them is a state the server has caught up with.
+			//
+			// Ended() alone is not enough: the server learns of an exit by watching the output stream, so a
+			// shim whose connection has already closed can report a transport error while this session
+			// still looks alive. That surfaced as a flaky `cm kill --all` reporting "stopping s14: ttrpc:
+			// closed" from a test that creates twenty rapidly-exiting sessions, which hits the window often
+			// enough to fail a run in three. The resize path above already checks both for the same reason.
+			ended, _ := sess.Ended()
+			if !ended && !isSessionOver(err) && !isTransportClosed(err) {
 				return nil, fmt.Errorf("stopping %s: %w", name, err)
 			}
 		}
@@ -941,7 +950,15 @@ func (m *Manager) Kill(
 				Force:  force,
 				Signal: sig,
 			})
-			if err != nil && !force {
+			// A shim that answered the probe and then vanished is the outcome the caller wanted, not a
+			// failure to stop it. This path has no Session to ask about liveness, so the error is the only
+			// evidence available -- which is why the transport check matters more here than above.
+			//
+			// This is where the flaky `cm kill --all` came from. A test creating twenty rapidly-exiting
+			// sessions reaches Kill after the session left the registry but while its shim is still
+			// shutting down, so the probe succeeds and the request loses the race, and cleanup reported
+			// "stopping d14: ttrpc: closed" about one run in three.
+			if err != nil && !force && !isSessionOver(err) && !isTransportClosed(err) {
 				return nil, fmt.Errorf("stopping %s: %w", name, err)
 			}
 			if resp != nil {

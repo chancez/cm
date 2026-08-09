@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -863,6 +864,25 @@ func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) er
 // The shim's own error rather than seqlog.ErrClosed, which is about an output log. Sharing one string
 // made a resize on a just-exited session report "output log is closed", which the server could not
 // distinguish from a genuine problem.
+// isTransportClosed reports whether an error is the connection to a shim having gone away.
+//
+// Matched on the message for the same reason isSessionOver is: ttrpc carries an error across the socket as
+// a status with a string, so no sentinel survives the trip.
+//
+// Distinct from isSessionOver, which is the shim saying its pty is gone. This is the shim not answering at
+// all, which during a shutdown means it exited between accepting the request and replying -- the outcome
+// the caller wanted.
+func isTransportClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "ttrpc: closed") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		errors.Is(err, io.EOF)
+}
+
 func isSessionOver(err error) bool {
 	if err == nil {
 		return false
