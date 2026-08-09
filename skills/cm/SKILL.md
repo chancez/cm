@@ -314,6 +314,14 @@ Kill the sessions you created when the work is done. A session left running hold
 
 Do not `cm kill --all` or `cm server stop` unless you are certain nothing else is using cm: the user's own interactive sessions live in the same server, and stopping it or killing everything takes their work with it. Kill by name.
 
+`cm kill` sends SIGHUP, which a job can ignore. If a session's process survives, escalate rather than assuming it worked:
+
+```bash
+cm kill worker --signal term    # or kill, for anything that ignores term
+```
+
+That matters for cleanup specifically: a surviving process holds a pty, and those are a capped resource, so a leaked one eventually breaks something unrelated.
+
 If you tagged a fan-out, that tag is the safe version of `--all`: it reaches exactly the sessions you created and nothing of the user's.
 
 ```bash

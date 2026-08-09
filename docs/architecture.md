@@ -399,7 +399,27 @@ It now asks the pty via `TIOCGPGRP`, which is exactly what the line discipline c
 so `cm signal` and the key mean the same thing about *which* processes they reach. The ioctl goes through
 `withPty` rather than a bare `Fd()`, since `Fd()` is not refcounted the way `Read` and `Write` are.
 
-`--process-only` signals the shell alone, for the rare case where that is the target. A session that has
+`--process-only` signals the shell alone, for the rare case where that is the target.
+
+`cm kill` shares this machinery rather than having its own. The shim's Shutdown handler calls the same
+`session.Signal`, so the foreground-group behavior above applies to teardown too: SIGHUP reaches a running
+job, not only the shell.
+
+That default is a request, and `cm kill --signal` exists because a request can be declined. A job that
+ignores SIGHUP survives it while `cm kill` reports the session killed, leaving a process holding a pty --
+the resource macOS caps at 511 system-wide, whose exhaustion surfaces as "device not configured" somewhere
+unrelated. Measured against a binary built before the foreground-group change, which leaks the same job,
+so this is long-standing rather than new.
+
+`--force` was already the escalation, and that was its undocumented half: it means SIGKILL *and* forget a
+record whose shim cannot be reached. Splitting those into two flags was the alternative considered.
+`--signal` made it unnecessary, since it expresses the escalation directly and leaves `--force` meaning
+one thing -- be maximally forceful. Keeping SIGKILL in `--force` also protects existing callers: the kitty
+watcher passes it on window close and would otherwise start sending SIGHUP.
+
+The shim's `ShutdownRequest` gained an optional signal field, which that frozen surface permits. Zero means
+"not specified", so an older shim -- and a new server routinely talks to one, since a shim outlives the
+binary that spawned it -- honors `force` alone. The degradation is one-way and recorded in the proto. A session that has
 ended is an error rather than a silent success, since a signal needs a process to receive it; a session
 that ends between the lookup and the delivery is not, because the caller wanted it stopped and it is.
 
