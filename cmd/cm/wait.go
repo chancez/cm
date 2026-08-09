@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,6 +23,18 @@ var waitStates = map[string]serverv1.WaitState{
 	"busy":    serverv1.WaitState_WAIT_STATE_BUSY,
 	"exited":  serverv1.WaitState_WAIT_STATE_EXITED,
 	"blocked": serverv1.WaitState_WAIT_STATE_BLOCKED,
+}
+
+// waitStateNames lists the states a wait accepts, in a stable order for help text and error messages.
+//
+// Sorted rather than in map order, so the help does not shuffle between builds.
+func waitStateNames() []string {
+	names := make([]string, 0, len(waitStates))
+	for name := range waitStates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func newWaitCommand(g *globals) *cobra.Command {
@@ -43,10 +57,12 @@ Idle and busy come from what the shell reports via OSC 133, so they need a shell
 with terminal integration loaded. A session whose shell reports nothing never
 becomes busy, and 'cm info <session> --field busy' shows what cm can see.
 
-Blocked only exists when a program reports it with 'cm report', because it cannot
-be derived: a shell marks a command as running whether it is computing or waiting
-at a prompt of its own. A report also takes precedence over the derived state for
-idle and busy, since a program describing itself is better evidence.
+Blocked only exists when a program reports it, because it cannot be derived: a
+shell marks a command as running whether it is computing or waiting at a prompt of
+its own. Report it with 'cm report', or with the cm_report function that
+'cm shell-init' provides for a shell. A report also takes precedence over the
+derived state for idle and busy, since a program describing itself is better
+evidence.
 
 Exits 0 when the state is reached and 1 on timeout, so it composes with && and ||:
 
@@ -64,7 +80,7 @@ request rather than polling, and cannot miss a transition the way sampling
 			}
 			state, ok := waitStates[until]
 			if !ok {
-				return fmt.Errorf("unknown state %q, want one of idle, busy, blocked, exited", until)
+				return fmt.Errorf("unknown state %q, want one of %s", until, strings.Join(waitStateNames(), ", "))
 			}
 
 			dirs, err := g.dirs()
@@ -91,7 +107,10 @@ request rather than polling, and cannot miss a transition the way sampling
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&until, "until", "idle", "state to wait for: idle, busy, or exited")
+	// Derived from the table rather than written out, which is the same reason the table exists. The
+	// hand-written version omitted blocked while the command accepted it, so the one state cm cannot derive
+	// for itself -- and the whole reason for the report mechanism -- was undiscoverable from the help.
+	f.StringVar(&until, "until", "idle", "state to wait for: "+strings.Join(waitStateNames(), ", "))
 	f.DurationVar(&timeout, "timeout", 0, "give up after this long (0 waits indefinitely)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd

@@ -588,7 +588,10 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 		if err := sess.Write(ctx, req.Data); err != nil {
 			return nil, err
 		}
-		return &serverv1.SendResponse{ShellReports: sess.CommandRuns() > 0}, nil
+		// StateRuns rather than CommandRuns, so a session driven by explicit reports is not described as
+		// reporting nothing. The flag exists to warn that a wait may never resolve, and a reporting session
+		// resolves fine.
+		return &serverv1.SendResponse{ShellReports: sess.StateRuns() > 0}, nil
 	}
 
 	// Subscribe before writing, so the wait cannot miss what the input causes.
@@ -607,7 +610,7 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 
 	// Recorded before the input, so a command that starts and finishes too fast to observe is still
 	// evident from the count having moved.
-	runsBefore := sess.CommandRuns()
+	runsBefore := sess.StateRuns()
 
 	if err := sess.Write(ctx, req.Data); err != nil {
 		return nil, err

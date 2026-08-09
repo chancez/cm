@@ -462,3 +462,80 @@ func TestCommandRunsCountsEachCommandOnce(t *testing.T) {
 		t.Errorf("CommandRuns() = %d after a second command, want %d", got, after+1)
 	}
 }
+
+// A `send --wait` against a session driven only by reports must resolve when the work finishes.
+//
+// The bug: the "has the caller's own work started" check counted OSC 133 commands, which a program
+// reporting its own state never produces. So a wait after sending input could never observe a start, and
+// every such call burned its entire timeout on work that had already completed. Measured before the fix at
+// a full 8s timeout for 1s of work, reporting satisfied=false.
+//
+// The distinction the counter exists for is real, which is why the fix is to count reports too rather than
+// to drop the check: an agent sitting at "idle" when the input arrives would otherwise satisfy a wait for
+// idle immediately, and the caller would read the previous turn's output.
+func TestSendWaitResolvesForAReportingSession(t *testing.T) {
+	svc, sess := waitFixture(t, "reporter", "sleep 30")
+	ctx := context.Background()
+
+	// Idle before the input, which is the state that made this fail: satisfied() is already true, so only
+	// the started check stands between the caller and a wrong answer.
+	sess.setReported(Reported{State: "idle", Source: "agent"})
+
+	// The work: busy then idle again, as an agent reporting for itself does, both landing in quick
+	// succession once the input has been written.
+	//
+	// The two transitions are deliberately not spaced out. A fast turn's busy and idle coalesce into one
+	// event, so nothing ever observes Running and only the counter shows that anything happened. That is the
+	// same property the OSC 133 tests rely on, and it is what makes counting reports necessary: without it
+	// the wait has no evidence the work began and sits until its timeout.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		sess.setReported(Reported{State: "busy", Source: "agent"})
+		sess.setReported(Reported{State: "idle", Source: "agent"})
+	}()
+
+	resp, err := svc.Send(ctx, &serverv1.SendRequest{
+		Session:       "reporter",
+		Data:          []byte("work\r"),
+		WaitUntil:     serverv1.WaitState_WAIT_STATE_IDLE,
+		WaitTimeoutMs: 5000,
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if !resp.GetWait().Satisfied {
+		t.Error("wait was not satisfied, so a reporting session cannot be driven with send --wait")
+	}
+	// And the session must not be described as reporting nothing, or callers get a warning telling them to
+	// load a shell integration they do not need.
+	if !resp.ShellReports {
+		t.Error("ShellReports = false for a session that reports its own state")
+	}
+}
+
+// The started check must still do its job: an already-idle session must not satisfy a wait for idle before
+// the work it was sent has begun.
+//
+// The counterpart of the test above, and the reason the fix counts reports rather than ignoring the check.
+// Without this, "fixing" the bug by treating every wait as started would pass the test above while making
+// send --wait return the previous turn's state.
+func TestSendWaitDoesNotResolveBeforeTheWorkStarts(t *testing.T) {
+	svc, sess := waitFixture(t, "notyet", "sleep 30")
+	ctx := context.Background()
+
+	// Idle and staying idle: nothing reports, so the work never starts.
+	sess.setReported(Reported{State: "idle", Source: "agent"})
+
+	resp, err := svc.Send(ctx, &serverv1.SendRequest{
+		Session:       "notyet",
+		Data:          []byte("work\r"),
+		WaitUntil:     serverv1.WaitState_WAIT_STATE_IDLE,
+		WaitTimeoutMs: 300,
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if resp.GetWait().Satisfied {
+		t.Error("wait was satisfied by the state the session was already in, before its work began")
+	}
+}

@@ -223,3 +223,36 @@ func TestDirsToleratesABrokenConfig(t *testing.T) {
 		t.Errorf("dirs() error = %v, want a broken config to be tolerated here", err)
 	}
 }
+
+// Every state a wait accepts must appear in the flag's help.
+//
+// The two drifted: the help said "idle, busy, or exited" while the command also accepted blocked, so the
+// one state cm cannot derive for itself was undiscoverable from `cm wait --help`. Both now come from the
+// same table, and this keeps a future state from being added to one and not the other.
+func TestWaitStatesAreAllDocumented(t *testing.T) {
+	root := newRootCommand()
+
+	var wait *cobra.Command
+	for _, c := range root.Commands() {
+		if c.Name() == "wait" {
+			wait = c
+			break
+		}
+	}
+	if wait == nil {
+		t.Fatal("no wait command registered")
+	}
+
+	help := wait.Flags().Lookup("until").Usage
+	for state := range waitStates {
+		if !strings.Contains(help, state) {
+			t.Errorf("--until help %q does not mention the accepted state %q", help, state)
+		}
+	}
+	// And the long description, since that is where someone reads what the states mean.
+	for state := range waitStates {
+		if !strings.Contains(wait.Long, state) {
+			t.Errorf("wait's help does not explain the accepted state %q", state)
+		}
+	}
+}

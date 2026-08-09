@@ -68,12 +68,6 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 // timing is load-bearing. Send subscribes before writing its input; Wait subscribes before its first
 // check. Either way the window where a transition could be missed is closed before anything can cause
 // one.
-// awaitState blocks until a session satisfies until, using an already-registered subscription.
-//
-// Takes the subscription rather than creating one, because the caller decides when to subscribe and that
-// timing is load-bearing. Send subscribes before writing its input; Wait subscribes before its first
-// check. Either way the window where a transition could be missed is closed before anything can cause
-// one.
 //
 // afterInput changes what the wait means, and is the difference between the two callers. Wait answers
 // "is it in this state", so a session already there satisfies at once. Send answers "did what I just
@@ -82,8 +76,11 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 // and the caller then reads output from before its own input. Measured at about 300ms for zsh, which is
 // long enough to lose every time rather than occasionally.
 //
-// sinceRuns is the count of reported commands when the input was sent, and is what makes this work for a
-// command too fast to observe running. The state subscription coalesces to a depth of one, so `true`
+// sinceRuns is the count of state changes when the input was sent, and is what makes this work for a
+// command too fast to observe running. It counts both OSC 133 commands and explicit reports, because an
+// agent driven by reports alone produces no commands to count: using only the command count meant a
+// `send --wait idle` against such a session never saw a start and burned its whole timeout on work that
+// had already finished. The state subscription coalesces to a depth of one, so `true`
 // starts and finishes between two reads and collapses into one event: watching for the session to *be*
 // busy misses it entirely and the wait then times out saying "waiting for idle; it is idle", which is
 // both true and useless. Comparing the counter instead asks whether a command ran at all, which survives
@@ -109,7 +106,7 @@ func (s *Service) awaitState(
 			// Nothing further will be reported, so waiting for a start that cannot happen would only
 			// burn the timeout.
 			started = true
-		} else if sess.CommandRuns() != sinceRuns {
+		} else if sess.StateRuns() != sinceRuns {
 			// A command has already come and gone since the input was sent.
 			started = true
 		}
@@ -141,7 +138,12 @@ func (s *Service) awaitState(
 			// which happens before the command runs.
 			// Either the session is visibly running something, or the counter shows a command has
 			// been and gone. The second case is the fast one, and is why a counter exists.
-			if !started && (sess.Command().Running || sess.CommandRuns() != sinceRuns) {
+			//
+			// The counter covers reports as well as OSC 133 commands, so a program describing its own state
+			// marks a start the same way. Deliberately not "a report exists": the session may have been
+			// reporting before the input arrived, and treating that as a start would resolve the wait on the
+			// state it was already in, handing the caller the previous turn's output.
+			if !started && (sess.Command().Running || sess.StateRuns() != sinceRuns) {
 				started = true
 			}
 			if started && satisfied(sess, until) {

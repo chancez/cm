@@ -84,6 +84,14 @@ type Session struct {
 	// express, since a shell reports a command as running whether it is computing or waiting at a prompt
 	// of its own. Empty when nothing has reported, in which case the derived state stands.
 	reported Reported
+	// reportRuns counts how many times a report has changed the session's state.
+	//
+	// The counterpart of command.Runs, and needed for the same reason: a wait issued after sending input
+	// has to tell "the state I am seeing describes my own work" from "it was already in that state". For
+	// OSC 133 that question is answered by counting commands, and a session driven by reports alone never
+	// increments it, so a `send --wait` against one could never observe a start and burned its whole
+	// timeout on work that had already finished.
+	reportRuns uint64
 
 	// commands parses the OSC 133 markers out of the output stream.
 	//
@@ -519,6 +527,10 @@ func (s *Session) setReported(r Reported) {
 		return
 	}
 	s.reported = r
+	// Counted on every change, so a wait can tell a state describing the caller's own work from the state
+	// the session was already in. Incremented for a clear too: withdrawing a report is a change like any
+	// other, and a caller waiting after one still needs to know something happened.
+	s.reportRuns++
 	title, cwd, cmd := s.title, s.cwd, s.command
 	s.mu.Unlock()
 
@@ -542,6 +554,17 @@ func (s *Session) CommandRuns() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.command.Runs
+}
+
+// StateRuns counts every observable change to what the session says it is doing, from either source.
+//
+// Both are summed rather than tracked separately because a caller asking "has anything happened since I
+// sent this" does not care which mechanism reported it, and an agent may well use both: a shell emitting
+// OSC 133 while the program inside it reports its own state. Either moving is a start.
+func (s *Session) StateRuns() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.command.Runs + s.reportRuns
 }
 
 // Metadata is what a session reports about itself.
