@@ -212,12 +212,23 @@ Waiting for `busy` and then `blocked` looks like it fixes that and does not: a f
 
 If you must wait separately, wait for `idle` with `send --wait`, and treat a standalone `cm wait --until <state>` as answering "is it in this state now" rather than "has my work finished".
 
-For an agent that does not report, fall back to `--timeout` and a content check:
+For an agent or program that does not report, wait on its output instead of polling:
 
 ```bash
-cm send reviewer 'Review the diff.' --enter
-cm read reviewer --since-commands 1 | grep -q 'DONE' || sleep 5
+cm wait reviewer --match 'DONE' --timeout 10m &   # start the wait first
+wait_pid=$!
+cm send reviewer 'Review the diff. Print DONE when finished.' --enter
+wait $wait_pid                                    # returns when DONE appears
+cm read reviewer --lines 200
 ```
+
+`--match` is the only wait that needs nothing from what is running, so it is the answer whenever a program emits no OSC 133 and has no hook wired up. It is a plain substring, matched against the rendered text, so colour codes between the characters do not defeat it.
+
+**Start the wait before sending.** Only output arriving after the call counts, so `cm send` followed by `cm wait --match` is a race: a fast command prints and finishes before the wait subscribes, and the wait then blocks until its timeout on output it already missed. That is the same ordering `cm send --wait` handles for you server-side, and the reason it exists -- use `send --wait` when the session reports OSC 133, and this pattern when it does not.
+
+Prefer this over a `cm read | grep` loop either way: polling can miss output that scrolls past between samples, which is the whole reason waiting happens server-side.
+
+Two things not to do. Do not use `cm wait --until idle` on a session with no OSC 133: cm sees no command running, so idle is satisfied immediately and you read the previous turn's output believing it is the new one. And do not reach for `cm read --since-commands` there either, since command boundaries come from the same markers -- use `--lines`.
 
 ## Several agents at once
 

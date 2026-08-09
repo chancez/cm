@@ -38,7 +38,7 @@ cm tag [session] k=v     label a session so it can be grouped and filtered
 cm history [session]     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching; --key for ctrl-c, arrows, ...
 cm run -- <command>      run a command in a session and exit with its status
-cm wait [session]        block until a session reaches a state
+cm wait [session]        block until a session reaches a state, or --match output
 cm read [session]        print a session's recent output; --follow --timeout to stream
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log

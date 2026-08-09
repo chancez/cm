@@ -438,6 +438,57 @@ binary that spawned it -- honors `force` alone. The degradation is one-way and r
 ended is an error rather than a silent success, since a signal needs a process to receive it; a session
 that ends between the lookup and the delivery is not, because the caller wanted it stopped and it is.
 
+## Waiting on output
+
+`cm wait --match TEXT` blocks until the text appears in a session's output, and is the only wait that needs
+nothing from what is running. Every state cm can wait for comes from OSC 133 or from a program calling
+`cm report`, so a session running something with neither could previously only be polled -- and the `cm`
+skill documented that polling loop as the fallback, which is exactly the sampling a server-side wait exists
+to avoid.
+
+The comparison worth being precise about is not "a state wait fails there". Without OSC 133 cm sees no
+command running, so `--until idle` is satisfied *immediately* and truthfully reports a session it knows
+nothing about as idle. That is worse than failing: it answers before the work starts, so a caller reads the
+previous turn's output believing it is the new one. Measured, and pinned by a test, because the case for
+`--match` rests on it.
+
+**Its own loop, not a branch in awaitState.** The two wake on different things. `awaitState` wakes on
+metadata changes -- title, cwd, whether a command is running -- and re-reads the session's current values.
+Output is not part of that, so a session can print for an hour with no metadata changing, and a match folded
+into that loop would only be evaluated when something unrelated happened. The match loop subscribes to the
+output log instead.
+
+**The matcher is a shared seam.** `cm watch` will want the same question answered at the same moment and
+differ only in what it does with the answer, so a second implementation would be a second copy of two
+non-obvious bugs. A match can straddle a chunk boundary, since a pty read is bounded by the kernel buffer
+and "DONE" arrives as "DO" then "NE" often enough to matter; the matcher keeps `len(pattern)-1` bytes of
+tail for that. And escape sequences sit between the characters, so a coloured `DO\x1b[0mNE` matches nothing
+byte-wise while a person plainly sees DONE; one stateful `ansi.Stripper` handles that, including an escape
+split across chunks. A chunk that is entirely escape sequences must not clear the tail, or a repainting
+program breaks a match spanning its repaint.
+
+Rendered by default, with `--match-raw` as the modifier rather than a `--match-raw` flag name, following how
+`--raw` already works on `read`, `history`, and `send`. Raw changes whether a pattern can match at all
+rather than merely how output looks, which is why it is a deliberate modifier and not a default.
+
+**Only output arriving after the call counts.** The same rule that keeps a wait for idle from being
+satisfied by the idle a session started in; subscribing from the log's current end is what implements it.
+Text printed earlier is `cm read`'s job.
+
+The consequence is an ordering requirement, and it caught a documented example in this repo before the
+example was corrected: `cm send` followed by `cm wait --match` is a race, because a fast command prints and
+finishes before the wait subscribes and the wait then blocks on output it already missed. A caller has to
+start the wait first and send afterwards. That is precisely the window `cm send --wait` closes server-side by
+arming the wait before writing the input, which is why it exists -- and it only helps a session reporting
+OSC 133, so the two are complementary rather than alternatives.
+
+Refused rather than resolved: `--match` with `--until`, since "idle and also matching" and "idle or
+matching" are both plausible readings; `--match-raw` alone; and a match against an ended session, which
+will produce no further output.
+
+A plain substring, not a pattern. Substring covers the case that motivated this, and a regex on a stream
+raises anchoring questions worth deciding separately.
+
 ## Timeouts
 
 `--timeout` bounds `cm wait`, `cm send --wait`, `cm run`, and `cm read --follow`. It reached the last of
