@@ -190,6 +190,45 @@ the client really is running in there. Note `cm attach` rather than `--no-attach
 watch and type in, and `--no-attach` would create the session and exit, leaving an empty tab. That is where to
 start, and it would answer the "is this wanted" question before any code lands here.
 
+**Mapping sessions to terminal windows and tabs.** Deferred, but the measurements are recorded because they
+are what decides it and they were not cheap to get. The goal was to replace a `zmx-map` script, which shows
+which kitty tab and window each session is in, with something native.
+
+The two directions are not interchangeable, and each question needs a different one.
+
+*cm identity outward, to the window.* A program inside a terminal can push a variable out to kitty with
+`OSC 1337;SetUserVar=key=<base64>`. Verified through cm's own pty with a client running in a real kitty
+window: the sequence passes through untouched and lands on the window, and `kitten @ ls` then reports
+`user_vars={'cm_session': 'passthru'}`. kitty can also match on it (`--match var:`, `--when-focus-on var:`).
+This is the half that works, and it would make a window self-describing, so "focus the window showing session
+X" needs no bookkeeping anywhere. An unrecognized OSC is discarded by any conforming terminal, the same
+property that makes cm's own OSC 25453 safe to emit unconditionally.
+
+*kitty layout inward, to `cm list`.* This is the half that does not work, and the obstacle is kitty's event
+model rather than anything in cm. Window ids are already available and stable: `KITTY_WINDOW_ID` is in the
+captured client environment, re-recorded on every attach, and unaffected by tab close or reorder. Tab
+*indices* are the problem. Measured with a probe watcher logging all seven events: closing the middle of
+three tabs moved a window from tab index 3 to index 2 and fired only `on_close` for the closed window, and
+`move_tab_forward` changed every index and fired nothing at all. There is no tab-membership or tab-index
+event, so both ways cm could learn a tab number are stale by construction -- env at attach, because tabs move
+without an attach, and a watcher-driven `cm tag`, because no event exists to hook. `on_focus_change` could
+refresh the focused window's index, which is exactly backwards: the sessions whose location you want from
+`cm list` are the ones you are not looking at.
+
+That leaves cm asking kitty at display time, which means cm shelling out to `kitten @ ls` and knowing kitty
+exists -- the line this whole entry is about. So a tab number in `cm list` is the one part that should
+probably stay refused rather than deferred.
+
+What is worth doing when this is picked up again: emit the user variable on attach, and let the mapping view
+live where the layout does. `kitten @ ls` alone then returns tab index, window id, title, and the session
+name for every window in one call, always fresh because kitty is authoritative for its own layout. That is
+strictly better than `zmx-map`, which infers the session from launch argv and two `lsof` passes and needs a
+MISMATCH column because the inference can disagree with itself. It is a small kitten rather than a cm
+feature, and the cm side is one sequence.
+
+Already done, and the practical half of this: `cm list` shows the session title in its own column, which is
+what a person actually recognizes a window by.
+
 ## Persistence and history
 
 **Searching history.** `cm history` prints everything and leaves searching to a pager or `grep`, which is
