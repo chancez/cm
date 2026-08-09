@@ -29,7 +29,29 @@ func (s *Service) awaitMatch(
 	reader := sess.SubscribeOutput()
 	defer reader.Close()
 
+	// No echo to skip: a bare wait sent no input, so everything arriving is the session's own output.
+	return s.matchOn(ctx, sess, reader, pattern, raw, timeoutMs, 0)
+}
+
+// matchOn scans a subscription until the pattern appears, the session ends, or the deadline passes.
+//
+// Takes the reader rather than opening one, because when the subscription is opened is load-bearing and
+// differs between callers. A bare wait subscribes at the moment it is asked; a send subscribes before
+// writing its input, so a command that prints and finishes immediately is still caught. Neither ordering
+// belongs to this function, so neither is decided here.
+func (s *Service) matchOn(
+	ctx context.Context,
+	sess *Session,
+	reader *seqlog.Reader,
+	pattern string,
+	raw bool,
+	timeoutMs uint64,
+	skipEcho int,
+) (*serverv1.WaitResponse, error) {
 	matcher := newOutputMatcher(pattern, raw)
+	if skipEcho > 0 {
+		matcher.skipEcho(skipEcho)
+	}
 
 	// The deadline is enforced by cancelling the read, since Next blocks until output arrives and a
 	// session that has gone quiet would otherwise hold the wait past its timeout.
@@ -78,4 +100,40 @@ func (s *Service) awaitMatch(
 			return waitResult(sess, true), nil
 		}
 	}
+}
+
+// sendAndAwaitMatch writes input and waits for a pattern in what it causes.
+//
+// The subscription is opened before the write, which is the whole reason this lives beside Send rather
+// than being composed from two calls. A command runs as soon as its input lands, so one that prints and
+// finishes faster than a second request could arrive would have its output already past by the time a
+// separate wait subscribed -- and that wait would then block until its timeout, having missed what it was
+// created for. Arming first closes the window rather than narrowing it.
+//
+// This is the ordering trap `cm wait --match` cannot avoid from outside, which is why a caller composing
+// the two has to start the wait first.
+func (s *Service) sendAndAwaitMatch(
+	ctx context.Context, sess *Session, req *serverv1.SendRequest,
+) (*serverv1.SendResponse, error) {
+	reader := sess.SubscribeOutput()
+	defer reader.Close()
+
+	// Taken before the input for the same reason the state path takes it: a caller warning that a wait may
+	// never resolve wants to know whether the shell was already reporting, and this call's own command
+	// would otherwise make every session look like it reports.
+	runsBefore := sess.StateRuns()
+
+	if err := sess.Write(ctx, req.Data); err != nil {
+		return nil, err
+	}
+
+	// The shell echoes the input back, and that echo contains the command, so a pattern naming anything in
+	// the command would match the echo rather than the output. Skipping the bytes just written steps over
+	// it. This is the match-wait counterpart of the afterInput qualifier a state wait uses.
+	wait, err := s.matchOn(
+		ctx, sess, reader, req.Match, req.MatchRaw, req.WaitTimeoutMs, len(req.Data))
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.SendResponse{Wait: wait, ShellReports: runsBefore > 0}, nil
 }

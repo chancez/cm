@@ -619,6 +619,19 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 		return nil, fmt.Errorf("%q: %w", req.Session, store.ErrNotFound)
 	}
 
+	if req.Match != "" && req.WaitUntil != serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
+		// Refused rather than combined, matching Wait: "idle and also matching" and "idle or matching" are
+		// both plausible readings of the pair.
+		return nil, errors.New("match and a state cannot both be waited for")
+	}
+	if req.MatchRaw && req.Match == "" {
+		return nil, errors.New("match_raw only applies with match")
+	}
+
+	if req.Match != "" {
+		return s.sendAndAwaitMatch(ctx, sess, req)
+	}
+
 	if req.WaitUntil == serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
 		if err := sess.Write(ctx, req.Data); err != nil {
 			return nil, err

@@ -264,3 +264,127 @@ func TestWaitMatchOnAnEndedSession(t *testing.T) {
 		t.Errorf("stderr = %q, want it to say the session has ended", r.stderr)
 	}
 }
+
+// `cm send --match` does not match the shell's echo of the command it just sent.
+//
+// Measured before it was fixed: writing to a pty makes the shell echo the line back, and the echo contains
+// the command, so a pattern naming anything in the command resolved against the echo. `send 'sh -c "sleep
+// 2; echo UNIQUEWORD"' --match UNIQUEWORD` returned in 11ms while the real output arrived 2s later. The same
+// class of wrong answer as a wait for idle satisfied by the idle a session was already in, and it hands the
+// caller a result before the work has happened.
+//
+// The timing is the assertion. A pattern present in both the echo and the output cannot be distinguished any
+// other way: matching the echo and matching the output look identical apart from when they happen.
+func TestSendMatchSkipsTheEchoedCommand(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("attach", "--no-attach", "w", "--", "/bin/sh")
+
+	start := time.Now()
+	r := e.runWithin(40*time.Second,
+		"send", "w", `sh -c "sleep 2; echo UNIQUEWORD"`, "--enter",
+		"--match", "UNIQUEWORD", "--timeout", "25s")
+	elapsed := time.Since(start)
+
+	if r.code != 0 {
+		t.Fatalf("send --match exited %d, want 0: %s", r.code, r.stderr)
+	}
+	// The output arrives two seconds in, so anything much faster matched the echo instead.
+	if elapsed < 1500*time.Millisecond {
+		t.Errorf("send --match returned in %v, want it to wait for the output at ~2s: "+
+			"it matched the echoed command line", elapsed)
+	}
+	// And it did not simply wait out the clock.
+	if elapsed > 15*time.Second {
+		t.Errorf("send --match took %v, want it to return when the output appeared", elapsed)
+	}
+}
+
+// A command that prints and finishes immediately is still caught.
+//
+// The window a composed `send` then `wait --match` cannot close from outside: the output is already past by
+// the time a second call subscribes. Send arms the subscription before writing, so this is the case that
+// justifies the flag living on the send request rather than only on Wait.
+func TestSendMatchCatchesAnInstantCommand(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("attach", "--no-attach", "w", "--", "/bin/sh")
+
+	r := e.runWithin(30*time.Second,
+		"send", "w", "echo INSTANT-DONE", "--enter", "--match", "INSTANT-DONE", "--timeout", "15s")
+	if r.code != 0 {
+		t.Errorf("send --match exited %d on an instant command, want it caught: %s", r.code, r.stderr)
+	}
+}
+
+// `cm run --session --match` bounds a reused session whose shell reports nothing.
+//
+// The gap this closes, which the cm skill documented as needing a timeout: reusing a session waits for the
+// shell to be idle, which needs OSC 133, so `/bin/sh` could only be bounded by a clock. Measured before and
+// after -- the state form took its whole 3s timeout, the match form returned in 14ms.
+func TestRunMatchOnAReusedSession(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("attach", "--no-attach", "build", "--", "/bin/sh")
+
+	start := time.Now()
+	r := e.runWithin(40*time.Second,
+		"run", "--session", "build", "--match", "COMPILED", "--timeout", "20s",
+		"--", `sh -c "sleep 1; echo COMPILED"`)
+	elapsed := time.Since(start)
+
+	if r.code != 0 {
+		t.Fatalf("run --match exited %d, want 0: %s", r.code, r.stderr)
+	}
+	// Returned when the text appeared rather than at the deadline.
+	if elapsed > 12*time.Second {
+		t.Errorf("run --match took %v, want it to return when the text appeared", elapsed)
+	}
+	// The command's output is printed, which is what run is for.
+	if !strings.Contains(r.stdout, "COMPILED") {
+		t.Errorf("stdout = %q, want the command's output", r.stdout)
+	}
+}
+
+// A match that never appears on a reused session times out and says so.
+func TestRunMatchTimesOut(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("attach", "--no-attach", "build", "--", "/bin/sh")
+
+	r := e.runWithin(30*time.Second,
+		"run", "--session", "build", "--match", "NEVER-APPEARS", "--timeout", "2s",
+		"--", "echo something-else")
+	if r.code == 0 {
+		t.Error("run --match exited 0 for text that never appeared, want non-zero")
+	}
+	// The output is still printed, since it is usually how a caller works out why the match failed.
+	if !strings.Contains(r.stdout, "something-else") {
+		t.Errorf("stdout = %q, want the output printed even on a timeout", r.stdout)
+	}
+}
+
+// Combinations with no single meaning are refused on send and run too.
+func TestSendAndRunMatchRejectConflicts(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("attach", "--no-attach", "w", "--", "/bin/sh")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "send match with wait", args: []string{"send", "w", "x", "--match", "A", "--wait", "idle"}},
+		// --follow stops when its wait resolves, and a match resolving mid-command would cut the stream
+		// off partway through output the caller was watching.
+		{name: "send match with follow", args: []string{"send", "w", "x", "--match", "A", "--follow"}},
+		{name: "send match-raw alone", args: []string{"send", "w", "x", "--match-raw"}},
+		{name: "run match-raw alone", args: []string{"run", "--match-raw", "--", "true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if r := e.run(tc.args...); r.code == 0 {
+				t.Errorf("%v exited 0, want it refused", tc.args)
+			}
+		})
+	}
+}

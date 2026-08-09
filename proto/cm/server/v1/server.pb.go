@@ -2956,6 +2956,21 @@ type SendRequest struct {
 	// that already happened. The server arms the wait before it writes the input, so there is no window.
 	WaitUntil     WaitState `protobuf:"varint,3,opt,name=wait_until,json=waitUntil,proto3,enum=cm.server.v1.WaitState" json:"wait_until,omitempty"`
 	WaitTimeoutMs uint64    `protobuf:"varint,4,opt,name=wait_timeout_ms,json=waitTimeoutMs,proto3" json:"wait_timeout_ms,omitempty"`
+	// Wait until this text appears in the session's output, instead of waiting for a state.
+	//
+	// The reason to have it here rather than only on Wait is the same reason wait_until is here: the
+	// subscription is armed before the input is written, so a command that prints and finishes faster than a
+	// second call could arrive is still caught. A caller composing `send` with a separate
+	// `wait --match` has to start the wait first and cannot close that window from outside.
+	//
+	// Matters most for a session whose shell reports no OSC 133, where wait_until has nothing to resolve on:
+	// reusing such a session could previously only be bounded by a timeout, which is a sleep rather than a
+	// wait.
+	//
+	// Mutually exclusive with wait_until, refused rather than combined.
+	Match string `protobuf:"bytes,5,opt,name=match,proto3" json:"match,omitempty"`
+	// Match the bytes the program emitted rather than the text they rendered to. See WaitRequest.match_raw.
+	MatchRaw      bool `protobuf:"varint,6,opt,name=match_raw,json=matchRaw,proto3" json:"match_raw,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3016,6 +3031,20 @@ func (x *SendRequest) GetWaitTimeoutMs() uint64 {
 		return x.WaitTimeoutMs
 	}
 	return 0
+}
+
+func (x *SendRequest) GetMatch() string {
+	if x != nil {
+		return x.Match
+	}
+	return ""
+}
+
+func (x *SendRequest) GetMatchRaw() bool {
+	if x != nil {
+		return x.MatchRaw
+	}
+	return false
 }
 
 type SendResponse struct {
@@ -3473,13 +3502,15 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x126\n" +
 	"\x05value\x18\x02 \x01(\v2 .cm.server.v1.SurvivingProcessesR\x05value:\x028\x01\"(\n" +
 	"\x12SurvivingProcesses\x12\x12\n" +
-	"\x04pids\x18\x01 \x03(\x05R\x04pids\"\x9b\x01\n" +
+	"\x04pids\x18\x01 \x03(\x05R\x04pids\"\xce\x01\n" +
 	"\vSendRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x126\n" +
 	"\n" +
 	"wait_until\x18\x03 \x01(\x0e2\x17.cm.server.v1.WaitStateR\twaitUntil\x12&\n" +
-	"\x0fwait_timeout_ms\x18\x04 \x01(\x04R\rwaitTimeoutMs\"c\n" +
+	"\x0fwait_timeout_ms\x18\x04 \x01(\x04R\rwaitTimeoutMs\x12\x14\n" +
+	"\x05match\x18\x05 \x01(\tR\x05match\x12\x1b\n" +
+	"\tmatch_raw\x18\x06 \x01(\bR\bmatchRaw\"c\n" +
 	"\fSendResponse\x12#\n" +
 	"\rshell_reports\x18\x03 \x01(\bR\fshellReports\x12.\n" +
 	"\x04wait\x18\x01 \x01(\v2\x1a.cm.server.v1.WaitResponseR\x04wait\"_\n" +
