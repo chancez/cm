@@ -77,6 +77,25 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 		// Interrupted, which is how a follower normally stops. Not an error: the caller asked to watch and
 		// then stopped watching.
 		return nil
+	case attachErr != nil && errors.Is(attachErr, context.DeadlineExceeded):
+		// A --timeout expiring, which is the same thing on a clock rather than a keystroke.
+		//
+		// Reached only if the deadline lands between attempts rather than inside an attachment: the client
+		// treats a cancelled context as a deliberate detach and returns no error, so the common path is
+		// already a clean exit and this arm is the belt to that braces. Checked with the arm disabled --
+		// the exit status stayed 0 -- so it is here to keep the behavior true of both paths rather than
+		// because one of them needs it.
+		//
+		// Not an error either way, which is the decision that makes the flag mean one thing across
+		// commands. `cm wait --timeout` exits 1 because it was asked a question and could not answer it. A
+		// follower was asked to print output until told to stop, and a deadline is being told to stop: it
+		// has already printed what the session produced, so failing would make a caller discard output it
+		// received.
+		//
+		// The consequence worth stating: exit status alone cannot distinguish "the session ended" from "my
+		// timeout expired". That is the right trade for bounding a follow so it cannot hang, and a caller
+		// needing the distinction has `cm wait`.
+		return nil
 	case attachErr != nil:
 		return attachErr
 	case closeErr != nil:

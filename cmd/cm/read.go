@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -27,6 +28,7 @@ func newReadCommand(g *globals) *cobra.Command {
 		tagArgs []string
 		since   int
 		lastOut bool
+		timeout time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "read [session]",
@@ -53,6 +55,21 @@ renders the whole scrollback and cannot be limited.
 
 --follow prints the last lines and then keeps streaming, like 'tail -f'. Escape
 sequences are stripped from both halves unless --raw is given.
+
+--timeout bounds a --follow so it cannot hang, which matters when the program being
+followed may never exit:
+
+  cm read build --follow --timeout 30s
+
+A timeout here is not a failure and exits 0. The output up to that point was
+delivered, and stopping is what was asked for, so treating it as an error would make
+a caller discard output it received. That differs from 'cm wait --timeout', which
+exits 1 because it was asked a question and could not answer it. The trade is that
+exit status alone cannot distinguish "the session ended" from "my timeout expired";
+use 'cm wait' when that distinction matters.
+
+Only meaningful with --follow, since every other form returns as soon as the server
+answers.
 
 The two halves still differ in kind. The lines already printed are a rendered screen
 with wrapping rejoined, and what follows is filtered byte by byte, because a stream
@@ -98,6 +115,12 @@ already ended, since boundaries live with the running session.`,
 			if (since > 0 || lastOut) && cmd.Flags().Changed("lines") {
 				return errors.New("--lines cannot be combined with --since-commands or --last-output; " +
 					"a command boundary and a line count are different bounds on the same read")
+			}
+			if timeout > 0 && !follow {
+				// Refused rather than ignored. Everything except --follow returns as soon as the server
+				// answers, so a timeout there would only ever bound an RPC that is already prompt, and a
+				// caller passing it believes it is protecting against a hang that cannot happen.
+				return errors.New("--timeout only applies with --follow, which is the form that streams")
 			}
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
@@ -156,7 +179,12 @@ already ended, since boundaries live with the running session.`,
 					if follow {
 						// The tail first, then the stream. Both go to stdout, so the caller sees one
 						// continuous piece of output rather than having to stitch two commands together.
-						return printTailThenFollow(ctx, dirs, name, resp.Data, raw, logger)
+						//
+						// Bounded on its own context rather than the request's, so the deadline covers the
+						// streaming and not the read that preceded it.
+						followCtx, cancel := withTimeout(ctx, timeout)
+						defer cancel()
+						return printTailThenFollow(followCtx, dirs, name, resp.Data, raw, logger)
 					}
 					if _, err := os.Stdout.Write(resp.Data); err != nil {
 						return err
@@ -188,5 +216,6 @@ already ended, since boundaries live with the running session.`,
 		"print output from where the last N commands began, prompt and command line included")
 	f.BoolVar(&lastOut, "last-output", false,
 		"print only the last command's own output, without the prompt or command line")
+	addTimeoutFlag(f, &timeout)
 	return cmd
 }
