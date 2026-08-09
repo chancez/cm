@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
@@ -389,21 +390,55 @@ func (s *Session) Exited() (bool, int) {
 	return s.exited, s.exitCode
 }
 
-// Signal sends a signal to the shell, or to its process group when group is set.
+// Signal sends a signal to the shell, or to the pty's foreground process group when group is set.
 //
-// Signaling the group is usually what a caller wants, so that a foreground job and its
-// children are included rather than just the shell.
+// The foreground group, not the shell's own group, and the difference is the whole point of the flag.
+// A shell with job control puts each job it starts in a *new* process group and hands that group the
+// terminal, so the shell's group contains only the shell. Signalling it therefore does not reach the
+// job a caller means to stop: measured with `sleep 300` under /bin/sh, where the shell sat in group
+// 20144 and the sleep in group 20242, and a SIGTERM to the shell's group left the sleep running while
+// reporting success.
+//
+// Asking the pty which group is in the foreground is what a keypress does -- the line discipline
+// delivers ctrl-c to exactly that group -- so this makes `cm signal` mean the same thing as the key,
+// for the cases where the key cannot get through.
+//
+// Falls back to the shell's own group when the pty cannot say. That happens when the shell has no job
+// running, in which case the shell *is* the foreground group and the two answers agree anyway.
 func (s *Session) Signal(sig syscall.Signal, group bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.exited || s.cmd.Process == nil {
+	shellPID := 0
+	if !s.exited && s.cmd.Process != nil {
+		shellPID = s.cmd.Process.Pid
+	}
+	s.mu.Unlock()
+	if shellPID == 0 {
 		return seqlog.ErrClosed
 	}
-	pid := s.cmd.Process.Pid
-	if group {
-		// Negating the pid targets the process group. The child called setsid, so it
-		// leads its own group and the negation cannot reach the shim.
-		pid = -pid
+
+	if !group {
+		return syscall.Kill(shellPID, sig)
 	}
-	return syscall.Kill(pid, sig)
+
+	target := shellPID
+	if pgrp, err := s.foregroundGroup(); err == nil && pgrp > 0 {
+		target = pgrp
+	}
+	// Negating targets the process group. The child called setsid, so neither its own group nor a
+	// foreground group under its terminal can reach the shim.
+	return syscall.Kill(-target, sig)
+}
+
+// foregroundGroup asks the pty which process group currently owns the terminal.
+//
+// Through withPty rather than a bare Fd(), because Fd() is not refcounted the way Read and Write are:
+// an ioctl on a descriptor that Close is racing is a real race even though the I/O calls are safe.
+func (s *Session) foregroundGroup() (int, error) {
+	var pgrp int
+	err := s.withPty(func(f *os.File) error {
+		var ferr error
+		pgrp, ferr = unix.IoctlGetInt(int(f.Fd()), unix.TIOCGPGRP)
+		return ferr
+	})
+	return pgrp, err
 }

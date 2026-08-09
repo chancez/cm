@@ -59,6 +59,14 @@ service Server {
   // naming and could not read the database.
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
 
+  // Signal sends a signal to a session's shell, and by default to its process group.
+  //
+  // Distinct from writing a control character with Send, which is not a duplicate of this: a control
+  // character goes through the pty's line discipline, so it reaches whatever has the terminal and only
+  // becomes a signal if that program's termios says so. This delivers a signal directly, which is what
+  // reaches a program that reads its input raw, or a session with no foreground job to interrupt.
+  rpc Signal(SignalRequest) returns (SignalResponse);
+
   // Tag sets or removes a session's tags.
   //
   // Separate from Attach because tagging an existing session must not require attaching to it: a
@@ -469,6 +477,22 @@ message Output {
 message Exited {
   int32 exit_code = 1;
 }
+
+message SignalRequest {
+  string session = 1;
+  // Signal number, as in signal(3). A number rather than an enum because the set is
+  // platform-defined: enumerating it here would mean either a list that disagrees with the host or a
+  // second vocabulary for something the operating system already names.
+  int32 signal = 2;
+  // Send to the shell's process group rather than the shell alone.
+  //
+  // Defaults to the group when unset, since that is what a keypress does: the pty delivers to the
+  // foreground process group, so a signal reaching only the shell would leave the job a caller meant
+  // to stop still running. process_only opts out for the rare case of signalling the shell itself.
+  bool process_only = 3;
+}
+
+message SignalResponse {}
 
 message TagRequest {
   // Empty means the session the caller is in, from CM_SESSION.
