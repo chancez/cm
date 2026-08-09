@@ -207,82 +207,128 @@ func printSessionsJSON(w io.Writer, sessions []*serverv1.Session) error {
 	return writeJSON(w, out)
 }
 
+// sessionStateColumn renders the STATE cell, which carries more than the lifecycle stage.
+//
+// What a session is *doing* is folded in here rather than given its own column, reusing the
+// exited(0) idiom. That was a width decision and still is: CWD is a full path and sits last, so every
+// column added before it costs a path its tail.
+func sessionStateColumn(s *serverv1.Session) string {
+	state := stateName(s)
+	switch {
+	case state == "exited":
+		return fmt.Sprintf("exited(%d)", s.ExitCode)
+	case state == "running" && s.ReportedState != "":
+		// A report wins over the derived state, and its detail is the useful part: "blocked" alone
+		// says a program wants something, while "blocked: needs approval" says what.
+		out := "running(" + s.ReportedState
+		if s.ReportedDetail != "" {
+			// Truncated, not reduced to its first word: a detail is a sentence a human wrote, so
+			// "needs approval" must not become "needs". A bound is still needed, since the column
+			// has to stay readable and nothing stops a reporter sending a paragraph.
+			out += ": " + truncate(s.ReportedDetail, 24)
+		}
+		return out + ")"
+	case state == "running" && s.Command != "":
+		return fmt.Sprintf("running(%s)", firstWord(s.Command))
+	case state == "running" && s.Busy:
+		// Busy but the shell did not say what. Distinguished from idle, since that is the part
+		// that matters when deciding whether to close a window.
+		return "running(busy)"
+	}
+	return state
+}
+
+// sessionCwdColumn renders the CWD cell, marking a directory that is not on this machine.
+func sessionCwdColumn(s *serverv1.Session) string {
+	cwd := s.Cwd
+	if !s.CwdIsLocal && cwd != "" {
+		// Marked rather than hidden: in a table the user wants to see that the session went
+		// somewhere, which an empty column would not convey.
+		cwd += " (remote)"
+	}
+	return cwd
+}
+
 // printSessionsTable writes a session list as aligned columns for a human.
+//
+// Columns are assembled from a list rather than written as format strings per combination. With TAGS
+// and TITLE both optional, the branching version needed one Fprintf per combination and they had to
+// agree on column order, which is exactly the shape that lets a header and its rows drift apart.
 func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 	if len(sessions) == 0 {
 		return nil
 	}
 	sortSessions(sessions)
 
-	// The tags column appears only when something is tagged.
+	// Optional columns appear only when some session has something to put in them.
 	//
-	// Not unconditional, because the existing note about a seventh column is still true: CWD is a
-	// full path and is last, so anything added before it pushes it off the edge of a normal terminal.
-	// Someone who does not use tags should not pay for the feature in width, and someone who does has
-	// asked for the column by tagging something.
+	// Width is the reason, and it is a real constraint rather than fussiness: CWD is a full path and
+	// sits last, so each column before it eats into the path. Someone who tags nothing and whose shell
+	// reports no title should pay for neither.
 	//
-	// Keyed on the whole list rather than per row, so the header and the rows agree and the columns
-	// stay aligned.
-	showTags := false
+	// Keyed on the whole list rather than per row, so the header and every row agree on the shape.
+	// Deciding per row misaligns the table, which is worse than an empty cell.
+	var showTags, showTitle bool
 	for _, s := range sessions {
 		if len(s.Tags) > 0 {
 			showTags = true
-			break
+		}
+		if s.Title != "" {
+			showTitle = true
 		}
 	}
 
-	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	header := "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tCWD"
-	if showTags {
-		// Before CWD rather than after it: a path is the one field that can be arbitrarily long, so
-		// anything placed after it is unlikely to line up on a normal terminal.
-		header = "NAME\tPID\tCLIENTS\tSTATE\tCREATED\tTAGS\tCWD"
+	type column struct {
+		header string
+		cell   func(*serverv1.Session) string
 	}
-	fmt.Fprintln(tw, header)
-	for _, s := range sessions {
-		state := stateName(s)
-		switch {
-		case state == "exited":
-			state = fmt.Sprintf("exited(%d)", s.ExitCode)
-		case state == "running" && s.ReportedState != "":
-			// A report wins over the derived state, and its detail is the useful part: "blocked" alone
-			// says a program wants something, while "blocked: needs approval" says what.
-			state = "running(" + s.ReportedState
-			if s.ReportedDetail != "" {
-				// Truncated, not reduced to its first word: a detail is a sentence a human wrote, so
-				// "needs approval" must not become "needs". A bound is still needed, since the column
-				// has to stay readable and nothing stops a reporter sending a paragraph.
-				state += ": " + truncate(s.ReportedDetail, 24)
-			}
-			state += ")"
-		case state == "running" && s.Command != "":
-			// Shown in the state column rather than as a new one, reusing the exited(0) idiom. What a
-			// session is doing belongs with whether it is alive, and a seventh column would push CWD
-			// off the edge of a normal terminal.
-			state = fmt.Sprintf("running(%s)", firstWord(s.Command))
-		case state == "running" && s.Busy:
-			// Busy but the shell did not say what. Distinguished from idle, since that is the part
-			// that matters when deciding whether to close a window.
-			state = "running(busy)"
-		}
-		cwd := s.Cwd
-		if !s.CwdIsLocal && cwd != "" {
-			// Marked rather than hidden: in a table the user wants to see that the session went
-			// somewhere, which an empty column would not convey.
-			cwd += " (remote)"
-		}
-		age := humanAge(time.Unix(s.CreatedAtUnix, 0))
-		if showTags {
+	columns := []column{
+		{"NAME", func(s *serverv1.Session) string { return s.Name }},
+		{"PID", func(s *serverv1.Session) string { return fmt.Sprint(s.ShellPid) }},
+		{"CLIENTS", func(s *serverv1.Session) string { return fmt.Sprint(s.Clients) }},
+		{"STATE", sessionStateColumn},
+		{"CREATED", func(s *serverv1.Session) string {
+			return humanAge(time.Unix(s.CreatedAtUnix, 0))
+		}},
+	}
+	if showTitle {
+		// A separate column rather than folded into STATE, because the two answer different
+		// questions: the title says what a window *is* and the state says whether it is safe to
+		// close. A terminal's own title is also the thing a person recognizes a window by, which is
+		// what makes it the bridge between `cm list` and a tab in front of them.
+		//
+		// Before TAGS and CWD, since it is bounded in practice: a title is written to be read in a
+		// tab, so it is already short by construction.
+		columns = append(columns, column{"TITLE", func(s *serverv1.Session) string {
+			// Bounded anyway. Nothing stops a program emitting a paragraph as its title, and the
+			// full value is in `cm info` and the JSON output.
+			return truncate(s.Title, 30)
+		}})
+	}
+	if showTags {
+		columns = append(columns, column{"TAGS", func(s *serverv1.Session) string {
 			// Truncated for the same reason the reported detail is: the column has to stay readable,
 			// and nothing bounds how many tags a session carries even though each one is bounded.
-			// `cm info` and the JSON output carry the whole set.
-			fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
-				s.Name, s.ShellPid, s.Clients, state, age,
-				truncate(tags.Format(s.Tags), 32), cwd)
-			continue
+			return truncate(tags.Format(s.Tags), 32)
+		}})
+	}
+	// CWD last, since a path is the one field that can be arbitrarily long and nothing after it
+	// would line up on a normal terminal.
+	columns = append(columns, column{"CWD", sessionCwdColumn})
+
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	headers := make([]string, 0, len(columns))
+	for _, c := range columns {
+		headers = append(headers, c.header)
+	}
+	fmt.Fprintln(tw, strings.Join(headers, "\t"))
+
+	for _, s := range sessions {
+		cells := make([]string, 0, len(columns))
+		for _, c := range columns {
+			cells = append(cells, c.cell(s))
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\t%s\t%s\n",
-			s.Name, s.ShellPid, s.Clients, state, age, cwd)
+		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	return tw.Flush()
 }
