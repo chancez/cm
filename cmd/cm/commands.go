@@ -443,13 +443,15 @@ selector matching nothing is an error rather than a silent success.`,
 
 func newSendCommand(g *globals) *cobra.Command {
 	var (
-		newline bool
-		until   string
-		timeout time.Duration
-		asJSON  bool
-		follow  bool
-		raw     bool
-		keys    []string
+		newline  bool
+		until    string
+		timeout  time.Duration
+		asJSON   bool
+		follow   bool
+		raw      bool
+		keys     []string
+		match    string
+		matchRaw bool
 	)
 	cmd := &cobra.Command{
 		Use:   "send <session> [text]...",
@@ -547,6 +549,21 @@ follower connects, which for a fast command can be all of it.`,
 				data += "\r"
 			}
 
+			if match != "" && until != "" {
+				return errors.New("--match and --wait cannot be combined; " +
+					"--match waits on output and --wait waits on a state")
+			}
+			if matchRaw && match == "" {
+				return errors.New("--match-raw only applies with --match")
+			}
+			if match != "" && follow {
+				// Refused rather than resolved. --follow stops when its wait resolves, and a match
+				// resolving mid-command would cut the stream off partway through output the caller was
+				// watching, which reads as truncation rather than as the flag working.
+				return errors.New("--match and --follow cannot be combined; " +
+					"follow streams until the command ends, which is a different stopping point")
+			}
+
 			// --follow implies waiting for idle, since streaming until "whenever" is not a thing: the
 			// command has to end for this to return. An explicit --wait still wins, so
 			// `--follow --wait exited` watches until the session itself finishes rather than until the
@@ -587,6 +604,8 @@ follower connects, which for a fast command can be all of it.`,
 					Session:       name,
 					Data:          []byte(data),
 					WaitUntil:     state,
+					Match:         match,
+					MatchRaw:      matchRaw,
 					WaitTimeoutMs: uint64(timeout.Milliseconds()),
 				})
 				if err != nil {
@@ -595,7 +614,10 @@ follower connects, which for a fast command can be all of it.`,
 				if resp.GetWait() == nil {
 					return nil
 				}
-				return reportWait(os.Stdout, os.Stderr, name, until, resp.GetWait(), asJSON)
+				// Described by what was waited for, so a timeout message names the pattern rather than
+				// an empty state.
+				return reportWait(os.Stdout, os.Stderr, name,
+					waitTarget{match: match, until: until}.describe(), resp.GetWait(), asJSON)
 			})
 		},
 	}
@@ -606,6 +628,10 @@ follower connects, which for a fast command can be all of it.`,
 		"send a key rather than text: ctrl-c, enter, up, f5, alt-x (repeatable, in order)")
 	f.StringVar(&until, "wait", "",
 		"after sending, wait until the session is idle, busy, blocked, or exited")
+	f.StringVar(&match, "match", "",
+		"after sending, wait until this text appears in the output")
+	f.BoolVar(&matchRaw, "match-raw", false,
+		"match the bytes the program emitted rather than the text they rendered to")
 	addTimeoutFlag(f, &timeout)
 	f.BoolVar(&asJSON, "json", false, "print the wait result as JSON")
 	f.BoolVarP(&follow, "follow", "f", false,

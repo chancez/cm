@@ -46,7 +46,26 @@ type outputMatcher struct {
 	// found records that the pattern has appeared, which is latched: a caller asks "has this happened",
 	// and output arriving afterwards cannot unhappen it.
 	found bool
+	// skip is text still to be discarded before matching begins, used to step over a shell's echo of the
+	// input that was just sent.
+	//
+	// Necessary because writing to a pty means the shell echoes the line back, and that echo contains the
+	// command -- so a pattern naming anything in the command matches the echo rather than the output.
+	// Measured: `send 'sh -c "sleep 2; echo UNIQUEWORD"' --match UNIQUEWORD` resolved in 11ms against the
+	// echo while the real output arrived 2s later, which is the same class of wrong answer as a wait for
+	// idle being satisfied by the idle a session was already in.
+	//
+	// Counted in bytes of text rather than matched as a string, because a terminal does not echo verbatim:
+	// it may wrap, and a shell with line editing redraws the line as it goes. A byte count is robust to
+	// both, and over-skipping by a few characters costs nothing here since the pattern a caller waits for
+	// is in the output that follows.
+	skip int
 }
+
+// skipEcho tells the matcher to discard n bytes of text before matching.
+//
+// Set by a send, which knows how much input it wrote, and not by a bare wait, which caused no echo.
+func (m *outputMatcher) skipEcho(n int) { m.skip = n }
 
 // newOutputMatcher builds a matcher for a pattern.
 //
@@ -81,6 +100,20 @@ func (m *outputMatcher) feed(p []byte) bool {
 			// breaking a match that spans the repaint.
 			return m.found
 		}
+	}
+
+	// Step over the echo before matching anything.
+	//
+	// Applied to the text rather than the raw bytes so a wrapped or redrawn echo still consumes the
+	// intended amount, and the tail is left untouched: there is nothing before an echo worth completing a
+	// match against.
+	if m.skip > 0 {
+		if len(text) <= m.skip {
+			m.skip -= len(text)
+			return false
+		}
+		text = text[m.skip:]
+		m.skip = 0
 	}
 
 	// Prepended rather than searched separately, so a match that begins in the previous chunk and ends

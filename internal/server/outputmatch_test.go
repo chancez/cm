@@ -180,3 +180,84 @@ func TestOutputMatcherIsCaseSensitive(t *testing.T) {
 		t.Error("did not match the exact case")
 	}
 }
+
+// A skipped echo is not matched against.
+//
+// The bug this closes was measured, not hypothetical: writing to a pty makes the shell echo the line back,
+// and the echo contains the command, so `send 'sh -c "sleep 2; echo UNIQUEWORD"' --match UNIQUEWORD`
+// resolved in 11ms against the echo while the real output arrived 2s later. Same class of wrong answer as a
+// wait for idle satisfied by the idle a session was already in.
+func TestOutputMatcherSkipsEcho(t *testing.T) {
+	const echoed = "sh -c \"sleep 2; echo UNIQUEWORD\"\r\n"
+
+	m := newOutputMatcher("UNIQUEWORD", false)
+	// Counted in text bytes, which is what the budget consumes: the carriage return is stripped, so the
+	// echo is one byte shorter than it was written. A caller passes the raw length and over-shoots by
+	// exactly that, which is the trade the budget accepts.
+	m.skipEcho(len(echoed) - 1)
+
+	// The echo itself must not satisfy it, even though the pattern is plainly in there.
+	if m.feed([]byte(echoed)) {
+		t.Fatal("matched the echoed command line, want the echo skipped")
+	}
+	// The real output does.
+	if !m.feed([]byte("UNIQUEWORD\r\n")) {
+		t.Error("did not match the command's own output after skipping the echo")
+	}
+}
+
+// An echo split across chunks is skipped in full.
+func TestOutputMatcherSkipsEchoAcrossChunks(t *testing.T) {
+	const echoed = "echo NEEDLE\r\n"
+	for cut := 1; cut < len(echoed); cut++ {
+		m := newOutputMatcher("NEEDLE", false)
+		m.skipEcho(len(echoed) - 1)
+
+		if m.feed([]byte(echoed[:cut])) {
+			t.Errorf("split at %d: matched inside the echo", cut)
+			continue
+		}
+		if m.feed([]byte(echoed[cut:])) {
+			t.Errorf("split at %d: matched the rest of the echo", cut)
+			continue
+		}
+		if !m.feed([]byte("NEEDLE\r\n")) {
+			t.Errorf("split at %d: did not match the output after the echo", cut)
+		}
+	}
+}
+
+// The skip is a budget in text bytes, and running past the echo swallows real output.
+//
+// Recorded as a limit rather than papered over, since it is the cost of counting bytes instead of matching
+// the echo as a string. Two things make it acceptable: the count comes from the input just written, so it
+// over-shoots only by what a terminal adds or removes -- a stripped carriage return, a wrap -- and a
+// pattern a caller waits for arrives in the output *after* that, not within a few bytes of the prompt.
+//
+// It is a real edge though: a skip much larger than the echo eats output that follows. This test pins the
+// arithmetic so a later change to how the budget is counted is visible rather than silent.
+func TestOutputMatcherSkipIsAByteBudget(t *testing.T) {
+	m := newOutputMatcher("TARGET", false)
+	// Deliberately far more than the echo below.
+	m.skipEcho(100)
+
+	// 12 raw bytes, but the carriage return is stripped, so 11 count against the budget.
+	if m.feed([]byte("short echo\r\n")) {
+		t.Fatal("matched during the skip")
+	}
+	// Enough to exhaust the remaining 89.
+	if m.feed([]byte(strings.Repeat("x", 89))) {
+		t.Fatal("matched during the skip")
+	}
+	if !m.feed([]byte("TARGET\r\n")) {
+		t.Error("did not match once the budget was exhausted")
+	}
+}
+
+// A bare wait skips nothing, so the first output it sees can match.
+func TestOutputMatcherWithoutSkip(t *testing.T) {
+	m := newOutputMatcher("FIRST", false)
+	if !m.feed([]byte("FIRST\r\n")) {
+		t.Error("did not match the first chunk when no echo was skipped")
+	}
+}

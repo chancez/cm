@@ -25,16 +25,18 @@ const runPollInterval = 200 * time.Millisecond
 
 func newRunCommand(g *globals) *cobra.Command {
 	var (
-		session string
-		dir     string
-		detach  bool
-		timeout time.Duration
-		persist bool
-		asJSON  bool
-		env     []string
-		quiet   bool
-		raw     bool
-		tagArgs []string
+		session  string
+		dir      string
+		detach   bool
+		timeout  time.Duration
+		persist  bool
+		asJSON   bool
+		env      []string
+		quiet    bool
+		raw      bool
+		tagArgs  []string
+		match    string
+		matchRaw bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- <command>...",
@@ -89,6 +91,9 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			if err != nil {
 				return err
 			}
+			if matchRaw && match == "" {
+				return errors.New("--match-raw only applies with --match")
+			}
 
 			dirs, err := g.dirs()
 			if err != nil {
@@ -127,7 +132,8 @@ owns the process and reaps it, so nothing is inferred from output.`,
 						defer closeLog.Close()
 					}
 					return runInExistingSession(
-						cmd.Context(), dirs, name, args, detach, timeout, quiet, raw, logger)
+						cmd.Context(), dirs, name, args, detach, timeout, quiet, raw,
+						match, matchRaw, logger)
 				}
 
 				if detach {
@@ -160,6 +166,10 @@ owns the process and reaps it, so nothing is inferred from output.`,
 		"set a KEY=VALUE in the command's environment (repeatable)")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"label the session, as key or key=value (repeatable, ignored when reusing a session)")
+	f.StringVar(&match, "match", "",
+		"on a reused session, wait until this text appears instead of for the shell to be idle")
+	f.BoolVar(&matchRaw, "match-raw", false,
+		"match the bytes the program emitted rather than the text they rendered to")
 	return cmd
 }
 
@@ -403,6 +413,8 @@ func runInExistingSession(
 	detach bool,
 	timeout time.Duration,
 	quiet, raw bool,
+	match string,
+	matchRaw bool,
 	log *slog.Logger,
 ) error {
 	data := strings.Join(command, " ") + "\r"
@@ -417,7 +429,7 @@ func runInExistingSession(
 		defer conn.Close()
 
 		until := serverv1.WaitState_WAIT_STATE_UNSPECIFIED
-		if !detach {
+		if !detach && match == "" {
 			// Not detached, so the exit status still has to be waited for even though nothing is printed.
 			until = serverv1.WaitState_WAIT_STATE_IDLE
 		}
@@ -425,6 +437,8 @@ func runInExistingSession(
 			Session:       name,
 			Data:          []byte(data),
 			WaitUntil:     until,
+			Match:         match,
+			MatchRaw:      matchRaw,
 			WaitTimeoutMs: uint64(timeout.Milliseconds()),
 		}); err != nil {
 			return err
@@ -436,5 +450,62 @@ func runInExistingSession(
 		return nil
 	}
 
+	if match != "" {
+		// Send, wait for the text, then print what the command produced.
+		//
+		// Not sendAndFollow, which streams until its wait resolves: a match resolves the moment the text
+		// appears, which is usually mid-command, so following would cut the stream off partway through
+		// output the caller wanted and read as truncation. Reading afterwards prints a complete view of
+		// what the session has, which is what --match is for on a shell that cannot say when a command
+		// ended.
+		return sendMatchThenRead(ctx, dirs, name, data, match, matchRaw, timeout, raw)
+	}
+
 	return sendAndFollow(ctx, dirs, name, data, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
+}
+
+// sendMatchThenRead sends input, waits for a pattern, and prints the session's recent output.
+func sendMatchThenRead(
+	ctx context.Context,
+	dirs paths.Dirs,
+	name, data, match string,
+	matchRaw bool,
+	timeout time.Duration,
+	raw bool,
+) error {
+	conn, cl, err := dialServer(dirs)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	resp, err := cl.Send(ctx, &serverv1.SendRequest{
+		Session:       name,
+		Data:          []byte(data),
+		Match:         match,
+		MatchRaw:      matchRaw,
+		WaitTimeoutMs: uint64(timeout.Milliseconds()),
+	})
+	if err != nil {
+		return err
+	}
+
+	// Printed whether or not the text appeared, since output produced before a timeout is still what the
+	// command said and is usually how a caller works out why the match failed.
+	out, readErr := cl.Read(ctx, &serverv1.ReadRequest{
+		Session: name,
+		Lines:   uint32(defaultReadLines),
+		Unwrap:  true,
+		Raw:     raw,
+	})
+	if readErr == nil {
+		if _, err := os.Stdout.Write(out.Data); err != nil {
+			return err
+		}
+	}
+
+	if w := resp.GetWait(); w != nil && !w.Satisfied {
+		return fmt.Errorf("timed out waiting for %q in %s", match, name)
+	}
+	return nil
 }

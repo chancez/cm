@@ -686,6 +686,22 @@ message SendRequest {
   // that already happened. The server arms the wait before it writes the input, so there is no window.
   WaitState wait_until = 3;
   uint64 wait_timeout_ms = 4;
+
+  // Wait until this text appears in the session's output, instead of waiting for a state.
+  //
+  // The reason to have it here rather than only on Wait is the same reason wait_until is here: the
+  // subscription is armed before the input is written, so a command that prints and finishes faster than a
+  // second call could arrive is still caught. A caller composing `send` with a separate
+  // `wait --match` has to start the wait first and cannot close that window from outside.
+  //
+  // Matters most for a session whose shell reports no OSC 133, where wait_until has nothing to resolve on:
+  // reusing such a session could previously only be bounded by a timeout, which is a sleep rather than a
+  // wait.
+  //
+  // Mutually exclusive with wait_until, refused rather than combined.
+  string match = 5;
+  // Match the bytes the program emitted rather than the text they rendered to. See WaitRequest.match_raw.
+  bool match_raw = 6;
 }
 
 message SendResponse {
