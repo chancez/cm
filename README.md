@@ -32,8 +32,9 @@ without redrawing.
 
 ```
 cm attach [session]      attach, creating the session if needed (ctrl-\ detaches)
-cm list                  list sessions
+cm list                  list sessions; --tag/--prefix to filter
 cm info <session>        one session's details; --field for a single value
+cm tag [session] k=v     label a session so it can be grouped and filtered
 cm history <session>     print contents including scrollback; --format=plain|vt|html
 cm send <session> <text> send input without attaching
 cm run -- <command>      run a command in a session and exit with its status
@@ -47,6 +48,14 @@ Session names complete dynamically once `cm completions zsh` is installed.
 `attach` with no name asks the server to allocate one, and `--own` ends the session when the
 client disconnects without detaching. Together those give a terminal emulator a session per
 window that cleans itself up on close.
+
+Tags group sessions that a name cannot, which includes every session the server named itself:
+
+```
+cm run --tag project=cm --tag role=build -- make      # label at creation
+cm tag s17 project=cm                                 # or afterwards
+cm list --tag project=cm                              # repeating --tag narrows
+```
 
 A server starts automatically when needed, so there is normally no reason to run `cm server`.
 
