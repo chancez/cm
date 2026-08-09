@@ -85,6 +85,31 @@ cm history worker                       # everything, scrollback included
 
 `cm send` writes to the pty exactly as typing would, so the session's own echo and its prompt appear in the output. That is the program's output, not something cm adds.
 
+### Keys and signals
+
+Text cannot express a keystroke, so use `--key` for one:
+
+```bash
+cm send worker --key ctrl-c             # interrupt what is running
+cm send worker --key escape            # leave a program's insert mode
+cm send agent 'yes' --key enter        # type, then press enter
+cm send menu --key down --key enter    # several, in order
+```
+
+Accepts `ctrl-c` (also `c-c`, `^C`), `alt-x`, and names: `enter`, `tab`, `escape`, `backspace`, `delete`, arrows, `home`, `end`, `pageup`, `pagedown`, `f1`-`f12`.
+
+**Do not send `ctrl-c` as text.** `cm send worker ctrl-c` types the six characters onto the command line and whatever was running keeps running. An unknown `--key` name is an error, so a typo fails loudly rather than being typed.
+
+When a keypress does not get through, signal the process instead:
+
+```bash
+cm signal worker int          # what ctrl-c means, delivered as a signal
+cm signal worker term         # ask it to stop
+cm signal --tag run=abc term  # a whole group
+```
+
+The difference matters for agents specifically: a program holding its terminal in raw mode reads ctrl-c as an ordinary byte and never sees an interrupt, and a shell sitting at a prompt has no job to interrupt. `--key` is what a keypress does; `cm signal` is what to reach for when that was not enough. It signals the session's foreground job, so the session itself survives, and `cm kill` remains the way to end the session.
+
 To send and collect in one step:
 
 ```bash

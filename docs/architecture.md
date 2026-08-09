@@ -360,6 +360,49 @@ bound is deliberately looser than the output buffer's, so a boundary usually out
 at: a boundary whose output has been trimmed still says the command existed, which beats claiming it never
 ran. A read that begins before the retained bytes logs that its view is short.
 
+## Sending keys, and sending signals
+
+`cm send` writes bytes to the pty, exactly as typing would. That is the right primitive and the reason
+both of the following exist: input that did not go through the pty would never reach a program's line
+discipline, so a shell would not see it as typing at all.
+
+`cm send --key ctrl-c` names a keystroke instead of spelling out its bytes. Before it, a caller had to
+produce the byte itself, and every natural spelling was sent as literal text -- measured in a sandbox,
+`C-c`, `ctrl-c`, `^C`, and `\003` all landed on the command line, leaving the session holding
+"C-cctrl-c^C\003" while the build a script believed it had interrupted kept running. Nothing errored.
+So an unrecognized multi-character key name is now refused rather than typed, which is the whole point:
+a single character is still sent literally, but "ctrlc" is a mistake and says so.
+
+`ControlCode` is shared with the detach-key parser rather than duplicated. They describe the same
+keystroke, and a user who configures a detach key and then sends that key by name would otherwise be
+naming one thing two ways with only one of them right.
+
+The key encodings are the default terminal forms, not the kitty-protocol or modifyOtherKeys variants.
+Those are what a terminal sends *to* cm when someone presses a modified key; a program inside the session
+has negotiated nothing with whoever is calling `cm send`.
+
+`cm signal` exposes the shim's Signal RPC, which existed for `cm kill` but had no server RPC or command
+reaching it. It is deliberately not a duplicate of sending ctrl-c, and which one is right depends on what
+you are stopping. A control character travels through the pty, so the line discipline decides what it
+means: a program that put its terminal in raw mode reads 0x03 as an ordinary byte and never sees a
+signal, and a shell at a prompt with no job has nothing to interrupt. A signal is delivered regardless.
+Verified against a job with SIGINT trapped, where `--key ctrl-c` could not stop it and `cm signal term`
+did.
+
+**The signal goes to the pty's foreground process group, not the shell's own group.** Building this found
+the shim signalling the wrong one. Its comment claimed the group covered "a foreground job and its
+children", and it does not: a shell with job control puts each job in a *new* group and hands that group
+the terminal, so the shell's group holds only the shell. Measured under `/bin/sh` with `sleep 300`, the
+shell sat in group 20144 and the sleep in 20242, and a SIGTERM to the shell's group reported success while
+leaving the sleep running. That is the worst shape available -- the caller is told the job was signalled.
+It now asks the pty via `TIOCGPGRP`, which is exactly what the line discipline consults for a keypress,
+so `cm signal` and the key mean the same thing about *which* processes they reach. The ioctl goes through
+`withPty` rather than a bare `Fd()`, since `Fd()` is not refcounted the way `Read` and `Write` are.
+
+`--process-only` signals the shell alone, for the rare case where that is the target. A session that has
+ended is an error rather than a silent success, since a signal needs a process to receive it; a session
+that ends between the lookup and the delivery is not, because the caller wanted it stopped and it is.
+
 ## Waiting, and why the server does it
 
 `cm wait` and `cm send --wait` block until a session is idle, busy, or exited. The server answers from
