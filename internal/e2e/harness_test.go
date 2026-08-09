@@ -448,6 +448,33 @@ type sessionJSON struct {
 	// ReportedState and ReportedDetail are what a program in the session reported about itself.
 	ReportedState  string `json:"reported_state"`
 	ReportedDetail string `json:"reported_detail"`
+	// Tags are the caller's own labels for the session.
+	Tags map[string]string `json:"tags"`
+}
+
+// listTagged returns the sessions matching a tag selector, as `cm list --tag` reports them.
+func (e *env) listTagged(selectors ...string) []sessionJSON {
+	e.t.Helper()
+	args := []string{"list", "--json"}
+	for _, s := range selectors {
+		args = append(args, "--tag", s)
+	}
+	out := e.mustRun(args...)
+	var sessions []sessionJSON
+	if err := json.Unmarshal([]byte(out), &sessions); err != nil {
+		e.t.Fatalf("parsing list output %q: %v", out, err)
+	}
+	return sessions
+}
+
+// tagNames returns the names of the sessions matching a tag selector, for comparing as a whole value.
+func (e *env) tagNames(selectors ...string) []string {
+	e.t.Helper()
+	var names []string
+	for _, s := range e.listTagged(selectors...) {
+		names = append(names, s.Name)
+	}
+	return names
 }
 
 // list returns the sessions cm reports.
