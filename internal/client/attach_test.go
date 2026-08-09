@@ -94,6 +94,9 @@ func (s *stubService) Report(
 ) (*serverv1.ReportResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Signal(context.Context, *serverv1.SignalRequest) (*serverv1.SignalResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Tag(context.Context, *serverv1.TagRequest) (*serverv1.TagResponse, error) {
 	panic("unused")
 }

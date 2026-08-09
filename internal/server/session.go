@@ -248,16 +248,16 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 	pumpCtx, stopPump := context.WithCancel(context.Background())
 
 	s := &Session{
-		name:        rec.Name,
-		record:      rec,
-		conn:        conn,
-		shim:        shim,
-		term:        term,
-		recent:      seqlog.NewAt(DefaultRecentBytes, fromSeq),
-		metaSubs:    make(map[*metaSub]struct{}),
+		name:     rec.Name,
+		record:   rec,
+		conn:     conn,
+		shim:     shim,
+		term:     term,
+		recent:   seqlog.NewAt(DefaultRecentBytes, fromSeq),
+		metaSubs: make(map[*metaSub]struct{}),
 		// Positioned at the same offset as the log, since a session adopted after a server restart
 		// resumes partway in and a tracker starting from zero would place every boundary wrongly.
-		boundaries: newBoundaryTrackerAt(fromSeq),
+		boundaries:  newBoundaryTrackerAt(fromSeq),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		lastSeq:     fromSeq,
@@ -1097,6 +1097,18 @@ func (s *Session) ReportFocus(ctx context.Context, focused bool) {
 // Write sends input to the session's shell.
 func (s *Session) Write(ctx context.Context, data []byte) error {
 	_, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data})
+	return err
+}
+
+// Signal delivers a signal to the session's shell, and to its process group unless processOnly.
+//
+// The group by default, because that is what a keypress does: a pty delivers to the foreground process
+// group, so signalling only the shell would leave the job the caller meant to stop still running.
+func (s *Session) Signal(ctx context.Context, sig int32, processOnly bool) error {
+	_, err := s.shim.Signal(ctx, &shimv1.SignalRequest{
+		Signal:       sig,
+		ProcessGroup: !processOnly,
+	})
 	return err
 }
 

@@ -18,6 +18,7 @@ type ServerService interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
+	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -111,6 +112,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Doctor(ctx, &req)
 			},
+			"Signal": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req SignalRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Signal(ctx, &req)
+			},
 			"Tag": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req TagRequest
 				if err := unmarshal(&req); err != nil {
@@ -156,6 +164,7 @@ type ServerClient interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
+	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -272,6 +281,14 @@ func (c *serverClient) Wait(ctx context.Context, req *WaitRequest) (*WaitRespons
 func (c *serverClient) Doctor(ctx context.Context, req *DoctorRequest) (*DoctorResponse, error) {
 	var resp DoctorResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Doctor", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Signal(ctx context.Context, req *SignalRequest) (*SignalResponse, error) {
+	var resp SignalResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Signal", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
