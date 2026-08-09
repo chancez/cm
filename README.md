@@ -36,12 +36,13 @@ cm list                  list sessions; --tag/--prefix to filter
 cm info [session]        one session's details; --field for a single value
 cm tag [session] k=v     label a session so it can be grouped and filtered
 cm history [session]     print contents including scrollback; --format=plain|vt|html
-cm send <session> <text> send input without attaching
+cm send <session> <text> send input without attaching; --key for ctrl-c, arrows, ...
 cm run -- <command>      run a command in a session and exit with its status
 cm wait [session]        block until a session reaches a state
 cm read [session]        print a session's recent output
 cm get-env [session]     print env vars from the session's latest client
 cm logs [session]        print cm's diagnostic log
+cm signal [session] <s>  signal a session's foreground job (int, term, ...)
 cm kill <session>...     terminate sessions
 ```
 
@@ -93,6 +94,8 @@ Sessions can be driven without attaching, which is what makes cm usable from a s
 
 ```
 cm send build 'make' --enter --wait idle   # send, then wait for it to finish
+cm send build --key ctrl-c                 # a keystroke, not the characters
+cm signal build int                        # a signal, when a keystroke cannot get through
 cm read build --since-commands 1           # what the last command printed, prompt and all
 cm read build --last-output                # just its output, for a parser
 cm read build --lines 50                   # the recent tail, soft wrap rejoined
