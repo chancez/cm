@@ -285,23 +285,6 @@ or as HTML with styling (which `cm history --format html` already does), covers 
 missing is a bundle: the content, the recorded command, the directory, the exit status. Useful for filing a
 bug or handing a transcript to someone.
 
-**Reattaching to an ended session usually fails to start its replacement.** Attaching to a name whose shell
-has exited deletes the old record and creates a new session under it. The new shim cannot claim the socket
-while the old one is still shutting down and holds it, so it dies with "already served by a live shim" and
-the stale row survives: `cm list` shows the previous exit status with `shell_pid 0` and nothing is running.
-
-Found while making the replacement log what it discards, and confirmed pre-existing -- a binary built before
-that change fails identically. Reproduced with `cm run --session r -- sh -c 'exit 7'` followed by
-`cm attach --no-attach r -- sh -c 'sleep 120'`.
-
-The shim's Listen already refuses to remove a socket that something answers on, deliberately: removing a
-live shim's socket would orphan it with no way back. So the fix is on the server side, waiting for the old
-shim to go before spawning its replacement, rather than loosening that check. `Kill` already waits on
-`sess.Done()` with a two-second bound for exactly this reason, and the create path does not.
-
-Worth doing, and bounded. What it needs care over is the case where the old shim never exits, which must
-fail with something better than a socket error.
-
 **Recovering a session whose shim died.** `store.go` notes that a future version may be able to resurrect
 a session from its output log. Today a dead shim means a dead session, and the persisted content is
 readable but not revivable. This is a real capability rather than a nicety, and it is bounded work: the

@@ -712,6 +712,25 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
+	// Wait for a previous shim on this socket to go before spawning one that has to bind it.
+	//
+	// A shim stays reachable briefly after its shell exits, deliberately: it is the only thing that knows
+	// the exit status, so it lingers for exitGrace to be asked. Recreating a session under the same name
+	// inside that window meant the new shim found the socket taken and died with "already served by a live
+	// shim", while waitForShim below dialed the *old* shim, got an answer, and reported the new one ready.
+	// The record was then left reading the previous incarnation's exit status with shell_pid 0, and nothing
+	// was running.
+	//
+	// Reached by attaching to a session whose shell has exited, which is what a terminal emulator does when
+	// it restores a saved window. Measured with `cm run --session r -- sh -c 'exit 7'` followed by
+	// `cm attach --no-attach r`.
+	//
+	// Waiting here rather than loosening the shim's socket check, which refuses to unlink a socket that
+	// something answers on for a good reason: removing a live shim's socket orphans it with no way back.
+	if err := waitForSocketFree(ctx, socket, shimReleaseTimeout); err != nil {
+		return nil, fmt.Errorf("waiting for the previous shim for %s to exit: %w", opts.Name, err)
+	}
+
 	// Either reason produces a log; only the first makes the session long-lived.
 	requested := m.persistsSession(opts.Name, opts.Persist)
 	persisting := requested || opts.CaptureOutput
@@ -875,6 +894,42 @@ func waitForShim(ctx context.Context, socket string) error {
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s", shimReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// shimReleaseTimeout bounds how long to wait for a previous shim to release its socket.
+//
+// Longer than the shim's own exitGrace, which is how long it stays reachable after its shell exits: this
+// has to outlast that or it would give up while the old shim was still doing what it is supposed to.
+const shimReleaseTimeout = 5 * time.Second
+
+// waitForSocketFree blocks until nothing answers on a socket path.
+//
+// The inverse of waitForShim, and needed for the same reason that one exists: a socket path is the only
+// name a shim has, so two incarnations of a session cannot overlap on it. Dialing rather than checking
+// whether the file exists, because a stale file nothing answers on is exactly the case that must not wait
+// -- the shim removes such a file itself when it binds.
+func waitForSocketFree(ctx context.Context, socket string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.Dial("unix", socket)
+		if err != nil {
+			// Nothing is listening, so the path is free. Any dial failure means that, including the
+			// common case of the file not existing at all.
+			return nil
+		}
+		conn.Close()
+
+		if time.Now().After(deadline) {
+			// Reported rather than spawning anyway, because spawning would fail with a socket error that
+			// says nothing about the cause. A shim that will not exit is a real problem and this names it.
+			return fmt.Errorf("still answering after %s", timeout)
 		}
 		select {
 		case <-ctx.Done():

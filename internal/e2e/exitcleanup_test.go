@@ -154,13 +154,18 @@ func TestReplacingAnEndedSessionIsLogged(t *testing.T) {
 	// A long-lived command, so a working replacement would be observably running.
 	e.mustRun("attach", "--no-attach", "reused", "--", "/bin/sh", "-c", "sleep 120")
 
-	// Deliberately not asserting that the replacement runs, because today it usually does not: the new
-	// shim cannot claim the socket while the old one is still shutting down and holds it, so it dies with
-	// "already served by a live shim" and the stale row survives. That is a separate, pre-existing bug --
-	// a binary built before this change fails the same way -- and it is recorded in docs/ideas.md rather
-	// than asserted here, so this test does not fail for a reason it is not about.
+	// The replacement is actually running, with a live pid.
 	//
-	// What is asserted is the logging, which is what this change added.
+	// This assertion was impossible for a while and the gap was itself the bug: the new shim could not claim
+	// the socket while the old one still held it, so it died with "already served by a live shim" and the
+	// stale row survived reading the previous incarnation's exited(7) with shell_pid 0. The create path now
+	// waits for the old shim to release the socket, so a replacement is observable rather than aspirational.
+	e.waitFor("the replacement shell to be running", 15*time.Second, func() bool {
+		s, ok := e.session("reused")
+		return ok && s.State == "running" && s.ShellPID > 0
+	})
+
+	// Logged as well as working, since the previous incarnation's status is discarded either way.
 	e.waitFor("the replacement to be logged", 15*time.Second, func() bool {
 		return strings.Contains(
 			e.readFileOrEmpty(e.serverLogPath()), "replacing an ended session")
