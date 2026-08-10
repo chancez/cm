@@ -40,7 +40,7 @@ it. Every change touching what reaches the pty or the client needs all of these:
 | 0 | `cm run`, a detached session. cm is the only possible answerer, so a mistake here is a **hang**, not an artifact. |
 | 1 interactive | The normal case. The terminal answers, so cm must not. |
 | 1 read-only | `cm read --follow`, `cm attach --read-only`. Input is **dropped** (see `recvLoop`), so this terminal cannot answer and cm still must. |
-| many | N terminals answering one query yields N replies. |
+| many | Every client sees the query, so N terminals answer it N times. |
 
 The read-only row is the one that catches a plausible-looking wrong fix. "Is a client attached"
 (`Clients() > 0`) reads correctly and is wrong, because it counts followers; the predicate has to be
@@ -50,7 +50,14 @@ actually distinguishes them.
 `readOnly` is also known at two different times: `registerClientSize` learns it, but a **resuming**
 client skips that call entirely. A test that only ever attaches fresh will not notice.
 
-The many-clients case remains untested. Say so rather than implying coverage.
+The many-clients row was a real bug, found only once it was measured: two kitty windows on one
+session answered a single `CSI c` twice, as `\x1b[?62;52;c\x1b[?62;52;c`. It had been reasoned about
+and left untested through two rounds of fixes for the same family of bug, which is the argument for
+walking the table rather than testing the state in front of you.
+
+The narrow-versus-broad distinction there is worth copying. Dropping *every* non-typing input from
+the non-answering clients fixes the duplicate and breaks the mouse, and it passes any test that only
+counts replies. When a fix restricts something, test what must still get through.
 
 ## Drive the pty directly, not a real program
 
