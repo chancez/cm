@@ -256,3 +256,60 @@ func TestWaitStatesAreAllDocumented(t *testing.T) {
 		}
 	}
 }
+
+// A flag cm exports the value of must not be filled from the environment.
+//
+// cm exports CM_SESSION into every session's shell, so the convention that gives every flag a
+// CM_-prefixed variable turned an inherited value into an argument nobody passed. `cm run -- make` from
+// inside a session reused the *calling* session: the second run printed the first command's output and
+// returned its exit status, then later runs failed with "ttrpc: closed". Nothing reported an error,
+// which is why this needs a test rather than a comment.
+func TestBindEnvSkipsSessionFlag(t *testing.T) {
+	t.Setenv(paths.SessionEnv(), "the-calling-session")
+
+	var session string
+	cmd := &cobra.Command{
+		Use:               "test",
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error { return bindEnv(c) },
+		RunE:              func(c *cobra.Command, _ []string) error { return nil },
+	}
+	cmd.Flags().StringVar(&session, "session", "", "")
+	cmd.SetArgs(nil)
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if session != "" {
+		t.Errorf("session = %q, want it empty so the server allocates a fresh name", session)
+	}
+	// And nothing claims the environment as its source, since `cm config` reports that.
+	if key, ok := filledFromEnv["session"]; ok {
+		t.Errorf("filledFromEnv[session] = %q, want the flag left unbound", key)
+	}
+}
+
+// An explicit --session must still work, since excluding it from the environment must not make the
+// flag itself unusable.
+func TestSessionFlagStillWorksExplicitly(t *testing.T) {
+	t.Setenv(paths.SessionEnv(), "the-calling-session")
+
+	var session string
+	cmd := &cobra.Command{
+		Use:               "test",
+		PersistentPreRunE: func(c *cobra.Command, _ []string) error { return bindEnv(c) },
+		RunE:              func(c *cobra.Command, _ []string) error { return nil },
+	}
+	cmd.Flags().StringVar(&session, "session", "", "")
+	cmd.SetArgs([]string{"--session=asked-for"})
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetErr(&strings.Builder{})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if session != "asked-for" {
+		t.Errorf("session = %q, want the value passed on the command line", session)
+	}
+}

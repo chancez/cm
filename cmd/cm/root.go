@@ -142,6 +142,9 @@ func bindEnv(cmd *cobra.Command) error {
 		if err != nil || f.Changed {
 			return
 		}
+		if noEnvFlags[f.Name] {
+			return
+		}
 		key := paths.Env(strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_")))
 		val, ok := os.LookupEnv(key)
 		if !ok || val == "" {
@@ -154,6 +157,28 @@ func bindEnv(cmd *cobra.Command) error {
 		filledFromEnv[f.Name] = key
 	})
 	return err
+}
+
+// noEnvFlags lists flags that must never be filled from the environment.
+//
+// The convention that every flag has a CM_-prefixed variable collides with the variables cm exports into a
+// session's own shell. CM_SESSION is set in every session, so `cm run -- make` from inside one bound
+// --session to the *calling* session: rather than creating a session, run typed the command into the shell
+// the developer was sitting in, printed that shell's echo of the command line, and returned its exit
+// status. Later runs then failed with "ttrpc: closed". Nothing reported an error, which is what made it
+// expensive to find.
+//
+// A deny list rather than dropping the convention, because filling flags from the environment is useful for
+// the rest, and rather than special-casing inside the loop, so the reason lives in one place and the next
+// exported variable has an obvious home. Only variables cm itself exports belong here.
+//
+// This bans binding the variable to a *flag*, not reading it at all. Taking CM_SESSION as a default target
+// stays deliberate where a command acts on the surrounding session rather than creating or retargeting one:
+// see report.go and getenv.go, which read it directly.
+var noEnvFlags = map[string]bool{
+	// Exported by paths.SessionEnv() into every session's shell. Also covers `cm shim --session`, which the
+	// server spawns with the name passed explicitly, so the two spellings of the flag cannot diverge.
+	"session": true,
 }
 
 // filledFromEnv records which flags bindEnv set, and from which variable.
