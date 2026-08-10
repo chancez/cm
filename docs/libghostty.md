@@ -49,10 +49,43 @@ Zig. It is:
 mise run libghostty
 ```
 
-Two flags are load-bearing and not redundant. `-Demit-xcframework=false` is required
+Three flags are load-bearing and not redundant. `-Demit-xcframework=false` is required
 because the default is "xcodebuild is on PATH", which is true even with only the
 Command Line Tools stub, and configuring the iOS target then fails without full Xcode.
 `-Demit-macos-app=false` avoids building the GUI app that cm does not use.
+
+`-Doptimize=ReleaseSafe` is the third, and omitting it is a correctness problem rather than a
+missed optimization.
+
+Zig defaults to `Debug`, and ghostty derives `slow_runtime_safety` from the optimize mode. In
+Debug that turns on integrity verification which walks an entire page, and `insertLines` calls
+it once per row it shifts, each call standing up a fresh `DebugAllocator`. A reverse index with
+the cursor on the top row goes through `insertLines`, so it cost 14ms at 50x120 against 10us for
+the same sequence anywhere else. The cost tracks cell count: 1.8ms at 10x40, 78ms at 100x200. It
+does not track scrollback depth, so it is per-operation rather than proportional to history.
+
+The symptom pointed nowhere near the cause. `less` emits home plus reverse index once per line
+when paging up, and plain lines when paging down, so scrolling up in `git log` or `git diff`
+lagged while scrolling down stayed instant. Measured with a real `less` over a real pty at
+50x120, one keypress cost:
+
+| key | Debug | ReleaseSafe |
+| --- | --- | --- |
+| `d` (down half page) | 1.2ms | 23-41us |
+| `u` (up half page) | 145-166ms | 32-91us |
+
+`ReleaseSafe` rather than `ReleaseFast`: measured at 15us against ReleaseFast's 12us for a
+half-page scroll, which is not worth giving up bounds and overflow checks in a parser whose input
+is whatever a program inside a session decides to print.
+
+Both build sites must agree: `mise.toml`'s `libghostty` task and `Dockerfile.test`. A timing
+assumption that holds in one and not the other is how a test passes locally and fails in CI.
+
+Two things guard this now, because a build flag is easy to drop and its symptom is easy to
+misattribute. `internal/vt/scroll_test.go` asserts on the *ratio* between scrolling up and down
+rather than an absolute duration, since a ratio is a property of the build and not of the
+machine: about 4x correct, about 45x in Debug. And `cm doctor`'s `slow-emulator` check measures a
+half-page scroll at startup, so an installation built wrong says so instead of feeling slow.
 
 The build emits `libghostty-vt.a`, a versioned dylib, headers, and pkg-config files under
 `zig-out`. Prefer the static archive so cm ships one binary with no runtime library path
