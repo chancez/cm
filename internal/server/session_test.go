@@ -794,7 +794,13 @@ func TestReportFocusSilentWhenNotRequested(t *testing.T) {
 		t.Fatalf("attach() error = %v", err)
 	}
 	defer sess.detach(att)
-	readUntil(t, att.reader, "READY")
+
+	// Waits for the newline that ends the line, not just for READY. The shell's own output arrives in
+	// whatever chunks the pty produces, so stopping at READY can leave a trailing "\r\n" queued: the
+	// read below then returns those bytes and the test reports them as a focus report that was never
+	// sent. That is what it did on a CI runner, failing with `sent "\r\n"` while passing locally,
+	// because a faster machine happened to deliver the whole line as one chunk.
+	readUntil(t, att.reader, "READY\r\n")
 
 	sess.ReportFocus(context.Background(), false)
 
