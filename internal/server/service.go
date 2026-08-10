@@ -114,6 +114,13 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// again, and the screen arrives visibly mangled. Resizing first means the model reflows once,
 	// and the snapshot describes what this client will actually display.
 	//
+	// A client that wants the screen repainted is displaying the session, which is what distinguishes it
+	// from one attaching only to create the session or to stream bytes. Recorded here rather than derived
+	// later, since the request is the only place the distinction exists.
+	if !open.NoRestore {
+		sess.noteWatched()
+	}
+
 	att, err := sess.attach(open.ResumeFromSeq)
 	if err != nil {
 		if errors.Is(err, ErrSessionGone) {

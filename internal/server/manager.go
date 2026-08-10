@@ -409,12 +409,71 @@ func (m *Manager) watch(sess *Session) {
 
 	_, code := sess.Ended()
 
+	// Deliberately no "has this been replaced" check here.
+	//
+	// One was added and removed: guarding the write on `m.sessions[name] == sess` looked like protection
+	// against an older incarnation clobbering a newer row, and it silently broke every detached session.
+	// A session whose last client has gone is removed from the registry, so `cm run -d` reaches here with
+	// no entry under its name, the check called that "replaced", and the outcome was never written --
+	// leaving `cm status` reporting a finished session as running while `cm list` showed exited. The
+	// registry answers "is this session being proxied now", not "is this the current session for this
+	// name", and only the delete below may use it.
+	//
+	// The clobbering it was meant to prevent was never the real cause of what prompted it either: that was
+	// a replacement shim unable to claim the socket while the old one still held it, recorded in
+	// docs/ideas.md.
+
 	state := store.StateExited
 	if code < 0 {
 		// The shim vanished rather than the shell exiting, so the outcome is unknown.
 		state = store.StateDead
 		code = 0
 	}
+
+	// An interactive session whose shell exited is finished business, so its record goes now rather than
+	// waiting out the forget interval.
+	//
+	// The distinction is between a session a person was sitting in and one whose result nobody has
+	// collected yet. Typing `exit` in a window means the output was already on screen and the person left;
+	// there is no status left to report and nothing anyone asked to keep, so a record that lingers is a
+	// placeholder holding an exit code nobody will read. Under the previous behavior every closed window
+	// left one in `cm list` for five minutes, and with one session per window they accumulated visibly.
+	//
+	// zmx draws the same line, which is what prompted this: `zmx a foo` then `exit` removes the session at
+	// once, while a detached `zmx run -d` that finishes keeps its record with `ended=` and `exit_code=`.
+	// Measured both ways rather than assumed.
+	//
+	// The two kinds are told apart by whether anything ever attached and whether the output was being
+	// saved. A `cm run` task sets CaptureOutput so its output outlives it, and a caller reads its status
+	// from the record afterwards, so those are kept for the forget interval as before. Same for a session
+	// asked to persist, and for one that ended without a client ever attaching, where the record is the
+	// only evidence it ran at all.
+	//
+	// EverWatched rather than the current client count, and rather than any attachment: a client detaching
+	// as its shell exits is exactly the shape of typing `exit`, so the count is already zero by the time
+	// this runs, and `cm run` and `--no-attach` both attach briefly just to create the session.
+	if state == store.StateExited && sess.EverWatched() &&
+		!sess.record.PersistRequested && sess.record.LogPath == "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.store.Delete(ctx, sess.name); err != nil {
+			// Not fatal: the record simply expires on the usual schedule instead, which is the behavior
+			// this replaces.
+			m.log.Warn("forgetting an exited interactive session failed",
+				"session", sess.name, "error", err)
+		} else {
+			m.log.Info("forgot exited interactive session",
+				"session", sess.name, "exit_code", code)
+		}
+
+		m.mu.Lock()
+		if m.sessions[sess.name] == sess {
+			delete(m.sessions, sess.name)
+		}
+		m.mu.Unlock()
+		return
+	}
+
 	seq := sess.LastSeq()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -531,6 +590,25 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 
 		// Carry forward what a restore needs, since the record is about to be deleted.
 		opts = m.inheritForRestore(opts, rec)
+
+		// Say that the old incarnation is being discarded, and what was lost with it.
+		//
+		// This is destructive and was silent: attaching to a name whose shell had exited started a fresh
+		// shell under it, and the exit status and pid that were the only evidence the previous run
+		// happened went with the deleted row. A caller reattaching to what it thought was its session got
+		// a new one and no indication of the substitution.
+		//
+		// Logged rather than refused, because refusing would break the case this path exists for: a
+		// terminal emulator restoring a saved window attaches by name and must get a working session
+		// whether or not the previous one is still alive. What it should not do is pretend nothing was
+		// there.
+		if rec.State != store.StateRunning {
+			restoring := opts.restoreFrom != ""
+			m.log.Info("replacing an ended session with a new shell under the same name",
+				"session", opts.Name, "previous_state", rec.State,
+				"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
+				"content_restored", restoring)
+		}
 
 		if err := m.store.Delete(ctx, opts.Name); err != nil {
 			return nil, false, fmt.Errorf("replacing stale record for %s: %w", opts.Name, err)

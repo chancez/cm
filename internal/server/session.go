@@ -132,6 +132,9 @@ type Session struct {
 	leader *attachToken
 	// attachOrder increases with each attach.
 	attachOrder uint64
+	// watched records that a client attached in order to display the session, as opposed to one that
+	// attached only to create it or to stream its bytes. See EverWatched.
+	watched bool
 
 	// restored holds a screen replayed from a previous incarnation's saved log, handed to the first
 	// client that attaches and then discarded.
@@ -784,6 +787,33 @@ func (s *Session) LastSeq() uint64 {
 
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
+
+// EverWatched reports whether a client has attached in order to display this session.
+//
+// Monotonic, unlike the client count, and that is what makes it usable when a session ends: a client
+// detaching as its shell exits is the normal shape of typing `exit` in a window, so the count is already
+// zero by the time anything asks, while "was someone watching this" stays true.
+//
+// Counting attachments alone was too loose. `cm attach --no-attach` and `cm run` both open an attachment
+// and immediately detach, purely to create the session, so every session looked watched -- and a `cm run`
+// task was then forgotten along with the exit status that was its entire product.
+//
+// Keyed on whether the client wanted a screen repaint, which is what actually separates the two. A client
+// painting a terminal needs the session's current screen; every caller that is only creating a session,
+// streaming bytes, or following output sets NoRestore because a repaint would duplicate or corrupt what it
+// is writing. So "asked to be shown the screen" means "there is a terminal displaying this".
+func (s *Session) EverWatched() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.watched
+}
+
+// noteWatched records that a client attached to display the session.
+func (s *Session) noteWatched() {
+	s.mu.Lock()
+	s.watched = true
+	s.mu.Unlock()
+}
 
 // attachToken identifies one attachment, so sizes and leadership can be tracked per client without
 // the client having an identity of its own.
