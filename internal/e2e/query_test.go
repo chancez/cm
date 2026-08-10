@@ -102,16 +102,48 @@ func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
 	// of being swallowed by the shell's line editor.
 	sink := filepath.Join(e.state, "stdin.bin")
 	first.write([]byte("cat > " + sink + "\n"))
-	time.Sleep(1 * time.Second)
+
+	// Wait for cat to be the foreground process before sending anything, rather than sleeping and
+	// hoping. The replies below are only captured if cat is already reading: sent while the shell is
+	// still starting it, they reach the shell's line editor instead, which consumes them and leaves the
+	// file short. That made this test fail with both replies present, since the ones the shell ate
+	// never reached the file and the ones that did arrive were whatever landed after cat came up.
+	//
+	// The file existing is the signal that cat has opened it, which happens before it reads.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(sink); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cat never created %s, so nothing would be captured", sink)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// Both clients answer the same DA1 query, as two real terminals would. Distinguishable replies,
 	// so the assertion can say which arrived.
+	//
+	// Spaced out rather than written back to back, because the dedupe only recognizes a reply that
+	// arrives as its own chunk. IsQueryReply is deliberately conservative: a chunk mixing a reply with
+	// other bytes is forwarded rather than dropped, since dropping a keystroke travelling alongside one
+	// is worse than a duplicate. A pty that batched these writes therefore produced two replies and
+	// failed this test on darwin while passing on linux. The gaps make what is being tested -- one
+	// clean reply per client -- actually what arrives.
+	//
+	// That conservatism is a real limitation and not only a test artifact: a terminal that coalesces a
+	// query reply with a keystroke gets both forwarded. The seam tests in internal/server cover the
+	// decision itself deterministically; this test covers the wiring.
 	first.write([]byte("\x1b[?62;11c"))
+	time.Sleep(300 * time.Millisecond)
 	second.write([]byte("\x1b[?62;22c"))
+	time.Sleep(300 * time.Millisecond)
 
 	// And both report a mouse press, which is per window and must not be dropped.
 	first.write([]byte("\x1b[<0;11;11M"))
+	time.Sleep(300 * time.Millisecond)
 	second.write([]byte("\x1b[<0;22;22M"))
+	time.Sleep(300 * time.Millisecond)
 
 	// Newline so cat flushes, then end it so the file is complete.
 	first.write([]byte("\n"))
