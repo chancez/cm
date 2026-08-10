@@ -10,6 +10,8 @@
 // injected input did, so the cases below are enumerated rather than inferred.
 package input
 
+import "bytes"
+
 // IsUserInput reports whether p contains something a person typed.
 //
 // Conservative in the direction that matters: an unrecognized escape sequence is treated as *not*
@@ -43,6 +45,130 @@ func IsUserInput(p []byte) bool {
 		return true
 	}
 	return false
+}
+
+// IsQueryReply reports whether p is entirely answers to questions a program asked the terminal.
+//
+// Separate from IsUserInput because the two decide different things and want different answers for
+// the same bytes. IsUserInput asks "may this claim sizing", where a mouse report and a device status
+// report are alike in saying no. This asks "is this an answer only one terminal should send", where
+// they differ: several attached terminals must not each answer one query, but each may report its own
+// mouse and focus events, since those describe that window rather than the session.
+//
+// Conservative in the opposite direction from IsUserInput, and for the same underlying reason. Only
+// sequences recognized as replies count, so an unrecognized one is forwarded rather than dropped. A
+// forwarded duplicate is the visible artifact this exists to reduce; a dropped keystroke or a dropped
+// mouse event is a session that ignores input, which is worse.
+//
+// Empty input is not a reply, so a caller never drops nothing for the wrong reason.
+func IsQueryReply(p []byte) bool {
+	if len(p) == 0 {
+		return false
+	}
+	for i := 0; i < len(p); {
+		if p[i] != 0x1b {
+			// Anything typed or printable means this is not purely a reply.
+			return false
+		}
+		n, reply := classifyReply(p[i:])
+		if n <= 0 || !reply {
+			return false
+		}
+		i += n
+	}
+	return true
+}
+
+// classifyReply consumes one escape sequence, reporting its length and whether it answers a query.
+//
+// A length of zero means the sequence is incomplete, which is treated as not-a-reply by the caller:
+// guessing on a fragment risks dropping the front of something that turns out to be typing.
+func classifyReply(p []byte) (n int, reply bool) {
+	if len(p) < 2 {
+		return 0, false
+	}
+
+	switch p[1] {
+	case '[':
+		i := 2
+		for i < len(p) && !isCSIFinal(p[i]) {
+			i++
+		}
+		if i >= len(p) {
+			return 0, false
+		}
+		final := p[i]
+		params := p[2:i]
+		length := i + 1
+
+		// Mouse and focus are excluded deliberately, even though IsUserInput also calls them
+		// not-typing. They report what happened to one window, so every attached terminal is entitled
+		// to send its own.
+		if final == 'M' && len(params) == 0 {
+			return length, false
+		}
+		if len(params) > 0 && params[0] == '<' {
+			return length, false
+		}
+		if len(params) == 0 && (final == 'I' || final == 'O') {
+			return length, false
+		}
+
+		switch final {
+		case 'R':
+			// Cursor position report, answering CSI 6n.
+			return length, true
+		case 'n':
+			// Device status report, answering CSI 5n. The request shares this final byte and is
+			// distinguished only by its parameter: 5 and 6 are requests, and a reply carries the
+			// status value instead. Matching the family would classify a client-sent CSI 6n as a reply
+			// and drop it.
+			if bytes.Equal(params, []byte("5")) || bytes.Equal(params, []byte("6")) {
+				return length, false
+			}
+			return length, true
+		case 'c':
+			// Device attributes. A reply carries a private marker that a request does not, so a bare
+			// CSI c arriving on the input channel is not treated as one.
+			if len(params) > 0 && (params[0] == '?' || params[0] == '>' || params[0] == '=') {
+				return length, true
+			}
+			return length, false
+		case 'u':
+			// Kitty keyboard flags, answering CSI ? u. A keypress in that protocol also ends in 'u',
+			// so only the '?' form is a reply.
+			if len(params) > 0 && params[0] == '?' {
+				return length, true
+			}
+			return length, false
+		case 'y':
+			// DECRPM, answering DECRQM.
+			return length, true
+		case 't':
+			// XTWINOPS size report.
+			return length, true
+		}
+		return length, false
+
+	case ']':
+		// OSC. On this channel these are answers: a color report for OSC 10/11, or clipboard contents
+		// for OSC 52.
+		if end := consumeString(p); end > 0 {
+			return end, true
+		}
+		return 0, false
+
+	case 'P':
+		// DCS, which carries XTGETTCAP and DECRQSS answers as well as XTVERSION.
+		if end := consumeString(p); end > 0 {
+			return end, true
+		}
+		return 0, false
+
+	default:
+		// APC, PM, SS3, and alt-modified keys. Not recognized as replies.
+		return 2, false
+	}
 }
 
 // classifyEscape consumes one escape sequence, reporting its length and whether it is typing.

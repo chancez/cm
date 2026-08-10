@@ -905,12 +905,49 @@ func (s *Session) Clients() int64 { return s.clients.Load() }
 func (s *Session) hasAnsweringClient() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, cs := range s.clientSizes {
-		if !cs.readOnly {
-			return true
+	return s.answererLocked() != nil
+}
+
+// answererLocked returns the one attachment responsible for answering terminal queries, or nil when
+// no attached client can.
+//
+// One rather than all, because output fans out to every client: two attached terminals both see a
+// query and both reply, so the shell receives two answers to one question. Measured, with two
+// interactive clients on one session, a single CSI c came back as
+// "\x1b[?62;52;c\x1b[?62;52;c". The program reads one and the other is left for the shell's line
+// editor, which is the same defect as cm answering alongside a terminal, just with a different
+// second answerer.
+//
+// The oldest attachment wins, and stability is the point rather than the choice of order. Picking by
+// map iteration would move the answerer between queries, so a program could get an answer from one
+// terminal and its next answer from another, and any dedupe keyed on the answerer would let a reply
+// through whenever the pick changed. Oldest also survives a new client attaching mid-conversation.
+//
+// Read-only followers are skipped: their input is dropped (see recvLoop), so a reply from one never
+// reaches the shell and electing it would answer nothing.
+//
+// Callers must hold s.mu.
+func (s *Session) answererLocked() *attachToken {
+	var best *attachToken
+	var bestOrder uint64
+	for tok, cs := range s.clientSizes {
+		if cs.readOnly {
+			continue
+		}
+		if best == nil || cs.order < bestOrder {
+			best, bestOrder = tok, cs.order
 		}
 	}
-	return false
+	return best
+}
+
+// isAnswerer reports whether this attachment is the one that should answer terminal queries.
+//
+// Used to drop query replies from every other client, so one question gets one answer.
+func (s *Session) isAnswerer(tok *attachToken) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.answererLocked() == tok
 }
 
 // EverWatched reports whether a client has attached in order to display this session.

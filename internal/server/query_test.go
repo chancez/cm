@@ -229,3 +229,108 @@ func TestHasAnsweringClient(t *testing.T) {
 		t.Error("hasAnsweringClient() = true after everything detached, want false")
 	}
 }
+
+// Exactly one attached client answers a terminal query, however many are attached.
+//
+// Output fans out to every client, so two attached terminals both see a query and both reply. The
+// shell then gets two answers to one question: measured against a real kitty with two clients on one
+// session, a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c". A program reads one and the spare
+// is left for the shell's line editor, which is the same visible artifact as cm answering alongside a
+// terminal, with a different second answerer.
+//
+// Asserted on the predicate rather than by driving two real terminals, because what the server
+// controls is which attachment is permitted to forward a reply. The e2e test covers the wiring.
+func TestOnlyOneClientAnswersQueries(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "answerer",
+		Command: []string{"/bin/sh", "-c", "sleep 5"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	first, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("first attach() error = %v", err)
+	}
+	second, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("second attach() error = %v", err)
+	}
+
+	// The oldest attachment answers. Which one matters less than that it is exactly one and that it
+	// does not move between queries.
+	if !sess.isAnswerer(first.token) {
+		t.Error("the first attachment is not the answerer, want it to be: the oldest client answers")
+	}
+	if sess.isAnswerer(second.token) {
+		t.Error("the second attachment is also an answerer, want only one.\n" +
+			"Two clients forwarding replies means the shell gets two answers to one question, and the " +
+			"one the program does not consume is printed by its line editor.")
+	}
+
+	// Stable across repeated checks, so a program asking twice is answered by the same terminal and a
+	// drop decision cannot flip between queries.
+	for i := 0; i < 20; i++ {
+		if !sess.isAnswerer(first.token) || sess.isAnswerer(second.token) {
+			t.Fatalf("the answerer moved between checks on iteration %d.\n"+
+				"Picking by map iteration order would do this, and an unstable pick lets a duplicate "+
+				"reply through whenever it changes.", i)
+		}
+	}
+
+	// When the answerer leaves, the remaining client takes over, or nothing answers at all.
+	sess.detach(first)
+	if !sess.isAnswerer(second.token) {
+		t.Error("after the answerer detached the remaining client is not the answerer, want it to be.\n" +
+			"Otherwise a query has no answerer while a terminal is still attached, and the program " +
+			"that asked hangs.")
+	}
+
+	sess.detach(second)
+	if sess.hasAnsweringClient() {
+		t.Error("hasAnsweringClient() = true with nothing attached, want false")
+	}
+}
+
+// A read-only follower is never the answerer, even when it attached first.
+//
+// Its input is dropped, so electing it would answer nothing while cm stayed silent because a client
+// looked attached. That is a hang rather than an artifact.
+func TestReadOnlyFollowerIsNeverTheAnswerer(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "followerfirst",
+		Command: []string{"/bin/sh", "-c", "sleep 5"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// The follower attaches first, so an implementation that simply took the oldest would pick it.
+	follower, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("follower attach() error = %v", err)
+	}
+	sess.markReadOnly(follower.token)
+
+	interactive, err := sess.attach(nil)
+	if err != nil {
+		t.Fatalf("interactive attach() error = %v", err)
+	}
+
+	if sess.isAnswerer(follower.token) {
+		t.Error("a read-only follower is the answerer, want the interactive client.\n" +
+			"A follower's input is dropped, so it can never deliver a reply.")
+	}
+	if !sess.isAnswerer(interactive.token) {
+		t.Error("the interactive client is not the answerer, want it to be")
+	}
+}
