@@ -1,0 +1,233 @@
+# Builds release binaries on a version tag and attaches them to a GitHub Release.
+#
+# One job per target rather than a cross-compile, because cgo is required: internal/vt links
+# libghostty-vt, so every target needs that archive built for its own OS and architecture and a C
+# toolchain to link it. A `GOOS=linux go build` from macOS cannot do that.
+#
+# Architectures follow the runners that exist: arm64 macOS (macos-15), x86_64 macOS (macos-15-intel),
+# and both on Linux via arm64 and x86_64 images. Adding a target means adding a runner that can build
+# libghostty natively for it.
+name: release
+
+on:
+  push:
+    tags:
+      # Version tags only, so an arbitrary tag cannot publish a release.
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      # Every target's result matters: a release missing one platform is worse than a failed release,
+      # because it looks complete.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            goos: darwin
+            goarch: arm64
+          - os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - os: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read pinned libghostty ref
+        id: ghostty
+        run: |
+          set -euo pipefail
+          ref="$(sed -n 's/^GHOSTTY_REF = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$ref" ] || { echo "could not read GHOSTTY_REF from mise.toml" >&2; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      # Shared with the test workflow's cache when the key matches, which is the point: a release for a
+      # ref already tested does not rebuild the emulator.
+      - name: Cache libghostty
+        id: ghostty-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/ghostty/zig-out
+          key: ghostty-${{ matrix.goos }}-${{ matrix.goarch }}-${{ steps.ghostty.outputs.ref }}-releasesafe
+
+      - name: Install zig
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build libghostty
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ref="${{ steps.ghostty.outputs.ref }}"
+          git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git third_party/ghostty
+          cd third_party/ghostty
+          # `git fetch <abbreviated-sha>` fails with "couldn't find remote ref": a server will only
+          # resolve a complete object name, and mise.toml pins an abbreviation because that is what a
+          # person reads. Dockerfile.test works around this by repeating the full SHA, which is a second
+          # copy that can drift.
+          #
+          # Fetching the default branch and resolving the abbreviation locally keeps mise.toml as the only
+          # place the ref is written. --filter=blob:none makes this cheap: commits and trees only, with
+          # blobs fetched on checkout.
+          if ! git fetch --depth 1 origin "$ref" 2>/dev/null; then
+            echo "abbreviated ref, resolving it locally"
+            git fetch --filter=blob:none origin
+            full="$(git rev-parse "$ref")"
+            echo "$ref resolves to $full"
+            git checkout --detach "$full"
+          else
+            git checkout --detach FETCH_HEAD
+          fi
+          zig build \
+            -Demit-lib-vt=true \
+            -Demit-xcframework=false \
+            -Demit-macos-app=false \
+            -Doptimize=ReleaseSafe
+
+      # No ldflags stamping the version. paths.Version reads it from the Go build info, so a build from
+      # a tagged commit reports the tag on its own; adding -X here would create a second source of truth
+      # that could disagree with what the binary was actually built from.
+      #
+      # Verified below rather than trusted, since "the release binary reports the wrong version" is the
+      # sort of thing nobody notices until they are trying to tell two builds apart.
+      # A dirty tree makes the Go toolchain stamp vcs.modified=true, and paths.Version then appends
+      # "-dirty" to what a released binary reports. That is a lie about a tag build and it is silent:
+      # the first citest release published four binaries all reporting "4c8332092965-dirty" from a
+      # checkout that was clean apart from setup-zig's cache directory.
+      #
+      # .zig-cache is gitignored now, so this is a guard rather than the fix. Failing here beats
+      # publishing a binary that misreports its own version, which is exactly the thing paths.Version
+      # exists to make reliable.
+      - name: Check the tree is clean
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the checkout is dirty, so the binary would report a -dirty version:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          go build -o "dist/cm" ./cmd/cm
+
+      # The tag names what this is supposed to be, so a mismatch here means the binary would lie about
+      # its own identity. Only checked for a plain release tag: a pre-release like v1.0.0-rc1 contains a
+      # dash, which paths.isReleaseVersion deliberately rejects in favour of the commit hash.
+      - name: Verify reported version matches the tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          got="$(./dist/cm --version)"
+          echo "tag=$tag reported=$got"
+          case "$tag" in
+            *-*)
+              echo "pre-release tag, so the binary reports a commit hash by design; not comparing"
+              ;;
+            *)
+              case "$got" in
+                *"$tag"*) ;;
+                *)
+                  echo "binary reports '$got' which does not contain the tag '$tag'" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+          esac
+
+      # A smoke test, not a substitute for the test workflow. It answers one question the test workflow
+      # cannot: does the artifact about to be published actually run on a clean machine? A binary that
+      # fails to link or dies on a missing dylib passes every unit test and is still useless.
+      - name: Smoke test the artifact
+        run: |
+          set -euo pipefail
+          ./dist/cm --help >/dev/null
+          ./dist/cm doctor --help >/dev/null
+          echo "artifact runs"
+
+      # Named by platform so several jobs' uploads do not collide, and so a downloaded file says what it
+      # is without being renamed.
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          name="cm_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          mkdir -p "staging/$name"
+          cp dist/cm "staging/$name/cm"
+          cp README.md "staging/$name/"
+          # The repo has no LICENSE today. Included when one appears rather than silently omitted, and
+          # tested for explicitly instead of with `cp a b || cp a`, which would also swallow a real
+          # copy failure.
+          if [ -f LICENSE ]; then
+            cp LICENSE "staging/$name/"
+          fi
+          tar -czf "dist/$name.tar.gz" -C staging "$name"
+          echo "artifact=$name.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: dist/${{ steps.package.outputs.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      # The only job that needs write access, and it needs it to create the release.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One checksums file covering every archive, which is what a Homebrew formula or any scripted
+      # installer verifies against. Generated here rather than per job so it is a single file listing
+      # all platforms, and so no job can publish a checksum for an artifact another job replaced.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -l
+          sha256sum ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # A tag containing a dash is a pre-release, matching how paths.isReleaseVersion reads one.
+          prerelease=""
+          case "$tag" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            $prerelease \
+            dist/*.tar.gz dist/SHA256SUMS
