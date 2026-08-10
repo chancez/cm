@@ -122,6 +122,12 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 
 	att, err := sess.attach(open.ResumeFromSeq)
+	if err == nil && open.ReadOnly {
+		// Recorded here rather than only in registerClientSize below, which a resuming client skips.
+		// A follower cannot answer a terminal query, since its input is dropped, and counting one as
+		// an answerer makes the emulator stay silent and the querying program hang.
+		sess.markReadOnly(att.token)
+	}
 	if err != nil {
 		if errors.Is(err, ErrSessionGone) {
 			// The shell exited between Open and here. Report it the way the streaming loop below

@@ -6,16 +6,18 @@ import (
 	"time"
 )
 
-// A terminal query must not reach the real terminal, because cm answers it and a second answer has
-// nowhere to go.
+// A query reaches the attached terminal and that terminal's answer is the only one the shell sees.
 //
-// The end-to-end half of the fix for "exiting vim leaves garbage below my prompt". The unit tests in
-// internal/osc and internal/server cover the matching and the pump; this covers the wiring, which is
-// the part they cannot: that the query really does stop at the server rather than arriving on a pty.
+// The end-to-end half of the fix for "exiting vim leaves garbage below my prompt" and the
+// ";rgb:2828/2c2c/3434" that followed `wallfacer -h`. Both were one defect: cm's emulator answered a
+// query and wrote the reply to the pty while a real terminal was answering too. An injected reply is
+// not addressed to whoever is reading, so some program consumed the wrong one and the leftover was
+// printed by the shell's line editor.
 //
-// Answering as the outer terminal is what makes this a real reproduction. Before the fix, cm's own
-// reply and this one both reached the shell, and the second was printed at the prompt.
-func TestQueriesDoNotReachTheRealTerminal(t *testing.T) {
+// The unit tests in internal/server cover the decision. This covers the wiring the unit tests cannot:
+// that a query really does travel out to a client's terminal, and that the terminal's reply really
+// does come back to the shell, with cm staying silent throughout.
+func TestAttachedTerminalAnswersQueries(t *testing.T) {
 	skipIfShort(t)
 
 	e := newEnv(t)
@@ -25,46 +27,44 @@ func TestQueriesDoNotReachTheRealTerminal(t *testing.T) {
 	c.waitReady()
 
 	// printf writes a real ESC [ c, which is what a program querying the terminal sends. Written as
-	// an octal escape the shell expands, not a Go escape: a needle containing a literal backslash-x
-	// never matches real bytes, and that mistake has made tests here pass while asserting nothing.
+	// an octal escape the shell expands rather than a Go escape: a needle holding a literal
+	// backslash-x never matches real bytes, and that has made tests here pass while asserting nothing.
 	e.mustRun("send", "q", `printf 'BEFORE\033[cAFTER\n'`, "--enter")
 
-	// Wait for the text after the query, so its absence is a real absence and not a race with
-	// delivery. Polled rather than waitForOutput because a timeout here should fail with the
-	// assertion below rather than a bare harness error.
-	var onPty string
+	// The query must reach the pty, because the attached terminal is now the thing that answers it.
+	// Suppressing it would leave nothing to answer and the program that asked would hang.
+	onPty := ""
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		onPty = c.output()
-		if strings.Contains(onPty, "AFTER") {
+		if strings.Contains(onPty, "\x1b[c") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-
-	if !strings.Contains(onPty, "BEFORE") || !strings.Contains(onPty, "AFTER") {
-		t.Fatalf("pty never showed the output around the query, got %q", onPty)
+	if !strings.Contains(onPty, "\x1b[c") {
+		t.Fatalf("the DA1 query never reached the pty, got %q.\n"+
+			"With a client attached the terminal is the answerer, so the query has to get there.", onPty)
 	}
 
-	// The query itself must not have arrived. A real terminal seeing this would answer it.
-	if strings.Contains(onPty, "\x1b[c") {
-		t.Errorf("the DA1 query reached the pty: %q\n"+
-			"cm's emulator already answered it, so the real terminal answers a second time and the "+
-			"spare reply is printed by the shell's line editor.", onPty)
-	}
+	// Answer the way a real terminal would, with a reply distinguishable from libghostty's own
+	// (?62;22c). Real kitty answers ?62;52;c, where 52 is its clipboard feature code.
+	const terminalReply = "\x1b[?64;1;9;15;52;c"
+	c.write([]byte(terminalReply))
+	time.Sleep(2 * time.Second)
 
-	// Answer the way a real terminal would, with a reply distinguishable from libghostty's
-	// (?62;22c). Nothing asked, so nothing should consume it: this proves the assertion above is not
-	// merely about timing, since a session that echoed this would show it.
-	c.write([]byte("\x1b[?64;1;9;15;52;c"))
-	time.Sleep(500 * time.Millisecond)
-
-	// And cm's own answer must have reached the shell, or the program that asked would hang. This is
-	// the control that keeps the test honest: if stripping had removed the query before the emulator
-	// saw it, no reply would exist at all and the assertions above would pass for the wrong reason.
 	raw := e.mustRun("read", "q", "--raw", "--lines", "40")
-	if !strings.Contains(raw, "62;22c") {
-		t.Errorf("session output %q contains no reply from cm's emulator (62;22c).\n"+
-			"The query was stripped from the client stream but must still reach the terminal model, "+
-			"which is what answers it. Otherwise a program querying the terminal blocks forever.", raw)
+
+	// The terminal's answer must reach the shell, or a querying program waits forever.
+	if !strings.Contains(raw, "64;1;9;15;52;c") {
+		t.Errorf("session output %q does not contain the terminal's reply.\n"+
+			"A client's terminal answered the query and that answer has to reach the shell.", raw)
+	}
+
+	// And cm must not have answered as well. Two answerers on one pty is the defect: whichever reply
+	// a program happens to read, the other is left over and lands in the line editor.
+	if strings.Contains(raw, "62;22c") {
+		t.Errorf("session output %q contains cm's own DA1 reply (62;22c) alongside the terminal's.\n"+
+			"With a client attached cm must stay silent, or a program gets two answers and prints the "+
+			"one it did not consume.", raw)
 	}
 }
