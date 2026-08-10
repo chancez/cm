@@ -144,6 +144,35 @@ than the cause and sends the reader looking for a build tag that is not there.
 Restore is a port of zmx's `serializeTerminalState`. Its details are all bug fixes; see
 `docs/restore.md`.
 
+**The model is fed after clients are woken, not before.** The pump appends to the log, which wakes
+attached clients, and only then advances the terminal model. That order is load-bearing in the other
+direction from most of this file: the model is a derived cache, used for screen restore and for
+`cm read`, and no live client's output depends on it being current. Feeding it first put its cost in
+front of every keystroke's response.
+
+That was not theoretical. libghostty built in Debug took 14ms to process a reverse index with the
+cursor on the top row, and `less` emits one per line when paging up, so a half page spent about 350ms
+in the emulator before the first byte reached the terminal. Paging down emits plain lines and was
+unaffected, so the visible symptom was that scrolling up lagged and scrolling down did not. The
+emulator cost is fixed separately, in how libghostty is built (see `docs/libghostty.md`); this
+ordering is what keeps a slow model from being a slow session regardless.
+
+**Which means the model can lag the log, and a fresh attach has to account for it.** A fresh attach
+serializes the screen and then streams from a position. The obvious position, the log's end, is now
+wrong: the model may be several chunks behind, so the screen does not contain those bytes, and
+streaming past them means no client ever shows them. The bytes are not delayed, they are lost, and
+only on a fresh attach.
+
+So `Session.modelSeq` records the log position the model's screen corresponds to, and attach streams
+from there. It is paired with the model's contents under `termMu`, separate from `mu`, because a
+caller that could see the screen updated but not the position, or the reverse, would either skip
+output or replay it twice. Lock order is `mu` then `termMu`, and nothing takes `mu` while holding
+`termMu`: `feedTerminal` drops `mu` before acquiring `termMu` for exactly that reason, and publishing
+metadata happens after `termMu` is released.
+
+Note that `modelSeq` lives in the log's numbering rather than the shim's, which is the two
+sequence-number spaces again, reached from a third direction.
+
 ## What a session reports about itself
 
 A terminal emulator driving cm needs to know more than "this session exists". Three things are tracked
