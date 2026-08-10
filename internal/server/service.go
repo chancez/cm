@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/tags"
+	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -905,21 +905,14 @@ func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) er
 // distinguish from a genuine problem.
 // isTransportClosed reports whether an error is the connection to a shim having gone away.
 //
-// Matched on the message for the same reason isSessionOver is: ttrpc carries an error across the socket as
-// a status with a string, so no sentinel survives the trip.
+// Delegates to transport.IsClosed, which is shared with the client: the same race appears there when a
+// caller asks the server to shut down and the reply loses to the connection closing.
 //
-// Distinct from isSessionOver, which is the shim saying its pty is gone. This is the shim not answering at
-// all, which during a shutdown means it exited between accepting the request and replying -- the outcome
-// the caller wanted.
+// Distinct from isSessionOver, which is the shim saying its pty is gone. This is the shim not answering
+// at all, which during a shutdown means it exited between accepting the request and replying -- the
+// outcome the caller wanted.
 func isTransportClosed(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "ttrpc: closed") ||
-		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "use of closed network connection") ||
-		errors.Is(err, io.EOF)
+	return transport.IsClosed(err)
 }
 
 func isSessionOver(err error) bool {
