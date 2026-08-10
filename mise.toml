@@ -145,6 +145,22 @@ description = "Fetch and build libghostty-vt (needed once VT state lands)"
 # Ghostty's build defaults emit-xcframework to "xcodebuild on PATH", which pulls in the
 # iOS SDK at configure time and fails without full Xcode. Disabling it explicitly is
 # not redundant. See the same workaround in zmx's build.zig.
+#
+# -Doptimize is not a tuning knob here, and omitting it is the bug this flag fixes.
+#
+# Zig defaults to Debug, and ghostty derives `slow_runtime_safety` from the optimize mode. In Debug
+# that turns on integrity verification that walks a whole page, and `insertLines` calls it once per
+# row it shifts, each call standing up a fresh DebugAllocator. A reverse index with the cursor on the
+# top row goes through insertLines, so it cost 14ms at 50x120 against 10us for the same sequence
+# anywhere else.
+#
+# That is a user-visible bug, not a benchmark curiosity. `less` emits home+RI once per line when
+# paging up, so `u` cost about 350ms of emulator time per half page while `d`, which emits plain
+# lines, cost about 8ms. Scrolling up in a pager was visibly delayed and scrolling down was not.
+#
+# ReleaseSafe rather than ReleaseFast: measured at 15us against ReleaseFast's 12us for the same
+# half-page, which is not worth giving up bounds and overflow checks in a parser whose input is
+# whatever a program inside a session decides to print.
 run = """
 set -euo pipefail
 if [ ! -d "$GHOSTTY_DIR/.git" ]; then
@@ -153,7 +169,7 @@ fi
 git -C "$GHOSTTY_DIR" fetch --depth 1 origin "$GHOSTTY_REF"
 git -C "$GHOSTTY_DIR" checkout --detach FETCH_HEAD
 cd "$GHOSTTY_DIR"
-zig build -Demit-lib-vt=true -Demit-xcframework=false -Demit-macos-app=false
+zig build -Demit-lib-vt=true -Demit-xcframework=false -Demit-macos-app=false -Doptimize=ReleaseSafe
 """
 sources = ["mise.toml"]
 outputs = ["third_party/ghostty/zig-out/lib/libghostty-vt.a"]
