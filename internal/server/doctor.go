@@ -125,6 +125,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// problem wants the whole picture, not the first item alphabetically.
 	findings = append(findings, m.checkVersionSkew(clientVersion)...)
 	findings = append(findings, m.checkTerminal()...)
+	findings = append(findings, m.checkEmulatorSpeed()...)
 	findings = append(findings, m.checkSocketPath()...)
 	findings = append(findings, m.checkShellIntegration()...)
 	findings = append(findings, m.checkSessionBacklog(ctx)...)
