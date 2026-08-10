@@ -1,0 +1,207 @@
+# Tests on pull requests and on main.
+#
+# Both Linux and macOS, deliberately. cm has termios and signal handling that differs per platform, and
+# a run on one never compiles the other half: `internal/client/termios_darwin.go` and its Linux twin are
+# selected by build tag, so a single-platform matrix would leave one uncompiled and untested. Linux also
+# has `/bin/sh` as dash rather than bash, which has caught real bugs here.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # For re-running against a branch without pushing to it, which is how this workflow was iterated on.
+  workflow_dispatch:
+
+# A new push to a PR makes the previous run's answer irrelevant, so stop it rather than pay for both.
+# Not applied to main, where each commit's result is worth keeping: group includes the ref.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      # One platform failing should not hide the other's result, which is the whole reason for testing
+      # both: a Linux-only bug and a darwin-only bug look identical in a cancelled run.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux
+          - os: macos-15
+            name: darwin
+    runs-on: ${{ matrix.os }}
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+
+      # Shells before anything else, because their absence is silent. The tests call `t.Skip` when zsh
+      # or fish is missing rather than failing, so a runner without them reports a green suite that
+      # never exercised the shell integration. That is exactly the "skipped test that looks like a
+      # pass" this project treats as worse than no test.
+      #
+      # bash and zsh ship with macOS; fish does not, and Ubuntu has neither fish nor zsh by default.
+      - name: Install shells
+        run: |
+          set -euo pipefail
+          case "${{ matrix.name }}" in
+            linux)
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends zsh fish python3
+              ;;
+            darwin)
+              # Already present: bash, zsh, python3. fish is the one that is not.
+              brew install fish
+              ;;
+          esac
+          for s in bash zsh fish; do
+            command -v "$s" >/dev/null || { echo "$s missing, shell tests would silently skip" >&2; exit 1; }
+          done
+
+          # Debian's /etc/zsh/zshrc runs compinit, which runs *before* the ZDOTDIR the e2e harness sets
+          # and so cannot be avoided by supplying a .zshrc. On a runner whose directories are group
+          # writable, compinit stops with "insecure directories" and an interactive
+          # "[y] or abort [n]?" prompt. That prompt lands in the session as input and corrupts every
+          # zsh-dependent test: 12 of 14 failures in the first CI run traced to it, presenting as
+          # `reported_state = ""` and timed-out waits rather than as anything about zsh.
+          #
+          # skip_global_compinit is Debian's own documented escape hatch, named in that file. Set in
+          # /etc/zsh/zshenv because zshenv is read before zshrc, which is the only ordering that gets
+          # ahead of the compinit call.
+          if [ -d /etc/zsh ]; then
+            echo 'skip_global_compinit=1' | sudo tee -a /etc/zsh/zshenv >/dev/null
+            echo "disabled global compinit, which prompts interactively on this runner"
+          fi
+
+      # go.mod is the single source of truth for the version, so this cannot drift from what a developer
+      # builds with. mise pins the same version; duplicating the number here would be a second place to
+      # update and a silent mismatch when only one moved.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The pinned libghostty commit, read from mise.toml so the workflow and the build agree by
+      # construction. A hardcoded ref here would keep testing the old emulator after a bump, which is
+      # the kind of divergence that presents as a test failing for no visible reason.
+      - name: Read pinned libghostty ref
+        id: ghostty
+        run: |
+          set -euo pipefail
+          ref="$(sed -n 's/^GHOSTTY_REF = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$ref" ] || { echo "could not read GHOSTTY_REF from mise.toml" >&2; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "using libghostty $ref"
+
+      # Keyed on the pinned ref, the optimize mode, and the runner, so a bump or a flag change misses
+      # and everything else hits. The zig build is the dominant cost of this workflow, minutes against
+      # seconds for the Go build.
+      #
+      # The optimize mode is in the key because ReleaseSafe is load-bearing rather than a tuning choice:
+      # a Debug artifact makes a reverse index at the top row cost 14ms instead of 10us, and
+      # internal/vt/scroll_test.go asserts on that ratio. A cache hit serving a Debug build would fail
+      # that test with nothing in the diff to explain it.
+      - name: Cache libghostty
+        id: ghostty-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/ghostty/zig-out
+          key: ghostty-${{ matrix.name }}-${{ steps.ghostty.outputs.ref }}-releasesafe
+
+      - name: Install zig
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          # Matches mise.toml. Only needed on a cache miss, since the cached artifact is what the Go
+          # build links against.
+          version: 0.16.0
+
+      # Mirrors mise.toml's libghostty task, including the three flags that are not optional there.
+      # -Demit-xcframework=false because the default is "xcodebuild is on PATH", true even with only the
+      # Command Line Tools, and configuring the iOS target then fails. -Doptimize=ReleaseSafe for the
+      # reason in the cache key above.
+      - name: Build libghostty
+        if: steps.ghostty-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          ref="${{ steps.ghostty.outputs.ref }}"
+          git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git third_party/ghostty
+          cd third_party/ghostty
+          # `git fetch <abbreviated-sha>` fails with "couldn't find remote ref": a server will only
+          # resolve a complete object name, and mise.toml pins an abbreviation because that is what a
+          # person reads. Dockerfile.test works around this by repeating the full SHA, which is a second
+          # copy that can drift.
+          #
+          # Fetching the default branch and resolving the abbreviation locally keeps mise.toml as the only
+          # place the ref is written. --filter=blob:none makes this cheap: commits and trees only, with
+          # blobs fetched on checkout.
+          if ! git fetch --depth 1 origin "$ref" 2>/dev/null; then
+            echo "abbreviated ref, resolving it locally"
+            git fetch --filter=blob:none origin
+            full="$(git rev-parse "$ref")"
+            echo "$ref resolves to $full"
+            git checkout --detach "$full"
+          else
+            git checkout --detach FETCH_HEAD
+          fi
+          zig build \
+            -Demit-lib-vt=true \
+            -Demit-xcframework=false \
+            -Demit-macos-app=false \
+            -Doptimize=ReleaseSafe
+
+      # Proves the artifact the Go build will link against actually exists, whether it came from the
+      # cache or the build above. A cache that restored an empty directory otherwise surfaces as a
+      # confusing cgo link error several steps later.
+      - name: Verify libghostty artifact
+        run: |
+          set -euo pipefail
+          ls -l third_party/ghostty/zig-out/lib/libghostty-vt.a
+          ls third_party/ghostty/zig-out/include/ghostty/vt.h
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          # `go fmt` rewrites files; this asks whether anything needed rewriting, which is what CI wants.
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # A unix socket path is capped at 104 bytes on darwin and the failure is a bare EINVAL, so a long
+      # TMPDIR turns the e2e suite into an unreadable mess. The harness already uses a short prefix with
+      # os.MkdirTemp, which respects TMPDIR: measured 61 characters on this runner against the 103-byte
+      # limit, so there is room. Asserted rather than assumed, because a runner image changing its temp
+      # path would present as EINVAL from socket code that has nothing to do with the change.
+      - name: Check TMPDIR leaves room for socket paths
+        run: |
+          set -euo pipefail
+          tmp="${TMPDIR:-/tmp}"
+          # The harness builds ${TMPDIR}/cme2eXXXXXXXXX/r/shim-<name>.sock; 45 covers the longest suffix
+          # it generates, with the session names these tests use.
+          echo "TMPDIR=$tmp (${#tmp} chars)"
+          if [ "$(( ${#tmp} + 45 ))" -gt 103 ]; then
+            echo "TMPDIR is too long for unix socket paths; e2e tests would fail with EINVAL" >&2
+            exit 1
+          fi
+
+      # The whole suite, e2e included. Those spawn real processes and ptys, which is where cm's wiring
+      # bugs live, so running with -short here would skip the half most likely to break.
+      - name: go test
+        run: go test ./...
+
+      # A separate run rather than the only run. -race widens real windows and cm's history is mostly
+      # lifetime races, so it is worth paying for; but it also changes timing enough that a failure
+      # under it and a failure without it are different findings, and seeing which one fired is the
+      # first question when triaging.
+      - name: go test -race
+        run: go test -race ./internal/... ./cmd/...
