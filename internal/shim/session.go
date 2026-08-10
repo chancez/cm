@@ -7,6 +7,7 @@
 package shim
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -482,12 +483,55 @@ func (s *Session) SignalAndCheck(sig syscall.Signal, grace time.Duration) (pgid 
 	time.Sleep(grace)
 
 	for _, pid := range members {
-		// Signal 0 asks whether the process exists without delivering anything.
-		if syscall.Kill(pid, 0) == nil {
+		if processLives(pid) {
 			surviving = append(surviving, pid)
 		}
 	}
 	return pgid, surviving, nil
+}
+
+// processLives reports whether a pid is a process still running, rather than merely a pid that exists.
+//
+// The distinction is the whole point. Signal 0 asks whether a pid exists without delivering anything, and a
+// zombie exists: it has died but its parent has not reaped it yet, so the entry stays until wait() collects
+// it. Using signal 0 alone therefore reported a process that had just been SIGKILLed as having survived
+// SIGKILL, which is impossible and read as a bug in the signalling rather than in the check.
+//
+// It surfaced first on Linux, failing TestKillWithSignalWarnsAboutNothing and TestDoctorIsQuietAfterACleanKill
+// under `mise run test-linux` while the macOS suite passed. That made it look platform-specific and it is
+// not: measured on darwin too, `ps -o stat= -p <pid>` reports Z for half a second after SIGKILL while
+// Kill(pid, 0) still returns nil. The macOS e2e tests missed it only because the pty teardown there happens
+// to reap the job before the check runs. A /proc-only fix would have left darwin broken and looked correct.
+//
+// Reading /proc where it exists, since it answers directly with no subprocess, and asking ps elsewhere.
+// A pid whose state cannot be determined either way counts as living, so an unparseable answer loses the
+// zombie refinement rather than suppressing a real leak warning.
+func processLives(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return false
+	}
+	if state, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		// The state field is the third, after the comm field, which is parenthesised and may itself contain
+		// spaces or parens. Scanning back from the last ')' is the standard way to parse this safely.
+		end := bytes.LastIndexByte(state, ')')
+		if end < 0 || end+2 >= len(state) {
+			return true
+		}
+		return state[end+2] != 'Z'
+	}
+	// No /proc, so ask ps. Through a subprocess reluctantly, for the same reason processGroupMembers shells
+	// out to pgrep: the alternative is a per-platform sysctl, and this only ever decides the wording of a
+	// diagnostic. A missing or failing ps degrades to reporting the process as alive.
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return true
+	}
+	state := bytes.TrimSpace(out)
+	if len(state) == 0 {
+		// ps knows nothing about it, so it is gone despite signal 0 having succeeded a moment ago.
+		return false
+	}
+	return state[0] != 'Z'
 }
 
 // processGroupMembers returns the pids in a process group.
