@@ -115,13 +115,17 @@ someone's work.
 
 A sandbox gives you an isolated cm, not a terminal. Anything that depends on real rendering, real
 keypresses, or a real pty on the other end -- attach, detach, screen restore, the detach key -- needs a
-terminal too, launched as a throwaway instance. The `kitty-sandbox` skill does that if it is installed;
-it lives in the developer's dotfiles rather than in this repo. Point the cm inside it at a sandbox from
-here.
+throwaway terminal instance as well.
 
 Do not run `cm attach` from a tool call against the developer's terminal. It takes over the terminal
 that invoked it, and the detach key belongs to whatever is outermost, so the window can end up
 unusable.
+
+Launching a throwaway terminal is machine-specific and not part of this repo. Look for a skill that
+does it, or a note in `AGENTS.local.md` or `CLAUDE.local.md`. Point the cm inside it at a sandbox from
+here: an isolated cm in the real terminal, or a real cm in an isolated terminal, each leave half the
+risk in place. Run `$S check` from inside it rather than assuming the wrapper got it right, since a
+terminal wrapper has its own environment and is exactly where an empty `CM_CONFIG` goes unnoticed.
 
 ## When a session behaves oddly
 

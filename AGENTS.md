@@ -91,10 +91,14 @@ orchestrating agents with it. It is deliberately not in `.agents/`: it teaches `
 and `cm send` against whatever server is running, which is exactly what an agent developing cm must not
 do. If you are here to change cm, use the sandbox skill instead.
 
-Anything needing a real terminal (attach, detach, screen restore, the detach key) needs a throwaway
-terminal instance rather than the one you are running in. That is a `kitty-sandbox` skill, which lives
-in the developer's dotfiles rather than here, since it is about their terminal and not about cm. If it
-is not installed, `CLAUDE.local.md` is where a pointer to it belongs.
+Neither covers a change needing a *real terminal*: attach, detach, screen restore, and the detach key
+depend on real rendering and real keypresses. Those need a throwaway terminal instance, never the one
+you are running in, because `cm attach` takes over the terminal that invoked it and the detach key
+belongs to whatever is outermost, so the window can end up unusable.
+
+Launching one is about the developer's terminal rather than about cm, so it is local tooling and not
+in this repo. Check your available skills and `AGENTS.local.md` or `CLAUDE.local.md` for what this
+machine provides. If there is nothing, say so and ask rather than testing in the live terminal.
 
 ## Testing rules
 
