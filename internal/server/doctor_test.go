@@ -187,6 +187,14 @@ func TestRepairStopsOrphansAndSparesHealthySessions(t *testing.T) {
 	}
 	done := mgr.Repair(ctx, found)
 	if len(done) != 1 {
+		// Every finding, not just the count, because this failed once on a CI runner with an empty
+		// repair list and the message could not say why: whether the orphan was missed, classified as a
+		// stale socket instead, or found but not marked fixable are three different bugs that all print
+		// as "did 0 things". Detection depends on the shim answering a probe, so a runner slow enough to
+		// miss that reports stale-socket for the same shim.
+		for _, f := range found {
+			t.Logf("finding: kind=%s session=%s fixable=%v detail=%s", f.Kind, f.Session, f.Fixable, f.Detail)
+		}
 		t.Fatalf("Repair() did %d things, want exactly one: %v", len(done), done)
 	}
 
