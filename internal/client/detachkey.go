@@ -105,32 +105,38 @@ func (k DetachKeySpec) Find(p []byte) int {
 // Terminal input arrives in arbitrary pieces, so a CSI-encoded detach can straddle two reads.
 // Without holding back a possible prefix, both halves reach the shell and the detach is missed.
 func (k DetachKeySpec) MightStart(p []byte) bool {
-	if k.Disabled {
-		return false
-	}
-	for _, seq := range k.Sequences {
-		for n := min(len(p), len(seq)-1); n > 0; n-- {
-			if bytes.Equal(p[len(p)-n:], seq[:n]) {
-				return true
-			}
-		}
-	}
-	return false
+	return k.HoldBack(p) > 0
 }
 
 // HoldBack returns how many trailing bytes to retain when a partial sequence may be in flight.
+//
+// The answer is the length of the longest suffix of p that is a proper prefix of some encoding, and
+// nothing more. Retaining a byte that cannot begin a detach does not merely delay it, it corrupts a
+// conversation: a program that queries the terminal and blocks for the answer sees a reply cut
+// short, and the missing tail surfaces later, pasted into the shell's line editor by the next
+// keystroke that flushes it.
+//
+// This used to derive the count from the *shortest* configured encoding instead, so any chunk whose
+// tail matched by even one byte gave up six. The symptom was `wallfacer -h` leaving
+// ";rgb:2828/2c2c/3434" and a stray cursor position report on screen, with "execute: 2828/2c2c/3434"
+// in the prompt afterwards: an OSC 11 background-color reply had arrived in a chunk ending with the
+// ESC of its ST terminator, and the five bytes before that ESC were held hostage. The same
+// arithmetic erred the other way for the longer encoding, holding 6 of the 7 bytes of a partial
+// "\x1b[27;5;" and forwarding the first, which would miss a detach split at exactly that point.
 func (k DetachKeySpec) HoldBack(p []byte) int {
-	if !k.MightStart(p) {
+	if k.Disabled {
 		return 0
 	}
-	keep := len(p)
+	keep := 0
 	for _, seq := range k.Sequences {
-		if n := len(seq) - 1; n < keep {
-			keep = n
+		// A complete sequence is not a partial one: Find handles that case, and holding the whole
+		// thing here would mean a detach never fires.
+		for n := min(len(p), len(seq)-1); n > keep; n-- {
+			if bytes.Equal(p[len(p)-n:], seq[:n]) {
+				keep = n
+				break
+			}
 		}
-	}
-	if keep < 0 {
-		return 0
 	}
 	return keep
 }

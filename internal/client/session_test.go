@@ -997,3 +997,47 @@ func TestRunSessionStopsOnATerminalReadError(t *testing.T) {
 		t.Errorf("outcome = %v, want outcomeDone: a broken terminal is not a reconnect", oc)
 	}
 }
+
+// A terminal reply must reach the session in the read it arrived in.
+//
+// This is the seam the HoldBack bug was visible at. A program inside the session queries the terminal
+// and blocks for the answer, so the client sitting between them cannot hold part of a reply back
+// waiting for a keystroke that may never come. The bug held six trailing bytes of any chunk whose last
+// byte could begin a detach encoding, which for an OSC 11 background-color reply meant the shell saw
+// ";rgb:2828/2c2c" and the program waited forever for the rest.
+func TestRunSessionForwardsATerminalReplyWhole(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
+
+	h := newHarness(t)
+	h.opts.DetachKey = key
+	h.stream.opened("test", 0, nil)
+
+	done := h.runAsync(context.Background())
+
+	// An OSC 11 reply arriving in one read, ending with the ESC of its ST terminator. A real read ends
+	// here because the terminal wrote the reply and the program's next query separately.
+	//
+	// Nothing else is sent afterwards, which is the whole point. Concatenating a second read would hide
+	// the bug: the held bytes were not dropped, they were prepended to whatever came next, so the total
+	// matched while the program waiting on the reply had already stalled.
+	reply := "\x1b]11;rgb:2828/2c2c/3434\x1b"
+	h.input <- []byte(reply)
+	h.waitForInputConsumed(t)
+	h.stream.waitForRequests(t, 1)
+
+	// Everything except the trailing ESC must already be on its way. Only that last byte could begin a
+	// detach encoding, so only it may wait for more input.
+	wantForwarded := reply[:len(reply)-1]
+	if got := string(h.stream.inputs()); got != wantForwarded {
+		t.Errorf("input forwarded = %q, want %q", got, wantForwarded)
+	}
+
+	// End the attachment the way a session exiting does, since nothing here detaches.
+	h.stream.exited(0)
+	if oc := <-done; oc != outcomeDone {
+		t.Errorf("outcome = %v, want outcomeDone", oc)
+	}
+}
