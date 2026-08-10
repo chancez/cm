@@ -45,10 +45,16 @@ RUN set -eux; \
 
 # Only the vt library. The macOS app and xcframework are irrelevant here and emit-xcframework
 # defaults to "xcodebuild on PATH", which would fail.
+#
+# -Doptimize must match mise.toml's libghostty task. Zig's default is Debug, which enables ghostty's
+# slow_runtime_safety and makes a reverse index at the top row cost 14ms instead of 10us. See that
+# task for the measurements. Matching matters beyond speed: a timing assumption that holds here and
+# not on a developer's machine is how a test passes in one place and fails in the other.
 RUN cd /src/ghostty && zig build \
       -Demit-lib-vt=true \
       -Demit-xcframework=false \
-      -Demit-macos-app=false
+      -Demit-macos-app=false \
+      -Doptimize=ReleaseSafe
 
 FROM golang:1.26-bookworm
 # zsh, because the OSC 133 tests need a shell that emits the markers, and skipping them here would leave
