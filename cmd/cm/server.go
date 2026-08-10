@@ -85,7 +85,12 @@ afterwards either way.`,
 			if conn, cl, cerr := connectServer(cmd.Context(), dirs); cerr == nil {
 				_, serr := cl.Shutdown(cmd.Context(), &serverv1.ShutdownRequest{})
 				conn.Close()
-				if serr != nil {
+				// A closed connection is what a successful shutdown looks like from here, not a failure.
+				// Shutdown replies before the server has finished stopping because the reply travels over
+				// the connection that stopping closes, so a caller that loses that race sees the socket
+				// close instead of an answer. Reporting it made `cm server restart` exit 1 after a restart
+				// that worked, on CI runners slow enough to lose the race.
+				if serr != nil && !transport.IsClosed(serr) {
 					return fmt.Errorf("stopping the running server: %w", serr)
 				}
 				// Waited on so the start below is not racing the shutdown.
@@ -172,7 +177,10 @@ Use 'cm kill' to end sessions themselves.`,
 			}
 			defer conn.Close()
 
-			if _, err := cl.Shutdown(cmd.Context(), &serverv1.ShutdownRequest{}); err != nil {
+			// Same race as in restart above: the reply can lose to the connection closing, and that means
+			// the shutdown happened rather than that it failed.
+			if _, err := cl.Shutdown(cmd.Context(), &serverv1.ShutdownRequest{}); err != nil &&
+				!transport.IsClosed(err) {
 				return err
 			}
 			return nil
