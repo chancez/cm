@@ -74,6 +74,12 @@ type Session struct {
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq uint64
 
+	// queryHeld is a partial escape sequence carried between shim reads, so a terminal query split
+	// across two of them is still recognized and stripped rather than forwarded in halves.
+	//
+	// Owned by the pump alone and needs no lock: the pump is the only reader and the only writer.
+	queryHeld []byte
+
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
 	// log type as the shim means the gap semantics are identical on both hops.
@@ -352,10 +358,25 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			s.noteReport()
 		}
 
+		// Removing the terminal queries cm answers itself, before anything downstream sees them.
+		//
+		// The emulator answers these and drainPending delivers that answer, so a copy reaching the
+		// real terminal means the program that asked gets two replies. It reads one and exits, and
+		// the other lands in the shell's line editor: the report was "exiting vim leaves garbage
+		// below my prompt", which was a DA1 reply printed as "62;52;c" beside the prompt.
+		//
+		// queryHeld carries a sequence split across two shim reads. Forwarding a fragment would let
+		// the real terminal reassemble the query and answer it after all, turning this into an
+		// intermittent version of the same bug.
+		//
+		// The model is deliberately still fed out.Data below, with the queries intact, since it is
+		// what answers them. Stripping here and feeding the original there is the whole design.
+		stripped := s.stripQueries(out.Data)
+
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
-		data := osc.RewritePromptRedraw(out.Data)
+		data := osc.RewritePromptRedraw(stripped)
 
 		// Command boundaries come from the rewritten bytes, not the originals.
 		//
@@ -373,11 +394,13 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// is a gap if the window passes it.
 		s.recent.Append(data)
 
-		// Two sequence numbers, deliberately, because the rewrite above changes the length.
+		// Two sequence numbers, deliberately, because the transforms above change the length: the
+		// prompt rewrite lengthens, and the query strip shortens.
 		//
 		// lastSeq tracks the shim's numbering, since it is the position to resubscribe from after
-		// a restart, and the shim knows nothing about the rewrite. Clients are served from
-		// s.recent, which numbers the rewritten bytes.
+		// a restart, and the shim knows nothing about either transform. It is therefore computed from
+		// out.Data, never from the stripped or rewritten bytes. Clients are served from s.recent,
+		// which numbers what they actually receive.
 		//
 		// Conflating them desynchronizes the two by however much the rewrite added, which puts a
 		// client's resume position inside an escape sequence and slices the ESC off the front of
@@ -388,6 +411,25 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 
 		s.feedTerminal(out.Data, s.recent.Next())
 	}
+}
+
+// stripQueries removes the terminal queries cm answers itself, carrying any trailing partial
+// sequence into the next call.
+//
+// Called only by the pump, which is what makes the unsynchronized queryHeld safe: one goroutine is
+// the only reader and the only writer.
+func (s *Session) stripQueries(data []byte) []byte {
+	chunk := data
+	if len(s.queryHeld) > 0 {
+		chunk = append(s.queryHeld, data...)
+	}
+
+	stripped, held := osc.StripAnsweredQueries(chunk)
+
+	// Copied rather than retained. held points into chunk, which the next call appends to, and
+	// appending to a slice whose backing array is still referenced would overwrite the held bytes.
+	s.queryHeld = append([]byte(nil), held...)
+	return stripped
 }
 
 // feedTerminal advances the terminal model, recording how far into the log it has consumed.
