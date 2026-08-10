@@ -215,8 +215,35 @@ func (e *env) writeConfig(body string) {
 }
 
 // environ returns the process environment for a cm invocation.
+// scrubbedEnviron returns the process environment with every cm variable removed.
+//
+// The harness sets each variable it needs below, so anything inherited is leakage rather than
+// configuration. This matters more here than in most projects: the person working on cm is usually working
+// *inside* cm, so their shell exports CM_SESSION, and a shell started from `cm attach` also carries
+// CM_RUNTIME_DIR pointing at their real server.
+//
+// That was not hypothetical. Run from a cm session, an inherited CM_SESSION=kitty.10 made `cm run` resolve
+// the developer's own session instead of the test's, and three tests failed with errors naming a session
+// the test never created: TestRunPropagatesExitStatus, TestReportDefaultsToTheSurroundingSession, and
+// TestFinishedSessionsAreForgottenOnADefaultInstall. The suite passed in CI and for anyone not using cm, which is
+// the worst version of this: it looked like a real regression in whatever change was in flight.
+//
+// Removing by prefix rather than naming the three variables involved, because the next one added would
+// reintroduce this silently.
+func scrubbedEnviron() []string {
+	all := os.Environ()
+	out := make([]string, 0, len(all))
+	for _, kv := range all {
+		if strings.HasPrefix(kv, paths.EnvPrefix) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func (e *env) environ() []string {
-	out := append(os.Environ(),
+	out := append(scrubbedEnviron(),
 		"CM_RUNTIME_DIR="+e.runtime,
 		"CM_STATE_DIR="+e.state,
 		// A predictable shell, so a session's own output does not depend on the developer's prompt.
