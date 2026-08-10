@@ -122,3 +122,81 @@ func TestDetachSplitAcrossReads(t *testing.T) {
 		}
 	}
 }
+
+// A terminal reply must reach the shell whole, in the read it arrived in.
+//
+// HoldBack computed its length from the *shortest* configured sequence rather than from how much of
+// a sequence the tail actually matches, so any chunk whose last byte could begin a detach lost six
+// trailing bytes to the hold buffer. Those bytes were not dropped, they were delayed until the next
+// keystroke, which is worse: a program that queries the terminal and waits for an answer gets a
+// truncated reply, and the missing tail is later pasted into the shell's line editor.
+//
+// Symptom that produced this: `wallfacer -h` left ";rgb:2828/2c2c/3434\x1b\\\x1b[3;1R" on screen and
+// "execute: 2828/2c2c/3434" in the prompt, because the OSC 11 background-color reply arrived in a
+// chunk ending with the ESC of its ST terminator.
+func TestHoldBackKeepsOnlyAPossiblePrefix(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		input []byte
+		want  int
+	}{
+		// An OSC 11 reply whose chunk ends at the ESC of its ST terminator. Only that final ESC
+		// could begin a detach, so only it may be held.
+		{"osc reply ending in ESC", []byte("\x1b]11;rgb:2828/2c2c/3434\x1b"), 1},
+		{"text then trailing ESC", []byte("abcdefgh\x1b"), 1},
+		{"bare ESC", []byte("\x1b"), 1},
+		{"ESC bracket", []byte("\x1b["), 2},
+		{"partial modifyOtherKeys", []byte("\x1b[27;5;"), 7},
+
+		// Nothing to hold when the tail cannot begin a detach.
+		{"complete detach", []byte("\x1b[92;5u"), 0},
+		{"plain text", []byte("ls -la"), 0},
+		{"diverged CSI", []byte("\x1b[A"), 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := key.HoldBack(tt.input); got != tt.want {
+				t.Errorf("HoldBack(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// The bytes a client forwards must be exactly the bytes it read, minus at most a real partial
+// detach. This is the property the bug violated: it forwarded a prefix and stranded the rest.
+func TestHoldBackDoesNotStrandTerminalReplyBytes(t *testing.T) {
+	key, err := ParseDetachKey(DefaultDetachKey)
+	if err != nil {
+		t.Fatalf("ParseDetachKey() error = %v", err)
+	}
+
+	// An OSC 11 background-color reply followed by a cursor position report, as termenv-style
+	// probing produces, split at the point that strands bytes.
+	reply := []byte("\x1b]11;rgb:2828/2c2c/3434\x1b")
+
+	var held []byte
+	buf := append(held, reply...)
+	if i := key.Find(buf); i >= 0 {
+		t.Fatalf("Find(%q) = %d, want no detach in a terminal reply", buf, i)
+	}
+	if keep := key.HoldBack(buf); keep > 0 && keep <= len(buf) {
+		held = append(held, buf[len(buf)-keep:]...)
+		buf = buf[:len(buf)-keep]
+	}
+
+	// Everything except a possible partial detach must have gone through. The only byte here that
+	// could begin one is the trailing ESC.
+	wantForwarded := reply[:len(reply)-1]
+	if !bytes.Equal(buf, wantForwarded) {
+		t.Errorf("forwarded %q, want %q", buf, wantForwarded)
+	}
+	if !bytes.Equal(held, []byte("\x1b")) {
+		t.Errorf("held %q, want %q", held, "\x1b")
+	}
+}
