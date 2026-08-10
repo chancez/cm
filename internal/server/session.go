@@ -51,7 +51,28 @@ type Session struct {
 
 	// term accumulates terminal state so a reattaching client can be restored. Nil until
 	// the VT layer lands; the fanout below does not depend on it.
+	//
+	// The pointer is guarded by mu, since the pump clears it when the model fails. Feeding it and
+	// reading a snapshot from it are serialized by termMu instead.
 	term Terminal
+
+	// termMu pairs the terminal model's contents with modelSeq below.
+	//
+	// Separate from mu because the pump no longer feeds the model before waking clients: output is
+	// delivered first and the model catches up afterwards, so the model can lag the log. Anything
+	// that serializes a screen must therefore learn how far that screen goes, and must not be able
+	// to see one without the other.
+	//
+	// Lock order is mu then termMu, never the reverse, and nothing may acquire mu while holding
+	// termMu. That is why feedTerminal releases mu before taking termMu, and why the calls that
+	// publish metadata happen after termMu is dropped.
+	termMu sync.Mutex
+	// modelSeq is the log position just past the last bytes the terminal model has consumed.
+	//
+	// A position in the log's numbering, not the shim's, because it is what a fresh attach streams
+	// from after replaying a screen. Streaming from the log's end instead would silently drop
+	// everything the model had not caught up to yet, which is output the client would never see.
+	modelSeq uint64
 
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
@@ -264,8 +285,13 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		lastSeq:     fromSeq,
-		done:        make(chan struct{}),
-		stopPump:    stopPump,
+		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
+		// adopted session resumes partway in. Leaving this at zero would make the first fresh attach
+		// stream from the very beginning of the shim's numbering, replaying output the restored screen
+		// already shows.
+		modelSeq: fromSeq,
+		done:     make(chan struct{}),
+		stopPump: stopPump,
 	}
 
 	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: fromSeq})
@@ -279,10 +305,20 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 	return s, nil
 }
 
-// pump consumes the shim's output stream, feeds the terminal model, and fans out to
-// clients.
+// pump consumes the shim's output stream, fans out to clients, and feeds the terminal model.
 //
 // This is the only writer to terminal state, so the emulator needs no locking of its own.
+//
+// Clients are woken before the emulator is fed, and that order is the point rather than an
+// incidental detail. The terminal model is a derived cache: it exists for screen restore and for
+// `cm read`, and no live client's output depends on it being current. Feeding it first put its cost
+// in front of every keystroke's response, which was measurable and was reported as cm feeling slow
+// in one direction only. `less` paging up emits a home plus reverse index per line, and a reverse
+// index with the cursor on the top row was costing 14ms in the emulator against 10us for the same
+// sequence anywhere else, so a half page spent about 350ms before the first byte reached the
+// terminal. Paging down emits plain lines and was unaffected, which is why only "up is slow" was
+// visible. The emulator cost itself is fixed separately, in how libghostty is built; this ordering
+// is what keeps a slow model from being a slow session.
 func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 	defer s.finish()
 
@@ -294,28 +330,16 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			return
 		}
 
-		if s.term != nil {
-			if err := s.term.Write(out.Data); err != nil {
-				// A terminal model that cannot keep up would make restores wrong, but
-				// dropping the session over it would be worse: live output still works.
-				// Give up on restores instead by discarding the model.
-				s.log.Error("terminal model failed, screen restore disabled for this session",
-					"session", s.name, "error", err)
-				s.mu.Lock()
-				s.term = nil
-				s.mu.Unlock()
-			} else {
-				s.drainPending()
-				s.noteMetadata()
-			}
-		}
-
-		// Track what the shell says about itself before the rewrite below, so the markers are read
-		// exactly as the shell sent them.
+		// Track what the shell says about itself from the bytes as the shell sent them, before the
+		// rewrite below, so the markers are read exactly as written.
 		//
 		// This is where "is a command running" comes from. The shell reports it via OSC 133 as part of
 		// its normal output, so cm reads it in passing rather than asking the shell to maintain it: zmx
 		// needed shell hooks writing a label for the same information.
+		//
+		// Kept ahead of the append so a waiter sees a command start no later than the output it
+		// produced. A client that learned of output first and of the command afterwards could observe
+		// a command's own bytes while the session still claimed to be idle.
 		if s.commands.Feed(out.Data) {
 			s.noteCommand()
 		}
@@ -361,7 +385,50 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		s.mu.Lock()
 		s.lastSeq = out.Seq + uint64(len(out.Data))
 		s.mu.Unlock()
+
+		s.feedTerminal(out.Data, s.recent.Next())
 	}
+}
+
+// feedTerminal advances the terminal model, recording how far into the log it has consumed.
+//
+// modelEnd is the log position just past the bytes being fed. The model is fed the shell's original
+// bytes while the log holds the rewritten ones, so the two differ in length; what is recorded is the
+// log position the model's screen now corresponds to, which is what attach needs to stream from.
+//
+// Its own method because the pair must be atomic with respect to attach. attach serializes a screen
+// and picks a position to stream from, and if it could see the model updated but the position not
+// yet, it would replay a chunk the client is also about to receive.
+func (s *Session) feedTerminal(data []byte, modelEnd uint64) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return
+	}
+
+	s.termMu.Lock()
+	err := term.Write(data)
+	if err == nil {
+		s.modelSeq = modelEnd
+	}
+	s.termMu.Unlock()
+
+	if err != nil {
+		// A terminal model that cannot keep up would make restores wrong, but dropping the
+		// session over it would be worse: live output still works. Give up on restores instead
+		// by discarding the model.
+		s.log.Error("terminal model failed, screen restore disabled for this session",
+			"session", s.name, "error", err)
+		s.mu.Lock()
+		s.term = nil
+		s.mu.Unlock()
+		return
+	}
+
+	// Both take s.mu, and drainPending calls the shim, so neither may run under termMu.
+	s.drainPending()
+	s.noteMetadata()
 }
 
 // finish records the session's outcome and releases subscribers.
@@ -871,19 +938,35 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	if resumeFrom != nil {
 		from = *resumeFrom
 	} else if s.term != nil {
+		// The screen and the position it corresponds to are read together, under termMu, so the pump
+		// cannot advance the model between the two.
+		//
+		// Taken while holding mu, which is the only permitted order. feedTerminal deliberately drops
+		// mu before acquiring termMu so this cannot deadlock against it.
+		s.termMu.Lock()
 		b, err := s.term.Restore()
+		modelEnd := s.modelSeq
+		s.termMu.Unlock()
 		if err != nil {
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
 		restore = b
-		// State is replayed, so streaming starts at the present rather than repeating history the
-		// snapshot already covers.
+
+		// State is replayed, so streaming starts where the replayed screen ends rather than repeating
+		// history the snapshot already covers.
 		//
-		// The log's own end, not lastSeq. lastSeq counts the shim's bytes, while the log numbers
-		// the rewritten ones, and prompt rewriting makes those differ by however much it added.
-		// Using lastSeq here starts the stream at an offset inside an escape sequence, which
-		// slices the ESC off and leaves a cursor move rendering as literal text beside the prompt.
-		from = s.recent.Next()
+		// Where the *model* ended, not the log's end, and the difference is output rather than
+		// duplication. The pump wakes clients before feeding the model, so the log can be ahead of the
+		// screen just serialized; starting at the log's end would skip exactly that gap, and the
+		// client would never see those bytes from anywhere. Starting at the model's end replays them,
+		// which is correct because the snapshot does not contain them.
+		//
+		// Both are positions in the log's numbering, not lastSeq's. lastSeq counts the shim's bytes
+		// while the log numbers the rewritten ones, and prompt rewriting makes those differ by however
+		// much it added. Using lastSeq here starts the stream at an offset inside an escape sequence,
+		// which slices the ESC off and leaves a cursor move rendering as literal text beside the
+		// prompt.
+		from = modelEnd
 	}
 
 	return s.newAttachmentLocked(from, restore), nil
