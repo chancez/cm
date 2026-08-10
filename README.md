@@ -128,6 +128,7 @@ See `docs/` for design notes and trade-offs:
 - `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
 - `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
 - `docs/concurrency.md` - the lifetime invariants, and how the races were found
+- `docs/testing.md` - how to test terminal behavior so a wrong result does not look like a pass
 - `docs/ideas.md` - things cm could grow, what each would cost, and what is deliberately not being done
 
 ## Building

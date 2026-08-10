@@ -116,9 +116,17 @@ Failures seen in this codebase, all of which looked like passes:
 - A test that looped over findings and asserted only if any existed, so zero findings passed.
 - A shell test that exercised a *shim* rather than the shell, because `exec.LookPath` returned a mise
   shim that could not resolve a version outside the repo.
+- A control chosen so it could not answer the question: a terminal bug "did not reproduce" without cm,
+  which only showed that removing the whole layer removes the bug. The real control was another
+  multiplexer, and it reproduced immediately.
+- A real program used as the trigger that did not send the sequence under test at all, so the run
+  proved nothing while looking like a pass. Drive the pty directly instead.
 
 The defense is a control that must fail. If you cannot make the test fail on purpose, you do not know
 it can fail at all.
+
+For anything involving escape sequences, `docs/testing.md` has the rest: which control to pick, the
+four client-count states to cover, and why `cm read --raw` is not the byte stream.
 
 ## 7. Test the documented path, not a convenient one
 

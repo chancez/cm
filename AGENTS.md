@@ -119,6 +119,21 @@ the state the race lands in instead of racing it.
 the code at all. `CM_VERSION` and `CM_SOCKET_WATCH_INTERVAL` work this way. An env var a shipped binary
 honors is one a stale `export` can use to make it lie.
 
+**Anything touching escape sequences: read `docs/testing.md` first.** That conversation is where most
+of cm's bugs live and it is the hardest thing here to observe, because a wrong result looks like a
+clean pass. Four traps from it, worth knowing even if you read nothing else:
+
+- **The control for a multiplexer bug is another multiplexer**, not a bare terminal. Comparing against
+  bare kitty said "not a cm bug" about a bug that reproduced against zmx on the first try.
+- **`cm read --raw` is not the byte stream.** It re-serializes the terminal model, so a session whose
+  log really did contain OSC sequences showed none. Use `--raw --follow` redirected to a file, or log
+  `%q` at the hop in question.
+- **Client count changes behavior**: 0, one interactive, one read-only, and many are four different
+  cases. Zero clients and read-only followers are where the failure is a *hang* rather than an
+  artifact.
+- **Drive the pty directly** with `printf 'A\033[6nB'` rather than running vim or another real
+  program, which confounds the test and can stop exercising it silently.
+
 ## Go conventions
 
 - `new("string")` / `new(5)` rather than a `ptr()` helper or a temp variable plus `&`.
