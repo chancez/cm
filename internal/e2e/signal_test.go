@@ -215,18 +215,33 @@ func TestSignalAcceptsNamesAndNumbers(t *testing.T) {
 	}
 }
 
-// Signalling an ended session is reported rather than counted as success.
-func TestSignalOnAnEndedSession(t *testing.T) {
+// Signalling a name nothing knows about is reported rather than counted as success.
+//
+// This used to signal a session that had just finished and assert the "has ended" message. That raced:
+// the message depends on the session having left the server's registry, which happens on a background
+// goroutine after the command finishes, so on a slower CI runner the signal arrived while the entry was
+// still there and the command succeeded. It passed locally 8 runs out of 8, which is why it shipped.
+//
+// Waiting for `state == "exited"` does not close the window either, since a live session reports itself
+// exited before its record is written back. The ended-versus-deregistered distinction is now covered
+// deterministically in internal/server/signalended_test.go, where the registry state can be constructed
+// instead of waited for.
+//
+// What is left here is the end-to-end half that does not race: the CLI reaches the server, the server
+// refuses, and the exit status and message come back.
+func TestSignalOnAnUnknownSession(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	e.mustRun("run", "--session", "done", "--", "/bin/sh", "-c", "echo finished")
+	// A session exists, so the server is running and the failure below is about the name rather than
+	// about there being nothing to talk to.
+	e.mustRun("run", "--session", "present", "-d", "--", "/bin/sh", "-c", "sleep 30")
 
-	r := e.run("signal", "done", "term")
+	r := e.run("signal", "no-such-session", "term")
 	if r.code == 0 {
-		t.Error("signalling an ended session exited 0, want an error")
+		t.Error("signalling an unknown session exited 0, want an error")
 	}
-	if !strings.Contains(r.stderr, "ended") {
-		t.Errorf("stderr = %q, want it to say the session has ended", r.stderr)
+	if !strings.Contains(r.stderr, "not found") {
+		t.Errorf("stderr = %q, want it to say the session was not found", r.stderr)
 	}
 }
 
