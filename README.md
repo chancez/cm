@@ -1,13 +1,205 @@
 # cm
 
-A terminal multiplexer that persists shell sessions, built on
-[libghostty-vt](https://github.com/ghostty-org/ghostty) for terminal emulation.
+Terminal sessions that outlive the terminal.
 
-Sessions survive detaching, the client exiting, and the server being upgraded or
-restarted. It provides no windows, tabs, or splits: your terminal emulator already does
-that better.
+Start a shell in a session, detach from it, close the window, restart your machine's terminal,
+and come back to it later with your screen and scrollback intact. Sessions also survive cm
+itself being upgraded or restarted, because the process holding your shell is not the process
+you talk to.
 
-## Architecture
+cm deliberately provides no windows, tabs, or splits. Your terminal emulator already does
+those, and staying out of its way is why cm is small.
+
+## Install
+
+Binaries are published for macOS and Linux on both arm64 and x86_64.
+
+With [mise](https://mise.jdx.dev), which picks the right archive for your platform and keeps it
+updated:
+
+```sh
+mise use -g github:chancez/cm      # or: mise use github:chancez/cm, per project
+```
+
+Or download the [latest release](https://github.com/chancez/cm/releases/latest) by hand. Each
+release ships a `SHA256SUMS` covering every archive.
+
+```sh
+tar -xzf cm_*_darwin_arm64.tar.gz
+install cm_*_darwin_arm64/cm ~/.local/bin/cm
+```
+
+To build from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Getting started
+
+```sh
+cm attach work     # create the session, or reattach if it exists
+ctrl-\             # detach, leaving the shell running
+cm ls              # see what is running
+cm attach work     # pick up where you left off
+```
+
+There is no server to start. Any command starts one if none is running.
+
+`cm attach` is the only command you need for both halves of that, which is the point: it
+creates a session or reattaches to an existing one, so the same command works from a script,
+a keybinding, or a terminal emulator's startup file.
+
+## Sessions
+
+A session has a name you choose, or one cm allocates:
+
+```sh
+cm attach work                  # named
+cm attach                       # cm picks a name and prints it
+cm attach --no-attach build     # create it without attaching
+cm attach notes --read-only     # watch without being able to type
+cm attach work --detach-key ctrl-]
+```
+
+Reusing a name reuses the session, so a command that creates one is safe to re-run.
+
+`--own` ends the session when the client disconnects *without* detaching. Combined with
+server-allocated names, that gives a terminal emulator one session per window that cleans
+itself up when the window closes, while an explicit detach still leaves the shell running.
+Attaching from inside a session creates a nested session rather than hijacking the window you
+ran it from.
+
+Detaching is `ctrl-\` by default. Set `detach_key` in the config file to change it, or
+`--detach-key` for one attachment, which is what you want when something outside cm already
+claims the key.
+
+## Tags
+
+Tags group sessions that a name cannot, including every session cm named for itself:
+
+```sh
+cm run --tag project=cm --tag role=build -- make   # label at creation
+cm tag s17 project=cm                              # or afterwards
+cm ls --tag project=cm                             # repeating --tag narrows
+```
+
+`--tag` then selects on `list`, `info`, `read`, `history`, `wait`, `signal`, and `kill`, so a
+group created together can be driven as one:
+
+```sh
+cm wait --tag run=abc --until idle   # all of them, concurrently; --any for the first
+cm read --tag run=abc                # each session's output under its own header
+cm kill --tag run=abc                # the safe form of --all: only what matched
+```
+
+A selector that matches nothing is an error rather than a silent success, which is what makes
+`cm kill --tag` safe to put in a teardown script.
+
+## Driving a session without attaching
+
+This is what makes cm usable from a script, a CI job, or a coding agent. A session is a real
+pty, so a program that checks whether it has a terminal behaves as it would interactively.
+
+```sh
+cm run -- make -j4                        # run, print output, exit with its status
+cm run -d -- ./long-thing                 # return immediately, print the session name
+cm send build 'make' --enter --wait idle   # send input, then wait for it to finish
+cm send build --key ctrl-c                 # a keystroke, not the six characters
+cm signal build int                        # a signal, when a keystroke cannot get through
+cm read build --lines 50                   # the recent tail, soft-wrapped lines rejoined
+cm read build --last-output                # just the last command's output, for a parser
+cm read build --since-commands 1           # that output with its prompt and command line
+cm wait api --until exited --timeout 5m    # block on a state instead of sleeping
+cm history build                           # everything, scrollback included
+```
+
+`cm run` exits with the command's status, so it composes with `&&` and `||` like a local
+command.
+
+`cm wait` and `cm send --wait` watch the session's own output, so they cannot miss a transition
+the way polling can. Pass `--timeout` to anything that can block: it turns a hang into an
+answer.
+
+Two things are worth knowing before you build on this. `--since-commands N` reads back by
+command rather than by guessing a line count, because cm brackets every command with OSC 133
+and knows where each one began. And `idle` and `busy` come from those same markers, so a shell
+that does not emit them never reports idle and a wait for it never returns. `cm doctor` names
+that case as `no-shell-integration`.
+
+`list`, `info`, `kill`, `get-env`, and the waiting commands accept `--json`, whose shape is a
+documented contract rather than whatever the wire format happens to be. See
+[docs/config.md](docs/config.md#json-output).
+
+For a fuller guide to orchestrating work this way, including running other agents in sessions,
+see [skills/cm/SKILL.md](skills/cm/SKILL.md).
+
+## Letting a program say what it is doing
+
+cm can tell that a command is running. It cannot tell whether that command is computing or
+sitting at a prompt of its own waiting for an answer, and only the program knows which. So a
+program can say:
+
+```sh
+cm report --state blocked --detail "needs approval"   # uses $CM_SESSION
+cm wait reviewer --until blocked                      # now reachable
+```
+
+From a shell, load the integration and use the function instead, which writes an escape
+sequence directly and costs nothing where a cm invocation costs about 23ms:
+
+```sh
+eval "$(cm shell-init zsh)"          # bash likewise; fish: cm shell-init fish | source
+cm_report blocked "waiting for approval"
+```
+
+Nothing here is program-specific. cm never learns what is running in a session and has no
+patterns matched against a program's output, so anything that can run a command on a state
+change can report, and a program cm has never heard of works exactly as well as one it has.
+See [contrib/hooks/](contrib/hooks/) for how to wire it up, including a Claude Code example.
+
+## Across a reboot
+
+Opt in per session or by name pattern, and the *content* comes back: scrollback, the last
+screen, and the working directory, with a fresh shell started in it.
+
+```sh
+cm attach work --persist
+```
+
+A pty is a kernel object and a shell is a process, so neither survives a reboot. Content
+persistence and process persistence are different guarantees and cm does not blur them. See
+[docs/persistence.md](docs/persistence.md).
+
+## Configuration
+
+Optional. cm works with no file, and every setting has a default that suits the common case.
+`cm config` prints what is in effect and where each value came from.
+
+Worth knowing about: `detach_key`, `scrollback` lines, the resize policy when several clients
+share a session, and `[env]`, which fixes a problem specific to long-lived sessions. A shell
+captures its terminal's environment once, at startup, so reattaching from a terminal that has
+since restarted leaves it holding a dead `KITTY_LISTEN_ON` or `SSH_AUTH_SOCK`. `cm get-env` and
+a prompt hook refresh them. See [docs/config.md](docs/config.md).
+
+Session names complete dynamically, annotated with each session's state, once
+`cm completions zsh` is installed.
+
+## When something looks wrong
+
+```sh
+cm doctor            # problems, with --clean to fix what is fixable
+cm status            # what the running server is doing
+cm logs server -f    # the server's diagnostic log
+cm logs shim work    # one session's
+```
+
+`cm doctor` is the first thing to reach for. Every check in it corresponds to something that
+actually went wrong and was slow to diagnose because it failed silently rather than reporting
+an error: a shim left holding a pty, a socket with nothing behind it, a client and server from
+different builds, a runtime directory long enough to break unix sockets.
+
+The diagnostic logs matter more than usual here, because cm swallows errors in anything
+advisory so that a failed title update or metadata write cannot end a session. Everything
+swallowed is logged.
+
+## How it works
 
 ```
 client  <--ttrpc-->  server  <--ttrpc-->  shim  <-->  pty  <-->  shell
@@ -15,160 +207,33 @@ client  <--ttrpc-->  server  <--ttrpc-->  shim  <-->  pty  <-->  shell
                      scrollback)         holds the pty)
 ```
 
-The shim exists so the server can be replaced without disturbing a running shell. It
-owns the pty and an append-only sequenced log of output, and nothing else: no terminal
-emulation, no session policy. Upgrading the binary does not upgrade running shims, which
-is the point, so the shim protocol stays small and additive-only.
+One shim per session owns the pty and an append-only sequenced log of output, and nothing
+else. That is why the server can be replaced without disturbing a running shell: it holds no
+state a new server cannot rediscover. Restarting the server is a brief freeze rather than a
+lost session, because the shim keeps buffering output while it is away and clients resume from
+their last sequence number without redrawing.
 
-The server is the single entry point. It holds terminal state via libghostty-vt, so
-reattaching restores your screen and scrollback, and multiple clients can share one
-session.
+The server is the single entry point, and clients never talk to a shim. It holds terminal state
+via [libghostty-vt](https://github.com/ghostty-org/ghostty), which is what makes reattaching
+restore your screen and scrollback, and what lets several clients share one session.
 
-Because the shim buffers output while the server is away, restarting the server is a
-brief freeze rather than a lost session. Clients resume from their last sequence number
-without redrawing.
+## Docs
 
-## Commands
+`docs/` is a set of decision records: what was chosen, what was measured, and what was
+rejected.
 
-```
-cm attach [session]      attach, creating the session if needed (ctrl-\ detaches)
-cm list                  list sessions; --tag/--prefix to filter
-cm info [session]        one session's details; --field for a single value
-cm tag [session] k=v     label a session so it can be grouped and filtered
-cm history [session]     print contents including scrollback; --format=plain|vt|html
-cm send <session> <text> send input without attaching; --key for ctrl-c, arrows, ...
-cm run -- <command>      run a command in a session and exit with its status
-cm wait [session]        block until a session reaches a state, or --match output
-cm read [session]        print a session's recent output; --follow --timeout to stream
-cm get-env [session]     print env vars from the session's latest client
-cm logs [session]        print cm's diagnostic log
-cm signal [session] <s>  signal a session's foreground job (int, term, ...)
-cm kill <session>...     terminate sessions; --signal to escalate past SIGHUP
-```
+- [architecture.md](docs/architecture.md) - why three layers, and what each owns
+- [restore.md](docs/restore.md) - how screen restore works, and why each detail is there
+- [config.md](docs/config.md) - the config file, and the session environment problem
+- [persistence.md](docs/persistence.md) - reboot persistence, and what can survive
+- [rpc.md](docs/rpc.md) - why ttrpc, measured against gRPC and ConnectRPC
+- [libghostty.md](docs/libghostty.md) - using libghostty-vt from Go, and its constraints
+- [concurrency.md](docs/concurrency.md) - the lifetime invariants, and how the races were found
+- [testing.md](docs/testing.md) - testing terminal behavior so a wrong result does not look like a pass
+- [ideas.md](docs/ideas.md) - what cm could grow, what each would cost, and what it will not do
 
-Session names complete dynamically once `cm completions zsh` is installed.
+## Contributing
 
-`attach` with no name asks the server to allocate one, and `--own` ends the session when the
-client disconnects without detaching. Together those give a terminal emulator a session per
-window that cleans itself up on close.
-
-Tags group sessions that a name cannot, which includes every session the server named itself:
-
-```
-cm run --tag project=cm --tag role=build -- make      # label at creation
-cm tag s17 project=cm                                 # or afterwards
-cm list --tag project=cm                              # repeating --tag narrows
-```
-
-`--tag` then selects on `list`, `kill`, `wait`, `read`, `history`, and `info`, so a group
-created together can be driven as one:
-
-```
-cm wait --tag run=abc --until idle    # concurrently, all of them; --any for the first
-cm read --tag run=abc                 # each session's output under its own header
-cm kill --tag run=abc                 # the safe form of --all: only what matched
-```
-
-A selector matching nothing is an error rather than a silent success, which is what makes
-`cm kill --tag` safe to put in a teardown script.
-
-A server starts automatically when needed, so there is normally no reason to run `cm server`.
-
-## Status
-
-Working and usable: persistent sessions, attach/detach, screen and scrollback restore on
-reattach, multiple clients per session, resize, session survival across a server restart or
-crash, history, send-without-attach, and cwd/title tracking forwarded to clients.
-
-Also tracks the terminal-related environment variables of whichever client attached most
-recently, so a long-running shell can refresh values like kitty's `KITTY_LISTEN_ON` that
-otherwise go stale when the terminal restarts. See `docs/config.md`.
-
-`list`, `info`, `kill`, and `get-env` accept `--json` for scripting; the shape is a documented
-contract rather than whatever the wire format happens to be.
-
-Sessions can also survive a reboot, opt-in per session or by name pattern: the content comes back
-and a fresh shell starts in the recorded directory. See `docs/persistence.md`.
-
-Sessions can be driven without attaching, which is what makes cm usable from a script or an agent:
-
-```
-cm send build 'make' --enter --wait idle   # send, then wait for it to finish
-cm send build --key ctrl-c                 # a keystroke, not the characters
-cm signal build int                        # a signal, when a keystroke cannot get through
-cm read build --since-commands 1           # what the last command printed, prompt and all
-cm read build --last-output                # just its output, for a parser
-cm read build --lines 50                   # the recent tail, soft wrap rejoined
-cm wait api --until exited                 # block until a session ends
-cm run --env KEY=value -- ./task           # a command in its own session
-```
-
-`--since-commands N` reads back by command rather than by guessing a line count: cm brackets
-every command with OSC 133, so it knows where each one began. Each block opens with the prompt
-and the echoed command line, which is what lets you tell several commands apart.
-
-A program inside a session can say what it is doing, which is how a long-running agent or build reports
-something cm cannot see for itself:
-
-```
-cm report --state blocked --detail "needs approval"   # uses CM_SESSION
-cm wait reviewer --until blocked                      # now reachable
-```
-
-Nothing about that is program-specific: cm never learns what is running, so anything that can invoke a
-command on a state change can report. `cm info <session> --field busy` reports what cm derives on its own,
-from OSC 133. See `docs/architecture.md` and `contrib/hooks/`.
-
-See `docs/` for design notes and trade-offs:
-
-- `docs/architecture.md` - why three layers, and what each owns
-- `docs/restore.md` - how screen restore works and why each detail is there
-- `docs/config.md` - the config file, and the session environment problem
-- `docs/persistence.md` - reboot persistence: what can survive, and the decisions made
-- `docs/rpc.md` - why ttrpc, measured against gRPC and Connect
-- `docs/libghostty.md` - using libghostty-vt from Go, and its constraints
-- `docs/concurrency.md` - the lifetime invariants, and how the races were found
-- `docs/testing.md` - how to test terminal behavior so a wrong result does not look like a pass
-- `docs/ideas.md` - things cm could grow, what each would cost, and what is deliberately not being done
-
-## Building
-
-Requires Go and, to build libghostty-vt from source, Zig 0.16.0. Both are pinned in
-`mise.toml`.
-
-```
-mise install
-mise run build
-```
-
-That leaves the binary in `bin/cm`. To put it on your PATH:
-
-```
-mise run install                      # into ~/.local/bin
-PREFIX=/usr/local mise run install    # or anywhere else
-mise run uninstall                    # removes it again
-```
-
-The install renames into place rather than copying over the existing file, which matters more than it
-sounds. Copying onto a path whose binary has a running process gets every later invocation SIGKILLed
-on macOS: `cp` writes into the existing inode and invalidates the kernel's cached code-signature pages
-that the live process still maps. It presents as `zsh: killed  cm ls` with nothing in any log. A
-rename replaces the directory entry instead, so the new binary is a new inode, the swap is atomic, and
-an already-running server keeps working on the old one until it is restarted.
-
-Tests run on the host with `mise run test`, and on Linux in Docker with `mise run test-linux`. The
-Linux run matters because a macOS-only run never compiles the Linux paths, and `/bin/sh` there is dash
-rather than bash, which has caught real bugs. It builds libghostty from source, so screen restore,
-history, and adoption-with-scrollback are covered rather than skipped.
-
-cgo is required. There was a second, no-cgo Linux image and a `!cgo` stub for `internal/vt`, on the
-theory that cm should degrade rather than break without the emulator. Both were retired: `cm read`,
-`cm history`, and screen restore are most of what cm does, and a build where they return empty
-*successfully* is a worse outcome than one that does not build. It also cost real debugging time
-twice, each time looking like a bug in cm rather than a missing emulator.
-
-A `CGO_ENABLED=0` build fails deliberately, with an error naming the reason.
-
-`mise run build-linux` checks that the Linux build compiles, using the same image.
-
-`go test -short` skips the end-to-end tests, which spawn real processes and ptys.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing, and the conventions. Note one rule
+up front: never run a bare `cm` command against your own setup while developing, because it
+talks to the server holding your real sessions.

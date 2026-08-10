@@ -7,6 +7,13 @@
 /third_party
 mise.local.toml
 
+# Machine-local agent instructions: a pointer to a skill that lives in someone's dotfiles, and
+# personal conventions. Untracked for the same reason it exists, which is that a contributor cloning
+# this repo has none of that setup and a checked-in doc naming it would be a dead end. AGENTS.md and
+# CONTRIBUTING.md stay self-contained without it.
+CLAUDE.local.md
+AGENTS.local.md
+
 # Zig's build cache. mise's libghostty task builds inside third_party, which is already ignored, but
 # setup-zig in CI points ZIG_LOCAL_CACHE_DIR at the repo root. An untracked directory there makes the
 # Go build stamp vcs.modified=true, so every release binary reported its version with a "-dirty"

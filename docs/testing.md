@@ -27,8 +27,8 @@ The rule: a control has to differ from the failing case in **one** thing, and th
 the code under suspicion. If the control removes the entire layer, a pass tells you nothing about the
 layer.
 
-The `kitty-sandbox` skill can host both at once. Use `--cm` for one and `--zmx` for the other, drive
-the identical command into each, and compare.
+A throwaway terminal can host both at once, one window each, with the identical command driven into
+both and the outputs compared.
 
 ## Test the states, not just the happy path
 
@@ -142,13 +142,14 @@ Before believing "it does not reproduce":
 Unit tests at the seam cover the decision; a real terminal covers the wiring. Both, for anything
 touching escape sequences.
 
-Use `kitty-sandbox`, never the developer's own terminal. Watch for these, all of which have bitten:
+Use a throwaway terminal instance, never the developer's own. Watch for these, all of which have
+bitten:
 
 - **Confirm config isolation, do not assume it.** An *empty* `CM_CONFIG` means **unset** to cm, so it
-  falls through to the developer's real config file. The `kitty-sandbox` script did exactly that until
-  it was caught here, and nothing failed because nothing asserted on it. It now points `CM_CONFIG` at
-  a nonexistent file, but check anyway: `cm config` inside the sandbox must show `detach_key ctrl-\`
-  and not the developer's setting.
+  falls through to the developer's real config file. A sandbox wrapper did exactly that until it was
+  caught here, and nothing failed because nothing asserted on it. Point `CM_CONFIG` at a nonexistent
+  file, and check anyway: `cm config` inside the sandbox must show `detach_key ctrl-\` and not the
+  developer's setting.
 - **`CM_SESSION` is inherited**, so a bare `cm attach` in a sandbox window retargets the session that
   launched it instead of creating one. The symptom is `clients=2` and `state=running(cm)`. Unset it in
   the wrapper.

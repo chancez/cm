@@ -115,7 +115,9 @@ someone's work.
 
 A sandbox gives you an isolated cm, not a terminal. Anything that depends on real rendering, real
 keypresses, or a real pty on the other end -- attach, detach, screen restore, the detach key -- needs a
-terminal too. Use the `kitty-sandbox` skill for that, and point the cm inside it at a sandbox from here.
+terminal too, launched as a throwaway instance. The `kitty-sandbox` skill does that if it is installed;
+it lives in the developer's dotfiles rather than in this repo. Point the cm inside it at a sandbox from
+here.
 
 Do not run `cm attach` from a tool call against the developer's terminal. It takes over the terminal
 that invoked it, and the detach key belongs to whatever is outermost, so the window can end up

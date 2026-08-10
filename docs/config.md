@@ -129,10 +129,11 @@ and together they make a system that degrades silently. The rule is that anythin
 logged.
 
 ```
-cm logs              # the server's log
-cm logs work         # one session's shim log
-cm logs -f           # follow
-cm logs --all        # include the rotated previous file
+cm logs server            # the server's log
+cm logs client            # every client's, shared
+cm logs shim work         # one session's shim log
+cm logs server -f         # follow
+cm logs server --all      # include the rotated previous file
 ```
 
 Logs live under the state directory, are owner-only since they record session names, directories,
@@ -147,16 +148,18 @@ This is the diagnostic log, not session output. `cm history` is what the shell p
 cm completions zsh > "${fpath[1]}/_cm"
 ```
 
-Session names complete dynamically for `attach`, `kill`, `info`, `history`, `get-env`, and `logs`,
-annotated with each session's state, so it is visible that attaching to a `dead` session will
-restore it rather than join it. `kill` drops names already on the command line.
+Session names complete dynamically for every command that takes one, annotated with each session's
+state, so it is visible that attaching to a `dead` session will restore it rather than join it.
+`kill` drops names already on the command line.
 
 Completion never starts a server. It runs on every tab press, and a stray keystroke should not
 launch a daemon; with none running there is nothing to complete anyway.
 
 ## JSON output
 
-`list`, `info`, `kill`, and `get-env` accept `--json`.
+`list`, `info`, `kill`, `get-env`, `tag`, `wait`, `send`, `run`, `status`, `doctor`, `config`, and
+`version` accept `--json`. The session-shaped payloads are the ones a script is most likely to build
+on, and the notes below are about those.
 
 The shape is a deliberate contract, defined in `cmd/cm/output.go` rather than by marshalling the
 wire messages directly. Fields are only ever added, never renamed or removed, and a test asserts

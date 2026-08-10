@@ -3,6 +3,10 @@
 Notes for anyone, human or agent, making changes here. `README.md` describes what cm is and
 `docs/` holds the design decisions; this file is about how to work on it without breaking things.
 
+`CONTRIBUTING.md` is the short version of this file, for a human arriving from the README. It states
+the rules; this one states them with the incident behind each. When a rule changes, change it here
+and check whether `CONTRIBUTING.md` repeats it.
+
 Everything here is a lesson from something that went wrong. Where a rule looks fussy, the reason is
 stated, because a rule without its reason gets dropped the first time it is inconvenient.
 
@@ -87,8 +91,10 @@ orchestrating agents with it. It is deliberately not in `.agents/`: it teaches `
 and `cm send` against whatever server is running, which is exactly what an agent developing cm must not
 do. If you are here to change cm, use the sandbox skill instead.
 
-The `kitty-sandbox` skill (outside this repo) is what to use when a change needs a real terminal:
-attach, detach, screen restore, the detach key.
+Anything needing a real terminal (attach, detach, screen restore, the detach key) needs a throwaway
+terminal instance rather than the one you are running in. That is a `kitty-sandbox` skill, which lives
+in the developer's dotfiles rather than here, since it is about their terminal and not about cm. If it
+is not installed, `CLAUDE.local.md` is where a pointer to it belongs.
 
 ## Testing rules
 
