@@ -419,6 +419,19 @@ func (s *Service) recvLoop(
 				// A reply to a terminal query, a mouse report, or a focus change. Forwarded to the
 				// shell, since the program asked for it, but it must not claim sizing: otherwise a
 				// window nobody is using takes over because the program polled the terminal.
+				//
+				// Except that a query reply is forwarded from one client only. Output fans out to every
+				// attached client, so two terminals both see a query and both answer it: measured with
+				// two clients on one session, a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c".
+				// The program reads one and the spare is left for the shell's line editor, which is the
+				// artifact that printed "62;52;c" beside a prompt.
+				//
+				// Only replies are dropped, not everything non-typing. Mouse and focus events describe
+				// one window rather than the session, so each client sends its own and dropping them
+				// would make a session ignore the mouse in every window but one.
+				if input.IsQueryReply(req.GetInput().Data) && !sess.isAnswerer(tok) {
+					continue
+				}
 				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
 					return fmt.Errorf("writing to session %s: %w", sess.name, err)
 				}

@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,5 +68,85 @@ func TestAttachedTerminalAnswersQueries(t *testing.T) {
 		t.Errorf("session output %q contains cm's own DA1 reply (62;22c) alongside the terminal's.\n"+
 			"With a client attached cm must stay silent, or a program gets two answers and prints the "+
 			"one it did not consume.", raw)
+	}
+}
+
+// Two attached clients answer one query once, and both still deliver their own mouse events.
+//
+// The duplicate is the bug: output fans out to every client, so both terminals see a query and both
+// reply, and the shell gets two answers to one question. Measured against a real kitty with two
+// clients on one session, a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c" where one client
+// gave one reply.
+//
+// Mouse events are the other half, and the reason the drop is narrow rather than "anything that is
+// not typing". A mouse report describes what happened in one window, so every client sends its own;
+// dropping them would make a session ignore the mouse in every window but the answerer's. Both halves
+// are asserted here because a fix for the first that breaks the second passes any test that only
+// checks for the duplicate.
+func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
+	skipIfShort(t)
+
+	e := newEnv(t)
+	// A shell, so waitReady sees a prompt, then a `cat` that writes what it reads to a file. The
+	// file is the observation point: what a client sends becomes shell input, and a shell consumes
+	// escape sequences rather than echoing them, so `cm read` cannot see them. `cm read --raw` is no
+	// help either, since it re-serializes the terminal model rather than replaying bytes.
+	e.mustRun("attach", "--no-attach", "two")
+
+	first := attachOnPty(t, e, "two")
+	first.waitReady()
+	second := attachOnPty(t, e, "two")
+	second.waitReady()
+
+	// Start a reader that records raw stdin, so client-sent sequences are captured verbatim instead
+	// of being swallowed by the shell's line editor.
+	sink := filepath.Join(e.state, "stdin.bin")
+	first.write([]byte("cat > " + sink + "\n"))
+	time.Sleep(1 * time.Second)
+
+	// Both clients answer the same DA1 query, as two real terminals would. Distinguishable replies,
+	// so the assertion can say which arrived.
+	first.write([]byte("\x1b[?62;11c"))
+	second.write([]byte("\x1b[?62;22c"))
+
+	// And both report a mouse press, which is per window and must not be dropped.
+	first.write([]byte("\x1b[<0;11;11M"))
+	second.write([]byte("\x1b[<0;22;22M"))
+
+	// Newline so cat flushes, then end it so the file is complete.
+	first.write([]byte("\n"))
+	time.Sleep(1 * time.Second)
+	first.write([]byte("\x04"))
+	time.Sleep(1 * time.Second)
+
+	captured, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("reading captured stdin: %v", err)
+	}
+	raw := string(captured)
+
+	// Exactly one of the two replies reaches the shell. Which one is not the point; that only one
+	// does is.
+	replies := 0
+	if strings.Contains(raw, "62;11c") {
+		replies++
+	}
+	if strings.Contains(raw, "62;22c") {
+		replies++
+	}
+	if replies != 1 {
+		t.Errorf("session output %q carried %d of the two DA1 replies, want exactly 1.\n"+
+			"Two clients each answering one query means the shell gets two answers, and the one the "+
+			"program does not consume is printed by its line editor.", raw, replies)
+	}
+
+	// Both mouse reports must arrive, from the answerer and the other client alike.
+	if !strings.Contains(raw, "11;11M") {
+		t.Errorf("session output %q is missing the first client's mouse report.", raw)
+	}
+	if !strings.Contains(raw, "22;22M") {
+		t.Errorf("session output %q is missing the second client's mouse report.\n"+
+			"Only query replies are restricted to one client. A mouse event describes one window, so "+
+			"dropping it makes the session ignore the mouse everywhere but the answerer.", raw)
 	}
 }
