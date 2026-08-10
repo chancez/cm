@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+
+	"github.com/chancez/cm/internal/paths"
 )
 
 // recovered turns a panic into an error, so a fault in the terminal model does not take the
@@ -52,6 +54,10 @@ type SessionTerminal struct {
 func NewSessionTerminal(rows, cols uint16, scrollbackLines int) (*SessionTerminal, error) {
 	st := &SessionTerminal{}
 
+	// Process-wide rather than per terminal, which is what SetXtversion documents. Every session in a
+	// server reports the same cm version, so setting it on each construction is idempotent.
+	SetXtversion(paths.Name + " " + paths.Version())
+
 	term, err := New(rows, cols, Callbacks{
 		// Queued rather than written directly: this fires inside Write, and touching the pty
 		// from here would mean re-entering code the emulator has locked.
@@ -60,6 +66,11 @@ func NewSessionTerminal(rows, cols uint16, scrollbackLines int) (*SessionTermina
 		},
 		TitleChanged: func(title string) { st.title = title },
 		PwdChanged:   func(pwd string) { st.pwd = pwd },
+		// Identify cm rather than the emulator it embeds. Only reaches a program when no client is
+		// attached, since an attached terminal answers XTVERSION itself, and that is exactly the case
+		// where cm is the terminal a program is talking to. Left unset it answers "libghostty", which
+		// names a library rather than anything a program can act on.
+		ReportXtversion: true,
 	})
 	if err != nil {
 		return nil, err
