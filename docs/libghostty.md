@@ -102,5 +102,27 @@ touch the same terminal.
 responses the emulator generates have to reach the pty or programs that probe the
 terminal will hang waiting.
 
+But they must reach it *only when no attached client will answer instead*, which is the
+harder half and was learned the expensive way. Two answerers on one pty is not a duplicate
+reply, it is a corrupted conversation. `wallfacer -h` sends OSC 11 and blocks reading the
+answer; only the real terminal can answer that, so cm forwards it. Meanwhile a zsh prompt
+hook sent `CSI 6n`, the emulator answered it, and cm wrote `\x1b[2;1R` to the pty while
+wallfacer was mid-read. wallfacer took the cursor report as its own answer and exited, so
+the terminal's OSC 11 reply arrived unclaimed and the line editor printed it as
+`;rgb:2828/2c2c/3434`. Under zsh's vi mode the leading ESC also dropped the editor into
+command mode and wedged the prompt.
+
+An injected reply is not addressed to whoever happens to be reading, so the guard is on
+*whether anyone else answers*, not on which query it is. See `Session.drainPending`. zmx
+gates the same way and does not have this bug.
+
+The condition is "a client that can answer", not "a client is attached". A read-only
+follower's input is dropped, so `cm read --follow` counted as an answerer would leave a
+query unanswered and hang the caller.
+
+An earlier attempt stripped these queries from client-bound output so cm was the sole
+answerer. That fixed a visible duplicate DA1 reply but not the injection above, and it is
+incompatible with letting the terminal answer, so it was removed.
+
 Kitty graphics pass through as APC bytes but the formatter does not re-emit them, so
 images are absent after a reattach. zmx has the same limitation.

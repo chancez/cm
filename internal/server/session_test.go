@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,12 @@ type fakeTerminal struct {
 	pwd      string
 	// focusReporting stands in for DECSET 1004 being enabled by the program.
 	focusReporting bool
+
+	// answers maps a query to the reply the emulator would generate for it, so a test can exercise
+	// the path where output triggers a write back to the pty. Real libghostty answers CSI 6n and
+	// friends this way; without this the fake never produces pending bytes and a test about
+	// answering would pass while testing nothing.
+	answers map[string]string
 }
 
 func (f *fakeTerminal) Write(p []byte) error {
@@ -41,6 +48,11 @@ func (f *fakeTerminal) Write(p []byte) error {
 		return f.writeErr
 	}
 	f.written = append(f.written, p...)
+	for query, reply := range f.answers {
+		if bytes.Contains(p, []byte(query)) {
+			f.pending = append(f.pending, []byte(reply))
+		}
+	}
 	return nil
 }
 

@@ -74,12 +74,6 @@ type Session struct {
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq uint64
 
-	// queryHeld is a partial escape sequence carried between shim reads, so a terminal query split
-	// across two of them is still recognized and stripped rather than forwarded in halves.
-	//
-	// Owned by the pump alone and needs no lock: the pump is the only reader and the only writer.
-	queryHeld []byte
-
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
 	// log type as the shim means the gap semantics are identical on both hops.
@@ -358,25 +352,21 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			s.noteReport()
 		}
 
-		// Removing the terminal queries cm answers itself, before anything downstream sees them.
+		// Terminal queries are deliberately *not* removed here, and an earlier version of this code
+		// removed them, so the reason is worth recording.
 		//
-		// The emulator answers these and drainPending delivers that answer, so a copy reaching the
-		// real terminal means the program that asked gets two replies. It reads one and exits, and
-		// the other lands in the shell's line editor: the report was "exiting vim leaves garbage
-		// below my prompt", which was a DA1 reply printed as "62;52;c" beside the prompt.
+		// Stripping made cm the only answerer, which fixed a duplicate DA1 reply but left the real
+		// defect: cm still injected its answers into the pty, where they could land in the middle of
+		// an unrelated program's read. See drainPending. Answering is now conditional on nobody else
+		// answering, which fixes both, and with that in place stripping would be actively wrong:
+		// nothing would answer a query cm suppressed while a terminal was attached to answer it.
 		//
-		// queryHeld carries a sequence split across two shim reads. Forwarding a fragment would let
-		// the real terminal reassemble the query and answer it after all, turning this into an
-		// intermittent version of the same bug.
-		//
-		// The model is deliberately still fed out.Data below, with the queries intact, since it is
-		// what answers them. Stripping here and feeding the original there is the whole design.
-		stripped := s.stripQueries(out.Data)
+		// So the query reaches the terminal and the terminal replies, exactly once.
 
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
-		data := osc.RewritePromptRedraw(stripped)
+		data := osc.RewritePromptRedraw(out.Data)
 
 		// Command boundaries come from the rewritten bytes, not the originals.
 		//
@@ -411,25 +401,6 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 
 		s.feedTerminal(out.Data, s.recent.Next())
 	}
-}
-
-// stripQueries removes the terminal queries cm answers itself, carrying any trailing partial
-// sequence into the next call.
-//
-// Called only by the pump, which is what makes the unsynchronized queryHeld safe: one goroutine is
-// the only reader and the only writer.
-func (s *Session) stripQueries(data []byte) []byte {
-	chunk := data
-	if len(s.queryHeld) > 0 {
-		chunk = append(s.queryHeld, data...)
-	}
-
-	stripped, held := osc.StripAnsweredQueries(chunk)
-
-	// Copied rather than retained. held points into chunk, which the next call appends to, and
-	// appending to a slice whose backing array is still referenced would overwrite the held bytes.
-	s.queryHeld = append([]byte(nil), held...)
-	return stripped
 }
 
 // feedTerminal advances the terminal model, recording how far into the log it has consumed.
@@ -547,16 +518,44 @@ func (s *Session) Close() {
 // having ended.
 func (s *Session) Releasing() bool { return s.releasing.Load() }
 
-// drainPending sends bytes the emulator generated back to the pty.
+// drainPending sends bytes the emulator generated back to the pty, but only when no attached client
+// will answer instead.
 //
 // These are answers to questions a program asked the terminal, such as a device status report.
-// Without this the program waits for a reply that never comes; zmx works around the same
-// problem by answering DA1 queries by hand.
+// Without them a program that queried the terminal waits for a reply that never comes.
+//
+// The condition is the fix for a bug that took a long time to find, and the reason it is a condition
+// rather than an unconditional write is worth stating plainly: cm answering while a real terminal is
+// also answering does not merely duplicate a reply, it corrupts an unrelated conversation.
+//
+// What was observed: `wallfacer -h` sends OSC 11 to ask the background color and blocks reading the
+// answer. Only the real terminal can answer that, so cm forwards it. Meanwhile a zsh prompt hook sent
+// CSI 6n, cm's emulator answered it, and this function injected `\x1b[2;1R` into the pty while
+// wallfacer was mid-read. wallfacer consumed the cursor report as though it were its own answer and
+// exited, so the terminal's OSC 11 reply arrived with nobody waiting for it, and the shell's line
+// editor printed it beside the prompt as ";rgb:2828/2c2c/3434". Under vi mode the leading ESC also
+// dropped the editor into command mode, wedging the prompt.
+//
+// So an injected reply is not addressed to whoever happens to be reading. Two answerers on one pty is
+// the defect, independent of which query each one answers, and letting the terminal be the only
+// answerer whenever there is one is what removes it. zmx does the same, and does not have this bug.
+//
+// Deliberately not conditioned on which query it is. The emulator generates a reply only for a query
+// it recognized, and by the time the bytes are here there is nothing to distinguish them; the useful
+// question is not "which reply is this" but "is anyone else going to answer".
+//
+// TakePending is called unconditionally, and before the check, so a skipped answer is discarded
+// rather than retained. Holding it would deliver it at some later moment when a client happened to
+// detach, which is the same mistimed injection this exists to prevent.
 func (s *Session) drainPending() {
 	if s.term == nil {
 		return
 	}
-	for _, data := range s.term.TakePending() {
+	pending := s.term.TakePending()
+	if s.hasAnsweringClient() {
+		return
+	}
+	for _, data := range pending {
 		if err := s.Write(context.Background(), data); err != nil {
 			// A program that queried the terminal is now waiting for an answer it will never get, so
 			// this explains an otherwise inexplicable hang.
@@ -897,6 +896,23 @@ func (s *Session) LastSeq() uint64 {
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
+// hasAnsweringClient reports whether some attached client will answer a terminal query.
+//
+// Not the same question as "is anyone attached", and the difference is a hang. A read-only
+// follower's input is dropped rather than forwarded (see recvLoop), so its terminal's answer never
+// reaches the shell. Counting one as an answerer would leave a querying program waiting forever
+// while `cm read --follow` was running, which is a normal thing to be doing.
+func (s *Session) hasAnsweringClient() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cs := range s.clientSizes {
+		if !cs.readOnly {
+			return true
+		}
+	}
+	return false
+}
+
 // EverWatched reports whether a client has attached in order to display this session.
 //
 // Monotonic, unlike the client count, and that is what makes it usable when a session ends: a client
@@ -1044,6 +1060,21 @@ func (s *Session) newAttachmentLocked(from uint64, restore []byte) attachment {
 		reader:  s.recent.Subscribe(from),
 		restore: restore,
 		first:   s.clients.Add(1) == 1,
+	}
+}
+
+// markReadOnly records that an attachment is a follower, so it is not mistaken for a client that
+// can answer a terminal query.
+//
+// Separate from registerClientSize, which learns the same flag, because that is skipped entirely for
+// a resuming client: a read-only follower that reconnected would otherwise look like an answerer and
+// leave a querying program waiting forever. Called immediately after attach, before any output is
+// pumped, so drainPending never sees a follower counted as an answerer.
+func (s *Session) markReadOnly(tok *attachToken) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cs := s.clientSizes[tok]; cs != nil {
+		cs.readOnly = true
 	}
 }
 

@@ -117,12 +117,21 @@ func (k DetachKeySpec) MightStart(p []byte) bool {
 // keystroke that flushes it.
 //
 // This used to derive the count from the *shortest* configured encoding instead, so any chunk whose
-// tail matched by even one byte gave up six. The symptom was `wallfacer -h` leaving
-// ";rgb:2828/2c2c/3434" and a stray cursor position report on screen, with "execute: 2828/2c2c/3434"
-// in the prompt afterwards: an OSC 11 background-color reply had arrived in a chunk ending with the
-// ESC of its ST terminator, and the five bytes before that ESC were held hostage. The same
-// arithmetic erred the other way for the longer encoding, holding 6 of the 7 bytes of a partial
+// tail matched by even one byte gave up six. An OSC 11 background-color reply arriving in a chunk
+// that ended with the ESC of its ST terminator had the five bytes before that ESC held hostage. The
+// same arithmetic erred the other way for the longer encoding, holding 6 of the 7 bytes of a partial
 // "\x1b[27;5;" and forwarding the first, which would miss a detach split at exactly that point.
+//
+// That bug was real and is fixed. Note, though, that the symptom it was diagnosed from -- `wallfacer
+// -h` leaving ";rgb:2828/2c2c/3434" and "execute: 2828/2c2c/3434" at the prompt -- came back
+// afterwards with an unrelated cause: cm was injecting its own answer to a *different* query into the
+// pty mid-read, so wallfacer consumed that and left the terminal's reply unclaimed. See
+// Session.drainPending. Measured while chasing the recurrence: holdback retains exactly 1 byte of
+// that reply for both ctrl-o and ctrl-\, and never false-detaches on it, so this code was not
+// involved the second time.
+//
+// The lesson worth carrying is that this symptom has had two distinct causes, so seeing it again is
+// not evidence about this function.
 func (k DetachKeySpec) HoldBack(p []byte) int {
 	if k.Disabled {
 		return 0
