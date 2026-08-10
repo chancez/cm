@@ -6,3 +6,9 @@
 # `/third_party/` that symlink is not ignored and gets committed by an `add -A`.
 /third_party
 mise.local.toml
+
+# Zig's build cache. mise's libghostty task builds inside third_party, which is already ignored, but
+# setup-zig in CI points ZIG_LOCAL_CACHE_DIR at the repo root. An untracked directory there makes the
+# Go build stamp vcs.modified=true, so every release binary reported its version with a "-dirty"
+# suffix while the checkout was in fact clean. Caught by reading the version off a published artifact.
+.zig-cache/
