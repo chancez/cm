@@ -10,15 +10,28 @@
 
 #include <ghostty/vt.h>
 
-// cm_install_callbacks sets userdata and the three callbacks cm uses. Each flag selects whether
-// that callback is installed, so a caller that does not want one does not pay for it.
+// cm_install_callbacks sets userdata and the callbacks cm uses. Each flag selects whether that
+// callback is installed, so a caller that does not want one does not pay for it.
 //
 // Returns the first non-success result, or GHOSTTY_SUCCESS.
 GhosttyResult cm_install_callbacks(GhosttyTerminal terminal,
                                    uintptr_t handle,
                                    bool write_pty,
                                    bool title_changed,
-                                   bool pwd_changed);
+                                   bool pwd_changed,
+                                   bool xtversion);
+
+// cm_set_xtversion records the string reported for XTVERSION (CSI > q).
+//
+// Held in C rather than passed per call because libghostty requires the returned memory to stay
+// valid until the callback returns, and a Go string's bytes cannot be handed to C. The value is
+// copied into a fixed buffer here, so it outlives any Go allocation and needs no pinning.
+//
+// Process-wide, not per terminal, which is a real constraint rather than an implementation detail:
+// every terminal reports whatever was set last. That is why the Go side exposes this as a package
+// function rather than a per-terminal option, so the API cannot promise something it does not do.
+// Verified: two terminals constructed with different values both answered the second one.
+void cm_set_xtversion(const char *s);
 
 // Modes are built by a static inline function that cgo cannot call, so the ones cm needs are
 // exposed as ordinary functions.

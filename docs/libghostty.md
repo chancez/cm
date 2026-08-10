@@ -120,6 +120,40 @@ The condition is "a client that can answer", not "a client is attached". A read-
 follower's input is dropped, so `cm read --follow` counted as an answerer would leave a
 query unanswered and hang the caller.
 
+And exactly *one* client answers, not every attached one. Output fans out to all of them, so
+two terminals both see a query and both reply: measured with two clients on one session, a
+single `CSI c` came back as `\x1b[?62;52;c\x1b[?62;52;c`. The oldest non-follower attachment
+is elected, and stability is the point rather than the order, since a moving answerer lets a
+duplicate through whenever the pick changes. Replies from every other client are dropped at
+the input path, and only replies: a mouse or focus event describes one window, so each client
+sends its own.
+
+## What cm reports about itself
+
+XTVERSION (`CSI > q`) answers `cm <version>`. Unwired it answers `libghostty`, which is true
+about the emulator and misleading about the terminal, since a program asking what it is
+talking to gets the name of a library rather than the multiplexer holding its pty. It only
+reaches a program when nothing is attached, which is exactly when cm *is* the terminal.
+
+The value is process-wide, in a C buffer, and that is a constraint rather than a detail.
+libghostty requires the reply to stay valid until its callback returns, so it cannot live in
+Go memory, and there is one buffer: two terminals constructed with different values both
+report the second. Verified. Hence `vt.SetXtversion` is a package function and `Callbacks`
+carries only a bool, so the API cannot promise per-terminal identity it does not deliver.
+Per-session identity would need a buffer keyed on the handle.
+
+DA1 is *not* wired, and the reply cm sends when detached (`?62;22c`, vt220 plus `ansi_color`)
+comes from a Zig struct default rather than a decision. Left alone deliberately: with a client
+attached the terminal answers for itself, so kitty's real `?62;52;c` including the clipboard
+bit reaches programs unchanged, measured identical inside cm and outside. A detached session
+has no clipboard, no sixel, and no window, so advertising fewer capabilities there is closer
+to true than copying a terminal's answer would be.
+
+OSC 52 needs nothing from cm and works today: verified by writing to the clipboard from inside
+a session and reading it back outside. Programs detect it through terminfo (`xterm-kitty` has
+`Ms=\E]52;%p1%s;%p2%s\E\\`) rather than through DA1, and cm passes `TERM` through unchanged, so
+the capability a program sees is the real terminal's.
+
 An earlier attempt stripped these queries from client-bound output so cm was the sole
 answerer. That fixed a visible duplicate DA1 reply but not the injection above, and it is
 incompatible with letting the terminal answer, so it was removed.

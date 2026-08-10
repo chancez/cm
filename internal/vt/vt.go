@@ -80,6 +80,41 @@ type Callbacks struct {
 	// PwdChanged fires when the shell reports its directory via OSC 7, OSC 9, or OSC 1337.
 	// The value is whatever the shell emitted, unparsed, so it is usually a file:// URI.
 	PwdChanged func(pwd string)
+	// ReportXtversion enables answering XTVERSION (CSI > q) with the value SetXtversion recorded.
+	//
+	// A flag rather than the string itself, because the value is process-wide: see SetXtversion. A
+	// per-terminal string here would read as though each terminal could report its own, which is not
+	// what the C side does.
+	ReportXtversion bool
+}
+
+// SetXtversion records what every terminal reports for XTVERSION (CSI > q), naming the terminal a
+// program believes it is talking to.
+//
+// Process-wide, and deliberately shaped to say so. libghostty requires the reply to stay valid until
+// its callback returns, so the value lives in a C buffer rather than in Go memory, and there is one
+// buffer: a terminal created with one value and then another created with a different one makes
+// *both* report the second. Verified rather than assumed, and it is why this is a package function
+// instead of a field on Callbacks.
+//
+// That costs nothing here, since cm reports its own version and every session agrees on it. It would
+// matter to anything wanting per-session identity, which would need a per-terminal buffer keyed on
+// the handle.
+//
+// Left unset, libghostty answers "libghostty", which is true about the emulator and misleading about
+// the terminal: a program asking what it is talking to gets the name of a library rather than the
+// multiplexer holding its pty.
+//
+// Call before creating terminals. Not safe to call concurrently with New.
+func SetXtversion(v string) {
+	if v == "" {
+		return
+	}
+	cs := C.CString(v)
+	// Freed immediately: cm_set_xtversion copies into its own buffer, so this allocation only has to
+	// survive the call.
+	defer C.free(unsafe.Pointer(cs))
+	C.cm_set_xtversion(cs)
 }
 
 // Terminal is a terminal emulator: it consumes output and can render its screen back out as
@@ -128,6 +163,7 @@ func (t *Terminal) wireCallbacks() error {
 		C.bool(t.cb.WritePty != nil),
 		C.bool(t.cb.TitleChanged != nil),
 		C.bool(t.cb.PwdChanged != nil),
+		C.bool(t.cb.ReportXtversion),
 	), "installing callbacks")
 }
 
