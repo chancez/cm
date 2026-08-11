@@ -196,10 +196,31 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			}
 		}
 	}
+	// A client attaching from inside another session freezes that session's metadata for as long as
+	// it runs. See Session.beginHosting: the parent's shell is blocked inside `cm attach`, so every
+	// report on its pty for this interval is really this child's, arriving there only because the
+	// child's output passes through it.
+	//
+	// Registered after attach succeeded and paired with a defer, so a session cannot be left frozen
+	// by an attach that failed on one of the paths above. A parent stuck believing it is hosting
+	// forever would stop reporting its own directory for the rest of its life, which is a worse bug
+	// than the one being fixed.
+	//
+	// The parent may not be a session this server knows: it can have exited, or the client can name
+	// one from a different server, and neither is an error worth failing an attach over. Nothing is
+	// frozen in that case, which is correct, because there is no parent whose bookkeeping could be
+	// wrong.
+	if open.InsideSession != "" && open.InsideSession != sess.name {
+		if parent, live := s.mgr.Get(open.InsideSession); live {
+			parent.beginHosting(sess.name)
+			defer parent.endHosting(sess.name)
+		}
+	}
+
 	s.mgr.log.Info("client attached",
 		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
 		"read_only", open.ReadOnly, "owns", open.Own && !open.ReadOnly,
-		"restore_bytes", len(att.restore))
+		"inside", open.InsideSession, "restore_bytes", len(att.restore))
 	reader := att.reader
 	defer func() {
 		// Tell a program that tracks focus when the last client leaves, since a detached session
@@ -547,6 +568,11 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 					item.State = serverv1.SessionState_SESSION_STATE_DEAD
 				}
 			}
+
+			// Only from a live session, like busy below and for the same reason: this describes two
+			// live attachments, so a stored value would come back after a restart claiming a nesting
+			// that ended with the previous server.
+			item.Hosting = sess.Hosting()
 
 			title, cwd := sess.Metadata()
 			if title != "" {

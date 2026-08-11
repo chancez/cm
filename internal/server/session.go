@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -87,16 +88,37 @@ type Session struct {
 	ended    bool
 	exitCode int
 	// title and cwd are what the shell last reported about itself, for clients and for
-	// listing. rawPwd is kept so a repeat report can be recognized without re-parsing.
+	// listing. cwdURI is the same directory as the shell sent it, keeping the host.
 	title  string
-	rawPwd string
 	cwd    osc.Cwd
+	cwdURI string
+	// rawPwd is the last directory seen in the terminal model, which is what a change is measured
+	// against. Kept so a repeat report can be recognized without re-parsing.
+	//
+	// Equal to cwdURI except while this session hosts a nested attach, when the model holds the
+	// child's directory and cwd holds this session's own.
+	rawPwd string
+	// baseTitle is the last title seen in the terminal model, which is what a change is measured
+	// against.
+	//
+	// Equal to title except while this session hosts a nested attach, when the model holds the
+	// child's title and title deliberately holds this session's own. Separating them is what lets
+	// the nesting end without the child's last title being mistaken for a change this session just
+	// made. cwd needs no equivalent because rawPwd already plays this part for it.
+	baseTitle string
 	// command is what the shell last reported about itself via OSC 133: whether a command is running
 	// and, when the shell says so, which one.
 	//
 	// Derived from the output stream rather than asked of the terminal model, because these are events
 	// rather than state libghostty retains. A terminal has no "is a command running" to query.
 	command osc.CommandState
+	// baseCommand is the tracker's latest state, which a change is measured against.
+	//
+	// The counterpart of baseTitle, and separate from command for the same reason: while this session
+	// hosts a nested attach the tracker follows the child's markers, and command must stay this
+	// session's own. Comparing against the tracker alone would treat the child's last command as a
+	// change to publish once the nesting ended.
+	baseCommand osc.CommandState
 
 	// reported is what a program inside the session said about itself, and takes precedence over
 	// command above.
@@ -169,6 +191,20 @@ type Session struct {
 	// each attached client forwards them on so a terminal emulator can react. Keyed by pointer
 	// so a client can remove its own.
 	metaSubs map[*metaSub]struct{}
+
+	// hosting counts the nested attachments running inside this session's shell, keyed by the
+	// session each is attached to.
+	//
+	// While this is non-empty, nothing arriving in the output stream is a statement about *this*
+	// session, and noteMetadata, noteCommand, and noteReport all decline to attribute it. The
+	// reasoning is not about the bytes, which are indistinguishable, but about who can be speaking:
+	// this session's shell is blocked inside `cm attach` for the whole time, so it reports nothing,
+	// and every report on this pty therefore belongs to the child.
+	//
+	// A count per child rather than a bool, because attaching twice to the same session from inside
+	// this one is legal, and the first of them detaching must not unfreeze a session the second is
+	// still driving.
+	hosting map[string]int
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -284,6 +320,7 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		boundaries:  newBoundaryTrackerAt(fromSeq),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
+		hosting:     make(map[string]int),
 		lastSeq:     fromSeq,
 		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
 		// adopted session resumes partway in. Leaving this at zero would make the first fresh attach
@@ -340,6 +377,10 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// Kept ahead of the append so a waiter sees a command start no later than the output it
 		// produced. A client that learned of output first and of the command afterwards could observe
 		// a command's own bytes while the session still claimed to be idle.
+		// Fed regardless of nesting, so the trackers stay in sync with the byte stream: a chunk
+		// skipped here can split a sequence across the resume and leave the next real report
+		// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
+		// noteReport, not the parsing.
 		if s.commands.Feed(out.Data) {
 			s.noteCommand()
 		}
@@ -579,13 +620,27 @@ func (s *Session) noteMetadata() {
 	rawPwd := s.term.Pwd()
 
 	s.mu.Lock()
-	titleChanged := title != s.title
+	// While a nested attach is running in this session, these values came from the child and say
+	// nothing about this session. Rebaselined rather than merely ignored, and that is the whole
+	// difference between a fix and a fix that looks like one: the model has genuinely absorbed the
+	// child's OSC 7 and OSC 2, so leaving the previous baseline in place would make the child's
+	// value look like a fresh change on the first call after the nesting ends, publishing it then
+	// instead of now.
+	if len(s.hosting) > 0 {
+		s.rawPwd = rawPwd
+		s.baseTitle = title
+		s.mu.Unlock()
+		return
+	}
+	titleChanged := title != s.baseTitle
 	pwdChanged := rawPwd != s.rawPwd
 	if titleChanged {
+		s.baseTitle = title
 		s.title = title
 	}
 	if pwdChanged {
 		s.rawPwd = rawPwd
+		s.cwdURI = rawPwd
 		if cwd, ok := osc.ParseCwd(rawPwd); ok {
 			s.cwd = cwd
 		} else {
@@ -614,10 +669,24 @@ func (s *Session) noteCommand() {
 	state := s.commands.State()
 
 	s.mu.Lock()
-	if state == s.command {
+	// A nested attach means this marker came from the child session, not this shell. Only the
+	// baseline moves, so the published value stays this session's own and the child's last command
+	// is not republished as a change the moment the nesting ends.
+	//
+	// Freezing command also freezes command.Runs, which is the point rather than a side effect.
+	// Those counters exist so a `send --wait` can tell the caller's own work from the state a
+	// session was already in, and a child's commands incrementing the parent's count is what let a
+	// `cm wait` on the parent be satisfied by the child.
+	if len(s.hosting) > 0 {
+		s.baseCommand = state
 		s.mu.Unlock()
 		return
 	}
+	if state == s.baseCommand && state == s.command {
+		s.mu.Unlock()
+		return
+	}
+	s.baseCommand = state
 	s.command = state
 	title, cwd, reported := s.title, s.cwd, s.reported
 	s.mu.Unlock()
@@ -645,6 +714,19 @@ func (s *Session) Command() osc.CommandState {
 func (s *Session) noteReport() {
 	r, ok := s.reports.Take()
 	if !ok {
+		return
+	}
+	// A report arriving while a nested attach is running was written by a program inside the child,
+	// which reached this pty only because the child's output passes through it. Dropped rather than
+	// baselined: unlike a title or a directory this is an event rather than a value, so there is no
+	// baseline to keep, and the child's own server has already recorded it against the right session.
+	//
+	// This is the case that made the bug more than cosmetic. With `cm wait outer --until blocked`
+	// running, a blocked report sent into the inner session satisfied the outer wait.
+	s.mu.Lock()
+	nested := len(s.hosting) > 0
+	s.mu.Unlock()
+	if nested {
 		return
 	}
 	if r.State == "clear" {
@@ -864,6 +946,56 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 	return s.title, s.cwd
 }
 
+// beginHosting records that a client attached to child is running inside this session's shell.
+//
+// From that point until endHosting, everything in this session's output stream is the child's:
+// its OSC 7, OSC 2, and OSC 133 all travel through this pty because the nested client's stdout is
+// this session's terminal. The bytes are indistinguishable from this shell's own, so cm cannot
+// filter them, but it does not need to. This shell is blocked inside `cm attach` for the whole
+// interval and reports nothing, so attribution can be suspended wholesale.
+//
+// Returns whether this session is now hosting anything, so the caller can log a transition rather
+// than every attach.
+func (s *Session) beginHosting(child string) {
+	s.mu.Lock()
+	s.hosting[child]++
+	s.mu.Unlock()
+}
+
+// endHosting records that a nested attachment to child has finished.
+//
+// The published title, directory, and command are left exactly as they were, which is the whole
+// point: they are this session's last true values, since nothing it reported was ever overwritten.
+// The baselines were kept current throughout, so the next thing this shell reports registers as a
+// change while the child's final values do not.
+func (s *Session) endHosting(child string) {
+	s.mu.Lock()
+	if n := s.hosting[child]; n > 1 {
+		s.hosting[child] = n - 1
+	} else {
+		delete(s.hosting, child)
+	}
+	s.mu.Unlock()
+}
+
+// Hosting returns the sessions currently attached from inside this one, sorted.
+//
+// Sorted so a listing is stable between calls rather than following Go's map ordering, which would
+// make `cm list` reorder the field on every invocation.
+func (s *Session) Hosting() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.hosting) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.hosting))
+	for name := range s.hosting {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // CwdURI returns the directory exactly as the shell reported it, which for OSC 7 is a URI that
 // keeps the host.
 //
@@ -872,7 +1004,7 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 func (s *Session) CwdURI() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.rawPwd
+	return s.cwdURI
 }
 
 // Done is closed when the session ends.
