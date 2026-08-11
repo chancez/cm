@@ -1,4 +1,16 @@
 /bin/
+
+# A `go build` with no -o writes the binary here, named after the module. Anchored with the leading
+# slash and no trailing one, which is exactly the right shape and easy to get wrong: a bare `cm` would
+# also match the `cmd/cm` source directory and hide the whole command from git, while `/cm/` would
+# match only a directory and let the binary through.
+#
+# This is not hypothetical. A 26 MB build of cm was committed at the repo root and sat in history for
+# 57 commits, and every later `go build ./...` silently modified it, so an unrelated change showed a
+# dirty binary in `git status`. Removed from history rather than deleted in a new commit, since the blob
+# is the cost and a delete keeps it.
+/cm
+
 # Without the trailing slash, so a symlink is ignored too.
 #
 # A git worktree has no third_party of its own, since the libghostty archive is built rather than
