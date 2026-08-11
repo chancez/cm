@@ -40,17 +40,18 @@ const (
 // client.
 func (o Options) Open(session string) *serverv1.Open {
 	return &serverv1.Open{
-		Session:   session,
-		Own:       o.Own,
-		ReadOnly:  o.ReadOnly,
-		Command:   o.Command,
-		Cwd:       o.Dir,
-		Env:       o.Env,
-		ClientEnv: o.ClientEnv,
-		Persist:   o.Persist,
-		OnRestore: o.OnRestore,
-		Tags:      o.Tags,
-		NoRestore: o.NoRestore,
+		Session:       session,
+		Own:           o.Own,
+		ReadOnly:      o.ReadOnly,
+		Command:       o.Command,
+		Cwd:           o.Dir,
+		Env:           o.Env,
+		ClientEnv:     o.ClientEnv,
+		Persist:       o.Persist,
+		OnRestore:     o.OnRestore,
+		Tags:          o.Tags,
+		NoRestore:     o.NoRestore,
+		InsideSession: o.InsideSession,
 	}
 }
 
@@ -89,6 +90,16 @@ type Options struct {
 	// For a follower that is not painting a terminal, where the repaint duplicates output the caller has
 	// already printed.
 	NoRestore bool
+
+	// InsideSession names the cm session this client is itself running in, when it is running in one.
+	//
+	// Tells the server that this attachment is nested, so the parent session stops attributing the
+	// bytes passing through it to itself. See Session.beginHosting for why the server cannot work
+	// that out alone.
+	//
+	// Set by the caller rather than read here, so the one place that consults the environment is the
+	// command layer and this package stays a library. InsideCmSession is the helper that decides it.
+	InsideSession string
 
 	// Output, when set, receives the session's bytes instead of the terminal.
 	//

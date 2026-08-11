@@ -15,31 +15,33 @@ import (
 // exactly the test that would have passed while that was broken.
 func TestOptionsOpenCarriesEveryField(t *testing.T) {
 	opts := Options{
-		Own:       true,
-		ReadOnly:  true,
-		Command:   []string{"/bin/zsh", "-l"},
-		Dir:       "/home/user/projects",
-		Env:       []string{"KEY=value"},
-		ClientEnv: map[string]string{"TERM": "xterm-kitty"},
-		Persist:   true,
-		OnRestore: "command",
-		Tags:      map[string]string{"project": "cm", "review": ""},
-		NoRestore: true,
+		Own:           true,
+		ReadOnly:      true,
+		Command:       []string{"/bin/zsh", "-l"},
+		Dir:           "/home/user/projects",
+		Env:           []string{"KEY=value"},
+		ClientEnv:     map[string]string{"TERM": "xterm-kitty"},
+		Persist:       true,
+		OnRestore:     "command",
+		Tags:          map[string]string{"project": "cm", "review": ""},
+		NoRestore:     true,
+		InsideSession: "parent",
 	}
 
 	got := opts.Open("work")
 	want := &serverv1.Open{
-		Session:   "work",
-		Own:       true,
-		ReadOnly:  true,
-		Command:   []string{"/bin/zsh", "-l"},
-		Cwd:       "/home/user/projects",
-		Env:       []string{"KEY=value"},
-		ClientEnv: map[string]string{"TERM": "xterm-kitty"},
-		Persist:   true,
-		OnRestore: "command",
-		Tags:      map[string]string{"project": "cm", "review": ""},
-		NoRestore: true,
+		Session:       "work",
+		Own:           true,
+		ReadOnly:      true,
+		Command:       []string{"/bin/zsh", "-l"},
+		Cwd:           "/home/user/projects",
+		Env:           []string{"KEY=value"},
+		ClientEnv:     map[string]string{"TERM": "xterm-kitty"},
+		Persist:       true,
+		OnRestore:     "command",
+		Tags:          map[string]string{"project": "cm", "review": ""},
+		NoRestore:     true,
+		InsideSession: "parent",
 		// Rows, Cols, and ResumeFromSeq are deliberately not set here: only the caller knows a
 		// terminal's size or where a reconnecting client left off.
 	}
@@ -74,16 +76,17 @@ func TestOptionsOpenSetsEveryWireField(t *testing.T) {
 
 	// Every field set to something non-zero, so a field the mapping forgets stays zero and is caught.
 	opts := Options{
-		Own:       true,
-		ReadOnly:  true,
-		Command:   []string{"/bin/zsh"},
-		Dir:       "/tmp",
-		Env:       []string{"KEY=value"},
-		ClientEnv: map[string]string{"TERM": "xterm"},
-		Persist:   true,
-		OnRestore: "shell",
-		Tags:      map[string]string{"k": "v"},
-		NoRestore: true,
+		Own:           true,
+		ReadOnly:      true,
+		Command:       []string{"/bin/zsh"},
+		Dir:           "/tmp",
+		Env:           []string{"KEY=value"},
+		ClientEnv:     map[string]string{"TERM": "xterm"},
+		Persist:       true,
+		OnRestore:     "shell",
+		Tags:          map[string]string{"k": "v"},
+		NoRestore:     true,
+		InsideSession: "parent",
 	}
 	open := opts.Open("work")
 

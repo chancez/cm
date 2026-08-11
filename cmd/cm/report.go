@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -110,11 +111,14 @@ func reportTarget(args []string) (string, error) {
 // exported into every session's shell, and a hook that had to be told its own session name would need the
 // caller to thread it through.
 //
-// This is the one place cm reads CM_SESSION, and it does not weaken the rule it looks like it breaks.
-// That rule is about `attach`: zmx treats the variable as a request to *switch* the parent terminal's
-// session, so attaching from inside one hijacks the window it was run from. Using it as the default
-// target of a report or a tag does not move or retarget anything, and an explicit name always overrides
-// it.
+// Reading CM_SESSION here does not weaken the rule it looks like it breaks. That rule is about what
+// `attach` *targets*: zmx treats the variable as a request to switch the parent terminal's session, so
+// attaching from inside one hijacks the window it was run from. Using it as the default target of a
+// report or a tag does not move or retarget anything, and an explicit name always overrides it.
+//
+// insideCmSession reads the same variable for a third purpose, telling the server which session an
+// attach is nested inside. That one is not a target either: it names a session to stop misattributing
+// output to, and never the session being attached.
 //
 // verb names what the caller wanted to do, so the error says which command had nothing to act on.
 func sessionTarget(args []string, verb string) (string, error) {
@@ -127,4 +131,39 @@ func sessionTarget(args []string, verb string) (string, error) {
 	return "", fmt.Errorf(
 		"no session given and %s is not set, so there is no session to %s",
 		paths.SessionEnv(), verb)
+}
+
+// insideCmSession returns the session this process is running inside, when its terminal is that
+// session's pty. Empty otherwise.
+//
+// Sent to the server on attach so a nested attachment is recognizable as one. The server cannot infer
+// it: a nested client's stdout *is* the parent's pty, so the child's OSC 7, OSC 2, OSC 133, and cm's own
+// report sequence all arrive on the parent's output stream as bytes indistinguishable from the parent
+// shell's own. The parent then recorded them against itself, which showed the child's directory and
+// title in `cm list`, wrote them to the store so they survived a restart, and let a `cm wait` on the
+// parent be satisfied by the child's report.
+//
+// Both conditions are load-bearing, and either one alone gets it wrong.
+//
+// CM_SESSION alone is not enough because the variable is exported into a session's shell and inherited
+// by everything that shell starts, including processes whose output goes somewhere else entirely.
+// `cm attach x > file` or a pipeline inside a session would claim to be nested while writing nothing to
+// the parent's pty, freezing a parent that was still reporting its own state perfectly well. Requiring
+// a terminal on stdout is what distinguishes an attachment that paints the parent's screen from one
+// that merely inherited an environment.
+//
+// A terminal alone is not enough either: the overwhelmingly common case is an attach from a real
+// terminal, where there is no cm session on the other side and nothing to suspend.
+//
+// A false negative here costs only the old behavior for one attachment. A false positive freezes a
+// session that is reporting honestly, which is worse, so the test is deliberately the strict one.
+func insideCmSession() string {
+	name := os.Getenv(paths.SessionEnv())
+	if name == "" {
+		return ""
+	}
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return ""
+	}
+	return name
 }

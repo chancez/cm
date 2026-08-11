@@ -1390,7 +1390,25 @@ type Open struct {
 	CaptureOutput bool `protobuf:"varint,15,opt,name=capture_output,json=captureOutput,proto3" json:"capture_output,omitempty"`
 	// Tags to attach to a newly created session. Ignored when attaching to one that exists, since an
 	// attach is not how tags are changed; Tag is.
-	Tags          map[string]string `protobuf:"bytes,17,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Tags map[string]string `protobuf:"bytes,17,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The session this client is itself running inside, when it is running inside one.
+	//
+	// Set from CM_SESSION by an interactive client whose terminal is a cm session's pty, which is
+	// what a nested attach is. Empty for a client attaching from a real terminal, and for one whose
+	// output is a pipe or a file, since neither is a session hosting anything.
+	//
+	// The server needs this because it cannot work the relationship out from the bytes. A nested
+	// client's stdout *is* the parent's pty, so the child's OSC 7, OSC 2, OSC 133, and cm's own
+	// report all arrive on the parent's stream indistinguishable from the parent shell's own. The
+	// parent server then recorded them as facts about itself: `cm list` showed the child's directory
+	// and title against the parent, the values reached the store and so survived a restart, and a
+	// `cm wait` on the parent was satisfied by a report the child made. Verified in a sandbox, with
+	// lsof confirming neither shell had actually changed directory.
+	//
+	// Naming the parent rather than sending a bare "I am nested" flag, because the server has to
+	// find that session to act on it, and a flag would leave it guessing which of its sessions the
+	// client's terminal belongs to.
+	InsideSession string `protobuf:"bytes,18,opt,name=inside_session,json=insideSession,proto3" json:"inside_session,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1542,6 +1560,13 @@ func (x *Open) GetTags() map[string]string {
 		return x.Tags
 	}
 	return nil
+}
+
+func (x *Open) GetInsideSession() string {
+	if x != nil {
+		return x.InsideSession
+	}
+	return ""
 }
 
 type Input struct {
@@ -2587,7 +2612,17 @@ type Session struct {
 	// cm never interprets a key. There is no tag that changes how a session is treated, because
 	// inferring meaning from one would be the same mistake as scraping a screen to work out what is
 	// running.
-	Tags          map[string]string `protobuf:"bytes,19,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Tags map[string]string `protobuf:"bytes,19,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Sessions currently attached from inside this one, by a nested `cm attach`.
+	//
+	// Present so a listing can say why this session's own reported values are standing still: while
+	// it hosts a nested attach its shell is blocked inside `cm attach` and reports nothing, so its
+	// title and directory are its last true ones rather than stale ones.
+	//
+	// Repeated because one session can host several at once, in sequence or in split panes of
+	// whatever is running inside it. Not persisted: this describes two live attachments, and a stored
+	// value would come back after a restart claiming a nesting that ended with the previous server.
+	Hosting       []string `protobuf:"bytes,20,rep,name=hosting,proto3" json:"hosting,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2751,6 +2786,13 @@ func (x *Session) GetCommandFinished() bool {
 func (x *Session) GetTags() map[string]string {
 	if x != nil {
 		return x.Tags
+	}
+	return nil
+}
+
+func (x *Session) GetHosting() []string {
+	if x != nil {
+		return x.Hosting
 	}
 	return nil
 }
@@ -3367,7 +3409,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\x92\x05\n" +
+	"\x05event\"\xb9\x05\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -3389,7 +3431,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
 	"on_restore\x18\x0e \x01(\tR\tonRestore\x12%\n" +
 	"\x0ecapture_output\x18\x0f \x01(\bR\rcaptureOutput\x120\n" +
-	"\x04tags\x18\x11 \x03(\v2\x1c.cm.server.v1.Open.TagsEntryR\x04tags\x1a<\n" +
+	"\x04tags\x18\x11 \x03(\v2\x1c.cm.server.v1.Open.TagsEntryR\x04tags\x12%\n" +
+	"\x0einside_session\x18\x12 \x01(\tR\rinsideSession\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
@@ -3461,7 +3504,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xbb\x05\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xd5\x05\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
@@ -3483,7 +3526,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\acommand\x18\r \x01(\tR\acommand\x123\n" +
 	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +
 	"\x10command_finished\x18\x12 \x01(\bR\x0fcommandFinished\x123\n" +
-	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x1a7\n" +
+	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x12\x18\n" +
+	"\ahosting\x18\x14 \x03(\tR\ahosting\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"W\n" +

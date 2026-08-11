@@ -128,6 +128,9 @@ receives it and the window closes instead of detaching.`,
 				// whatever this process exported is not in the server's environment and so never
 				// reaches the shell. Only applies when this call creates the session.
 				Env: env,
+				// Tells the server this attach is nested, so the session it is running inside stops
+				// reading the bytes passing through it as reports about itself.
+				InsideSession: insideCmSession(),
 			}
 			logger, closeLog := newClientLogger(dirs, cfg)
 			if closeLog != nil {

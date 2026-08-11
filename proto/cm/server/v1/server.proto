@@ -390,6 +390,25 @@ message Open {
   // Tags to attach to a newly created session. Ignored when attaching to one that exists, since an
   // attach is not how tags are changed; Tag is.
   map<string, string> tags = 17;
+
+  // The session this client is itself running inside, when it is running inside one.
+  //
+  // Set from CM_SESSION by an interactive client whose terminal is a cm session's pty, which is
+  // what a nested attach is. Empty for a client attaching from a real terminal, and for one whose
+  // output is a pipe or a file, since neither is a session hosting anything.
+  //
+  // The server needs this because it cannot work the relationship out from the bytes. A nested
+  // client's stdout *is* the parent's pty, so the child's OSC 7, OSC 2, OSC 133, and cm's own
+  // report all arrive on the parent's stream indistinguishable from the parent shell's own. The
+  // parent server then recorded them as facts about itself: `cm list` showed the child's directory
+  // and title against the parent, the values reached the store and so survived a restart, and a
+  // `cm wait` on the parent was satisfied by a report the child made. Verified in a sandbox, with
+  // lsof confirming neither shell had actually changed directory.
+  //
+  // Naming the parent rather than sending a bare "I am nested" flag, because the server has to
+  // find that session to act on it, and a flag would leave it guessing which of its sessions the
+  // client's terminal belongs to.
+  string inside_session = 18;
 }
 
 message Input {
@@ -631,6 +650,17 @@ message Session {
   // inferring meaning from one would be the same mistake as scraping a screen to work out what is
   // running.
   map<string, string> tags = 19;
+
+  // Sessions currently attached from inside this one, by a nested `cm attach`.
+  //
+  // Present so a listing can say why this session's own reported values are standing still: while
+  // it hosts a nested attach its shell is blocked inside `cm attach` and reports nothing, so its
+  // title and directory are its last true ones rather than stale ones.
+  //
+  // Repeated because one session can host several at once, in sequence or in split panes of
+  // whatever is running inside it. Not persisted: this describes two live attachments, and a stored
+  // value would come back after a restart claiming a nesting that ended with the previous server.
+  repeated string hosting = 20;
 }
 
 message KillRequest {
