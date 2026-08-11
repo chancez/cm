@@ -87,6 +87,12 @@ type sessionJSON struct {
 	// should not have to parse a rendering meant for a column. Always present, and empty rather than
 	// null for a session with no tags, so `jq '.[].tags.project'` does not have to special-case it.
 	Tags map[string]string `json:"tags"`
+	// Hosting names the sessions attached from inside this one by a nested `cm attach`.
+	//
+	// Also says why this session's own title and directory are standing still: while it hosts a nested
+	// attach its shell is blocked inside `cm attach` and reports nothing, so those values are its last
+	// true ones rather than stale ones. Empty rather than null for the usual case, like Tags.
+	Hosting []string `json:"hosting"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -104,6 +110,10 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	sessionTags := s.Tags
 	if sessionTags == nil {
 		sessionTags = map[string]string{}
+	}
+	hosting := s.Hosting
+	if hosting == nil {
+		hosting = []string{}
 	}
 
 	return sessionJSON{
@@ -126,6 +136,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedDetail:      s.ReportedDetail,
 		ReportedSource:      s.ReportedSource,
 		Tags:                sessionTags,
+		Hosting:             hosting,
 	}
 }
 
@@ -247,6 +258,21 @@ func sessionCwdColumn(s *serverv1.Session) string {
 		// Marked rather than hidden: in a table the user wants to see that the session went
 		// somewhere, which an empty column would not convey.
 		cwd += " (remote)"
+	}
+	// A session hosting a nested attach is annotated here rather than given its own column, for the
+	// same reason "(remote)" is: it qualifies the directory shown beside it. This is the session whose
+	// shell is sitting inside `cm attach`, so the path is where it was when it started attaching and
+	// will not move until the nesting ends. Without the note that looks like a stale value, which is
+	// what the underlying bug used to make it.
+	//
+	// Safe to append because CWD is the last column, so a variable-length addition cannot push
+	// anything out of alignment.
+	if len(s.Hosting) > 0 {
+		note := "(hosting " + strings.Join(s.Hosting, " ") + ")"
+		if cwd == "" {
+			return note
+		}
+		return cwd + "  " + note
 	}
 	return cwd
 }
@@ -395,6 +421,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		// Rendered as "k=v,k" here rather than as a map, since --field prints one bare value for a
 		// script to read. The JSON output carries the map for anything that wants the structure.
 		{"tags", tags.Format(j.Tags)},
+		// Space-separated, since a session name cannot contain a space and `--field hosting` is read
+		// by a script that would otherwise have to strip punctuation.
+		{"hosting", strings.Join(j.Hosting, " ")},
 	}
 }
 

@@ -30,6 +30,8 @@ func sampleWireSession(name string) *serverv1.Session {
 		ReportedDetail: "needs approval",
 		ReportedSource: "my-agent",
 		Tags:           map[string]string{"project": "cm", "review": ""},
+		// Left empty, so this fixture describes the ordinary session. Nesting is exercised by the
+		// tests that assert on it directly, where the annotation is the thing under test.
 	}
 }
 
@@ -53,7 +55,7 @@ func TestSessionJSONKeys(t *testing.T) {
 		// The last command's own outcome, distinct from exit_code above, which is the session's.
 		"last_command_exit_code", "command_finished",
 		"reported_state", "reported_detail", "reported_source",
-		"tags",
+		"tags", "hosting",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -86,6 +88,8 @@ func TestSessionJSONValues(t *testing.T) {
 		ReportedDetail: "needs approval",
 		ReportedSource: "my-agent",
 		Tags:           map[string]string{"project": "cm", "review": ""},
+		// Empty rather than nil, like Tags, so a script indexing into it needs no null check.
+		Hosting: []string{},
 	}
 	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
 	want.CreatedAt = got.CreatedAt
@@ -465,5 +469,73 @@ func TestSessionFieldNamesMatchWhatIsAccepted(t *testing.T) {
 		if !bytes.Contains(table.Bytes(), []byte(name)) {
 			t.Errorf("the table output is missing field %q:\n%s", name, table.String())
 		}
+	}
+}
+
+// A session hosting a nested attach says so where a person is looking.
+//
+// The annotation is what makes the frozen directory readable. While a session hosts a nested attach its
+// shell is blocked inside `cm attach` and reports nothing, so the path shown is where it was when the
+// nesting began. Without the note that is indistinguishable from a stale value, which is exactly what
+// the underlying bug used to make it: the parent showed the *child's* directory as its own.
+func TestSessionsTableMarksASessionHostingANestedAttach(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cwd     string
+		hosting []string
+		want    string
+	}{
+		{
+			name:    "hosting one session",
+			cwd:     "/home/user/projects",
+			hosting: []string{"inner"},
+			want:    "/home/user/projects  (hosting inner)",
+		},
+		// Several at once, which happens when the thing running inside has panes of its own.
+		{
+			name:    "hosting several",
+			cwd:     "/home/user/projects",
+			hosting: []string{"a", "b"},
+			want:    "/home/user/projects  (hosting a b)",
+		},
+		// A session that never reported a directory still shows why, rather than an empty cell.
+		{
+			name:    "hosting with no directory reported",
+			cwd:     "",
+			hosting: []string{"inner"},
+			want:    "(hosting inner)",
+		},
+		{
+			name:    "not hosting anything",
+			cwd:     "/home/user/projects",
+			hosting: nil,
+			want:    "/home/user/projects",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := sampleWireSession("work")
+			s.Cwd = tc.cwd
+			s.Hosting = tc.hosting
+
+			if got := sessionCwdColumn(s); got != tc.want {
+				t.Errorf("sessionCwdColumn() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The remote marker and the hosting note have to coexist.
+//
+// Both qualify the same cell, and a session that ssh'd somewhere and then hosted a nested attach is not
+// hypothetical: it is how an agent session driving another one on a remote host looks.
+func TestSessionsTableMarksRemoteAndHostingTogether(t *testing.T) {
+	s := sampleWireSession("work")
+	s.Cwd = "/remote/path"
+	s.CwdIsLocal = false
+	s.Hosting = []string{"inner"}
+
+	want := "/remote/path (remote)  (hosting inner)"
+	if got := sessionCwdColumn(s); got != want {
+		t.Errorf("sessionCwdColumn() = %q, want %q", got, want)
 	}
 }

@@ -91,9 +91,40 @@ parent terminal's session, so an `attach` from inside a session hijacks the wind
 from. An upstream PR to fix it was withdrawn, with the conclusion that nested sessions are
 unsupported.
 
-cm only ever exports `CM_SESSION` into a session's shell and never reads it. Intent comes from
-the request, so attaching from inside a session creates a nested session. This matters more
-than it sounds for per-window sessions, where every manual attach is nested by construction.
+cm never treats `CM_SESSION` as a *target*. Intent comes from the request, so attaching from inside a
+session creates a nested session. This matters more than it sounds for per-window sessions, where every
+manual attach is nested by construction.
+
+### Who a report belongs to
+
+Nesting breaks an assumption the rest of the server makes: that everything in a session's output stream
+is a statement by that session's shell. A nested client's stdout *is* the parent's pty, so the child's
+OSC 7, OSC 2, OSC 133, and cm's own OSC 25453 all travel through the parent's stream, indistinguishable
+from the parent shell's own bytes.
+
+The parent used to record all four against itself. `cm list` showed the child's directory and title
+beside the parent, the values reached the store and so survived a restart, and `cm wait outer --until
+blocked` was satisfied by a report made inside the child. Measured with lsof: neither shell had actually
+changed directory, so every one of those readings was false.
+
+Filtering the bytes is not possible, and not necessary. The parent's shell is blocked inside `cm attach`
+for the whole nesting, so it reports nothing, and every report on its pty in that window is provably the
+child's. So the client tells the server which session it is running inside, via `Open.inside_session`
+from `CM_SESSION`, and the parent suspends attribution until it detaches. `cm list` shows the parent as
+`(hosting inner)`, which is also what explains why its directory is standing still.
+
+Two details are load-bearing. The pass-through itself is deliberately left alone: the parent's terminal
+title is correct precisely *because* the child's OSC 2 reaches it untouched, so this changes bookkeeping
+and not bytes. And suspending is not enough on its own, because the parent's terminal model really does
+absorb the child's values; the baselines a change is measured against have to keep moving while the
+published values stay put, or the child's last directory is published as the parent's the moment the
+nesting ends. That is the case `TestParentKeepsItsOwnValuesAfterNestingEnds` exists for, and a freeze
+without the re-baseline passes every other test.
+
+The client requires both `CM_SESSION` and a terminal on stdout before claiming to be nested. The
+variable alone is inherited by everything a session's shell starts, so `cm attach x > file` would freeze
+a parent that was still reporting honestly. A false positive is the expensive direction: it silences a
+session's own reporting for as long as the attachment lasts.
 
 ## Restarting the server
 
