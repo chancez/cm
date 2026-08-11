@@ -74,6 +74,18 @@ service Server {
   // metadata would create the session if the name were wrong.
   rpc Tag(TagRequest) returns (TagResponse);
 
+  // Detach disconnects a session's clients, leaving the session running.
+  //
+  // The detach key covers the interactive case and cannot cover this one. A key is delivered to
+  // whichever client owns the real terminal, which is the outermost one, so from a nested attach it
+  // detaches the parent rather than the child. Adding a rule to guess which one the user meant was
+  // considered and rejected: the target would depend on server state the user cannot see, and a wrong
+  // guess against an owned session ends a shell rather than merely detaching from it.
+  //
+  // The other caller has no keyboard at all. An agent that started a client had no way to disconnect
+  // it, since every existing route to detaching is a keystroke.
+  rpc Detach(DetachRequest) returns (DetachResponse);
+
   // Status reports facts about the running server: its pid, how long it has been up, and how many
   // sessions it holds.
   //
@@ -549,6 +561,23 @@ message TagRequest {
 message TagResponse {
   // The session's tags after the change, so a caller does not need a second call to see the result.
   map<string, string> tags = 1;
+}
+
+message DetachRequest {
+  // Sessions whose clients to disconnect. Repeated to match Kill, so one call can clear several.
+  repeated string sessions = 1;
+}
+
+message DetachResponse {
+  // How many clients were disconnected, keyed by session name.
+  //
+  // A count rather than a bool, because a session can have several clients and "detached" would not say
+  // whether one or four windows just let go. Zero is a normal answer rather than an error: asking a
+  // session with nothing attached to detach is already satisfied, which is what makes this safe to call
+  // without checking first.
+  map<string, uint32> detached = 1;
+  // Sessions that could not be detached, keyed by name. Shaped like KillResponse.errors.
+  map<string, string> errors = 2;
 }
 
 message ListRequest {

@@ -20,6 +20,7 @@ type ServerService interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -126,6 +127,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Tag(ctx, &req)
 			},
+			"Detach": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req DetachRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Detach(ctx, &req)
+			},
 			"Status": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req StatusRequest
 				if err := unmarshal(&req); err != nil {
@@ -166,6 +174,7 @@ type ServerClient interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -297,6 +306,14 @@ func (c *serverClient) Signal(ctx context.Context, req *SignalRequest) (*SignalR
 func (c *serverClient) Tag(ctx context.Context, req *TagRequest) (*TagResponse, error) {
 	var resp TagResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Tag", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Detach(ctx context.Context, req *DetachRequest) (*DetachResponse, error) {
+	var resp DetachResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Detach", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

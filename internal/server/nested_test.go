@@ -31,6 +31,7 @@ func newNestedTestSession(t *testing.T, term Terminal) *Session {
 		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
 		term:        term,
 		clientSizes: make(map[*attachToken]*clientSize),
+		evicts:      make(map[*attachToken]chan struct{}),
 		metaSubs:    make(map[*metaSub]struct{}),
 		hosting:     make(map[string]int),
 		boundaries:  osc.NewBoundaryTracker(0),

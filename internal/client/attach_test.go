@@ -76,6 +76,11 @@ func (s *stubService) List(context.Context, *serverv1.ListRequest) (*serverv1.Li
 func (s *stubService) Kill(context.Context, *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Detach(
+	context.Context, *serverv1.DetachRequest,
+) (*serverv1.DetachResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Send(context.Context, *serverv1.SendRequest) (*serverv1.SendResponse, error) {
 	panic("unused")
 }

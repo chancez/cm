@@ -201,6 +201,11 @@ func (c *fakeClient) List(context.Context, *serverv1.ListRequest) (*serverv1.Lis
 func (c *fakeClient) Kill(context.Context, *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Detach(
+	context.Context, *serverv1.DetachRequest,
+) (*serverv1.DetachResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Send(context.Context, *serverv1.SendRequest) (*serverv1.SendResponse, error) {
 	panic("unused")
 }
@@ -1039,5 +1044,37 @@ func TestRunSessionForwardsATerminalReplyWhole(t *testing.T) {
 	h.stream.exited(0)
 	if oc := <-done; oc != outcomeDone {
 		t.Errorf("outcome = %v, want outcomeDone", oc)
+	}
+}
+
+// A server-initiated detach must end the attachment rather than trigger a reconnect.
+//
+// This is what `cm detach` needs from the client, and the failure is silent. The server sends Detached and
+// closes the stream; a clean close is otherwise read as "the server went away", which returns
+// outcomeReconnect. The client then reattaches within a second and undoes the detach it was just asked to
+// perform, so the session looks like it ignored the command.
+//
+// Distinct from the acknowledgement of a detach this client asked for, which never reaches the main loop:
+// that one is drained by waitForDetachAck before runSession returns.
+func TestRunSessionLeavesWhenTheServerDetachesIt(t *testing.T) {
+	h := newHarness(t)
+	h.stream.opened("test", 0, nil)
+	// No Detach was sent by this client, so this is the server asking rather than acknowledging.
+	h.stream.detached()
+
+	oc, err := h.run(context.Background())
+	if err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+	if oc != outcomeDone {
+		t.Errorf("outcome = %v, want outcomeDone: the client would reconnect and undo the detach", oc)
+	}
+	if !h.result.Detached {
+		t.Error("result.Detached = false, want true so the caller can report why it stopped")
+	}
+	// Nothing was sent in reply. The server already knows, and a Detach here would be answered by a
+	// server that has closed the stream.
+	if n := h.stream.detaches(); n != 0 {
+		t.Errorf("client sent %d Detach messages, want 0: the server initiated this one", n)
 	}
 }

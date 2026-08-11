@@ -171,6 +171,9 @@ type Session struct {
 	resizePolicy ResizePolicy
 	// clients tracks each attached client's size, keyed by its attachment.
 	clientSizes map[*attachToken]*clientSize
+	// evicts holds each attachment's eviction channel, so `cm detach` can reach a client that is
+	// blocked waiting for output. Keyed by the same token as clientSizes, and removed by detach.
+	evicts map[*attachToken]chan struct{}
 	// leader is the attachment that last sent real typing, under ResizeLeader.
 	leader *attachToken
 	// attachOrder increases with each attach.
@@ -320,6 +323,7 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		boundaries:  newBoundaryTrackerAt(fromSeq),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
+		evicts:      make(map[*attachToken]chan struct{}),
 		hosting:     make(map[string]int),
 		lastSeq:     fromSeq,
 		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
@@ -1131,6 +1135,13 @@ type attachment struct {
 	// first reports that this is the only attached client, so a program that tracks focus should
 	// be told someone is watching again.
 	first bool
+	// evict is closed when something outside this client asks it to detach, which is what `cm detach`
+	// does. The attach loop selects on it and returns as though the user had pressed the detach key.
+	//
+	// A channel rather than a flag, because the loop it has to reach is blocked in a select waiting on
+	// output that a quiet session may not produce for hours. A flag would only be noticed on the next
+	// byte, so detaching an idle session would appear to hang.
+	evict chan struct{}
 }
 
 // attach registers a subscriber and returns it along with the sequence number its stream
@@ -1224,11 +1235,21 @@ func (s *Session) newAttachmentLocked(from uint64, restore []byte) attachment {
 	token := &attachToken{order: s.attachOrder}
 	s.clientSizes[token] = &clientSize{order: s.attachOrder}
 
+	evict := make(chan struct{})
+	// Lazily created, so a Session built field by field rather than through newSession still attaches.
+	// Several tests construct one to hold an exact intermediate state, and a nil map here panics only on
+	// attach, which is a long way from the missing line that caused it.
+	if s.evicts == nil {
+		s.evicts = make(map[*attachToken]chan struct{})
+	}
+	s.evicts[token] = evict
+
 	return attachment{
 		token:   token,
 		reader:  s.recent.Subscribe(from),
 		restore: restore,
 		first:   s.clients.Add(1) == 1,
+		evict:   evict,
 	}
 }
 
@@ -1425,10 +1446,46 @@ func (s *Session) setRestored(blob []byte) {
 	s.mu.Unlock()
 }
 
+// EvictClients asks every attached client to detach, returning how many were asked.
+//
+// The session keeps running, including an owned one. That is the whole point: this is a detach rather
+// than a kill, so the attach loop treats an eviction exactly as it treats the detach key, and ownership
+// does not reap. Getting that wrong would make `cm detach` destroy the sessions it was asked to release.
+//
+// Counted rather than reported as a bool because a session can hold several clients, and a caller
+// clearing a session wants to know whether one window or four just let go. Zero is a normal answer: a
+// session with nothing attached is already in the requested state.
+//
+// Idempotent. A second call while the first eviction is still in flight finds the channel already
+// closed and skips it, so a retry cannot panic on a double close.
+func (s *Session) EvictClients() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := 0
+	for _, ch := range s.evicts {
+		select {
+		case <-ch:
+			// Already evicted and not yet torn down, so it is not asked twice and not counted twice.
+		default:
+			close(ch)
+			n++
+		}
+	}
+	return n
+}
+
 // detach releases a subscriber, reporting whether it was the last one.
 func (s *Session) detach(a attachment) (last bool) {
 	a.reader.Close()
 	if a.token != nil {
+		// Dropped here rather than in EvictClients, so the channel outlives the eviction it carries: the
+		// attach loop has to still be able to select on it after the close, and removing it there would
+		// leave a client blocked on a channel nothing holds.
+		s.mu.Lock()
+		delete(s.evicts, a.token)
+		s.mu.Unlock()
+
 		if rows, cols, x, y, resize := s.releaseClientSize(a.token); resize {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()

@@ -381,6 +381,20 @@ func runSession(
 				result.ExitCode = int(ex.ExitCode)
 				return outcomeDone, nil
 			}
+			// An unsolicited Detached means `cm detach` asked this client to let go, so it leaves as
+			// though the user had pressed the detach key.
+			//
+			// Handled here rather than left to fall through, and that is the whole reason this branch
+			// exists: the server closes the stream immediately afterwards, and a clean close is otherwise
+			// read as the server having gone away, which returns outcomeReconnect. The client would then
+			// reattach within a second and silently undo the detach it was just asked to perform.
+			//
+			// A solicited one never reaches here, since the detach path drains it through
+			// waitForDetachAck before returning.
+			if msg.resp.GetDetached() != nil {
+				result.Detached = true
+				return outcomeDone, nil
+			}
 			if m := msg.resp.GetMetadata(); m != nil {
 				if opts.OnMetadata != nil {
 					opts.OnMetadata(SessionMetadata{

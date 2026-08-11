@@ -36,6 +36,7 @@ func TestAttachStreamsFromTheModelNotTheLog(t *testing.T) {
 		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
 		term:        &fakeTerminal{restore: []byte("SCREEN")},
 		clientSizes: make(map[*attachToken]*clientSize),
+		evicts:      make(map[*attachToken]chan struct{}),
 		metaSubs:    make(map[*metaSub]struct{}),
 		boundaries:  osc.NewBoundaryTracker(0),
 		done:        make(chan struct{}),

@@ -367,6 +367,27 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			// Deliberate detach: the session keeps running even if this client owns it.
 			return nil
 
+		case <-att.evict:
+			// `cm detach` asked this client to let go. Treated exactly as the detach key is, and an owned
+			// session must survive: a detach that killed the sessions it was asked to release would be
+			// worse than having no command at all.
+			//
+			// Returning without calling reapIfAbandoned is what protects it here, since this is a
+			// deliberate release rather than a client that vanished. The flag is belt and braces for that:
+			// it is what the two paths below consult, so anything later that reaches them by another route
+			// still reads this as intentional. Verified by adding a reap to this case, which only destroys
+			// the session once the flag is also removed.
+			sawDetach.Store(true)
+			// Told before the stream closes, so the client can report "detached by request" rather than
+			// treating a server-initiated close as an outage and trying to reconnect. Failure is ignored:
+			// the client is going away regardless, and this is the same best-effort acknowledgement the
+			// recv loop sends.
+			_ = srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
+			})
+			s.mgr.log.Info("client detached on request", "session", sess.name)
+			return nil
+
 		case err := <-recvErr:
 			reapIfAbandoned()
 			if err != nil && !errors.Is(err, context.Canceled) {
@@ -658,6 +679,39 @@ func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv
 			}
 			resp.Surviving[name] = &serverv1.SurvivingProcesses{Pids: surviving}
 		}
+	}
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
+	return resp, nil
+}
+
+// Detach disconnects a session's clients, leaving the session running.
+//
+// Resolved against live sessions only, and a name the store knows but the registry does not is not an
+// error: a session with no server-side presence has no clients to detach, so the request is already
+// satisfied. Reporting zero rather than failing is what lets a caller detach a set of sessions without
+// first checking which of them anyone is watching.
+func (s *Service) Detach(
+	_ context.Context, req *serverv1.DetachRequest,
+) (*serverv1.DetachResponse, error) {
+	resp := &serverv1.DetachResponse{
+		Detached: make(map[string]uint32),
+		Errors:   make(map[string]string),
+	}
+	for _, name := range req.Sessions {
+		sess, live := s.mgr.Get(name)
+		if !live {
+			// Distinguished from a name that does not exist at all, which is worth an error: asking to
+			// detach something never created is a mistake, while asking to detach an idle session is not.
+			if _, err := s.mgr.store.Get(context.Background(), name); err != nil {
+				resp.Errors[name] = trimNamePrefix(err.Error(), name)
+				continue
+			}
+			resp.Detached[name] = 0
+			continue
+		}
+		resp.Detached[name] = uint32(sess.EvictClients())
 	}
 	if len(resp.Errors) == 0 {
 		resp.Errors = nil
