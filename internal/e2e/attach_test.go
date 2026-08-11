@@ -135,6 +135,32 @@ func (c *ptyClient) detachKey() {
 	}
 }
 
+// waitExit blocks until the client process has exited.
+//
+// Distinct from waiting for the session to report zero clients, and both are needed: the server
+// deregisters a client before the process is gone, so a client that was told to detach and then
+// reconnected would pass the count check while still running. That is exactly the failure mode of the
+// client treating a server-initiated close as an outage, so the process itself has to be observed.
+//
+// Waited on a goroutine because Wait blocks, and the cleanup registered by attachOnPty also calls it;
+// a second Wait on an already-reaped process returns an error rather than hanging, which is why the
+// result is ignored here.
+func (c *ptyClient) waitExit(timeout time.Duration) {
+	c.t.Helper()
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = c.cmd.Process.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		c.t.Fatalf("the client process did not exit within %s after being asked to detach, "+
+			"so it is holding the terminal or has reconnected", timeout)
+	}
+}
+
 // kill terminates the client without letting it detach, which is what closing a window does.
 func (c *ptyClient) kill() {
 	c.t.Helper()

@@ -326,9 +326,12 @@ A caveat with real consequences: a full-screen program (an editor, a TUI) draws 
 ```bash
 cm kill <name>          # end a session and its shell
 cm kill --all           # every session cm knows
+cm detach <name>        # disconnect its clients, leave the shell running
 ```
 
 Kill the sessions you created when the work is done. A session left running holds a pty and a process.
+
+`cm detach` is the non-destructive one, and the only way an agent can disconnect a client it started: every other route to detaching is a keypress, which you cannot send to the client itself. Reach for it when a session should keep running but nothing should be watching it, and for a client you attached that is now in the way. Detaching a session with nothing attached reports `no clients attached` and is not an error, so it is safe to call without checking first.
 
 Do not `cm kill --all` or `cm server stop` unless you are certain nothing else is using cm: the user's own interactive sessions live in the same server, and stopping it or killing everything takes their work with it. Kill by name.
 

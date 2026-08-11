@@ -70,6 +70,17 @@ Detaching is `ctrl-\` by default. Set `detach_key` in the config file to change 
 `--detach-key` for one attachment, which is what you want when something outside cm already
 claims the key.
 
+`cm detach` does the same thing without a keypress, which covers the two cases a key cannot.
+The key reaches whichever client owns the real terminal, so from a nested attach it detaches
+the parent; naming the session says which one you meant. And a script or an agent has no
+keyboard at all.
+
+```
+cm detach          # let go of the session I am in
+cm detach inner    # a specific one
+cm detach --all    # every client the server has
+```
+
 ## Tags
 
 Tags group sessions that a name cannot, including every session cm named for itself:

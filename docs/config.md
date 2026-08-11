@@ -200,6 +200,17 @@ that better than a setting, since it is usually one window rather than every one
 Configurable because that combination is awkward or unreachable on some keyboard layouts, and
 disableable because a program running in the session may want the key itself.
 
+`cm detach [session]` is the same operation without a key, and it exists because two cases are
+outside what any key can do. A key is delivered to whichever client owns the real terminal, which is
+the outermost one, so from a nested attach it detaches the parent however it is bound. And a script
+or an agent driving sessions has no keyboard, so before this there was no route to detaching at all.
+
+Making the key itself pick a target was considered and rejected. It would have to choose from
+server-side state the user cannot see, so the key would stop meaning one thing, and a wrong guess
+against an owned session ends a shell rather than releasing it. Both outcomes of the current
+behavior are recoverable by pressing the key again; that asymmetry is what decided it. Naming the
+session is explicit and needs no rule.
+
 Whatever key is chosen is detected in three encodings: the raw control byte, the kitty keyboard
 protocol form, and xterm's modifyOtherKeys form. All three are necessary. A terminal with either
 protocol active reports a modified key as an escape sequence rather than a control byte, so

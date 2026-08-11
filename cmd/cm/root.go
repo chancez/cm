@@ -102,6 +102,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newTagCommand(g),
 		newSignalCommand(g),
 		newDoctorCommand(g),
+		newDetachCommand(g),
 		newKillCommand(g),
 		newServerCommand(g),
 		newSendCommand(g),
