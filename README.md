@@ -10,6 +10,9 @@ you talk to.
 cm deliberately provides no windows, tabs, or splits. Your terminal emulator already does
 those, and staying out of its way is why cm is small.
 
+Already using tmux or zmx? [docs/alternatives.md](docs/alternatives.md) compares them, including
+where cm is the wrong choice.
+
 ## Install
 
 Binaries are published for macOS and Linux on both arm64 and x86_64.
@@ -233,6 +236,7 @@ restore your screen and scrollback, and what lets several clients share one sess
 `docs/` is a set of decision records: what was chosen, what was measured, and what was
 rejected.
 
+- [alternatives.md](docs/alternatives.md) - tmux, zmx, and libghostty: what differs and why
 - [architecture.md](docs/architecture.md) - why three layers, and what each owns
 - [restore.md](docs/restore.md) - how screen restore works, and why each detail is there
 - [config.md](docs/config.md) - the config file, and the session environment problem

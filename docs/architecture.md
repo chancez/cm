@@ -219,11 +219,19 @@ emulator cannot work out for itself: cm owns the pty, so kitty only ever sees `c
 cannot tell a session sitting at a prompt from one in the middle of a build. It is what a close
 confirmation needs.
 
-Reading it from the output stream rather than asking the shell to maintain it is the difference from
-zmx, which needs `preexec`/`precmd` hooks writing a label. Two consequences beyond having no shell
-configuration to install. zmx restricts label values to `[a-zA-Z0-9-_.]`, so a command has to be
-mangled to fit and arrives lossy, while cm reports the command line as sent. And it works in a session
-whose shell has none of the user's dotfiles, since the signal comes from kitty's shell integration.
+Title and directory are not a difference from zmx: it reads the same two sequences, tracking cwd from
+OSC 7 since `85b045c` and replaying the title on attach, and it decodes the URI's host to avoid
+chdir'ing into a remote path exactly as cm does. Independent arrivals at the same answer, which is
+what the sequences being a standard is for.
+
+The command state is the difference, and it is narrower than "zmx needs hooks". zmx reads OSC 133 too,
+but only to rewrite `redraw=0` into prompt markers, the same fix cm applies; it does not derive a
+running command from them, so saying what a session is doing means labelling it with `zmx set`. That
+is a deliberately different design rather than a missing feature: a label is an explicit statement and
+survives whatever the shell does, where a derived state costs nothing to maintain but only exists when
+the shell emits the markers. cm pays for that with a session adopted by a new server reporting idle
+until its next command, and gains not restricting the value: a label value is limited to
+`[a-zA-Z0-9-_.]`, so a command line has to be mangled to fit, while cm reports it as sent.
 
 The markers are events rather than state, which shapes two decisions. The tracker is stateful and
 handles sequences split across reads, because a pty read is bounded by the kernel buffer rather than by
