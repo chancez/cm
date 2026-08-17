@@ -1054,8 +1054,8 @@ func TestRunSessionForwardsATerminalReplyWhole(t *testing.T) {
 // outcomeReconnect. The client then reattaches within a second and undoes the detach it was just asked to
 // perform, so the session looks like it ignored the command.
 //
-// Distinct from the acknowledgement of a detach this client asked for, which never reaches the main loop:
-// that one is drained by waitForDetachAck before runSession returns.
+// Distinct from the acknowledgement of a detach this client asked for. No client asks for one, so a
+// Detached arriving here is always the server's own initiative.
 func TestRunSessionLeavesWhenTheServerDetachesIt(t *testing.T) {
 	h := newHarness(t)
 	h.stream.opened("test", 0, nil)

@@ -288,10 +288,10 @@ func serveFakeShim(t *testing.T, svc shimv1.ShimService) string {
 
 // The server must acknowledge a detach that asked for one.
 //
-// A protocol guarantee, so it is asserted at this level rather than only through a client. It exists for
-// a client that cannot safely exit until it knows the server has seen its Detach: ttrpc sends are
-// asynchronous, so sending and returning tears the connection down with the message possibly still
-// queued.
+// No client asks any more: the acknowledgement existed so an owned session was not reaped when its
+// Detach was discarded with the connection, and ownership is gone. Kept as a protocol test rather than
+// deleted with the feature, because `no_ack` is a field a client can set either way and the false branch
+// would otherwise be unexercised -- a server that stopped replying entirely would look correct.
 func TestDetachIsAcknowledged(t *testing.T) {
 	mgr, st, _ := newTestManager(t, nil)
 	ctx := context.Background()

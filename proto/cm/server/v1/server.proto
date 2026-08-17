@@ -435,14 +435,14 @@ message Resize {
 message Detach {
   // The client will exit without reading the acknowledgement, so do not send one.
   //
-  // For a client that detaches as its last act and has nothing to do with the confirmation: `cm run -d`,
-  // `cm attach --no-attach`, and a follower being interrupted. Their connection is closing as the Detach
-  // goes out, so the reply loses a race about 40% of the time and the server logged a warning for behavior
-  // that was intended -- pure noise, and it made `cm doctor` report a healthy installation as having a
-  // problem.
+  // Every client sets this now: nothing waits for the reply, because nothing depends on the Detach
+  // arriving. It reads as vestigial and is not. The field is what keeps a warning out of the server's
+  // log for a client whose connection is closing as its Detach goes out -- `cm run -d`,
+  // `cm attach --no-attach`, and an interrupted follower all lose that race about 40% of the time, and
+  // warning about intended behavior made `cm doctor` report a healthy installation as having a problem.
   //
-  // An interactive client leaves this false and waits, so the server records a deliberate detach rather
-  // than a client that died.
+  // Kept as a field rather than assumed, so a future client that does want confirmation can ask without
+  // reviving the protocol. See docs/architecture.md for what the acknowledgement originally protected.
   bool no_ack = 1;
 }
 

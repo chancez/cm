@@ -385,8 +385,8 @@ func runSession(
 			// read as the server having gone away, which returns outcomeReconnect. The client would then
 			// reattach within a second and silently undo the detach it was just asked to perform.
 			//
-			// A solicited one never reaches here, since the detach path drains it through
-			// waitForDetachAck before returning.
+			// Always unsolicited, since no client asks for an acknowledgement any more: every Detach
+			// this client sends sets no_ack, so the server never replies to one.
 			if msg.resp.GetDetached() != nil {
 				result.Detached = true
 				return outcomeDone, nil
@@ -448,15 +448,13 @@ func runSession(
 						},
 					})
 				}
-				// Tell the server this was deliberate, and wait for it to say so.
+				// Tell the server this was deliberate, and do not wait to hear back: nothing is at
+				// risk if the message is discarded by the connection closing behind it.
 				_ = stream.Send(&serverv1.AttachRequest{
 					Event: &serverv1.AttachRequest_Detach{
-						Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
+						Detach: &serverv1.Detach{NoAck: true},
 					},
 				})
-				if wantsDetachAck(opts) {
-					waitForDetachAck(out)
-				}
 				result.Detached = true
 				return outcomeDone, nil
 			}
@@ -512,12 +510,9 @@ func runSession(
 			// recorded as deliberate in the server's log rather than looking like a client that died.
 			_ = stream.Send(&serverv1.AttachRequest{
 				Event: &serverv1.AttachRequest_Detach{
-					Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
+					Detach: &serverv1.Detach{NoAck: true},
 				},
 			})
-			if wantsDetachAck(opts) {
-				waitForDetachAck(out)
-			}
 			result.Detached = true
 			return outcomeDone, nil
 		}
@@ -552,57 +547,9 @@ func dial(socketPath string) (transport.Conn, serverv1.ServerClient, error) {
 }
 
 // outMsg is one message from the server, or the error that ended the stream.
-//
-// At package scope rather than inside the attach loop so waitForDetachAck can take the channel.
 type outMsg struct {
 	resp *serverv1.AttachResponse
 	err  error
-}
-
-// detachAckTimeout bounds how long a detaching client waits for the server to confirm.
-//
-// Short, because this is a local socket and the only thing being waited on is one small message. A
-// bound at all, because a client that hangs on exit is worse than one that occasionally exits before
-// the acknowledgement arrives.
-const detachAckTimeout = 2 * time.Second
-
-// waitForDetachAck waits for the server to confirm a detach before the caller exits.
-//
-// ttrpc sends are asynchronous, so returning straight after Send closes the connection while the
-// message may still be queued, and the Detach is then discarded. Nothing is destroyed by that now
-// that a session cannot be owned, so this is about the server recording the detach as deliberate
-// rather than as a client that died.
-//
-// Drains other messages while waiting, since output can still be in flight, and gives up on timeout
-// or stream error rather than hanging.
-func waitForDetachAck(out <-chan outMsg) {
-	deadline := time.After(detachAckTimeout)
-	for {
-		select {
-		case msg, ok := <-out:
-			if !ok || msg.err != nil {
-				return
-			}
-			if msg.resp.GetDetached() != nil {
-				return
-			}
-		case <-deadline:
-			return
-		}
-	}
-}
-
-// wantsDetachAck reports whether this client should wait for the server to confirm a detach.
-//
-// Only an interactive client does. It used to be only an *owning* one, because the acknowledgement
-// existed to stop an owned session being reaped when its Detach was discarded with the connection.
-// Ownership is gone, so what is left is keeping the server's record of why the client left accurate.
-//
-// A client that detaches as its last act says so instead, and the server then skips the reply. `cm run
-// -d`, `cm attach --no-attach`, and an interrupted follower all lose the race about 40% of the time,
-// and warning about it made `cm doctor` report a healthy installation as having a problem.
-func wantsDetachAck(opts Options) bool {
-	return !opts.ReadOnly
 }
 
 // discardLogHandler drops every record, for a client that was given no logger.

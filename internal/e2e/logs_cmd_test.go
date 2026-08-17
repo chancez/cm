@@ -161,7 +161,8 @@ func TestLogsShimUnknownSession(t *testing.T) {
 // worse, it made doctor report log-warnings on an installation where nothing was wrong.
 //
 // Fixed by letting a client say it will not wait, so the server skips both the reply and the warning. The
-// log is quiet because nothing failed rather than because a genuine failure was downgraded.
+// log is quiet because nothing failed rather than because a genuine failure was downgraded. Every client
+// now says it will not wait, so this covers all of them rather than only the three above.
 //
 // Repeated, because the bug it guards against was probabilistic: one round would have passed more often than
 // not even before the fix. Even so, this test alone does not reliably catch a client that stops setting the

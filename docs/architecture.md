@@ -97,12 +97,37 @@ The database column was vestigial in a second way. Ownership lived on the attach
 session adopted after a server restart had none until its client reattached and said so again,
 which made the stored flag a write-only record of a past request. Nothing ever read it back.
 
-Removing it also removed the `sawDetach` flag. A dropped connection surfaces as a receive error
-*and* as a cancelled request context, racing each other, so a detach could not be inferred from
-how the stream ended and had to be recorded when the message arrived. Nothing consults the
-difference now.
+What its removal simplified, recorded because each part looks arbitrary alone:
+
+- The `sawDetach` flag. A dropped connection surfaces as a receive error *and* as a cancelled
+  request context, racing each other, so a detach could not be inferred from how the stream
+  ended and had to be recorded when the message arrived. Nothing consults the difference now.
+- The detach acknowledgement handshake. See below.
 
 A session outlives its client unconditionally, and `cm kill` is the only thing that ends one.
+
+### The detach acknowledgement, and why clients stopped waiting
+
+A client sending Detach used to wait for the server to confirm. ttrpc sends are asynchronous, so
+returning immediately tore the connection down with the message possibly still queued: the server
+then saw a client that had vanished without detaching and destroyed the owned session. Pressing
+ctrl-\ in a per-window session killed the work in it, the opposite of what detaching means. Only a
+real client on a real terminal found it, because every unit test drives the service through a fake
+stream whose `Send` completes synchronously.
+
+Ownership was the only consumer. With no session dying from a lost Detach, a discarded message
+costs nothing, so every client sets `no_ack` and none waits. What that leaves is the server's log
+recording a detach it never heard about as a client that died, which is a cosmetic difference in a
+diagnostic rather than something a user loses work to.
+
+`Detach.no_ack` is kept rather than removed, and reads as vestigial without this. It is what keeps
+a warning out of the log for a client whose connection is closing as its Detach goes out --
+measured at about 40% of runs, and warning about intended behavior made `cm doctor` report a
+healthy installation as having a problem.
+
+The server-to-client `Detached` message stays, and is now only ever the server's own initiative.
+`cm detach` needs it: without it an evicted client reads the clean close as the server going away
+and reconnects within a second, silently undoing the detach.
 
 ## Nested sessions work
 
