@@ -309,38 +309,3 @@ func followerOutput(stream *fakeAttachStream) string {
 	}
 	return got.String()
 }
-
-// A follower must not be able to end a session by claiming ownership, or watching a build could
-// destroy it.
-func TestReadOnlyClientCannotOwnSession(t *testing.T) {
-	mgr, st, _ := newTestManager(t, nil)
-	ctx := context.Background()
-
-	rec := startShimFor(t, shimConfigFor("ro-own", "echo READY; sleep 5"))
-	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if err := mgr.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-
-	svc := NewService(mgr)
-	// Both flags together, which is contradictory: a watcher claiming to own what it watches.
-	streamCtx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	stream := newFakeStream(streamCtx,
-		openReq(&serverv1.Open{
-			Session: "ro-own", Rows: 24, Cols: 80, ReadOnly: true, Own: true,
-		}),
-	)
-	_ = svc.Attach(streamCtx, stream)
-
-	// The session must survive the follower going away.
-	if _, live := mgr.Get("ro-own"); !live {
-		t.Error("a read-only client that claimed ownership ended the session on disconnect")
-	}
-	if _, err := st.Get(ctx, "ro-own"); err != nil {
-		t.Errorf("session record was removed: %v", err)
-	}
-}

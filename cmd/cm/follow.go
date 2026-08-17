@@ -374,12 +374,10 @@ func followSessionSignalling(
 // session with the caller's own options -- persistence, restore behavior, environment -- so what comes back is
 // what `cm attach` would have made.
 //
-// Detaches explicitly rather than dropping the connection, matching `cm run`. Not load-bearing here, and the
-// comment claimed otherwise until it was measured: an abandoned stream only destroys a session that is owned,
-// and Own is false below, so removing the detach changes nothing observable. Kept because it states the intent
-// -- this client is leaving on purpose -- and because the reason Own is false today is a choice rather than a
-// law, so a future change that made these sessions owned would otherwise turn a tidy exit into a destroyed
-// session.
+// Detaches explicitly rather than dropping the connection, matching `cm run`. Not load-bearing, and the
+// comment claimed otherwise until it was measured: no session dies from an abandoned stream, so removing
+// the detach changes nothing observable. Kept because it states the intent, that this client is leaving on
+// purpose.
 func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
 	// opts carries the logger already, since this is called from attach, which opens one.
 	if err := ensureServer(ctx, dirs); err != nil {
@@ -404,9 +402,6 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	// program that checks in the meantime gets a plausible answer rather than zeros.
 	open.Rows = 24
 	open.Cols = 80
-	// Never owned: an owning client ends its session on disconnect, and this disconnects immediately,
-	// which would defeat the point.
-	open.Own = false
 	// No repaint to receive, since nothing is being painted.
 	open.NoRestore = true
 

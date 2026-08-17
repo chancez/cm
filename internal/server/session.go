@@ -1448,9 +1448,8 @@ func (s *Session) setRestored(blob []byte) {
 
 // EvictClients asks every attached client to detach, returning how many were asked.
 //
-// The session keeps running, including an owned one. That is the whole point: this is a detach rather
-// than a kill, so the attach loop treats an eviction exactly as it treats the detach key, and ownership
-// does not reap. Getting that wrong would make `cm detach` destroy the sessions it was asked to release.
+// The session keeps running. That is the whole point: this is a detach rather than a kill, so the attach
+// loop treats an eviction exactly as it treats the detach key.
 //
 // Counted rather than reported as a bool because a session can hold several clients, and a caller
 // clearing a session wants to know whether one window or four just let go. Zero is a normal answer: a

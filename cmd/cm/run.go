@@ -216,11 +216,8 @@ func startRun(
 				Cwd:     opts.dir,
 				// A conventional size rather than none: a program that asks gets a plausible answer
 				// instead of zeros, and full-screen output is captured at a usable width.
-				Rows: 24,
-				Cols: 80,
-				// Never owned. An owning client ends its session on disconnect, and this client
-				// disconnects immediately by design.
-				Own:     false,
+				Rows:    24,
+				Cols:    80,
 				Persist: opts.persist,
 				// Set on the session rather than inherited, because the shim is spawned by the server:
 				// whatever the caller exported is not in the server's environment and so never reaches

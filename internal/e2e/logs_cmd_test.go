@@ -157,13 +157,11 @@ func TestLogsShimUnknownSession(t *testing.T) {
 // This was a real complaint. Three clients -- `cm run -d`, `cm attach --no-attach`, and an interrupted
 // follower -- send Detach as their last act and exit without reading the acknowledgement. The server's reply
 // then lost a race about 40% of the time, measured at 8 of 20 runs, and each failure logged a warning for
-// behavior that was entirely intended. The session was never at risk, since the flag protecting it is set
-// before the reply is attempted, so the warning was pure noise -- and worse, it made doctor report
-// log-warnings on an installation where nothing was wrong.
+// behavior that was entirely intended. No session was ever at risk, so the warning was pure noise -- and
+// worse, it made doctor report log-warnings on an installation where nothing was wrong.
 //
-// Fixed by letting a client say it will not wait, so the server skips both the reply and the warning. The log
-// is quiet because nothing failed, rather than because a genuine failure was downgraded: an owning interactive
-// client still asks for the acknowledgement and still warns if it does not arrive.
+// Fixed by letting a client say it will not wait, so the server skips both the reply and the warning. The
+// log is quiet because nothing failed rather than because a genuine failure was downgraded.
 //
 // Repeated, because the bug it guards against was probabilistic: one round would have passed more often than
 // not even before the fix. Even so, this test alone does not reliably catch a client that stops setting the
@@ -206,36 +204,5 @@ func TestOrdinaryUseLogsNoWarnings(t *testing.T) {
 	got, _ := e.doctor()
 	if slices.Contains(got.kinds(), "log-warnings") {
 		t.Errorf("doctor reports log-warnings for a healthy installation: %v", got.kinds())
-	}
-}
-
-// An owning interactive client still asks for the acknowledgement, and its session still survives a detach.
-//
-// The other half: the fix must not quiet the case the acknowledgement exists for. An owned session detached
-// deliberately has to survive, and that only works because the client waits for the server to confirm the
-// Detach was received rather than exiting into a torn-down connection.
-func TestOwningClientStillWaitsForTheDetachAck(t *testing.T) {
-	skipIfShort(t)
-	e := newEnv(t)
-
-	c := attachOnPty(t, e, "ownedsess", "--own", "--", "/bin/sh")
-	c.waitReady()
-	c.typeLine("echo READY_MARK")
-	c.waitForOutput("READY_MARK", 15*time.Second)
-
-	c.detachKey()
-	e.waitFor("the client to detach", 15*time.Second, func() bool {
-		s, ok := e.session("ownedsess")
-		return ok && s.Clients == 0
-	})
-
-	// Survives, which is what the acknowledgement protects: an owned session whose client vanished without
-	// detaching would have been destroyed.
-	s, ok := e.session("ownedsess")
-	if !ok {
-		t.Fatal("the owned session was destroyed by a deliberate detach")
-	}
-	if s.State != "running" {
-		t.Errorf("state = %q after detaching, want running", s.State)
 	}
 }

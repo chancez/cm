@@ -286,14 +286,12 @@ func serveFakeShim(t *testing.T, svc shimv1.ShimService) string {
 	return socket
 }
 
-// The server must acknowledge a detach.
+// The server must acknowledge a detach that asked for one.
 //
-// The client cannot safely exit until it knows the server has seen its Detach: ttrpc sends are
-// asynchronous, so a client that sends and returns tears the connection down with the message possibly
-// still queued. The server then treats it as a client that vanished, and destroys an owned session.
-//
-// Asserted at this level as well as end to end because it is a protocol guarantee, and the e2e test
-// that found it needs a real terminal and a real process to run.
+// A protocol guarantee, so it is asserted at this level rather than only through a client. It exists for
+// a client that cannot safely exit until it knows the server has seen its Detach: ttrpc sends are
+// asynchronous, so sending and returning tears the connection down with the message possibly still
+// queued.
 func TestDetachIsAcknowledged(t *testing.T) {
 	mgr, st, _ := newTestManager(t, nil)
 	ctx := context.Background()
@@ -311,8 +309,7 @@ func TestDetachIsAcknowledged(t *testing.T) {
 	streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	stream := newFakeStream(streamCtx,
-		// Owned, since that is the case where a missed detach does damage.
-		openReq(&serverv1.Open{Session: "ackdetach", Rows: 24, Cols: 80, Own: true}),
+		openReq(&serverv1.Open{Session: "ackdetach", Rows: 24, Cols: 80}),
 		&serverv1.AttachRequest{Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{}}},
 	)
 	if err := svc.Attach(streamCtx, stream); err != nil && !errors.Is(err, io.EOF) {
@@ -330,11 +327,11 @@ func TestDetachIsAcknowledged(t *testing.T) {
 			len(stream.sent()))
 	}
 
-	// And the owned session survived, which is what the acknowledgement protects.
+	// And the session survived, which is what any detach must leave alone.
 	if sess, ok := mgr.Get("ackdetach"); !ok {
-		t.Error("the owned session was destroyed by a deliberate detach")
+		t.Error("the session was destroyed by a deliberate detach")
 	} else if ended, _ := sess.Ended(); ended {
-		t.Error("the owned session ended after a deliberate detach, want it still running")
+		t.Error("the session ended after a deliberate detach, want it still running")
 	}
 }
 
@@ -390,7 +387,7 @@ func TestDetachWithNoAckIsNotAcknowledged(t *testing.T) {
 		t.Errorf("server warned about a detach that asked for no acknowledgement:\n%s", logged.String())
 	}
 
-	// The session still survives, since the flag that protects it is set before the reply is considered.
+	// The session still survives, which no longer depends on the reply at all.
 	if sess, ok := mgr.Get("noack"); !ok {
 		t.Error("the session was destroyed by a detach that wanted no acknowledgement")
 	} else if ended, _ := sess.Ended(); ended {

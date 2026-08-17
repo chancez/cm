@@ -401,8 +401,8 @@ func TestAttachStopsOnContextCancelDuringAnOutage(t *testing.T) {
 
 // Options are sent on every connection, not just the first.
 //
-// A reconnect that dropped them would silently change the attachment: a read-only watcher would become a
-// writer, and an owned session would stop being owned and outlive its client.
+// A reconnect that dropped them would silently change the attachment: a read-only watcher would become
+// a writer, and a session would lose the restore behavior and tags it was opened with.
 func TestAttachResendsOptionsOnReconnect(t *testing.T) {
 	svc := &stubService{handle: func(n int, srv serverv1.Server_AttachServer) error {
 		if n == 1 {
@@ -420,8 +420,8 @@ func TestAttachResendsOptionsOnReconnect(t *testing.T) {
 	}}
 	socket := serveStub(t, svc)
 	tty, opts := attachOpts(t, socket)
-	opts.Own = true
 	opts.ReadOnly = true
+	opts.NoRestore = true
 
 	if _, err := Attach(context.Background(), tty, opts); err != nil {
 		t.Fatalf("Attach() error = %v", err)
@@ -432,8 +432,8 @@ func TestAttachResendsOptionsOnReconnect(t *testing.T) {
 		t.Fatalf("got %d Open messages, want 2", len(opens))
 	}
 	for i, open := range opens {
-		if !open.Own {
-			t.Errorf("Open %d has Own = false, want it preserved across the reconnect", i+1)
+		if !open.NoRestore {
+			t.Errorf("Open %d has NoRestore = false, want it preserved across the reconnect", i+1)
 		}
 		if !open.ReadOnly {
 			t.Errorf("Open %d has ReadOnly = false, want it preserved across the reconnect", i+1)

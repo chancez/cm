@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -37,7 +39,6 @@ func sampleSession(name string) Session {
 		Title:      "zsh",
 		Rows:       40,
 		Cols:       120,
-		Owned:      true,
 		Env:        map[string]string{"KITTY_LISTEN_ON": "unix:/tmp/kitty-1", "TERM": "xterm-kitty"},
 		Tags:       map[string]string{"project": "cm", "role": "reviewer", "review": ""},
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
@@ -476,6 +477,74 @@ func TestReopenPreservesSessions(t *testing.T) {
 	if next != "kitty.2" {
 		t.Errorf("NextName() after reopen = %q, want %q: the counter must survive restart",
 			next, "kitty.2")
+	}
+}
+
+// A database written by an older cm must survive the upgrade with its sessions readable.
+//
+// This is the case no other test reaches: every one of them starts from a fresh database, which
+// applies the whole migration list at once and so exercises the end state rather than the path to
+// it. A migration that fails on a real installation, or drops a column something still selects,
+// presents as every existing session vanishing on upgrade while a fresh install looks perfect.
+//
+// Built by applying every migration but the last, which is what the previous release's binary
+// would have left behind, then opening the store normally so the final one runs against it.
+func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cm.db")
+	ctx := context.Background()
+
+	// The previous schema, applied the way migrate does, including the version it would have
+	// recorded so the real Open below picks up exactly where that binary left off.
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	prior := migrations[:len(migrations)-1]
+	for i, m := range prior {
+		if _, err := old.ExecContext(ctx, m); err != nil {
+			t.Fatalf("applying migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := old.ExecContext(ctx,
+		fmt.Sprintf("PRAGMA user_version = %d", len(prior))); err != nil {
+		t.Fatalf("recording the prior schema version: %v", err)
+	}
+	// A row with the column this migration drops, since a database that never had one set would
+	// let a broken migration pass.
+	if _, err := old.ExecContext(ctx, `
+		INSERT INTO sessions (name, shim_socket, log_path, state, owned, created_at, updated_at)
+		VALUES ('old', '/run/cm/shim-old.sock', '', 'running', 1, 1700000000000, 1700000000000)`,
+	); err != nil {
+		t.Fatalf("inserting a row under the prior schema: %v", err)
+	}
+	old.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() on a database from the previous schema error = %v", err)
+	}
+	defer s.Close()
+
+	got, err := s.Get(ctx, "old")
+	if err != nil {
+		t.Fatalf("Get() after the upgrade error = %v", err)
+	}
+	want := Session{
+		Name:       "old",
+		ShimSocket: "/run/cm/shim-old.sock",
+		State:      StateRunning,
+		CreatedAt:  time.UnixMilli(1_700_000_000_000),
+		UpdatedAt:  time.UnixMilli(1_700_000_000_000),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after upgrading from the previous schema Get() = %+v\nwant %+v", got, want)
+	}
+
+	// And the upgraded database still works for writes, not just reads: a migration that left the
+	// table in a state INSERT rejects would otherwise pass the assertion above.
+	if err := s.Create(ctx, sampleSession("fresh")); err != nil {
+		t.Errorf("Create() on an upgraded database error = %v", err)
 	}
 }
 

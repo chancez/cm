@@ -95,9 +95,6 @@ type Session struct {
 	Title   string
 	Rows    int
 	Cols    int
-	// Owned records that a client claimed this session, so losing that client's
-	// connection without an explicit detach should end the session.
-	Owned bool
 	// PersistRequested records that persistence was asked for, rather than turned on to capture a
 	// command's output.
 	//
@@ -215,5 +212,16 @@ var migrations = []string{
 	// the thousands.
 	`
 	ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT '';
+	`,
+
+	// Drop the ownership flag, which recorded that a client asked for its session to end when its
+	// connection dropped without a detach.
+	//
+	// Dropped rather than left in place because it was never read back: ownership lived on the
+	// attachment, so a session adopted after a server restart had none until its client reattached
+	// and said so again, which made the column a write-only record of a request rather than state.
+	// Removed with the flag itself; see docs/architecture.md for why the feature went.
+	`
+	ALTER TABLE sessions DROP COLUMN owned;
 	`,
 }

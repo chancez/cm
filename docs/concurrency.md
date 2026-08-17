@@ -99,9 +99,9 @@ they lived between processes. `internal/e2e` exists for that class.
 - A build without cgo could not create a session at all, since the fault was in wiring that only
   exists in `main`.
 
-Writing those tests then found three more: a server deleting its successor's socket on restart, an
-owned session being destroyed by a deliberate detach, and `cm run` output not being readable after the
-command exited.
+Writing those tests then found three more: a server deleting its successor's socket on restart, a
+session being destroyed by a deliberate detach back when a session could be owned, and `cm run` output
+not being readable after the command exited.
 
 The detach one is the clearest argument for driving a real client. The client sent Detach and returned,
 but ttrpc sends are asynchronous, so closing the connection discarded the message. Every unit test

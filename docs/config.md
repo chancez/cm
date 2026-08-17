@@ -206,10 +206,14 @@ the outermost one, so from a nested attach it detaches the parent however it is 
 or an agent driving sessions has no keyboard, so before this there was no route to detaching at all.
 
 Making the key itself pick a target was considered and rejected. It would have to choose from
-server-side state the user cannot see, so the key would stop meaning one thing, and a wrong guess
-against an owned session ends a shell rather than releasing it. Both outcomes of the current
-behavior are recoverable by pressing the key again; that asymmetry is what decided it. Naming the
-session is explicit and needs no rule.
+server-side state the user cannot see, so the key would stop meaning one thing, while both outcomes
+of the current behavior are recoverable by pressing it again. Naming the session is explicit and
+needs no rule.
+
+The argument used to be sharper than that, and is recorded because the reasoning changed rather
+than the decision: while sessions could be owned, a wrong guess ended a shell instead of releasing
+it, so the two options were not equally recoverable. Ownership is gone, so a wrong guess now only
+detaches the wrong client. The predictability argument is what still decides it.
 
 Whatever key is chosen is detected in three encodings: the raw control byte, the kitty keyboard
 protocol form, and xterm's modifyOtherKeys form. All three are necessary. A terminal with either

@@ -79,8 +79,8 @@ service Server {
   // The detach key covers the interactive case and cannot cover this one. A key is delivered to
   // whichever client owns the real terminal, which is the outermost one, so from a nested attach it
   // detaches the parent rather than the child. Adding a rule to guess which one the user meant was
-  // considered and rejected: the target would depend on server state the user cannot see, and a wrong
-  // guess against an owned session ends a shell rather than merely detaching from it.
+  // considered and rejected: the target would depend on server state the user cannot see, so the key
+  // would stop meaning one thing.
   //
   // The other caller has no keyboard at all. An agent that started a client had no way to disconnect
   // it, since every existing route to detaching is a keystroke.
@@ -339,14 +339,10 @@ message Open {
   // so it wants the bytes it missed, not a fresh repaint. Absent on a first attach.
   optional uint64 resume_from_seq = 6;
 
-  // Take ownership of the session: if this client's connection drops without sending a
-  // Detach, the server terminates the session.
-  //
-  // This is what makes per-window sessions work without external cleanup. Closing a
-  // terminal window kills its session, while detaching deliberately, or the server
-  // restarting, leaves it running. Distinguishing those cases is exactly what a terminal
-  // emulator cannot do reliably from the outside.
-  bool own = 7;
+  // Field 7 was `own`, which ended the session when this client's connection dropped without a
+  // Detach. Removed rather than reused: see docs/architecture.md for why a server-side flag cannot
+  // express per-window lifetime.
+  reserved 7;
 
   // Attach without sending input or affecting sizing: a read-only follower.
   bool read_only = 8;
@@ -434,21 +430,19 @@ message Resize {
   uint32 y_pixel = 4;
 }
 
-// Detach ends this client's attachment without terminating the session. Sending it
-// explicitly is what distinguishes leaving a session from losing the connection, so an
-// owning client's session survives a deliberate detach.
+// Detach ends this client's attachment without terminating the session. Sending it explicitly is
+// what distinguishes leaving a session from losing the connection, which the server records.
 message Detach {
   // The client will exit without reading the acknowledgement, so do not send one.
   //
   // For a client that detaches as its last act and has nothing to do with the confirmation: `cm run -d`,
   // `cm attach --no-attach`, and a follower being interrupted. Their connection is closing as the Detach
   // goes out, so the reply loses a race about 40% of the time and the server logged a warning for behavior
-  // that was intended. The session was never at risk -- the flag that protects it is set before the reply is
-  // attempted -- so the warning was pure noise, and it made `cm doctor` report a healthy installation as
-  // having a problem.
+  // that was intended -- pure noise, and it made `cm doctor` report a healthy installation as having a
+  // problem.
   //
-  // An interactive client leaves this false and waits, because for an owned session the reply is what
-  // guarantees the Detach was transmitted rather than discarded with the connection.
+  // An interactive client leaves this false and waits, so the server records a deliberate detach rather
+  // than a client that died.
   bool no_ack = 1;
 }
 

@@ -194,8 +194,6 @@ func (c *ptyClient) waitForOutput(want string, timeout time.Duration) string {
 func TestAttachDetachReattachRepaintsScreen(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
-	// The repainted screen comes from the emulator serializing terminal state, so this test is about
-	// rendering. The ownership tests below are not, and deliberately have no such guard.
 
 	c := attachOnPty(t, e, "paint", "--", "/bin/sh")
 	c.waitReady()
@@ -227,8 +225,9 @@ func TestAttachDetachReattachRepaintsScreen(t *testing.T) {
 
 // A session must outlive the terminal its client was running in.
 //
-// Killing the client without a detach is what closing a terminal window does. Without --own the
-// session survives, which is what makes reopening a terminal restore the work in it.
+// Killing the client without a detach is what closing a terminal window does. The session survives it,
+// which is what makes reopening a terminal restore the work in it. There was once an --own flag that
+// made this case end the session instead; nothing does now, so a lost client is never fatal.
 func TestSessionSurvivesClientBeingKilled(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
@@ -247,63 +246,6 @@ func TestSessionSurvivesClientBeingKilled(t *testing.T) {
 	})
 	if s, ok := e.session("orphan"); !ok || s.State != "running" {
 		t.Errorf("session after the client was killed = %+v (found=%v), want it still running", s, ok)
-	}
-}
-
-// An owned session must end when its client vanishes without detaching.
-//
-// The mirror of the test above, and the distinction the --own flag exists to draw: a session created
-// for a particular window should not outlive that window, while a session the user detached from
-// should. Getting this wrong in either direction is bad, so both need asserting.
-func TestOwnedSessionEndsWhenItsClientVanishes(t *testing.T) {
-	skipIfShort(t)
-	e := newEnv(t)
-
-	c := attachOnPty(t, e, "owned", "--own", "--", "/bin/sh")
-	c.waitReady()
-	c.typeLine("echo OWNED_READY")
-	c.waitForOutput("OWNED_READY", 15*time.Second)
-
-	c.kill()
-
-	e.waitFor("the owned session to end", 15*time.Second, func() bool {
-		s, ok := e.session("owned")
-		return !ok || s.State != "running"
-	})
-}
-
-// Detaching deliberately must leave an owned session running.
-//
-// The third case, and the one that makes ownership useful rather than merely destructive: ctrl-\ and a
-// closed window look similar from the server's side, and telling them apart is the whole basis of the
-// flag.
-//
-// This found a real bug, and only a real client on a real terminal could. The client sent Detach and
-// returned immediately, but ttrpc sends are asynchronous, so closing the connection discarded the
-// message: the server saw a client that vanished without detaching and destroyed the session. Every
-// unit test drives the service with a fake stream whose Send completes synchronously, so none of them
-// could see it. The user-visible effect was that pressing ctrl-\ in a per-window session killed the
-// work in it, which is the exact opposite of what detaching means.
-func TestOwnedSessionSurvivesADeliberateDetach(t *testing.T) {
-	skipIfShort(t)
-	e := newEnv(t)
-
-	c := attachOnPty(t, e, "kept", "--own", "--", "/bin/sh")
-	c.waitReady()
-	c.typeLine("echo KEPT_READY")
-	c.waitForOutput("KEPT_READY", 15*time.Second)
-
-	c.detachKey()
-	e.waitFor("the client to detach", 10*time.Second, func() bool {
-		s, ok := e.session("kept")
-		return ok && s.Clients == 0
-	})
-
-	// Give any mistaken reap a chance to happen before declaring success, or the test would pass simply
-	// by asking too early.
-	time.Sleep(500 * time.Millisecond)
-	if s, ok := e.session("kept"); !ok || s.State != "running" {
-		t.Errorf("owned session after a deliberate detach = %+v (found=%v), want it running", s, ok)
 	}
 }
 

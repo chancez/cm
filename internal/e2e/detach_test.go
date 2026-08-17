@@ -58,48 +58,6 @@ func TestDetachCommandDisconnectsAClient(t *testing.T) {
 	c2.waitForOutput("DETACH_MARKER", 15*time.Second)
 }
 
-// An owned session must survive `cm detach`, which is the case that would turn a detach into a kill.
-//
-// --own means "end this session if my client disconnects without detaching", so an eviction that the
-// server mistook for a disconnect would destroy exactly the session the caller asked to release. That is
-// the worst failure this command could have, so it is asserted end to end as well as at the seam.
-func TestDetachCommandLeavesAnOwnedSessionRunning(t *testing.T) {
-	skipIfShort(t)
-	e := newEnv(t)
-
-	c := attachOnPty(t, e, "owned", "--own", "--", "/bin/sh")
-	c.waitReady()
-	c.typeLine("echo OWNED_MARKER")
-	c.waitForOutput("OWNED_MARKER", 15*time.Second)
-
-	e.waitFor("the owning client to attach", 10*time.Second, func() bool {
-		s, ok := e.session("owned")
-		return ok && s.Clients == 1
-	})
-
-	if got := e.run("detach", "owned"); got.code != 0 {
-		t.Fatalf("cm detach exited %d: %s", got.code, got.stderr)
-	}
-	c.waitExit(10 * time.Second)
-
-	// Given a moment for a reap to happen if it were going to. Without this the assertion could pass by
-	// reading the session before the server got round to destroying it, which is the same false pass as
-	// asserting on state that has not settled.
-	e.waitFor("the client to be disconnected", 10*time.Second, func() bool {
-		s, ok := e.session("owned")
-		return ok && s.Clients == 0
-	})
-	time.Sleep(500 * time.Millisecond)
-
-	s, ok := e.session("owned")
-	if !ok {
-		t.Fatal("the owned session was destroyed by cm detach, want it still running")
-	}
-	if s.State != "running" {
-		t.Errorf("state = %q, want running: cm detach must not reap an owned session", s.State)
-	}
-}
-
 // A bare `cm detach` inside a session detaches that session.
 //
 // The shape a keybinding or a shell alias uses, and it takes the CM_SESSION path rather than an

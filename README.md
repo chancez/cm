@@ -63,9 +63,8 @@ cm attach work --detach-key ctrl-]
 
 Reusing a name reuses the session, so a command that creates one is safe to re-run.
 
-`--own` ends the session when the client disconnects *without* detaching. Combined with
-server-allocated names, that gives a terminal emulator one session per window that cleans
-itself up when the window closes, while an explicit detach still leaves the shell running.
+A session outlives the client attached to it, however that client goes away: detaching, closing
+the window, or the process being killed all leave the shell running. Ending one is `cm kill`.
 Attaching from inside a session creates a nested session rather than hijacking the window you
 ran it from.
 

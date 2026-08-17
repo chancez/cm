@@ -10,20 +10,13 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
-// An evicted client must leave, and its session must survive even when it owned it.
+// An evicted client must leave, and its session must survive.
 //
 // This is the property the whole command rests on, and getting it wrong turns a detach into a kill.
-// Ownership means "this session exists for my window", so a client that vanishes without detaching ends
-// the session, and an eviction must not be mistaken for one.
-//
-// What this catches, stated precisely, because the obvious mutation does not fail: removing the
-// sawDetach store alone leaves the test passing, since the eviction case returns without consulting the
-// flag. It fails when the eviction path also reaps, which is the shape the bug would really take -- an
-// eviction routed into the disconnect handling below it. Both mutations together were measured: the test
-// reports "the owned session ended after an eviction".
-//
-// Owned deliberately, since an unowned session survives either way and would pass while broken.
-func TestEvictedClientLeavesAndOwnedSessionSurvives(t *testing.T) {
+// Weaker than it was: while sessions could be owned, an eviction mistaken for a client that vanished
+// destroyed the shell, and this test was the seam-level guard for that. Nothing kills a session on
+// disconnect now, so what remains to assert is that the attach returns and the client is told why.
+func TestEvictedClientLeavesAndSessionSurvives(t *testing.T) {
 	mgr, st, _ := newTestManager(t, nil)
 	ctx := context.Background()
 
@@ -42,7 +35,7 @@ func TestEvictedClientLeavesAndOwnedSessionSurvives(t *testing.T) {
 	// Held open, so the attachment is still live when the eviction arrives. A stream that ended would
 	// detach on its own and the test would pass without exercising anything.
 	stream := newHeldFakeStream(streamCtx,
-		openReq(&serverv1.Open{Session: "evictown", Rows: 24, Cols: 80, Own: true}),
+		openReq(&serverv1.Open{Session: "evictown", Rows: 24, Cols: 80}),
 	)
 
 	attachDone := make(chan error, 1)
@@ -82,9 +75,9 @@ func TestEvictedClientLeavesAndOwnedSessionSurvives(t *testing.T) {
 
 	// The session survived, which is the difference between a detach and a kill.
 	if sess, ok := mgr.Get("evictown"); !ok {
-		t.Error("the owned session was destroyed by an eviction, want it still running")
+		t.Error("the session was destroyed by an eviction, want it still running")
 	} else if ended, _ := sess.Ended(); ended {
-		t.Error("the owned session ended after an eviction, want it still running")
+		t.Error("the session ended after an eviction, want it still running")
 	}
 }
 

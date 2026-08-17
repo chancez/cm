@@ -15,7 +15,6 @@ import (
 // exactly the test that would have passed while that was broken.
 func TestOptionsOpenCarriesEveryField(t *testing.T) {
 	opts := Options{
-		Own:           true,
 		ReadOnly:      true,
 		Command:       []string{"/bin/zsh", "-l"},
 		Dir:           "/home/user/projects",
@@ -31,7 +30,6 @@ func TestOptionsOpenCarriesEveryField(t *testing.T) {
 	got := opts.Open("work")
 	want := &serverv1.Open{
 		Session:       "work",
-		Own:           true,
 		ReadOnly:      true,
 		Command:       []string{"/bin/zsh", "-l"},
 		Cwd:           "/home/user/projects",
@@ -76,7 +74,6 @@ func TestOptionsOpenSetsEveryWireField(t *testing.T) {
 
 	// Every field set to something non-zero, so a field the mapping forgets stays zero and is caught.
 	opts := Options{
-		Own:           true,
 		ReadOnly:      true,
 		Command:       []string{"/bin/zsh"},
 		Dir:           "/tmp",

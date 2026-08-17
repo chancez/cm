@@ -11,7 +11,7 @@ import (
 )
 
 const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
-	state, exit_code, command, cwd, title, rows, cols, owned, created_at, updated_at, env,
+	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags`
 
 // Create inserts a session record.
@@ -30,10 +30,10 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
-		sess.Cwd, sess.Title, sess.Rows, sess.Cols, sess.Owned,
+		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
 		sess.PersistRequested, encodeStringMap(sess.Tags),
 	)
@@ -107,7 +107,6 @@ type Update struct {
 	Title    *string
 	Rows     *int
 	Cols     *int
-	Owned    *bool
 	Env      map[string]string
 	// Tags replaces the session's whole tag set rather than merging into it, so removing a tag is
 	// expressible. A nil map leaves them alone; an empty but non-nil map clears them, which is what
@@ -156,9 +155,6 @@ func (s *Store) Apply(ctx context.Context, name string, u Update) error {
 	}
 	if u.Cols != nil {
 		add("cols", *u.Cols)
-	}
-	if u.Owned != nil {
-		add("owned", *u.Owned)
 	}
 	if u.Env != nil {
 		add("env", encodeStringMap(u.Env))
@@ -259,7 +255,6 @@ func scanSession(sc scanner) (Session, error) {
 		state     string
 		created   int64
 		updated   int64
-		ownedFlag bool
 		envJSON   string
 		requested bool
 		tagsJSON  string
@@ -267,7 +262,7 @@ func scanSession(sc scanner) (Session, error) {
 	err := sc.Scan(
 		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
-		&sess.Rows, &sess.Cols, &ownedFlag, &created, &updated, &envJSON, &requested,
+		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON,
 	)
 	if err != nil {
@@ -277,7 +272,6 @@ func scanSession(sc scanner) (Session, error) {
 	sess.Tags = decodeStringMap(tagsJSON)
 	sess.LastSeq = uint64(lastSeq)
 	sess.State = State(state)
-	sess.Owned = ownedFlag
 	sess.PersistRequested = requested
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)

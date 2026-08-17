@@ -41,7 +41,6 @@ const (
 func (o Options) Open(session string) *serverv1.Open {
 	return &serverv1.Open{
 		Session:       session,
-		Own:           o.Own,
 		ReadOnly:      o.ReadOnly,
 		Command:       o.Command,
 		Cwd:           o.Dir,
@@ -61,9 +60,6 @@ type Options struct {
 	SocketPath string
 	// Session to attach to. Empty asks the server to allocate a name.
 	Session string
-	// Own makes the session end if this client disconnects without detaching, which is how
-	// a terminal emulator gets a session per window that is cleaned up on close.
-	Own bool
 	// ReadOnly follows the session without sending input.
 	ReadOnly bool
 	// Command overrides the shell when creating.
@@ -452,14 +448,7 @@ func runSession(
 						},
 					})
 				}
-				// Tell the server this was deliberate, so an owned session survives, and wait for it
-				// to say so.
-				//
-				// Waiting is not politeness. The send is asynchronous, so returning here tears down the
-				// connection before the message is transmitted: the server then sees a client that
-				// vanished without detaching and destroys the owned session, which is precisely the
-				// opposite of what the user asked for. Verified by adding a delay here, which made the
-				// session survive.
+				// Tell the server this was deliberate, and wait for it to say so.
 				_ = stream.Send(&serverv1.AttachRequest{
 					Event: &serverv1.AttachRequest_Detach{
 						Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
@@ -519,8 +508,8 @@ func runSession(
 			}
 
 		case <-ctx.Done():
-			// Interrupted, such as by SIGTERM. Detach rather than abandoning the stream so
-			// an owned session is not destroyed by the client being asked to stop.
+			// Interrupted, such as by SIGTERM. Detach rather than abandoning the stream, so the exit is
+			// recorded as deliberate in the server's log rather than looking like a client that died.
 			_ = stream.Send(&serverv1.AttachRequest{
 				Event: &serverv1.AttachRequest_Detach{
 					Detach: &serverv1.Detach{NoAck: !wantsDetachAck(opts)},
@@ -574,23 +563,18 @@ type outMsg struct {
 //
 // Short, because this is a local socket and the only thing being waited on is one small message. A
 // bound at all, because a client that hangs on exit is worse than one that occasionally exits before
-// the acknowledgement arrives: the flag the server sets on receiving Detach is what actually protects
-// the session, and this wait only ensures the message gets there.
+// the acknowledgement arrives.
 const detachAckTimeout = 2 * time.Second
 
 // waitForDetachAck waits for the server to confirm a detach before the caller exits.
 //
 // ttrpc sends are asynchronous, so returning straight after Send closes the connection while the
-// message may still be queued, and a discarded Detach means the server sees a client that vanished
-// without detaching, which for an owned session means destroying it.
+// message may still be queued, and the Detach is then discarded. Nothing is destroyed by that now
+// that a session cannot be owned, so this is about the server recording the detach as deliberate
+// rather than as a client that died.
 //
-// Measured honestly, the server's acknowledgement is what fixes that: replying forces the queued
-// Detach to be flushed, and the test passes with this wait removed as long as the reply is sent. This
-// is kept as the explicit half of the handshake, so the guarantee does not rest on a side effect of
-// the transport. Removing both halves fails the test.
-//
-// Drains other messages while waiting, since output can still be in flight, and gives up on timeout or
-// stream error rather than hanging.
+// Drains other messages while waiting, since output can still be in flight, and gives up on timeout
+// or stream error rather than hanging.
 func waitForDetachAck(out <-chan outMsg) {
 	deadline := time.After(detachAckTimeout)
 	for {
@@ -606,6 +590,19 @@ func waitForDetachAck(out <-chan outMsg) {
 			return
 		}
 	}
+}
+
+// wantsDetachAck reports whether this client should wait for the server to confirm a detach.
+//
+// Only an interactive client does. It used to be only an *owning* one, because the acknowledgement
+// existed to stop an owned session being reaped when its Detach was discarded with the connection.
+// Ownership is gone, so what is left is keeping the server's record of why the client left accurate.
+//
+// A client that detaches as its last act says so instead, and the server then skips the reply. `cm run
+// -d`, `cm attach --no-attach`, and an interrupted follower all lose the race about 40% of the time,
+// and warning about it made `cm doctor` report a healthy installation as having a problem.
+func wantsDetachAck(opts Options) bool {
+	return !opts.ReadOnly
 }
 
 // discardLogHandler drops every record, for a client that was given no logger.
@@ -628,18 +625,4 @@ func resumeFromValue(p *uint64) int64 {
 		return -1
 	}
 	return int64(*p)
-}
-
-// wantsDetachAck reports whether this client should wait for the server to confirm a detach.
-//
-// Only an owning client needs to. The acknowledgement exists because the send is asynchronous: returning
-// immediately tears the connection down before the Detach is transmitted, so the server sees a client that
-// vanished without detaching and destroys the session it was asked to keep. That only destroys an *owned*
-// session, so a read-only follower has nothing to protect and no reason to pay for a round trip.
-//
-// Saying so explicitly, rather than letting the send fail, is what keeps the server's log quiet: a follower
-// that exits as its Detach goes out loses the race about 40% of the time, and warning about it made
-// `cm doctor` report a healthy installation as having a problem.
-func wantsDetachAck(opts Options) bool {
-	return opts.Own && !opts.ReadOnly
 }

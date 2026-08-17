@@ -110,9 +110,9 @@ whether anyone else will answer.
 **Where cm differs.**
 
 *A server between clients and sessions.* zmx has a daemon per session and no central server; cm adds
-one, and clients never talk to a shim. That buys one place for fanout, ownership, and terminal state,
-and it makes remote access a gateway concern rather than a matter of exposing every session. It costs
-a process and a hop.
+one, and clients never talk to a shim. That buys one place for fanout, session bookkeeping, and
+terminal state, and it makes remote access a gateway concern rather than a matter of exposing every
+session. It costs a process and a hop.
 
 *Nested sessions.* zmx treats its session environment variable as a request to *switch* the parent
 terminal's session, so attaching from inside a session hijacks the window you ran it from; an

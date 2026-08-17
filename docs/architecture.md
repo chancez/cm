@@ -18,7 +18,7 @@ One shim per session, not one for many. A crash or an upgrade then has a blast r
 session. zmx makes the same argument for its daemon-per-session choice.
 
 The server is the single entry point. Clients never talk to a shim, which keeps fanout,
-ownership, and terminal state in one place. It also means remote access, if it is ever built,
+session bookkeeping, and terminal state in one place. It also means remote access, if it is ever built,
 is a gateway concern rather than a matter of exposing every shim.
 
 ## Sequence numbers on both hops
@@ -53,7 +53,7 @@ adopt them.
 
 ## State: sqlite for metadata, files for bytes
 
-Session metadata lives in sqlite (`internal/store`): the registry, ownership, cwd, title,
+Session metadata lives in sqlite (`internal/store`): the registry, cwd, title,
 each session's shim socket, and the sequence number the server last consumed. Terminal output
 does not. It is high-volume, written sequentially, and only read back in order, so putting it
 in rows would place a SQL insert on the hot path.
@@ -70,19 +70,39 @@ it permanently. zmx learned the same lesson.
 Names come from a monotonic counter and are never reused, even after deletion. Reuse would let
 a client holding an old name silently reattach to an unrelated session.
 
-## Ownership, and implicit sessions
+## Ownership was removed, and why a server flag cannot express per-window lifetime
 
-A client may declare itself the owner of a session. If an owner's connection drops *without*
-an explicit detach, the server ends the session; an explicit detach leaves it running.
+There used to be an `--own` flag, setting `Open.own`. An owning client's connection dropping
+*without* an explicit detach ended the session; an explicit detach left it running. The claim
+was that this distinction is what a terminal emulator cannot determine from outside, so the
+server should draw it and per-window sessions would clean themselves up with no counter file
+and no `lsof`.
 
-That single distinction is what a terminal emulator cannot determine from outside, and it is
-why the existing kitty setup needs a latched flag plus a window-map check to guess at it.
-Combined with server-side name allocation, it gives per-window sessions that clean themselves
-up, with no counter file and no `lsof`.
+The claim was backwards, which is the part worth keeping. The emulator is the *only* thing that
+can tell a closed window from a quit, because it knows whether it is shutting down. The server
+sees one dropped connection either way. So the case ownership was built for is exactly the case
+it gets wrong: quitting kitty disconnects every client at once, and `--own` would destroy every
+session rather than leave them to be reattached, which is the entire point of running windows
+inside a multiplexer.
 
-Getting this right required handling both exit paths. A dropped connection surfaces as a
-receive error *and* as a cancelled request context, racing each other, so the detach is
-recorded as a flag when the message arrives rather than inferred from how the stream ended.
+The kitty integration this was built for therefore never used it. It reaps from a watcher, which
+fires on every way a window can close and can check `on_quit` and the window map to distinguish
+a deliberate close from teardown. Any integration needs that watcher regardless, and once it has
+one, `cm kill` from the watcher is strictly better: the decision is made where the information
+is. Nothing else ever asked for ownership -- `cm run` and `cm attach --no-attach` both set the
+field to false explicitly, since a client that disconnects by design would have destroyed its
+own session.
+
+The database column was vestigial in a second way. Ownership lived on the attachment, so a
+session adopted after a server restart had none until its client reattached and said so again,
+which made the stored flag a write-only record of a past request. Nothing ever read it back.
+
+Removing it also removed the `sawDetach` flag. A dropped connection surfaces as a receive error
+*and* as a cancelled request context, racing each other, so a detach could not be inferred from
+how the stream ended and had to be recorded when the message arrived. Nothing consults the
+difference now.
+
+A session outlives its client unconditionally, and `cm kill` is the only thing that ends one.
 
 ## Nested sessions work
 
@@ -151,8 +171,8 @@ though it were new.
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an
 upstream API break is one package to fix.
 
-The server holds terminal state behind an interface with an injected constructor, so fanout,
-reconnect, and ownership logic are testable without the emulator. The server's own tests use a
+The server holds terminal state behind an interface with an injected constructor, so fanout and
+reconnect logic are testable without the emulator. The server's own tests use a
 nil constructor for exactly that.
 
 cgo is required, and that is a deliberate reversal. There used to be a `!cgo` stub for this package

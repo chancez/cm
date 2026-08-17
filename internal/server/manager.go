@@ -520,9 +520,6 @@ type OpenOptions struct {
 	Dir string
 	// Env holds extra KEY=VALUE entries for a new session.
 	Env []string
-	// Owned records that the attaching client claims the session, so dropping its
-	// connection without detaching should end it.
-	Owned bool
 	// Persist requests that this session's content survive a reboot, regardless of whether its
 	// name matches the configured patterns.
 	Persist bool
@@ -749,7 +746,6 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Cwd:        opts.Dir,
 		Rows:       int(opts.Rows),
 		Cols:       int(opts.Cols),
-		Owned:      opts.Owned,
 		Env:        opts.ClientEnv,
 		Tags:       opts.Tags,
 		// Records why there is a log, which is what expiry keys off.

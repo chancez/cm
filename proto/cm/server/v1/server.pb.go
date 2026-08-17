@@ -1338,14 +1338,6 @@ type Open struct {
 	// client reconnecting after the server restarted: its terminal still shows the session,
 	// so it wants the bytes it missed, not a fresh repaint. Absent on a first attach.
 	ResumeFromSeq *uint64 `protobuf:"varint,6,opt,name=resume_from_seq,json=resumeFromSeq,proto3,oneof" json:"resume_from_seq,omitempty"`
-	// Take ownership of the session: if this client's connection drops without sending a
-	// Detach, the server terminates the session.
-	//
-	// This is what makes per-window sessions work without external cleanup. Closing a
-	// terminal window kills its session, while detaching deliberately, or the server
-	// restarting, leaves it running. Distinguishing those cases is exactly what a terminal
-	// emulator cannot do reliably from the outside.
-	Own bool `protobuf:"varint,7,opt,name=own,proto3" json:"own,omitempty"`
 	// Attach without sending input or affecting sizing: a read-only follower.
 	ReadOnly bool `protobuf:"varint,8,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
 	// Skip the screen repaint that normally opens an attachment, streaming only what happens from now on.
@@ -1483,13 +1475,6 @@ func (x *Open) GetResumeFromSeq() uint64 {
 		return *x.ResumeFromSeq
 	}
 	return 0
-}
-
-func (x *Open) GetOwn() bool {
-	if x != nil {
-		return x.Own
-	}
-	return false
 }
 
 func (x *Open) GetReadOnly() bool {
@@ -1681,9 +1666,8 @@ func (x *Resize) GetYPixel() uint32 {
 	return 0
 }
 
-// Detach ends this client's attachment without terminating the session. Sending it
-// explicitly is what distinguishes leaving a session from losing the connection, so an
-// owning client's session survives a deliberate detach.
+// Detach ends this client's attachment without terminating the session. Sending it explicitly is
+// what distinguishes leaving a session from losing the connection, which the server records.
 type Detach struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The client will exit without reading the acknowledgement, so do not send one.
@@ -1691,12 +1675,11 @@ type Detach struct {
 	// For a client that detaches as its last act and has nothing to do with the confirmation: `cm run -d`,
 	// `cm attach --no-attach`, and a follower being interrupted. Their connection is closing as the Detach
 	// goes out, so the reply loses a race about 40% of the time and the server logged a warning for behavior
-	// that was intended. The session was never at risk -- the flag that protects it is set before the reply is
-	// attempted -- so the warning was pure noise, and it made `cm doctor` report a healthy installation as
-	// having a problem.
+	// that was intended -- pure noise, and it made `cm doctor` report a healthy installation as having a
+	// problem.
 	//
-	// An interactive client leaves this false and waits, because for an owned session the reply is what
-	// guarantees the Detach was transmitted rather than discarded with the connection.
+	// An interactive client leaves this false and waits, so the server records a deliberate detach rather
+	// than a client that died.
 	NoAck         bool `protobuf:"varint,1,opt,name=no_ack,json=noAck,proto3" json:"no_ack,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3513,15 +3496,14 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xb9\x05\n" +
+	"\x05event\"\xad\x05\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
 	"\x04cols\x18\x03 \x01(\rR\x04cols\x12\x17\n" +
 	"\ax_pixel\x18\x04 \x01(\rR\x06xPixel\x12\x17\n" +
 	"\ay_pixel\x18\x05 \x01(\rR\x06yPixel\x12+\n" +
-	"\x0fresume_from_seq\x18\x06 \x01(\x04H\x00R\rresumeFromSeq\x88\x01\x01\x12\x10\n" +
-	"\x03own\x18\a \x01(\bR\x03own\x12\x1b\n" +
+	"\x0fresume_from_seq\x18\x06 \x01(\x04H\x00R\rresumeFromSeq\x88\x01\x01\x12\x1b\n" +
 	"\tread_only\x18\b \x01(\bR\breadOnly\x12\x1d\n" +
 	"\n" +
 	"no_restore\x18\x10 \x01(\bR\tnoRestore\x12\x18\n" +
@@ -3543,7 +3525,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
-	"\x10_resume_from_seq\"\x1b\n" +
+	"\x10_resume_from_seqJ\x04\b\a\x10\b\"\x1b\n" +
 	"\x05Input\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"b\n" +
 	"\x06Resize\x12\x12\n" +

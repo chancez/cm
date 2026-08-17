@@ -86,8 +86,8 @@ func TestConcurrentAttachDetachWhileSessionEnds(t *testing.T) {
 	if !ended {
 		t.Error("Ended() = false after Done() closed")
 	}
-	// Clients back to zero: every attachment that succeeded was also detached. A leak here is what keeps a
-	// session alive forever, or destroys an owned one early.
+	// Clients back to zero: every attachment that succeeded was also detached. A leak here is what leaves
+	// a session reporting watchers it does not have.
 	if n := sess.Clients(); n != 0 {
 		t.Errorf("Clients() = %d after every goroutine detached, want 0", n)
 	}

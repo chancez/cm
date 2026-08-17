@@ -24,7 +24,6 @@ import (
 
 func newAttachCommand(g *globals) *cobra.Command {
 	var (
-		own          bool
 		readOnly     bool
 		dir          string
 		setTitle     bool
@@ -113,7 +112,6 @@ receives it and the window closes instead of detaching.`,
 			opts := client.Options{
 				SocketPath: dirs.ServerSocket(),
 				Session:    session,
-				Own:        own,
 				ReadOnly:   readOnly,
 				Dir:        dir,
 				Command:    argsAfterDash(cmd, args),
@@ -160,8 +158,6 @@ receives it and the window closes instead of detaching.`,
 		},
 	}
 	f := cmd.Flags()
-	f.BoolVar(&own, "own", false,
-		"terminate the session if this client disconnects without detaching")
 	f.BoolVar(&readOnly, "read-only", false,
 		"follow the session without sending input")
 	f.StringVar(&dir, "dir", "", "working directory for a newly created session")

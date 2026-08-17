@@ -81,7 +81,6 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		Command:       open.Command,
 		Dir:           open.Cwd,
 		Env:           open.Env,
-		Owned:         open.Own && !open.ReadOnly,
 		ClientEnv:     open.ClientEnv,
 		Persist:       open.Persist,
 		CaptureOutput: open.CaptureOutput,
@@ -219,7 +218,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 
 	s.mgr.log.Info("client attached",
 		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
-		"read_only", open.ReadOnly, "owns", open.Own && !open.ReadOnly,
+		"read_only", open.ReadOnly,
 		"inside", open.InsideSession, "restore_bytes", len(att.restore))
 	reader := att.reader
 	defer func() {
@@ -261,30 +260,16 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		return err
 	}
 
-	// Whether a Detach was seen is the whole basis of session ownership: closing a terminal
-	// window ends an owned session, while detaching leaves it running.
-	//
-	// This is tracked as a flag rather than inferred from how the stream ended. A dropped
-	// connection surfaces as both a receive error and a cancelled request context, racing each
-	// other, so the exit path cannot tell a detach from a disconnect on its own.
-	var sawDetach atomic.Bool
+	// A detach and a dropped connection are the same outcome here: this client stops watching and
+	// the session keeps running. They were once distinguished, because an owned session ended when
+	// its client vanished without detaching, and telling the two apart needed a flag set on arrival
+	// rather than inferred from how the stream closed. Ownership is gone, so nothing consults the
+	// difference.
 	detached := make(chan struct{})
 	recvErr := make(chan error, 1)
 	go func() {
-		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, att.token, detached, &sawDetach)
+		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, att.token, detached)
 	}()
-
-	// reapIfAbandoned ends an owned session whose client vanished without detaching.
-	//
-	// A read-only client can never trigger this, however it asked. Ownership means "this session
-	// exists for my window", which contradicts watching someone else's, and honoring both flags
-	// together would let a follower destroy the session it was only observing.
-	owns := open.Own && !open.ReadOnly
-	reapIfAbandoned := func() {
-		if owns && !sawDetach.Load() {
-			s.reapOwned(sess)
-		}
-	}
 
 	// Metadata is forwarded so a terminal emulator can retitle a tab or open a new window in the
 	// session's directory. Subscribing before the loop means the current values arrive
@@ -364,24 +349,16 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			}
 
 		case <-detached:
-			// Deliberate detach: the session keeps running even if this client owns it.
+			// Deliberate detach: the session keeps running.
 			return nil
 
 		case <-att.evict:
-			// `cm detach` asked this client to let go. Treated exactly as the detach key is, and an owned
-			// session must survive: a detach that killed the sessions it was asked to release would be
-			// worse than having no command at all.
+			// `cm detach` asked this client to let go.
 			//
-			// Returning without calling reapIfAbandoned is what protects it here, since this is a
-			// deliberate release rather than a client that vanished. The flag is belt and braces for that:
-			// it is what the two paths below consult, so anything later that reaches them by another route
-			// still reads this as intentional. Verified by adding a reap to this case, which only destroys
-			// the session once the flag is also removed.
-			sawDetach.Store(true)
 			// Told before the stream closes, so the client can report "detached by request" rather than
 			// treating a server-initiated close as an outage and trying to reconnect. Failure is ignored:
-			// the client is going away regardless, and this is the same best-effort acknowledgement the
-			// recv loop sends.
+			// the client is going away regardless, and this is the same best-effort notice the recv loop
+			// sends.
 			_ = srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
 			})
@@ -389,17 +366,14 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return nil
 
 		case err := <-recvErr:
-			reapIfAbandoned()
 			if err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
 			return nil
 
 		case <-ctx.Done():
-			// The request context is cancelled when the connection drops, which races with the
-			// receive loop failing. Both have to honor ownership, or an owned session would
-			// survive a closed window roughly half the time depending on which fired first.
-			reapIfAbandoned()
+			// The request context is cancelled when the connection drops, which races with the receive
+			// loop failing. Either one ending this attachment is correct: the session outlives both.
 			return ctx.Err()
 		}
 	}
@@ -413,7 +387,6 @@ func (s *Service) recvLoop(
 	readOnly bool,
 	tok *attachToken,
 	detached chan<- struct{},
-	sawDetach *atomic.Bool,
 ) error {
 	for {
 		req, err := srv.Recv()
@@ -423,27 +396,20 @@ func (s *Service) recvLoop(
 
 		switch {
 		case req.GetDetach() != nil:
-			// Recorded before signalling, so the exit path cannot observe the close without also
-			// seeing the flag.
-			sawDetach.Store(true)
-			// Acknowledged before signalling, so the client can wait for confirmation rather than
-			// racing its own disconnect. A client that sent Detach and exited immediately had the
-			// message dropped, because the send is asynchronous and closing the connection discarded
-			// it, and the server then reaped the owned session it was asked to keep.
+			// Acknowledged before signalling, so a client that asks can wait for confirmation rather than
+			// racing its own disconnect.
 			//
 			// Skipped when the client said it will not wait. `cm run -d`, `cm attach --no-attach`, and an
-			// interrupted follower all detach as their last act and exit; their connection is closing as the
-			// Detach arrives, so the reply lost a race about 40% of the time and produced a warning for
-			// behavior that was intended. The session was never at risk, since sawDetach above is what
-			// protects it, so the warning was noise that also made `cm doctor` report a healthy installation
-			// as having a problem.
+			// interrupted follower all detach as their last act and exit; their connection is closing as
+			// the Detach arrives, so the reply lost a race about 40% of the time and produced a warning
+			// for behavior that was intended, which also made `cm doctor` report a healthy installation as
+			// having a problem.
 			if !req.GetDetach().NoAck {
 				if err := srv.Send(&serverv1.AttachResponse{
 					Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
 				}); err != nil {
-					// A client that asked for the acknowledgement and then vanished before it arrived. Worth
-					// a warning, unlike the case above: it means an interactive client lost its connection
-					// mid-detach, and for an owned session the flag above is the only thing that saved it.
+					// An interactive client that asked for the acknowledgement and lost its connection
+					// before it arrived, unlike the case above where not waiting was the intent.
 					s.mgr.log.Warn("acknowledging a detach failed",
 						"session", sess.name, "error", err)
 				}
@@ -519,21 +485,6 @@ func (s *Service) recvLoop(
 				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
 			}
 		}
-	}
-}
-
-// reapOwned ends a session whose owning client vanished.
-//
-// Uses a fresh context because the request context is already cancelled: it was the client
-// going away that triggered this.
-func (s *Service) reapOwned(sess *Session) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	s.mgr.log.Info("owning client vanished, ending session", "session", sess.name)
-	if _, err := s.mgr.Kill(ctx, sess.name, true, 0); err != nil {
-		// A session that should have been reaped and was not becomes a leak the user has to notice
-		// on their own, so it is logged even though nothing can be done here.
-		s.mgr.log.Error("reaping owned session failed", "session", sess.name, "error", err)
 	}
 }
 
