@@ -36,10 +36,25 @@ type Reader struct {
 //
 // A from beyond the log's end is clamped to the end rather than rejected, so a
 // subscriber that saw output the log has since forgotten, which can happen if the log
-// was reset, simply continues from the present.
+// was reset, simply continues from the present. That clamp is also flagged with Gap,
+// because the two situations it covers are indistinguishable from here and one of them
+// loses bytes.
 //
-// A from before the oldest retained byte is served from the oldest instead, and the
-// first chunk is flagged with Gap.
+// The benign case is a log that was reset behind the subscriber, where continuing from
+// the present is exactly right and there is nothing missing. The other is a position
+// expressed in a different numbering than this log's, which is a real defect and used to
+// be silent: a client resuming across a server restart asked for a position counted in
+// post-rewrite bytes while the new log began at the shim's count, so it was clamped
+// forward past output it never received. Whatever escape sequence straddled that point
+// arrived with its front sliced off, which renders as literal text and looks like a
+// terminal bug rather than a lost prefix.
+//
+// Flagging it does not repair the drift, and is not meant to. It converts "silently skip
+// bytes" into "tell the reader its view is discontinuous", which a client already knows
+// how to handle by resynchronizing rather than by continuing.
+//
+// A from before the oldest retained byte is served from the oldest instead, and is
+// likewise flagged with Gap.
 func (l *Log) Subscribe(from uint64) *Reader {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -52,7 +67,7 @@ func (l *Log) Subscribe(from uint64) *Reader {
 	if next < l.oldest {
 		next, gap = l.oldest, true
 	} else if next > end {
-		next = end
+		next, gap = end, true
 	}
 
 	// Prime the channel so a reader that already has data available does not wait for

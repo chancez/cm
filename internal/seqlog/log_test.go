@@ -180,14 +180,25 @@ func TestSubscribeBeyondEndClampsToPresent(t *testing.T) {
 		l := New(64)
 		l.Append([]byte("abc"))
 
-		// Ahead of the log: treated as caught up, not an error, and not a gap.
+		// Ahead of the log: served from the present rather than rejected, and flagged as a gap.
+		//
+		// The flag is the part that changed, and it changed because of a bug. This branch was written
+		// for a log that was reset behind a subscriber, where continuing from the present loses nothing
+		// and a gap would be a lie. But it also catches a position counted in a *different numbering
+		// space*, where output really is being skipped, and from inside the log the two are
+		// indistinguishable. A client resuming across a server restart hit exactly that: its position
+		// was in post-rewrite bytes while the new log began at the shim's count, so it was clamped
+		// forward past bytes it never received and an escape sequence lost its leading ESC.
+		//
+		// So the conservative answer is to flag both. A spurious gap costs a resynchronize; a missing
+		// one costs silent corruption that presents as a terminal bug.
 		r := l.Subscribe(999)
 		defer r.Close()
 		l.Append([]byte("xyz"))
 
 		got, gap := drain(t, r)
-		if got != "xyz" || gap {
-			t.Errorf("drain() = (%q, %v), want (%q, false)", got, gap, "xyz")
+		if got != "xyz" || !gap {
+			t.Errorf("drain() = (%q, %v), want (%q, true)", got, gap, "xyz")
 		}
 	})
 }
