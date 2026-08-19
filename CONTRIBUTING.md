@@ -77,7 +77,7 @@ and an already-running server keeps working on the old one until it is restarted
 ## Testing
 
 ```sh
-mise run check                                # fmt, vet, test
+mise run check                                # fmt, vet, test, validate the plugin manifests
 go test ./...                                 # everything
 go test -short ./...                          # skips e2e, which spawn real processes and ptys
 go test -race ./internal/... ./cmd/...

@@ -29,7 +29,7 @@ Out of scope, permanently: windows, tabs, splits. The terminal emulator does tho
 mise install          # pinned Go, Zig, protoc, buf, fish
 mise run libghostty   # builds libghostty-vt once, into third_party/ (slow, cached)
 mise run build        # -> bin/cm
-mise run check        # fmt, vet, test
+mise run check        # fmt, vet, test, validate the plugin manifests
 ```
 
 Tests:
@@ -90,6 +90,34 @@ symlink to it, so an agent in this repo picks these up. Read the relevant one ra
 orchestrating agents with it. It is deliberately not in `.agents/`: it teaches `cm attach`, `cm kill`,
 and `cm send` against whatever server is running, which is exactly what an agent developing cm must not
 do. If you are here to change cm, use the sandbox skill instead.
+
+`skills/cm/` is also distributed through the Claude Code plugin marketplace this repo declares, so it
+can be installed with `/plugin marketplace add chancez/cm` rather than copied by hand. Two files carry
+that, and the layout is the part worth understanding before changing either:
+
+- `.claude-plugin/marketplace.json` is the catalog. It must be at the repo root for
+  `/plugin marketplace add chancez/cm` to find it, and that location is Claude Code's requirement
+  rather than a choice.
+- `.claude-plugin/plugins/cm/` is the plugin, and holds `skills/cm` as a symlink to
+  `../../../../skills/cm` rather than a copy. Claude Code dereferences symlinks when it installs, so
+  users get real files, and there is only one SKILL.md in the repo to edit. If you move either
+  directory, fix that symlink: its `../` count is relative to where it sits.
+
+Everything Claude-specific lives under `.claude-plugin/` on purpose, including the nested
+`.claude-plugin/plugins/cm/.claude-plugin/plugin.json`, which reads oddly but installs correctly and
+is verified by a test. A top-level `plugins/` would look like a cm concept, and `.claude/` is worse:
+that directory is agent *configuration* in normal use, and here it already holds the
+`skills -> ../.agents/skills` symlink, so a distributable plugin sitting next to it would be read as
+part of this repo's own agent setup.
+
+The plugin is a subdirectory rather than the repo root, which is a size decision and was measured: a
+root source (`"source": "./"`) copies the whole checkout into every user's plugin cache, 2.6 MB against
+28 KB, and re-copies it on each update. It also puts `.agents/skills/` inside the installed plugin,
+which are the develop-on-cm skills and exactly what a user driving sessions must not get.
+
+`mise run check` validates both files, so a typo fails locally rather than at someone else's
+`/plugin install`. `claude plugin validate` only checks the catalog when pointed at the root: the
+plugin's own frontmatter needs a second run against the plugin directory, and the task does both.
 
 Neither covers a change needing a *real terminal*: attach, detach, screen restore, and the detach key
 depend on real rendering and real keypresses. Those need a throwaway terminal instance, never the one

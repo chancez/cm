@@ -93,9 +93,31 @@ run = "go fmt ./..."
 description = "Vet Go code"
 run = "go vet ./..."
 
+[tasks.validate-plugin]
+description = "Validate the plugin marketplace manifests"
+# The marketplace is how the cm skill reaches Claude Code users, and a broken manifest is invisible
+# here: nothing in this repo reads it, so the first symptom is someone else's `/plugin install`
+# failing. Cheap to check, and the check is the only thing standing between a stray comma and that.
+#
+# Two invocations, because they check different things. Pointed at the root, the validator reads
+# marketplace.json and each entry's plugin.json, but not the skills those plugins declare. Pointed at
+# the plugin directory, it also parses the SKILL.md frontmatter, which is where a bad `description:`
+# would otherwise load with no metadata and simply never trigger.
+#
+# Skipped rather than failed when claude is absent, so a contributor without it can still run `check`.
+run = """
+set -euo pipefail
+if ! command -v claude >/dev/null; then
+  echo "claude not installed, skipping plugin manifest validation"
+  exit 0
+fi
+claude plugin validate .
+claude plugin validate ./.claude-plugin/plugins/cm
+"""
+
 [tasks.check]
-description = "Format, vet, and test"
-depends = ["fmt", "vet", "test"]
+description = "Format, vet, test, and validate the plugin manifests"
+depends = ["fmt", "vet", "test", "validate-plugin"]
 
 [tasks.test-linux]
 description = "Run the tests on Linux in Docker, with libghostty"

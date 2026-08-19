@@ -141,7 +141,15 @@ documented contract rather than whatever the wire format happens to be. See
 [docs/config.md](docs/config.md#json-output).
 
 For a fuller guide to orchestrating work this way, including running other agents in sessions,
-see [skills/cm/SKILL.md](skills/cm/SKILL.md).
+see [skills/cm/SKILL.md](skills/cm/SKILL.md). Claude Code users can install it as a plugin
+rather than copying the file:
+
+```
+/plugin marketplace add chancez/cm
+/plugin install cm@cm
+```
+
+The skill teaches driving cm; it does not install the binary, so install cm itself first.
 
 ## Letting a program say what it is doing
 
