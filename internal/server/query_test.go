@@ -180,6 +180,60 @@ func TestReadOnlyFollowerDoesNotSuppressAnswers(t *testing.T) {
 	}
 }
 
+// A reservation that has not become an attachment must not suppress cm's own answers.
+//
+// Service.Attach reserves a sizing slot, resizes the pty, and only then attaches, because the screen
+// has to be serialized at the client's width. The resize is deliberately a ResizeSignal, so the shell
+// redraws, so anything its SIGWINCH handler emits is generated inside that window. At that moment the
+// reservation was enough to make hasAnsweringClient say yes while there was no attachment to answer
+// with: cm went silent and the client, not yet subscribed, never saw the question.
+//
+// The visible result was the reverse of the artifact the answerer election exists to prevent. A zsh
+// prompt hook's query went unanswered, so the reply it was waiting for was really a later, unrelated
+// one: a branch name from a title report and ";rgb:2828/2c2c/3434" from an OSC 11 both landed in the
+// line editor, and under vi mode the leading ESC dropped it into command mode and opened the text in
+// a scratch buffer.
+//
+// Asserted with the window constructed directly rather than by driving Service.Attach, because the
+// query has to arrive between the reserve and the attach. Making a real shell emit one from a WINCH
+// handler at that instant is a race, and this is the state that race lands in.
+func TestReservationDoesNotSuppressAnswers(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "reserved",
+		Command: []string{"/bin/sh", "-c", `printf 'A\033[6nB'; printf 'MARK\n'; sleep 5`},
+		Rows:    24, Cols: 80,
+	})
+
+	term := &fakeTerminal{restore: []byte("RESTORED"), answers: cursorReport}
+	sess, err := newSession(rec, term, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// Exactly the window Service.Attach opens: sized, not yet attached.
+	tok := sess.reserveClient()
+	sess.registerClientSize(tok, 40, 120, 0, 0, false)
+
+	if sess.hasAnsweringClient() {
+		t.Error("hasAnsweringClient() = true for a reservation with no attachment, want false.\n" +
+			"Nothing can answer through a reservation: it has no output stream to carry the query and " +
+			"no input channel to carry a reply.")
+	}
+
+	// Subscribing to the log rather than attaching, so the reservation is the only entry present.
+	sub := sess.recent.Subscribe(0)
+	defer sub.Close()
+	readUntil(t, sub, "MARK")
+
+	if got := awaitStream(t, sess, echoedCursorReport, 5*time.Second); !strings.Contains(got, echoedCursorReport) {
+		t.Errorf("cm's cursor report never reached the pty during the reservation window; stream was "+
+			"%q.\nA reservation is not an answerer, so cm is still the only one. Staying silent leaves "+
+			"the querying program waiting, and the reply it eventually consumes is some later query's, "+
+			"which is how a branch name ended up in the line editor.", got)
+	}
+}
+
 // hasAnsweringClient is the predicate the whole fix rests on, so it is asserted directly rather than
 // only through the three behavioral tests above.
 func TestHasAnsweringClient(t *testing.T) {
@@ -227,6 +281,54 @@ func TestHasAnsweringClient(t *testing.T) {
 	sess.detach(follower)
 	if sess.hasAnsweringClient() {
 		t.Error("hasAnsweringClient() = true after everything detached, want false")
+	}
+}
+
+// A reservation that goes on to attach becomes the answerer, which is the other half of not counting
+// reservations.
+//
+// The obvious fix for the reservation window is to ignore any entry attach did not create, and that
+// would be wrong in the direction that duplicates replies: every interactive client now arrives via
+// reserveClient, so an implementation keyed on how the entry was made would count none of them and cm
+// would answer alongside the terminal again. The distinction is attached-or-not, not reserved-or-not.
+func TestReservationBecomesTheAnswererOnceAttached(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "promoted",
+		Command: []string{"/bin/sh", "-c", "sleep 5"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	tok := sess.reserveClient()
+	sess.registerClientSize(tok, 40, 120, 0, 0, false)
+	if sess.hasAnsweringClient() {
+		t.Fatal("hasAnsweringClient() = true while only reserved, want false")
+	}
+
+	// attach adopts the reservation rather than allocating a token of its own, which is what the
+	// service does once the session has been sized.
+	att, err := sess.attach(nil, tok)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	if att.token != tok {
+		t.Fatalf("attach() used token %p, want the reservation %p", att.token, tok)
+	}
+	if !sess.hasAnsweringClient() {
+		t.Error("hasAnsweringClient() = false after the reservation attached, want true")
+	}
+	if !sess.isAnswerer(tok) {
+		t.Error("the attached client is not the answerer, want it to be.\n" +
+			"Every interactive client now arrives through reserveClient, so an implementation that " +
+			"disqualified reserved entries rather than unattached ones would leave cm answering " +
+			"alongside the real terminal, which is the duplicate-reply bug.")
 	}
 }
 

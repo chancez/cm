@@ -250,6 +250,17 @@ type clientSize struct {
 	// readOnly clients never own sizing, since a follower reflowing the window it watches is the
 	// bug this whole policy exists to avoid.
 	readOnly bool
+	// attached distinguishes a live attachment from a reservation that has not become one yet.
+	//
+	// Sizing deliberately does not care: reserveClient exists so the session can be resized to a
+	// client's size *before* its screen is serialized, which means a reservation must be able to hold
+	// a size and win the policy while it is still only a reservation.
+	//
+	// Answering a terminal query is the opposite. An entry that is not attached yet has no stream to
+	// receive the query and no input channel to reply on, so counting it as an answerer means nobody
+	// answers at all: cm stays silent because a client appears to be present, and the client never
+	// sees the question because it was not subscribed when the query went past. See answererLocked.
+	attached bool
 }
 
 // Terminal is the terminal state the server maintains for a session.
@@ -1062,12 +1073,19 @@ func (s *Session) hasAnsweringClient() bool {
 // Read-only followers are skipped: their input is dropped (see recvLoop), so a reply from one never
 // reaches the shell and electing it would answer nothing.
 //
+// So are reservations that have not become attachments, for the same reason one step earlier: an entry
+// made by reserveClient has no output stream and no input channel yet. Electing one makes a query
+// vanish, which is a hang rather than an artifact and is worse than the duplicate reply the election
+// exists to prevent. Service.Attach reserves, then resizes the pty, and that resize deliberately makes
+// the shell redraw, so a query emitted by a SIGWINCH handler lands in exactly this window. That is how
+// a shell hook's OSC and a branch name reached the line editor after the ordering fix.
+//
 // Callers must hold s.mu.
 func (s *Session) answererLocked() *attachToken {
 	var best *attachToken
 	var bestOrder uint64
 	for tok, cs := range s.clientSizes {
-		if cs.readOnly {
+		if cs.readOnly || !cs.attached {
 			continue
 		}
 		if best == nil || cs.order < bestOrder {
@@ -1286,6 +1304,15 @@ func (s *Session) newAttachmentLocked(from uint64, restore []byte, tok *attachTo
 	token := tok
 	if token == nil {
 		token = s.reserveClientLocked()
+	}
+
+	// Marked attached only now, which is what makes this client eligible to answer a terminal query.
+	// Until this point it is a reservation holding a size, with no stream to receive a query on and no
+	// input channel to reply from, and electing one leaves a query answered by nobody. Set here rather
+	// than in attach because both paths out of attach come through this function, which is the same
+	// reason the size entry is registered here.
+	if cs := s.clientSizes[token]; cs != nil {
+		cs.attached = true
 	}
 
 	evict := make(chan struct{})
