@@ -56,6 +56,36 @@ records that fact, so the pump ending is not mistaken for the session ending: wi
 distinction a clean shutdown marks every live session dead and the next server refuses to
 adopt them.
 
+### A restart does not drop output, measured
+
+Worth recording because the question keeps coming back, and because two bugs that *looked* like
+restart data loss were bookkeeping errors instead.
+
+Measured against a session emitting numbered lines at roughly 10 MB/s, followed to a file and
+checked for holes in the numbering. A restart takes about 450ms. One restart: no discontinuity at
+the restart. Three back-to-back restarts: no discontinuity at any of them. The control run, with
+*zero* restarts, showed one hole at the same position as the other two runs, which is what
+identified it: a follower's initial subscribe asks for the current end and the shell keeps writing
+while the subscription is set up, so the hole is the subscribe, not the restart. Without that
+control the first run's hole reads as a restart gap and sends you fixing the wrong thing.
+
+Nothing needs to be handed off, because the shim already holds what a handoff would carry. It owns
+the pty and buffers 4 MiB regardless of whether a server is subscribed, the new server resubscribes
+from a recorded position, and the client keeps its terminal and resumes from its own. Passing client
+connections to the new server, or deferring hooks until a client reconnects, were both considered
+and rejected: they add authoritative cross-restart state to a design whose central property is that
+anything the server holds is rediscoverable, and neither addresses a loss that is occurring.
+
+A gap is still possible in one case, and it is a buffer-size question rather than a handoff one: a
+session sustaining more than roughly 9 MB/s through the whole restart window overflows the shim's
+4 MiB. The test above was near that edge and still lossless. `yes` in a loop reaches it; an
+interactive shell or a coding agent does not. The lever is `shim.DefaultLogBytes`, at a fixed memory
+cost per session.
+
+What did go wrong twice was bookkeeping. The bytes were retained and the client asked for them by
+the wrong number: see "Adoption needs both resume points" below, and `docs/restore.md` for the
+reservation window that made a query go unanswered.
+
 ## State: sqlite for metadata, files for bytes
 
 Session metadata lives in sqlite (`internal/store`): the registry, cwd, title,
