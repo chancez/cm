@@ -500,7 +500,10 @@ func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	prior := migrations[:len(migrations)-1]
+	// Two back rather than one: the newest migration adds client_seq, and the one before it drops
+	// `owned`, which the row inserted below sets. Stopping one short would apply the drop and then
+	// insert into a column that no longer exists.
+	prior := migrations[:len(migrations)-2]
 	for i, m := range prior {
 		if _, err := old.ExecContext(ctx, m); err != nil {
 			t.Fatalf("applying migration %d: %v", i+1, err)

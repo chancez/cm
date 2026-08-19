@@ -267,7 +267,7 @@ func TestSessionFeedsTerminalModel(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED")}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -297,7 +297,7 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED")}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -347,7 +347,7 @@ func TestAttachWithoutTerminalReplaysRecentOutput(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -379,7 +379,7 @@ func TestMultipleClientsEachSeeOutput(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -423,7 +423,7 @@ func TestSessionEndsWhenShellExits(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -476,7 +476,7 @@ func TestAttachToEndedSessionFails(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -503,7 +503,7 @@ func TestTerminalWriteFailureDoesNotKillSession(t *testing.T) {
 	})
 
 	term := &fakeTerminal{writeErr: errors.New("emulator exploded")}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -531,7 +531,7 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -565,7 +565,7 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 
 	// Consume the early output through one session, then adopt again from where it stopped,
 	// as a restarting server would.
-	first, err := newSession(rec, nil, 0)
+	first, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -575,7 +575,7 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 	resumeFrom := first.LastSeq()
 	first.Close()
 
-	second, err := newSession(rec, nil, resumeFrom)
+	second, err := newSession(rec, nil, resumeFrom, resumeFrom)
 	if err != nil {
 		t.Fatalf("second newSession() error = %v", err)
 	}
@@ -612,7 +612,7 @@ func shimConfigFor(name, script string) shim.Config {
 func TestSubscribeMetadataDeliversCurrentValues(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("meta", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -643,7 +643,7 @@ func TestSubscribeMetadataDeliversCurrentValues(t *testing.T) {
 func TestPublishMetadataCoalesces(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("coalesce", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -681,7 +681,7 @@ func TestPublishMetadataCoalesces(t *testing.T) {
 func TestPublishMetadataDoesNotBlockOnUnreadSubscriber(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("noblock", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -715,7 +715,7 @@ func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
 	rec.Rows, rec.Cols = 24, 80
 
 	term := &fakeTerminal{rows: 24, cols: 80, restore: []byte("SNAPSHOT")}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -762,7 +762,7 @@ func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
 
 	loud := &fakeTerminal{focusReporting: true}
 	rec := startShimFor(t, shimConfigFor("focus-on", script))
-	sess, err := newSession(rec, loud, 0)
+	sess, err := newSession(rec, loud, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -795,7 +795,7 @@ func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
 func TestReportFocusSilentWhenNotRequested(t *testing.T) {
 	quiet := &fakeTerminal{focusReporting: false}
 	rec := startShimFor(t, shimConfigFor("focus-off", "echo READY; cat"))
-	sess, err := newSession(rec, quiet, 0)
+	sess, err := newSession(rec, quiet, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -828,7 +828,7 @@ func TestReportFocusSilentWhenNotRequested(t *testing.T) {
 func TestDetachReportsLastClient(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("last", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -865,7 +865,7 @@ func TestAttachStreamStartsOnASequenceBoundary(t *testing.T) {
 	rec.Rows, rec.Cols = 24, 80
 
 	term := &fakeTerminal{restore: []byte("RESTORED")}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -910,7 +910,7 @@ func TestSessionReportsRealExitStatus(t *testing.T) {
 			rec := startShimFor(t, shimConfigFor(
 				fmt.Sprintf("status-%d", want), fmt.Sprintf("exit %d", want)))
 
-			sess, err := newSession(rec, nil, 0)
+			sess, err := newSession(rec, nil, 0, 0)
 			if err != nil {
 				t.Fatalf("newSession() error = %v", err)
 			}

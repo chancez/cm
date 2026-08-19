@@ -46,7 +46,7 @@ func TestPumpDeliversOutputBeforeFeedingTerminal(t *testing.T) {
 	const delay = 2 * time.Second
 
 	term := &slowTerminal{delay: delay}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestPumpStillFeedsTerminalModel(t *testing.T) {
 	})
 
 	term := &slowTerminal{delay: 10 * time.Millisecond}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}

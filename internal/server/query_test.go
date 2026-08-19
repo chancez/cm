@@ -75,7 +75,7 @@ func TestNoAnswerInjectedWhileClientAttached(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED"), answers: cursorReport}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -121,7 +121,7 @@ func TestAnswerInjectedWhenNoClientAttached(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED"), answers: cursorReport}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -157,7 +157,7 @@ func TestReadOnlyFollowerDoesNotSuppressAnswers(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED"), answers: cursorReport}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -205,7 +205,7 @@ func TestReservationDoesNotSuppressAnswers(t *testing.T) {
 	})
 
 	term := &fakeTerminal{restore: []byte("RESTORED"), answers: cursorReport}
-	sess, err := newSession(rec, term, 0)
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestHasAnsweringClient(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestReservationBecomesTheAnswererOnceAttached(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -349,7 +349,7 @@ func TestOnlyOneClientAnswersQueries(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -410,7 +410,7 @@ func TestReadOnlyFollowerIsNeverTheAnswerer(t *testing.T) {
 		Rows:    24, Cols: 80,
 	})
 
-	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0)
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}

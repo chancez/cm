@@ -216,7 +216,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 
 		// Resume from where the previous server stopped consuming.
-		sess, err := m.adopt(ctx, rec, rec.LastSeq)
+		sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
 		if err != nil {
 			// The shim answered a moment ago, so this is worth reporting but not fatal:
 			// the remaining sessions should still come back.
@@ -257,7 +257,17 @@ func probeShim(ctx context.Context, socket string) (alive bool, err error) {
 // adopted after a server restart has an empty screen: the model lives in the server, so a new server
 // starts with a blank one, and consuming from fromSeq only ever sees output produced from now on. The
 // shim still holds the earlier bytes, so the scrollback is recoverable rather than gone.
-func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) (*Session, error) {
+//
+// fromSeq is in the shim's numbering, since it is what the resubscribe and the history replay both ask
+// the shim for. clientSeq is where the new session's client log begins, in the numbering clients see,
+// and the two are not interchangeable: the prompt rewrite lengthens output, so they diverge by nine
+// bytes per prompt marker. Passing fromSeq for both is what made a resuming client ask for a position
+// its new server's log did not have, and the bytes in between were dropped without a word. Zero means
+// "same as fromSeq", which is right for a brand new session, where nothing has been rewritten yet and
+// both spaces start together.
+func (m *Manager) adopt(
+	ctx context.Context, rec store.Session, fromSeq, clientSeq uint64,
+) (*Session, error) {
 	term, err := m.buildTerminal(uint16(rec.Rows), uint16(rec.Cols))
 	if err != nil {
 		return nil, err
@@ -270,7 +280,14 @@ func (m *Manager) adopt(ctx context.Context, rec store.Session, fromSeq uint64) 
 				"session", rec.Name, "error", err)
 		}
 	}
-	sess, err := newSession(rec, term, fromSeq)
+	// A record written before client_seq existed has zero there, which is indistinguishable from a
+	// session that genuinely served nothing. Falling back to fromSeq is what an upgrade wants: it
+	// reproduces the old behavior for that one adoption rather than starting the log at zero, which
+	// would make every subscriber look like it had missed the entire session.
+	if clientSeq == 0 {
+		clientSeq = fromSeq
+	}
+	sess, err := newSession(rec, term, fromSeq, clientSeq)
 	if err != nil {
 		if term != nil {
 			term.Close()
@@ -474,13 +491,14 @@ func (m *Manager) watch(sess *Session) {
 		return
 	}
 
-	seq := sess.LastSeq()
+	seq, clientSeq := sess.resumePoints()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := m.store.Apply(ctx, sess.name, store.Update{
-		State:    &state,
-		ExitCode: &code,
-		LastSeq:  &seq,
+		State:     &state,
+		ExitCode:  &code,
+		LastSeq:   &seq,
+		ClientSeq: &clientSeq,
 	}); err != nil {
 		// A record that is already gone is the expected outcome of a kill, not a failure.
 		//
@@ -575,7 +593,7 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 			// Recorded as running but not in our registry, which happens if Reconcile
 			// could not adopt it. Try once more before giving up.
 			if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
-				sess, err := m.adopt(ctx, rec, rec.LastSeq)
+				sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
 				if err == nil {
 					m.mu.Lock()
 					m.sessions[opts.Name] = sess
@@ -767,7 +785,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
-	sess, err := m.adopt(ctx, rec, 0)
+	sess, err := m.adopt(ctx, rec, 0, 0)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.Name)
 		return nil, err
@@ -953,7 +971,7 @@ func (m *Manager) List(ctx context.Context, prefix string) ([]store.Session, err
 	defer m.mu.Unlock()
 	for i := range records {
 		if sess, ok := m.sessions[records[i].Name]; ok {
-			records[i].LastSeq = sess.LastSeq()
+			records[i].LastSeq, records[i].ClientSeq = sess.resumePoints()
 		}
 	}
 	return records, nil
@@ -1334,9 +1352,12 @@ func (m *Manager) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, sess := range sessions {
-		// Persist the resume point so the next server picks up exactly here.
-		seq := sess.LastSeq()
-		if err := m.store.Apply(ctx, sess.name, store.Update{LastSeq: &seq}); err != nil {
+		// Persist both resume points so the next server picks up exactly here. The client position is
+		// stored alongside the shim one because they count the same output differently and the adopting
+		// server needs both: one to resubscribe with, one to number its client log from.
+		seq, clientSeq := sess.resumePoints()
+		if err := m.store.Apply(ctx, sess.name,
+			store.Update{LastSeq: &seq, ClientSeq: &clientSeq}); err != nil {
 			// Losing this means the next server resubscribes from an older position and replays
 			// output the client already saw, so it is worth knowing about.
 			m.log.Error("recording resume point failed",

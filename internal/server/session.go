@@ -313,7 +313,12 @@ func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 // outlives the request that created it: the client that attached first will detach, and its
 // context will be cancelled, but the session must keep consuming so later clients see
 // current state. Its lifetime is instead bound to the session, ended by Close.
-func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, error) {
+// fromSeq is in the shim's numbering and clientSeq is in the numbering clients see. They are separate
+// parameters because the prompt rewrite changes length, so the position to resubscribe from and the
+// position to number the client log from are different numbers describing the same instant. Conflating
+// them is what let a resuming client ask its new server for a position past the end of that server's
+// log, where seqlog clamps forward and the bytes in between are lost.
+func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*Session, error) {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
 		return nil, err
@@ -327,11 +332,14 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		conn:     conn,
 		shim:     shim,
 		term:     term,
-		recent:   seqlog.NewAt(DefaultRecentBytes, fromSeq),
+		recent:   seqlog.NewAt(DefaultRecentBytes, clientSeq),
 		metaSubs: make(map[*metaSub]struct{}),
 		// Positioned at the same offset as the log, since a session adopted after a server restart
 		// resumes partway in and a tracker starting from zero would place every boundary wrongly.
-		boundaries:  newBoundaryTrackerAt(fromSeq),
+		//
+		// clientSeq rather than fromSeq: boundaries are recorded from the rewritten bytes, which is what
+		// the log numbers, so a boundary stored in the shim's numbering would be off by the rewrite.
+		boundaries:  newBoundaryTrackerAt(clientSeq),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		evicts:      make(map[*attachToken]chan struct{}),
@@ -339,9 +347,12 @@ func newSession(rec store.Session, term Terminal, fromSeq uint64) (*Session, err
 		lastSeq:     fromSeq,
 		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
 		// adopted session resumes partway in. Leaving this at zero would make the first fresh attach
-		// stream from the very beginning of the shim's numbering, replaying output the restored screen
-		// already shows.
-		modelSeq: fromSeq,
+		// stream from the very beginning of the numbering, replaying output the restored screen already
+		// shows.
+		//
+		// clientSeq, because this is a position in the client log: attach streams from it after replaying
+		// a screen, and the log numbers rewritten bytes.
+		modelSeq: clientSeq,
 		done:     make(chan struct{}),
 		stopPump: stopPump,
 	}
@@ -1038,6 +1049,40 @@ func (s *Session) LastSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastSeq
+}
+
+// ClientSeq returns the position clients have been served up to, in the numbering they see.
+//
+// Distinct from LastSeq, which counts the shim's bytes. The prompt rewrite lengthens output, so the
+// two diverge, and an adopting server needs this one to position its client log. See resumePoints for
+// why the pair is usually read together rather than one at a time.
+func (s *Session) ClientSeq() uint64 {
+	return s.recent.Next()
+}
+
+// resumePoints returns both resume positions, for storing as a pair.
+//
+// The two count the same output in different numbering, so they are read here rather than by two calls
+// from each caller that stores them.
+//
+// The read order is deliberate and cannot be replaced by a lock. The pump appends to the client log
+// *before* it takes s.mu to advance lastSeq, so a chunk can be in the log while lastSeq does not yet
+// account for it, and no lock available here closes that window.
+//
+// Reading lastSeq first is what makes the window harmless. It can only make the stored pair describe
+// a client log that is at or ahead of what the shim position accounts for, so the next server
+// resubscribes from slightly before where its log starts and re-delivers the overlap. Reading in the
+// other order would let the shim position be ahead instead, so those bytes would never be requested
+// while the log numbering already counted them, and a client resuming there would be served from a
+// position whose bytes never arrive. Duplicated output is visible and recoverable; a silent hole in
+// the middle of an escape sequence is the corruption this pair exists to prevent.
+func (s *Session) resumePoints() (shimSeq, clientSeq uint64) {
+	s.mu.Lock()
+	shimSeq = s.lastSeq
+	s.mu.Unlock()
+	// Deliberately after s.mu is released: the log has its own lock, and attach takes s.mu before
+	// touching the log, so acquiring them the other way round here would invert that order.
+	return shimSeq, s.recent.Next()
 }
 
 // Clients reports how many clients are attached.

@@ -259,7 +259,7 @@ func TestPersistsSessionRespectsPolicy(t *testing.T) {
 func TestRestoredScreenGoesToFirstClientOnly(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("restored", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -291,7 +291,7 @@ func TestRestoredScreenGoesToFirstClientOnly(t *testing.T) {
 func TestRestoredScreenSkippedOnResume(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("resumed", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -315,7 +315,7 @@ func TestRestoredScreenSkippedOnResume(t *testing.T) {
 func TestRestoredScreenStreamStartsAtPresent(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("streamstart", "echo SOMETHING; sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -484,7 +484,7 @@ func TestExpireSkipsLiveSessions(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	sess, err := mgr.adopt(ctx, rec, 0)
+	sess, err := mgr.adopt(ctx, rec, 0, 0)
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}

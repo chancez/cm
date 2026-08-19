@@ -84,9 +84,16 @@ type Session struct {
 	ShimPID  int
 	ShellPID int
 	// LastSeq is how far the server had consumed the shim's output log. This is the
-	// resume point after a server restart.
+	// resume point after a server restart, in the shim's numbering.
 	LastSeq uint64
-	State   State
+	// ClientSeq is how far the server had served clients, in the numbering clients see.
+	//
+	// Distinct from LastSeq because output is rewritten on the way through and the rewrite changes
+	// length, so the two counts diverge by nine bytes per prompt marker. An adopting server has to
+	// start its client log here rather than at LastSeq, or a resuming client asks for a position the
+	// new log does not have and loses the bytes in between. See docs/architecture.md.
+	ClientSeq uint64
+	State     State
 	// ExitCode is meaningful only when State is StateExited.
 	ExitCode int
 	// Command is the argv the session runs, stored for display.
@@ -223,5 +230,24 @@ var migrations = []string{
 	// Removed with the flag itself; see docs/architecture.md for why the feature went.
 	`
 	ALTER TABLE sessions DROP COLUMN owned;
+	`,
+
+	// How far the server had served *clients*, as distinct from last_seq, which counts the shim's
+	// bytes.
+	//
+	// Two numbering spaces exist because output is rewritten on the way through: RewritePromptRedraw
+	// appends ";redraw=0" to a prompt marker that carries no redraw parameter, which is the form real
+	// shells send, and that lengthens the chunk by nine bytes. last_seq has to stay in the shim's
+	// numbering, since it is what a resubscribe asks the shim for, and the shim knows nothing about
+	// the rewrite.
+	//
+	// Without this column the two were conflated across a restart. A client resumed from a position it
+	// had counted in rewritten bytes, while the adopting server started its client log at last_seq, so
+	// the client asked for a position ahead of the log and was silently clamped forward past output it
+	// never received. Measured at nine bytes per prompt marker, so a session that had run three
+	// commands lost 27 bytes: enough to slice the front off an escape sequence, which then renders as
+	// literal text. It presented as a corrupted TUI that a forced repaint fixed.
+	`
+	ALTER TABLE sessions ADD COLUMN client_seq INTEGER NOT NULL DEFAULT 0;
 	`,
 }

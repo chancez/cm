@@ -93,7 +93,7 @@ func TestAttachResizesBeforeSnapshotting(t *testing.T) {
 // symptom would be a session stuck at the size of a failed attach.
 func TestFailedAttachReleasesItsSizingSlot(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("released", "exit 0"))
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}

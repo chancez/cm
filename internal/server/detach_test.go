@@ -87,7 +87,7 @@ func TestEvictedClientLeavesAndSessionSurvives(t *testing.T) {
 func TestEvictClientsWithNoClientsIsZero(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("evictnone", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -105,7 +105,7 @@ func TestEvictClientsWithNoClientsIsZero(t *testing.T) {
 func TestEvictClientsCountsEveryClient(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("evictmany", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}

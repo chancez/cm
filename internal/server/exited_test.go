@@ -149,7 +149,7 @@ func TestSizingFailureIsFatalOnlyWhenTheSessionLives(t *testing.T) {
 			// talks to. 24x80 here against 40x100 below, so the resize actually runs.
 			sess, err := newSession(store.Session{
 				Name: "size-race", ShimSocket: socket, Rows: 24, Cols: 80,
-			}, nil, 0)
+			}, nil, 0, 0)
 			if err != nil {
 				t.Fatalf("newSession() error = %v", err)
 			}

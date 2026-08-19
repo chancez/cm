@@ -32,9 +32,14 @@ would either wedge the shell on a full pty buffer or silently drop output. The s
 covers the gap for clients, so one attaching mid-session is not shown a blank screen.
 
 Numbers count bytes rather than writes, so a resume point stays meaningful even if a chunk is
-split differently on a second pass. `seqlog.NewAt` exists because the server's log must
-continue the shim's numbering; starting from zero would make a position mean different things
-on each hop.
+split differently on a second pass. `seqlog.NewAt` exists so an adopted session's log continues
+from where the previous server left off rather than from zero, which would make every existing
+client position look like the distant future.
+
+The two hops do *not* share one numbering, and assuming they do has caused two separate bugs.
+Output is rewritten on the way through, which changes its length, so the server's log counts
+different bytes than the shim's. Both numbers therefore have to be carried: see "Adoption needs
+both resume points" below.
 
 A subscriber whose position was already dropped is told so. That flag is not cosmetic:
 replaying bytes across a hole cannot reconstruct state the missing bytes established, so the
@@ -190,6 +195,41 @@ overlapping by even a few bytes duplicates a *fragment* of a line rather than a 
 looks like a rendering fault. And it writes only to the terminal model, never to the client log,
 because a resuming client has already seen that output and appending it would replay old output as
 though it were new.
+
+### Adoption needs both resume points, not one
+
+There are two of them because there are two numbering spaces, and adoption is where conflating them
+did real damage. `last_seq` counts the *shim's* bytes, since that is what a resubscribe asks the shim
+for and the shim knows nothing about the rewrite. `client_seq` counts what clients actually received.
+
+A single number was stored and used for both. The adopting server started its client log at
+`last_seq`, while a reconnecting client asked to resume from a position it had counted in
+post-rewrite bytes. The client's number was therefore *ahead* of the new log's end, and
+`seqlog.Subscribe` clamps a position past the end to the end, so the difference was skipped without a
+word. Measured at nine bytes per prompt marker, the width of the `;redraw=0` that
+`RewritePromptRedraw` appends to a marker sent without one, which is the form real shells send. Three
+commands is 27 bytes: comfortably enough to eat the front of an escape sequence, and the remainder
+renders as literal text. It presented as a corrupted TUI that a `ctrl-l` repaint fixed, which points
+at the client's rendering rather than at a lost prefix on the server's side.
+
+Two consequences worth keeping. The pair is read in one place, `Session.resumePoints`, and in a fixed
+order: `lastSeq` first, then the log's position. The pump appends to the log *before* taking `mu` to
+advance `lastSeq`, so no lock available there closes the window between them, and this order is what
+makes the window harmless. It can only leave the stored client position at or ahead of what the shim
+position accounts for, so the next server resubscribes from slightly behind its log's start and
+re-delivers the overlap. The other order loses bytes instead, which is the whole failure again.
+
+And `client_seq` defaults to 0 on a database written before the column existed, which is
+indistinguishable from a session that served nothing. Adoption falls back to `last_seq` in that case:
+wrong by the rewrite drift for that one adoption, which self-corrects on the next restart, rather than
+starting the log at zero and making every client position look like the distant future.
+
+`seqlog.Subscribe` now also flags a clamped position as a gap. That does not repair the drift and is
+not meant to; it converts "silently skip bytes" into "tell the reader its view is discontinuous". The
+clamp itself is still legitimate for a log that was reset behind a subscriber, but the two cases are
+indistinguishable from inside the log, and a spurious resynchronize is much cheaper than silent
+corruption. Note that the attach path forwards the flag to clients over the wire and the client does
+not yet act on it, so this is currently a diagnostic rather than a recovery.
 
 ## Terminal state
 

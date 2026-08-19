@@ -12,7 +12,7 @@ import (
 
 const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
-	persist_requested, tags`
+	persist_requested, tags, client_seq`
 
 // Create inserts a session record.
 //
@@ -30,12 +30,12 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
-		sess.PersistRequested, encodeStringMap(sess.Tags),
+		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.Name, err)
@@ -98,16 +98,17 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 // because the server usually changes several at once, and a single statement keeps the row
 // consistent.
 type Update struct {
-	ShimPID  *int
-	ShellPID *int
-	LastSeq  *uint64
-	State    *State
-	ExitCode *int
-	Cwd      *string
-	Title    *string
-	Rows     *int
-	Cols     *int
-	Env      map[string]string
+	ShimPID   *int
+	ShellPID  *int
+	LastSeq   *uint64
+	ClientSeq *uint64
+	State     *State
+	ExitCode  *int
+	Cwd       *string
+	Title     *string
+	Rows      *int
+	Cols      *int
+	Env       map[string]string
 	// Tags replaces the session's whole tag set rather than merging into it, so removing a tag is
 	// expressible. A nil map leaves them alone; an empty but non-nil map clears them, which is what
 	// removing the last tag does.
@@ -134,6 +135,9 @@ func (s *Store) Apply(ctx context.Context, name string, u Update) error {
 	}
 	if u.ShellPID != nil {
 		add("shell_pid", *u.ShellPID)
+	}
+	if u.ClientSeq != nil {
+		add("client_seq", int64(*u.ClientSeq))
 	}
 	if u.LastSeq != nil {
 		add("last_seq", int64(*u.LastSeq))
@@ -252,6 +256,7 @@ func scanSession(sc scanner) (Session, error) {
 	var (
 		sess      Session
 		lastSeq   int64
+		clientSeq int64
 		state     string
 		created   int64
 		updated   int64
@@ -263,7 +268,7 @@ func scanSession(sc scanner) (Session, error) {
 		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
-		&tagsJSON,
+		&tagsJSON, &clientSeq,
 	)
 	if err != nil {
 		return Session{}, err
@@ -271,6 +276,7 @@ func scanSession(sc scanner) (Session, error) {
 	sess.Env = decodeStringMap(envJSON)
 	sess.Tags = decodeStringMap(tagsJSON)
 	sess.LastSeq = uint64(lastSeq)
+	sess.ClientSeq = uint64(clientSeq)
 	sess.State = State(state)
 	sess.PersistRequested = requested
 	sess.CreatedAt = time.UnixMilli(created)

@@ -9,7 +9,7 @@ import (
 func resizeFixture(t *testing.T, policy ResizePolicy) *Session {
 	t.Helper()
 	rec := startShimFor(t, shimConfigFor("resize-"+string(policy), "sleep 5"))
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
@@ -215,7 +215,7 @@ func TestResizeAfterDetachIsIgnored(t *testing.T) {
 // unaffected.
 func TestResizeDefaultPolicyIsLeader(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("resize-default", "sleep 5"))
-	sess, err := newSession(rec, nil, 0)
+	sess, err := newSession(rec, nil, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
