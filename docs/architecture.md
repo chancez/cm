@@ -228,8 +228,25 @@ starting the log at zero and making every client position look like the distant 
 not meant to; it converts "silently skip bytes" into "tell the reader its view is discontinuous". The
 clamp itself is still legitimate for a log that was reset behind a subscriber, but the two cases are
 indistinguishable from inside the log, and a spurious resynchronize is much cheaper than silent
-corruption. Note that the attach path forwards the flag to clients over the wire and the client does
-not yet act on it, so this is currently a diagnostic rather than a recovery.
+corruption.
+
+### What a client does with a gap
+
+It repaints, by dropping its resume position and reconnecting. That turns the next attach into a fresh
+one, which the server answers with a serialized screen, so the recovery reuses the mechanism that
+already exists rather than adding a second one.
+
+Continuing is the thing that cannot work. The escape sequences that established the current screen may
+be part of what was lost, so every later chunk is interpreted against state that never existed. The
+gapped chunk is therefore not written either: its bytes are in the snapshot the repaint replays, so
+writing them first would paint them twice, once against the wrong state.
+
+A follower is the exception, and gets the bytes as they arrive. `cm read --follow` streams to a pipe
+and sets `NoRestore` precisely because a repaint would corrupt what it is writing, so for one of those
+a gap is a fact to report rather than something to fix, and dropping the chunk would lose real output.
+The condition is keyed on `NoRestore` rather than on whether `Output` is set: both say "not painting a
+terminal", but `NoRestore` is the one that says a repaint is unwanted, and it is what the server
+already reads.
 
 ## Terminal state
 

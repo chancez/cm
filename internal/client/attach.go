@@ -109,9 +109,12 @@ type Options struct {
 
 	// Log records what the client did, for diagnosing an attachment that misbehaved.
 	//
-	// Never nil in practice: Attach installs a discarding logger when one is not supplied, so the call sites
-	// below need no nil check. A client has diagnostics nothing else can see -- how often it reconnected, where
-	// it resumed from, input it had to hold across an outage -- and until this existed they were invisible.
+	// Both Attach and runSession install a discarding logger when one is not supplied, so no call site needs a
+	// nil check. Defaulted in both rather than only in Attach because runSession is driven directly by its
+	// tests, where a nil logger was a panic in whichever branch happened to log rather than a missing line.
+	//
+	// A client has diagnostics nothing else can see -- how often it reconnected, where it resumed from, input
+	// it had to hold across an outage -- and until this existed they were invisible.
 	Log *slog.Logger
 
 	// OnAttached, when set, is called once the server has opened the session on this connection.
@@ -264,6 +267,13 @@ func runSession(
 	input <-chan []byte,
 	inputErr <-chan error,
 ) (outcome, error) {
+	// Defaulted again rather than relied on from Attach. Attach fills this in, but this function is
+	// also driven directly by its tests, which is the whole reason the loop body is separable, and a
+	// nil logger there is a panic in whichever branch happens to log rather than a missing line.
+	if opts.Log == nil {
+		opts.Log = slog.New(discardLogHandler{})
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -402,6 +412,36 @@ func runSession(
 				continue
 			}
 			if o := msg.resp.GetOutput(); o != nil {
+				// A gap means bytes before this chunk never reached this client, so the screen it is
+				// looking at was built from an incomplete stream. Continuing to write is what makes that
+				// visible as corruption: the escape sequences that established the current screen may be
+				// part of what was lost, so the next chunk is interpreted against state that never
+				// existed. Typically the front of a sequence is missing and its remainder renders as
+				// literal text.
+				//
+				// Repainting is the only recovery, and the server already has the mechanism: a fresh
+				// attach answers with a serialized screen. So this drops the resume position and
+				// reconnects, which turns the next attach into a fresh one rather than a resume.
+				//
+				// Only for a client that is painting a terminal. A follower streams bytes to a pipe and
+				// sets NoRestore precisely because a repaint would corrupt what it is writing, so for one
+				// of those a gap is a fact to report rather than something to fix. Deliberately keyed on
+				// NoRestore rather than on Output being nil: both say "not painting a terminal", but
+				// NoRestore is the one that says a repaint is unwanted, and it is what the server reads.
+				if o.Gap && !opts.NoRestore {
+					// Dropped rather than left alone. A reconnect with a position still set resumes, and
+					// resuming is exactly what cannot recover a hole.
+					*resumeFrom = nil
+					// Worth a log line for the same reason a reconnect gets one: the client holds the
+					// terminal through it, so the user sees a flicker and nothing else, and a session
+					// dropping bytes repeatedly looks identical to one that never did.
+					opts.Log.Info("output gap detected, repainting from a fresh attach",
+						"session", result.Session, "seq", o.Seq, "bytes", len(o.Data))
+					// The chunk is deliberately not written. Its bytes are in the snapshot the fresh
+					// attach replays, so writing them here would paint them twice, once against the wrong
+					// state.
+					return outcomeReconnect, nil
+				}
 				w := io.Writer(tty)
 				if opts.Output != nil {
 					w = opts.Output

@@ -166,6 +166,16 @@ func (s *fakeStream) output(seq uint64, data string) {
 	})
 }
 
+// outputGap queues output flagged as discontinuous, which is what the server sends when bytes before
+// this chunk never reached this client.
+func (s *fakeStream) outputGap(seq uint64, data string) {
+	s.push(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Output{Output: &serverv1.Output{
+			Seq: seq, Data: []byte(data), Gap: true,
+		}},
+	})
+}
+
 // exited queues the session ending.
 func (s *fakeStream) exited(code int32) {
 	s.push(&serverv1.AttachResponse{
