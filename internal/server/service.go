@@ -113,6 +113,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// again, and the screen arrives visibly mangled. Resizing first means the model reflows once,
 	// and the snapshot describes what this client will actually display.
 	//
+	// This is enforced by reserving the client's sizing slot here, before attaching, because the
+	// policy needs a token to decide with and taking it from attach is what broke the order once
+	// already. See TestAttachResizesBeforeSnapshotting.
+	//
 	// A client that wants the screen repainted is displaying the session, which is what distinguishes it
 	// from one attaching only to create the session or to stream bytes. Recorded here rather than derived
 	// later, since the request is the only place the distinction exists.
@@ -120,14 +124,28 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		sess.noteWatched()
 	}
 
-	att, err := sess.attach(open.ResumeFromSeq)
-	if err == nil && open.ReadOnly {
-		// Recorded here rather than only in registerClientSize below, which a resuming client skips.
-		// A follower cannot answer a terminal query, since its input is dropped, and counting one as
-		// an answerer makes the emulator stay silent and the querying program hang.
-		sess.markReadOnly(att.token)
+	tok := sess.reserveClient()
+	if open.ReadOnly {
+		// Recorded before anything is pumped. A follower cannot answer a terminal query, since its
+		// input is dropped, and counting one as an answerer makes the emulator stay silent and the
+		// querying program hang.
+		sess.markReadOnly(tok)
 	}
+
+	// Sized before the screen is taken, so the snapshot below describes this client's width. Whether
+	// this client's size wins depends on the configured policy, which only matters once several
+	// clients are attached. On resume the client already matches, so nothing is resized and the shell
+	// is not made to redraw for no reason.
+	if open.ResumeFromSeq == nil {
+		if err := s.sizeForAttach(ctx, sess, tok, open); err != nil {
+			sess.releaseClient(tok)
+			return err
+		}
+	}
+
+	att, err := sess.attach(open.ResumeFromSeq, tok)
 	if err != nil {
+		sess.releaseClient(tok)
 		if errors.Is(err, ErrSessionGone) {
 			// The shell exited between Open and here. Report it the way the streaming loop below
 			// does rather than failing the call: the session really did run and really did exit, so
@@ -157,44 +175,6 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		return err
 	}
 
-	// Whether this client's size wins depends on the configured policy, which only matters once
-	// several clients are attached. On resume the client already matches, so nothing is resized and
-	// the shell is not made to redraw for no reason.
-	if open.ResumeFromSeq == nil {
-		rows, cols, x, y, resize := sess.registerClientSize(
-			att.token, uint16(open.Rows), uint16(open.Cols),
-			uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
-		)
-		if resize {
-			// ResizeSignal rather than Resize: on a fresh attach the shell has to redraw even when
-			// the size is unchanged, or a program that repaints only on SIGWINCH keeps updating a
-			// screen that is now the snapshot replayed below.
-			if err := sess.ResizeSignal(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
-				// A shim that has gone away is not a sizing failure, it is the session ending, and
-				// the same race as above one step later: attach succeeded, then the shell exited
-				// before this resize reached the shim. Sizing a session that no longer exists is
-				// moot, so the attach continues and the loop below reports the exit status.
-				//
-				// Without this, `cm run` on a fast command failed with "sizing session s9: ttrpc:
-				// closed" instead of the command's exit code, about one run in ten on Linux.
-				//
-				// Two ways to recognize it, because they can arrive in either order. The session may
-				// already be marked ended, or the shim may say so first: the server learns of an exit
-				// by watching the output stream, so a resize can reach a shim whose pty is already
-				// released while this session still looks alive.
-				if ended, _ := sess.Ended(); !ended && !isSessionOver(err) {
-					sess.detach(att)
-					return fmt.Errorf("sizing session %s: %w", sess.name, err)
-				}
-				s.mgr.log.Info("skipped sizing a session that ended while attaching",
-					"session", sess.name)
-			}
-			ir, ic := int(rows), int(cols)
-			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
-				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
-			}
-		}
-	}
 	// A client attaching from inside another session freezes that session's metadata for as long as
 	// it runs. See Session.beginHosting: the parent's shell is blocked inside `cm attach`, so every
 	// report on its pty for this interval is really this child's, arriving there only because the
@@ -377,6 +357,59 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return ctx.Err()
 		}
 	}
+}
+
+// sizeForAttach settles the session's size for a freshly attaching client, before its screen is
+// serialized.
+//
+// Called with a reserved token rather than an attachment, which is what lets it run ahead of the
+// snapshot. Returns an error only when the attach itself should fail; a shim that has gone away is
+// reported to the log and left to the streaming loop, which has the exit status.
+func (s *Service) sizeForAttach(
+	ctx context.Context,
+	sess *Session,
+	tok *attachToken,
+	open *serverv1.Open,
+) error {
+	rows, cols, x, y, resize := sess.registerClientSize(
+		tok, uint16(open.Rows), uint16(open.Cols),
+		uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
+	)
+	if !resize {
+		return nil
+	}
+
+	// ResizeSignal rather than Resize: on a fresh attach the shell has to redraw even when the size
+	// is unchanged, or a program that repaints only on SIGWINCH keeps updating a screen that is now
+	// the snapshot replayed below.
+	//
+	// The redraw this provokes is also why the ordering here matters beyond wrapping. Whatever the
+	// shell emits in response is generated now, ahead of the snapshot, so it is part of the screen
+	// being serialized instead of arriving interleaved with the replay of it.
+	if err := sess.ResizeSignal(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+		// A shim that has gone away is not a sizing failure, it is the session ending: the attach
+		// succeeded, then the shell exited before this resize reached the shim. Sizing a session that
+		// no longer exists is moot, so the attach continues and the streaming loop reports the exit
+		// status.
+		//
+		// Without this, `cm run` on a fast command failed with "sizing session s9: ttrpc: closed"
+		// instead of the command's exit code, about one run in ten on Linux.
+		//
+		// Two ways to recognize it, because they can arrive in either order. The session may already
+		// be marked ended, or the shim may say so first: the server learns of an exit by watching the
+		// output stream, so a resize can reach a shim whose pty is already released while this session
+		// still looks alive.
+		if ended, _ := sess.Ended(); !ended && !isSessionOver(err) {
+			return fmt.Errorf("sizing session %s: %w", sess.name, err)
+		}
+		s.mgr.log.Info("skipped sizing a session that ended while attaching", "session", sess.name)
+	}
+
+	ir, ic := int(rows), int(cols)
+	if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
+		s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+	}
+	return nil
 }
 
 // recvLoop handles client-to-server events until the stream ends.

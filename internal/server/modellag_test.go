@@ -51,7 +51,7 @@ func TestAttachStreamsFromTheModelNotTheLog(t *testing.T) {
 	// every time it delivers before feeding.
 	sess.recent.Append([]byte(lagging))
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

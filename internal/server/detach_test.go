@@ -113,7 +113,7 @@ func TestEvictClientsCountsEveryClient(t *testing.T) {
 
 	var atts []attachment
 	for range 3 {
-		att, err := sess.attach(nil)
+		att, err := sess.attach(nil, nil)
 		if err != nil {
 			t.Fatalf("attach() error = %v", err)
 		}

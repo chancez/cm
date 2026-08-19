@@ -59,7 +59,7 @@ func TestConcurrentAttachDetachWhileSessionEnds(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			att, err := sess.attach(nil)
+			att, err := sess.attach(nil, nil)
 			if err != nil {
 				// Expected once the session is over. The contract is that it fails cleanly rather than
 				// returning a half-built attachment.
@@ -181,7 +181,7 @@ func TestConcurrentReaderCloseWhileBlocked(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range stressRounds {
-		att, err := sess.attach(nil)
+		att, err := sess.attach(nil, nil)
 		if err != nil {
 			t.Fatalf("attach() error = %v", err)
 		}
@@ -310,7 +310,7 @@ func TestConcurrentKillWithAttachedClients(t *testing.T) {
 	var wg sync.WaitGroup
 	// Readers that will be in flight when the kill lands.
 	for range 10 {
-		att, err := sess.attach(nil)
+		att, err := sess.attach(nil, nil)
 		if err != nil {
 			t.Fatalf("attach() error = %v", err)
 		}

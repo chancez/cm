@@ -49,6 +49,30 @@ Reversed, the snapshot describes lines wrapped for the old width and the client 
 again, so the screen arrives mangled. Only visible when a client attaches at a size the session
 does not already have.
 
+This has been broken twice, and both times it produced two symptoms that read as unrelated bugs:
+
+- **Rows arrive spliced.** A soft wrap is serialized as a hard `\r\n`, because the formatter has
+  no option to preserve wrap state. That is harmless *only* when the model already matches the
+  client, which is what this ordering guarantees. Measured against a 60-column session attached
+  from a 100-column window: the broken order renders `...for your changes.` and `Lines starting"`
+  on separate rows, the correct one renders the line whole.
+- **A literal `]2;` on screen.** The resize makes the shell redraw, so anything its SIGWINCH
+  handler emits is generated *after* the screen was serialized and interleaves with the replay
+  rather than being part of it. A zsh `TRAPWINCH` setting the title is enough: the OSC 2 arrives
+  with its `ESC` already consumed by the bytes ahead of it.
+
+The second regression came from the configurable resize policy, which decides with an attach
+token and could only get one from `attach`, so the sizing block moved below it. The fix is
+`reserveClient`, which hands out a token before attaching; the ordering is not restorable by
+moving the call alone.
+
+The test that shipped with the first fix could not catch the second break. It drives
+`sess.Resize` and `sess.attach` itself, in the correct order, and asserts on the session, so it
+passed while the service did the opposite of what its own comment said. The ordering is only
+observable through `Service.Attach`, and the assertion has to be on the size the model held *when
+the screen was taken*: a late resize leaves the model looking correct afterwards while the bytes
+already captured describe the old width.
+
 ## What is deliberately excluded
 
 - **Synchronized output (DECSET 2026)** is suppressed across serialization and restored
@@ -99,6 +123,13 @@ escaping.
 Kitty graphics and OSC 8 hyperlink targets are absent from a restored screen, because
 libghostty's formatter does not re-emit them. Both work in live output. zmx has the same gap
 and the fix belongs upstream.
+
+Soft wraps are serialized as hard `\r\n`. The formatter's only wrap-related option is `unwrap`,
+which drops the break entirely, and that is not a substitute: the cursor position emitted with
+the screen is absolute, so unwrapping content that then occupies fewer rows leaves the cursor a
+row low and typing lands on the wrong line. Measured, and the reason the ordering above is the
+fix rather than an `unwrap: true`. It only matters when the model and the client disagree about
+width, which resizing first prevents.
 
 ## Two sequence numbers, and why conflating them corrupted the prompt
 

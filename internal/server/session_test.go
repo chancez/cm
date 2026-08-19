@@ -31,6 +31,12 @@ type fakeTerminal struct {
 	pending  [][]byte
 	title    string
 	pwd      string
+	// restoreRows and restoreCols are the size the model held the last time Restore was called, and
+	// restoredAt counts the calls. Together they answer "was the screen serialized at the size the
+	// client will display it at", which is the ordering a snapshot depends on.
+	restoreRows uint16
+	restoreCols uint16
+	restoredAt  int
 	// focusReporting stands in for DECSET 1004 being enabled by the program.
 	focusReporting bool
 
@@ -59,6 +65,12 @@ func (f *fakeTerminal) Write(p []byte) error {
 func (f *fakeTerminal) Restore() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// The size the model held when the screen was serialized, which is the thing that has to match
+	// the client the bytes are being sent to. Recorded rather than asserted on the model's current
+	// size afterwards: a resize that lands *after* the snapshot leaves the model looking correct
+	// while the bytes already taken describe the old width.
+	f.restoreRows, f.restoreCols = f.rows, f.cols
+	f.restoredAt++
 	return f.restore, nil
 }
 
@@ -261,7 +273,7 @@ func TestSessionFeedsTerminalModel(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -296,7 +308,7 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 	readUntil(t, warm, "HELLO")
 	warm.Close()
 
-	fresh, err := sess.attach(nil)
+	fresh, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("fresh attach() error = %v", err)
 	}
@@ -309,7 +321,7 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 	}
 
 	from := uint64(0)
-	resumed, err := sess.attach(&from)
+	resumed, err := sess.attach(&from, nil)
 	if err != nil {
 		t.Fatalf("resumed attach() error = %v", err)
 	}
@@ -346,7 +358,7 @@ func TestAttachWithoutTerminalReplaysRecentOutput(t *testing.T) {
 	warm.Close()
 
 	// Attaching after that output was produced must still show it.
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -373,11 +385,11 @@ func TestMultipleClientsEachSeeOutput(t *testing.T) {
 	}
 	defer sess.Close()
 
-	a1, err := sess.attach(nil)
+	a1, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
-	a2, err := sess.attach(nil)
+	a2, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}
@@ -417,7 +429,7 @@ func TestSessionEndsWhenShellExits(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -476,7 +488,7 @@ func TestAttachToEndedSessionFails(t *testing.T) {
 		t.Fatal("session did not end")
 	}
 
-	if _, err := sess.attach(nil); !errors.Is(err, ErrSessionGone) {
+	if _, err := sess.attach(nil, nil); !errors.Is(err, ErrSessionGone) {
 		t.Errorf("attach() error = %v, want ErrSessionGone", err)
 	}
 }
@@ -497,7 +509,7 @@ func TestTerminalWriteFailureDoesNotKillSession(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -529,7 +541,7 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 		t.Errorf("initial LastSeq() = %d, want 0", got)
 	}
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -569,7 +581,7 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 	}
 	defer second.Close()
 
-	a2, err := second.attach(nil)
+	a2, err := second.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -714,7 +726,7 @@ func TestAttachSnapshotsAtTheClientsSize(t *testing.T) {
 	if err := sess.Resize(context.Background(), 40, 120, 0, 0); err != nil {
 		t.Fatalf("Resize() error = %v", err)
 	}
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -756,7 +768,7 @@ func TestReportFocusOnlyWhenProgramAsked(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -789,7 +801,7 @@ func TestReportFocusSilentWhenNotRequested(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -822,7 +834,7 @@ func TestDetachReportsLastClient(t *testing.T) {
 	}
 	defer sess.Close()
 
-	a1, err := sess.attach(nil)
+	a1, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -866,7 +878,7 @@ func TestAttachStreamStartsOnASequenceBoundary(t *testing.T) {
 
 	// The property: a fresh attach must start exactly at the end of the rewritten log, so no
 	// partial sequence is delivered.
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
