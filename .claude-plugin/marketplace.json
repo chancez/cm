@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "cm",
+  "description": "The cm skill: driving persistent terminal sessions and orchestrating agents in them.",
+  "owner": {
+    "name": "chancez",
+    "url": "https://github.com/chancez"
+  },
+  "plugins": [
+    {
+      "name": "cm",
+      "source": "./.claude-plugin/plugins/cm",
+      "description": "Run and drive work in cm sessions: persistent terminal sessions that outlive the caller, each a real pty, so interactive programs and coding agents work in one."
+    }
+  ]
+}

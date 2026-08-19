@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "cm",
+  "description": "Run and drive work in cm sessions: persistent terminal sessions that outlive the caller, each a real pty, so interactive programs and coding agents work in one.",
+  "author": {
+    "name": "chancez",
+    "url": "https://github.com/chancez"
+  },
+  "homepage": "https://github.com/chancez/cm",
+  "repository": "https://github.com/chancez/cm",
+  "keywords": ["terminal", "multiplexer", "sessions", "pty", "orchestration"]
+}
