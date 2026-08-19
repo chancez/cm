@@ -81,7 +81,7 @@ func TestNoAnswerInjectedWhileClientAttached(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -163,7 +163,7 @@ func TestReadOnlyFollowerDoesNotSuppressAnswers(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestHasAnsweringClient(t *testing.T) {
 		t.Error("hasAnsweringClient() = true with nothing attached, want false")
 	}
 
-	interactive, err := sess.attach(nil)
+	interactive, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -207,7 +207,7 @@ func TestHasAnsweringClient(t *testing.T) {
 		t.Error("hasAnsweringClient() = false with an interactive client attached, want true")
 	}
 
-	follower, err := sess.attach(nil)
+	follower, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -253,11 +253,11 @@ func TestOnlyOneClientAnswersQueries(t *testing.T) {
 	}
 	defer sess.Close()
 
-	first, err := sess.attach(nil)
+	first, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
-	second, err := sess.attach(nil)
+	second, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}
@@ -315,13 +315,13 @@ func TestReadOnlyFollowerIsNeverTheAnswerer(t *testing.T) {
 	defer sess.Close()
 
 	// The follower attaches first, so an implementation that simply took the oldest would pick it.
-	follower, err := sess.attach(nil)
+	follower, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("follower attach() error = %v", err)
 	}
 	sess.markReadOnly(follower.token)
 
-	interactive, err := sess.attach(nil)
+	interactive, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("interactive attach() error = %v", err)
 	}

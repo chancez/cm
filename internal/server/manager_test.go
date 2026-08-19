@@ -99,7 +99,7 @@ func TestReconcileAdoptsLiveShim(t *testing.T) {
 		t.Fatal("session was not adopted")
 	}
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -292,7 +292,7 @@ func TestCloseLeavesShimRunningAndPersistsResumePoint(t *testing.T) {
 	if !live {
 		t.Fatal("session not adopted")
 	}
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -360,7 +360,7 @@ func TestListReportsLiveSequence(t *testing.T) {
 	}
 
 	sess, _ := mgr.Get("listed")
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

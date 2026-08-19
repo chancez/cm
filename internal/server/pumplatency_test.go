@@ -52,7 +52,7 @@ func TestPumpDeliversOutputBeforeFeedingTerminal(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestPumpStillFeedsTerminalModel(t *testing.T) {
 	}
 	defer sess.Close()
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

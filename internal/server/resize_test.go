@@ -21,7 +21,7 @@ func resizeFixture(t *testing.T, policy ResizePolicy) *Session {
 // attachAt attaches a client and reports its size, returning the decision.
 func attachAt(t *testing.T, sess *Session, rows, cols uint16, readOnly bool) (*attachToken, bool) {
 	t.Helper()
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestResizeLastAttach(t *testing.T) {
 		t.Error("first attach did not size the session")
 	}
 	rows, cols := uint16(0), uint16(0)
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestResizeSmallest(t *testing.T) {
 	sess := resizeFixture(t, ResizeSmallest)
 
 	rows, cols, _, _, resize := func() (uint16, uint16, uint16, uint16, bool) {
-		att, err := sess.attach(nil)
+		att, err := sess.attach(nil, nil)
 		if err != nil {
 			t.Fatalf("attach() error = %v", err)
 		}
@@ -160,7 +160,7 @@ func TestResizeSmallest(t *testing.T) {
 
 	// A smaller client constrains both dimensions independently, since a window can be shorter and
 	// wider at once.
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

@@ -1144,13 +1144,62 @@ type attachment struct {
 	evict chan struct{}
 }
 
+// reserveClient registers a client for sizing before it has attached, returning its token.
+//
+// This exists so the caller can settle the session's size *before* the screen is serialized. The
+// sizing policy needs a token to decide with, and the token used to come only from attach, which
+// forced the resize to happen after the snapshot and reintroduced a bug that had already been fixed
+// once: a screen serialized at the old width, and a shell redraw generated after those bytes were
+// taken. See Service.Attach for the two symptoms.
+//
+// The reservation is discarded by detach along with everything else keyed by the token, so a caller
+// that reserves and then fails to attach leaves nothing behind as long as it releases it.
+func (s *Session) reserveClient() *attachToken {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reserveClientLocked()
+}
+
+// reserveClientLocked allocates the token and its size entry.
+//
+// Split out because attach also needs it while already holding mu, and the ordering of the counter
+// and the map entry must be identical on both paths.
+func (s *Session) reserveClientLocked() *attachToken {
+	s.attachOrder++
+	token := &attachToken{order: s.attachOrder}
+	s.clientSizes[token] = &clientSize{order: s.attachOrder}
+	return token
+}
+
+// releaseClient drops a reservation that never became an attachment.
+//
+// Without it a client whose attach failed between reserving and attaching would leave a size entry
+// behind, and under ResizeLeader that entry is enough to hold sizing: the session would keep sizing
+// itself to a window that no longer exists.
+//
+// Deliberately not releaseClientSize, which is the detach path and recomputes the session's size so
+// it can grow once a constraint leaves. Nothing is ever displayed for a reservation that failed, so
+// there is no size to give back: resizing the pty here would make the shell redraw for a client that
+// never arrived, and under ResizeSmallest it would resize the session twice for one failed attach.
+func (s *Session) releaseClient(tok *attachToken) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.clientSizes, tok)
+	if s.leader == tok {
+		s.leader = nil
+	}
+}
+
 // attach registers a subscriber and returns it along with the sequence number its stream
 // begins at.
+//
+// tok is a token from reserveClient, so the caller can size the session before the screen is taken.
+// Passing nil allocates one here, which is what a caller with no sizing to do wants.
 //
 // The caller gets restore bytes and a starting sequence under one lock, so no output can
 // slip between snapshotting the screen and subscribing. Getting that wrong would show a
 // client a screen that is either missing bytes or replaying them twice.
-func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
+func (s *Session) attach(resumeFrom *uint64, tok *attachToken) (attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1170,7 +1219,7 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 	if resumeFrom == nil && len(s.restored) > 0 {
 		restore = s.restored
 		s.restored = nil
-		return s.newAttachmentLocked(s.recent.Next(), restore), nil
+		return s.newAttachmentLocked(s.recent.Next(), restore, tok), nil
 	}
 
 	if resumeFrom != nil {
@@ -1207,7 +1256,7 @@ func (s *Session) attach(resumeFrom *uint64) (attachment, error) {
 		from = modelEnd
 	}
 
-	return s.newAttachmentLocked(from, restore), nil
+	return s.newAttachmentLocked(from, restore, tok), nil
 }
 
 // SubscribeOutput follows the session's output from its current position.
@@ -1230,10 +1279,14 @@ func (s *Session) SubscribeOutput() *seqlog.Reader {
 // One place rather than at each return, because there are two paths out of attach and the earlier
 // version registered on only one of them, so a client restored from disk had no size entry and could
 // never own sizing.
-func (s *Session) newAttachmentLocked(from uint64, restore []byte) attachment {
-	s.attachOrder++
-	token := &attachToken{order: s.attachOrder}
-	s.clientSizes[token] = &clientSize{order: s.attachOrder}
+// tok is the reservation from reserveClient when the caller made one, so the size entry it already
+// holds is kept rather than replaced: replacing it would discard the size the session was just resized
+// to and, under ResizeLeader, the leadership that went with it.
+func (s *Session) newAttachmentLocked(from uint64, restore []byte, tok *attachToken) attachment {
+	token := tok
+	if token == nil {
+		token = s.reserveClientLocked()
+	}
 
 	evict := make(chan struct{})
 	// Lazily created, so a Session built field by field rather than through newSession still attaches.

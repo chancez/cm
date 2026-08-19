@@ -267,7 +267,7 @@ func TestRestoredScreenGoesToFirstClientOnly(t *testing.T) {
 
 	sess.setRestored([]byte("SCREEN_FROM_BEFORE"))
 
-	first, err := sess.attach(nil)
+	first, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
@@ -276,7 +276,7 @@ func TestRestoredScreenGoesToFirstClientOnly(t *testing.T) {
 	}
 	sess.detach(first)
 
-	second, err := sess.attach(nil)
+	second, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}
@@ -300,7 +300,7 @@ func TestRestoredScreenSkippedOnResume(t *testing.T) {
 	sess.setRestored([]byte("SCREEN_FROM_BEFORE"))
 
 	from := uint64(0)
-	att, err := sess.attach(&from)
+	att, err := sess.attach(&from, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -328,7 +328,7 @@ func TestRestoredScreenStreamStartsAtPresent(t *testing.T) {
 
 	sess.setRestored([]byte("SCREEN"))
 
-	att, err := sess.attach(nil)
+	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
