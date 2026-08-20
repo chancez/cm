@@ -56,6 +56,42 @@ records that fact, so the pump ending is not mistaken for the session ending: wi
 distinction a clean shutdown marks every live session dead and the next server refuses to
 adopt them.
 
+### A client retries forever, and why the bound had to go
+
+Reconnecting is unbounded: a client that has once reached the server keeps trying until it is
+cancelled. Cancellation is `ctx`, which the closing window delivers, so nothing waits against the
+user's wishes.
+
+There used to be a 30s budget, and it killed live sessions. The bug was not the length but where the
+clock started: the deadline was armed on a client's *first* failure and never rearmed after a
+successful reconnect, so it bounded the client's whole lifetime rather than any one outage. A window
+open for hours had already spent it on earlier restarts, and the next restart ended it.
+
+Measured from the logs of the incident. One `cm server stop` and restart: three sessions died and
+twenty survived. The three were the only clients that retried inside the ~180ms before the new server
+bound its socket, so they saw a dial failure where the others saw a live server, and all three had
+first reconnected hours earlier (08:31 and 10:18 against a 14:43 restart) with no budget left. Every
+survivor was on a first or recent reconnect. Two of the three shims recorded `shell_exited=false`,
+which is the tell: the shell was still alive and its terminal was discarded anyway.
+
+Unbounded is also correct independent of that bug, and follows from the layering. The shim owns the pty
+and the shell keeps running with no server at all, so a server that is slow to come back is a reason to
+wait rather than a reason to throw away a terminal someone is using. The asymmetry to keep: a *first*
+dial that fails is still a hard error, because there is no session on screen to preserve and no reason
+to think one is coming, which is what makes a typo in a socket path report itself instead of hanging.
+
+Two consequences of never giving up:
+
+- **Backoff.** After `reconnectQuietPeriod` the retry interval goes from 100ms to 1s, so a server that
+  is gone for good is not dialled ten times a second for the life of the window.
+- **Logging on a delay.** A reconnect used to be logged every time, which with twenty sessions meant
+  twenty lines per restart saying nothing had gone wrong, and that noise is what hid the real outages.
+  Nothing is logged for the first 3 seconds, which covers an ordinary 450ms restart entirely. Past that
+  the outage is reported, repeated every 30s while it lasts, and its recovery is noted -- but only if
+  the outage itself was reported, so a quiet restart stays quiet on both sides. Silence matters more
+  than it used to: the client holds the terminal while it waits, and with no eventual error to explain
+  it, an unexplained freeze is indistinguishable from a hang.
+
 ### A restart does not drop output, measured
 
 Worth recording because the question keeps coming back, and because two bugs that *looked* like
