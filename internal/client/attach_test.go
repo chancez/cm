@@ -234,9 +234,11 @@ func sendOpened(srv serverv1.Server_AttachServer, session string, nextSeq uint64
 
 // An unreachable server on the first attempt is a hard failure, not a wait.
 //
-// The distinction is the whole point of the deadline being zero until something has connected. A first attempt
-// that retried for thirty seconds would make a typo in a socket path look like a hang, and `cm attach` against
-// a stopped server would appear to freeze rather than report the problem.
+// This is what `everConnected` is for, and the distinction carries more weight now that reconnecting is
+// unbounded: a first attempt that entered the retry loop would never come back at all, so a typo in a
+// socket path or `cm attach` against a stopped server would hang forever instead of reporting the
+// problem. Losing a server that *was* there is the opposite case, since a session is on screen and its
+// shell is still running behind the shim.
 func TestAttachFailsImmediatelyWhenTheServerWasNeverReachable(t *testing.T) {
 	tty, opts := attachOpts(t, filepath.Join(t.TempDir(), "nope.sock"))
 
@@ -247,11 +249,11 @@ func TestAttachFailsImmediatelyWhenTheServerWasNeverReachable(t *testing.T) {
 	if err == nil {
 		t.Fatal("Attach() error = nil, want a failure for an unreachable server")
 	}
-	// Well under reconnectTimeout, which is what shows it did not enter the retry loop. Generous, since this
-	// only has to distinguish "returned promptly" from "waited out a 30s budget".
+	// Any bound distinguishes "returned promptly" from "entered the retry loop", which no longer has an
+	// end. Generous so a loaded machine does not fail this for timing reasons.
 	if elapsed > 5*time.Second {
-		t.Errorf("Attach() took %s to fail, want a prompt failure rather than the %s retry budget",
-			elapsed, reconnectTimeout)
+		t.Errorf("Attach() took %s to fail, want a prompt failure rather than an unbounded retry",
+			elapsed)
 	}
 }
 
@@ -371,7 +373,8 @@ func TestAttachStopsOnContextCancelDuringAnOutage(t *testing.T) {
 		done <- err
 	}()
 
-	// Wait for the connection, so the client is past its first dial and the deadline has started.
+	// Wait for the connection, so the client is past its first dial and is in the retry path rather
+	// than the never-connected one.
 	deadline := time.Now().Add(5 * time.Second)
 	for svc.connections() < 1 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -383,8 +386,8 @@ func TestAttachStopsOnContextCancelDuringAnOutage(t *testing.T) {
 	// Now the server is gone, so every retry fails to dial.
 	stop()
 
-	// Long enough for at least one failed dial, and far short of the 30s budget: if cancellation were ignored,
-	// the call would run for the full budget rather than returning here.
+	// Long enough for at least one failed dial, so cancellation lands while the client is genuinely
+	// retrying rather than before it has started.
 	time.Sleep(3 * reconnectInterval)
 	cancel()
 
@@ -394,8 +397,12 @@ func TestAttachStopsOnContextCancelDuringAnOutage(t *testing.T) {
 			t.Errorf("Attach() error = %v, want context.Canceled", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Errorf("Attach() did not return within 10s of cancellation, want it to stop rather than dial out "+
-			"the %s budget", reconnectTimeout)
+		// This is now the only thing that stops a reconnecting client, so it carries the weight the
+		// retry budget used to. With no deadline left in the loop, a cancellation that was ignored means
+		// the client waits for a server that is never coming back, for as long as the window is open.
+		t.Error("Attach() did not return within 10s of cancellation, want it to stop.\n" +
+			"Retrying is unbounded, so ctx is the only cancel signal: if this regresses, a closed window " +
+			"leaves a client dialling forever rather than exiting.")
 	}
 }
 

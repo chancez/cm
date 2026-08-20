@@ -16,12 +16,30 @@ import (
 )
 
 const (
-	// reconnectTimeout bounds how long to keep trying to reach the server before giving
-	// up. Generous enough to cover a restart or an upgrade, short enough that a client
-	// whose server is gone for good does not hang indefinitely.
-	reconnectTimeout = 30 * time.Second
-	// reconnectInterval is how often to retry while the server is away.
+	// reconnectInterval is how often to retry while the server is away, for as long as the outage
+	// looks like an ordinary restart.
 	reconnectInterval = 100 * time.Millisecond
+	// reconnectSlowInterval is how often to retry once an outage has outlasted
+	// reconnectQuietPeriod.
+	//
+	// Backing off matters because retrying is now unbounded: a client whose server is never coming
+	// back would otherwise dial ten times a second for as long as the window stays open. Reached only
+	// after the quiet period, so an ordinary restart still reconnects at the fast interval and pays
+	// nothing for this.
+	reconnectSlowInterval = 1 * time.Second
+	// reconnectQuietPeriod is how long an outage may last before it is worth mentioning.
+	//
+	// A restart takes about 450ms (docs/architecture.md), so anything under a few seconds is the
+	// expected case and logging it is noise: a user restarting the server would get a line per session
+	// per restart, which is what made the log useless for finding a real outage. Past this the outage
+	// is no longer routine and silence is the worse failure, since the client holds the terminal and a
+	// wait looks identical to a hang.
+	reconnectQuietPeriod = 3 * time.Second
+	// reconnectLogInterval is how often to repeat that an outage is still going.
+	//
+	// Repeated rather than logged once, so a session that has been waiting ten minutes says so instead
+	// of leaving a single stale line from the moment it started waiting.
+	reconnectLogInterval = 30 * time.Second
 	// inputReadSize bounds a single read of keystrokes. Human input is small; this only
 	// needs to cover a paste arriving in one read.
 	inputReadSize = 4096
@@ -197,27 +215,41 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	inputErr := make(chan error, 1)
 	go readInput(tty, input, inputErr)
 
-	deadline := time.Time{}
+	// outage tracks the current disconnection: when it started, whether it has been reported, and
+	// whether this client has ever been connected at all.
+	//
+	// Retrying is deliberately unbounded, and replaces a 30s budget that killed real sessions. That
+	// budget was set on a client's *first* failure and never reset on a successful reconnect, so it was
+	// a limit on a client's whole lifetime rather than on one outage: a window open for hours had
+	// already spent it on earlier restarts, and the next restart closed it. Observed with three
+	// sessions dying together while every other session reconnected, the difference being only that
+	// those three had first reconnected hours earlier.
+	//
+	// Unbounded is also the right behavior independent of that bug. The shim holds the pty and the shell
+	// keeps running, so a server that is slow to come back is a reason to wait, not a reason to discard
+	// a terminal someone is using. The cancel signal is ctx, which a closing window delivers, so
+	// nothing waits forever against the user's wishes.
+	var outage outageState
 	for {
 		conn, cl, err := dial(opts.SocketPath)
 		if err != nil {
-			// The server is unreachable. On a first attempt that is a hard failure; while
-			// reconnecting it is expected, so keep trying until the deadline.
-			if deadline.IsZero() {
+			// A first attempt that cannot reach the server is a hard failure: there is no session on
+			// screen to preserve and no reason to think one is coming. Once connected, the same error
+			// means an outage, which is waited out however long it takes.
+			if !outage.everConnected {
 				return result, fmt.Errorf("connecting to server: %w", err)
 			}
-			if time.Now().After(deadline) {
-				return result, fmt.Errorf("server did not return within %s: %w",
-					reconnectTimeout, err)
-			}
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(reconnectInterval):
+			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
+			outage.report(log)
+			if waitErr := outage.sleep(ctx); waitErr != nil {
+				return result, waitErr
 			}
 			continue
 		}
 		log.Debug("connected to the server", "resume_from", resumeFromValue(resumeFrom))
+		// Reached the server, so any outage is over. Logged only if it was reported, which keeps an
+		// ordinary restart silent on both sides rather than announcing a recovery nobody was told about.
+		outage.end(log)
 
 		outcome, err := runSession(ctx, tty, cl, opts, &result, &resumeFrom, &pending, winch, input, inputErr)
 		conn.Close()
@@ -226,22 +258,106 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		case outcomeDone:
 			return result, err
 		case outcomeReconnect:
-			// Start the clock on the first failure, so the budget covers the outage rather
-			// than resetting on every retry.
-			if deadline.IsZero() {
-				deadline = time.Now().Add(reconnectTimeout)
-			}
-			// Logged because a reconnect is invisible otherwise: the client holds the terminal through it, so
-			// a user sees a pause and nothing else, and a session that dropped repeatedly looks the same as
-			// one that never did.
-			log.Info("reconnecting to the server",
-				"error", err, "resume_from", resumeFromValue(resumeFrom), "pending_bytes", len(pending))
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(reconnectInterval):
+			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
+			outage.report(log)
+			if waitErr := outage.sleep(ctx); waitErr != nil {
+				return result, waitErr
 			}
 		}
+	}
+}
+
+// outageState tracks one disconnection, so the reconnect loop can wait indefinitely without either
+// logging every routine restart or going silent through a long outage.
+//
+// A struct rather than a handful of locals because the two call sites in the loop, a failed dial and a
+// dropped session, have to treat an outage identically. They did not before: only one of them logged,
+// so a client that could not dial at all left nothing in the log, which is exactly the case that
+// needed explaining.
+type outageState struct {
+	// everConnected distinguishes "never reached the server" from "lost the server", which get
+	// opposite treatment: the first fails immediately, the second waits.
+	everConnected bool
+	// since is when the current outage began, zero when connected.
+	since time.Time
+	// reported is whether this outage has been logged, so recovery is announced only if the problem
+	// was.
+	reported bool
+	// lastLogged is when this outage was last mentioned, for the periodic reminder.
+	lastLogged time.Time
+	// err, resumeFrom, and pending describe the outage for the log.
+	err        error
+	resumeFrom int64
+	pending    int
+}
+
+// begin records that an outage is in progress, keeping the start time of the first failure.
+func (o *outageState) begin(err error, resumeFrom int64, pending int) {
+	if o.since.IsZero() {
+		o.since = time.Now()
+	}
+	o.err = err
+	o.resumeFrom = resumeFrom
+	o.pending = pending
+}
+
+// report logs an outage that has lasted long enough to be worth mentioning, and repeats periodically.
+//
+// Silent below reconnectQuietPeriod, which is the whole point: a server restart takes about 450ms and
+// the client recovers by itself, so logging it produced one line per session per restart and buried the
+// outages that mattered. Past the quiet period the reasoning inverts, because the client holds the
+// terminal while it waits and an unexplained freeze is indistinguishable from a hang.
+func (o *outageState) report(log *slog.Logger) {
+	if o.since.IsZero() {
+		return
+	}
+	waited := time.Since(o.since)
+	if waited < reconnectQuietPeriod {
+		return
+	}
+	if o.reported && time.Since(o.lastLogged) < reconnectLogInterval {
+		return
+	}
+
+	// Rounded, since the exact microsecond of an outage is noise and a round number is what a reader
+	// compares against the restart they just did.
+	log.Info("waiting for the server to return",
+		"error", o.err, "waited", waited.Round(100*time.Millisecond),
+		"resume_from", o.resumeFrom, "pending_bytes", o.pending)
+	o.reported = true
+	o.lastLogged = time.Now()
+}
+
+// end clears the outage, reporting recovery only when the outage itself was reported.
+func (o *outageState) end(log *slog.Logger) {
+	o.everConnected = true
+	if o.since.IsZero() {
+		return
+	}
+	if o.reported {
+		log.Info("server returned", "outage", time.Since(o.since).Round(100*time.Millisecond))
+	}
+	o.since = time.Time{}
+	o.reported = false
+	o.lastLogged = time.Time{}
+	o.err = nil
+}
+
+// sleep waits before the next attempt, or returns ctx's error if the client was cancelled.
+//
+// Backs off once the outage is no longer routine. Since retrying never gives up, a server that is gone
+// for good would otherwise be dialled ten times a second for the life of the window; after the quiet
+// period the same outage is retried once a second, which still reconnects promptly by human standards.
+func (o *outageState) sleep(ctx context.Context) error {
+	interval := reconnectInterval
+	if !o.since.IsZero() && time.Since(o.since) >= reconnectQuietPeriod {
+		interval = reconnectSlowInterval
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(interval):
+		return nil
 	}
 }
 
