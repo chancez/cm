@@ -225,7 +225,75 @@ have those modes on. zmx hit this with a program that enables modifyOtherKeys on
 
 The `[env]` section controls which environment variables follow a client into a session.
 
-### The problem it solves
+### Two mechanisms, for two different questions
+
+They differ in *when* they apply, which decides everything else about them, and conflating them was a
+bug rather than a hypothetical:
+
+- **Forwarded at creation.** A new session's shell starts from the environment of the client that
+  created it, less the dynamic linker variables (`NoInherit` in `internal/sessionenv`). It answers
+  "what environment is this shell born with", and it is not configurable, because the useful answer is
+  "the same as the thing that created it".
+- **Captured on every attach**, and served by `cm get-env` to a shell that is *already running*. It
+  answers "what has changed about the terminal since this shell started": `TERM`, the `KITTY_*`
+  family, `SSH_AUTH_SOCK` and the rest, in `DefaultCapture`. The `[env]` settings below configure
+  this list, and only this list.
+
+Forwarding is what makes a session resemble the thing that opened it. Created by hand from a shell, it
+gets that shell's environment, the way a subshell would. Created by a terminal emulator's integration,
+it gets the emulator's, which is close to fresh because such a client has no shell between it and the
+service manager that launched it: 14 variables against a login shell's 60, measured here. Neither
+needs a flag, because the client's own ancestry is the signal.
+
+The environment is fixed when the shell starts and never rewritten afterwards. That is the same
+contract a terminal split has, and picking up a changed shell config by closing a window and opening a
+new one is the intended workflow rather than a limitation. Refreshing a *running* shell is what
+`get-env` is for, and it is deliberately limited to the captured list, since rewriting `PATH` under a
+live shell would fight whatever it and its tooling had since done to their own.
+
+Two consequences worth stating plainly. A client's secrets reach the sessions it creates, exactly as
+they reach a terminal split started from the same shell; nothing is filtered by name. And nothing
+forwarded is written to disk: the captured list is recorded in the session record, which is a file, and
+it is an allow-list for that reason, while a forwarded environment only ever reaches the shim's own
+process environment.
+
+The exception is the dynamic linker variables, which are dropped. `LD_PRELOAD`, `LD_AUDIT`,
+`LD_LIBRARY_PATH`, and the `DYLD_*` family choose what code a process loads rather than how it behaves.
+sshd defaults `PermitUserEnvironment` to `no` and names `LD_PRELOAD` as the reason; cm has no
+equivalent trust boundary to defend, since the client is a local process already running as you, but
+the exclusion is cheap and has a precedent where a broader denylist guessing at which names hold
+secrets would have neither. An explicit `--env LD_PRELOAD=...` is still honored, because that is a
+request rather than something travelling silently.
+
+`SHELL` is forwarded like anything else, which does mean a session runs the shell its creating client
+named. That is usually what you want and is worth knowing, since it also decides which program the
+shim execs.
+
+### Why a session's environment is not the server's
+
+A session's environment used to come entirely from the server, because the server spawns the shim
+and the shim spawns the shell. The server inherits from whatever shell started it, so a server
+running for weeks handed every new session a weeks-old environment.
+
+The symptom was a `PATH` entry that had been deleted from the dotfiles the day before still
+appearing in sessions created today, and every obvious escape fails: `exec zsh -l` re-reads config
+but still inherits the stale value, `typeset -gU path` only reorders and keeps obsolete tail
+entries, and `cm server restart` from a shell that already has the stale value pins it again. Only
+restarting from a fresh window fixed it, taking `PATH` from 88 entries to 27.
+
+Two measured facts hold the fix up, both asserted in tests rather than assumed:
+
+- Go's `exec` keeps the **last** occurrence of a duplicated name, which is what makes appending an
+  override rather than a silent no-op.
+- `exec.Command` does **not** resolve a program name against `cmd.Env`. Seeding the variable is
+  therefore not sufficient by itself; it works because the server puts these values in the shim's
+  own environment, which the shim then inherits, so a bare command name resolves against the right
+  `PATH`.
+
+The server's environment remains the fallback for everything nobody else supplies, which is what a
+session created by something with no environment worth copying should get.
+
+### The problem the captured list solves
 
 A terminal emulator describes itself to its child through the environment, and a session's shell
 captures those values once, when it starts. Reattaching from a different terminal, or from the

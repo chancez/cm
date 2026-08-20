@@ -73,7 +73,13 @@ to bind while something answers and the start path retries for ten seconds. The 
 makes that deterministic rather than dependent on a retry loop absorbing it.
 
 Starts a server even if none was running, since the caller wants one running
-afterwards either way.`,
+afterwards either way.
+
+The new server inherits the environment of the shell that runs this, and that is
+what a session falls back to for anything its own client does not supply. Sessions
+take their PATH and their terminal variables from the client that creates them, so
+this matters less than it once did, but restarting from a shell with an environment
+you would not want is still worth avoiding.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dirs, err := g.dirs()
