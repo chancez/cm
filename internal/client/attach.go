@@ -517,6 +517,22 @@ func runSession(
 				result.Detached = true
 				return outcomeDone, nil
 			}
+			if q := msg.resp.GetQuery(); q != nil {
+				// The server is asking this terminal a question it cannot answer itself: the background
+				// colour, the clipboard, the window's pixel size. Written to the terminal, whose reply
+				// travels back on the ordinary input path, where the server matches it to the request.
+				//
+				// Written to the tty rather than to opts.Output, and skipped entirely when there is no
+				// terminal to ask. A caller taking bytes programmatically has no terminal behind it, so a
+				// question written into that stream would corrupt what it is collecting and could never be
+				// answered. The server's request then expires, which is the same outcome as today.
+				if opts.Output == nil && !opts.ReadOnly {
+					if _, err := tty.Write(q.Data); err != nil {
+						return outcomeDone, err
+					}
+				}
+				continue
+			}
 			if m := msg.resp.GetMetadata(); m != nil {
 				if opts.OnMetadata != nil {
 					opts.OnMetadata(SessionMetadata{

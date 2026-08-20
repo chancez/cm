@@ -174,6 +174,26 @@ type Session struct {
 	// evicts holds each attachment's eviction channel, so `cm detach` can reach a client that is
 	// blocked waiting for output. Keyed by the same token as clientSizes, and removed by detach.
 	evicts map[*attachToken]chan struct{}
+	// queries holds each attachment's channel for questions cm needs that client to answer: the
+	// background colour, the clipboard, the window's pixel size. Keyed like evicts, and removed by detach.
+	//
+	// A channel per client rather than the output log, because these bytes are addressed to one client
+	// rather than to everything watching the session. Putting a question in the log would send it to every
+	// attached terminal and each would answer, which is the duplicate-reply bug in a new costume, and it
+	// would also record in the session's scrollback a question the shell never asked.
+	//
+	// Buffered, so the output pump is never blocked behind a slow client's socket. A full buffer drops the
+	// question, which costs one unanswered query rather than a stalled session.
+	queries map[*attachToken]chan []byte
+	// requests is the ordered queue of outstanding proxied questions and replies waiting behind them.
+	//
+	// One queue per session rather than per client, because the ordering that must be preserved is the
+	// *program's*: it asked its questions in an order down one pty and expects the answers in that order,
+	// regardless of which client each question went to. See pendingRequest.
+	requests []*pendingRequest
+	// clock reads the current time, so a test can drive request expiry without sleeping. Nil means
+	// time.Now.
+	clock func() time.Time
 	// leader is the attachment that last sent real typing, under ResizeLeader.
 	leader *attachToken
 	// attachOrder increases with each attach.
@@ -343,6 +363,7 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		evicts:      make(map[*attachToken]chan struct{}),
+		queries:     make(map[*attachToken]chan []byte),
 		hosting:     make(map[string]int),
 		lastSeq:     fromSeq,
 		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
@@ -365,6 +386,9 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 	}
 
 	go s.pump(sub)
+	// Expires proxied queries a client never answered, which is what keeps one unanswerable question from
+	// holding every reply behind it. Ends with the session, via s.done.
+	go s.runRequestSweeper()
 	return s, nil
 }
 
@@ -419,16 +443,27 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			s.noteReport()
 		}
 
-		// Terminal queries are deliberately *not* removed here, and an earlier version of this code
-		// removed them, so the reason is worth recording.
+		// Terminal queries are deliberately *not* removed from the stream, and two earlier versions of
+		// this code removed them, so the reasons are worth recording.
 		//
-		// Stripping made cm the only answerer, which fixed a duplicate DA1 reply but left the real
-		// defect: cm still injected its answers into the pty, where they could land in the middle of
-		// an unrelated program's read. See drainPending. Answering is now conditional on nobody else
-		// answering, which fixes both, and with that in place stripping would be actively wrong:
-		// nothing would answer a query cm suppressed while a terminal was attached to answer it.
+		// The first stripped them unconditionally to make cm the only answerer. That fixed a duplicate
+		// DA1 reply but left the real defect, cm injecting answers mid-read of an unrelated program, and
+		// it silenced queries an attached terminal was going to answer. The second stripped only what cm
+		// answered, which was correct about who answers and wrong about byte counts: removing bytes makes
+		// the client log shorter than the shim's numbering accounts for, which inverted the resume
+		// ordering and clamped a reconnecting client into the middle of an escape sequence.
 		//
-		// So the query reaches the terminal and the terminal replies, exactly once.
+		// So the stream is forwarded verbatim, and the fix is in *who writes replies* instead. cm is now
+		// the only writer of a reply to this pty: it answers what its model can answer, and for a query
+		// only a real terminal can answer it asks one client and relays what comes back. A client never
+		// answers directly, so a query reaching several clients, or reaching one twice across a restart,
+		// cannot produce a second answer.
+		//
+		// Registered before the model is fed, which is the load-bearing ordering here. The model
+		// generates replies to answerable queries synchronously inside its Write, so a question later in
+		// this same chunk must already be outstanding by then or the reply would be written straight to
+		// the pty and overtake it. See noteQueries and queueOrWriteReply.
+		s.noteQueries(out.Data)
 
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
@@ -585,52 +620,37 @@ func (s *Session) Close() {
 // having ended.
 func (s *Session) Releasing() bool { return s.releasing.Load() }
 
-// drainPending sends bytes the emulator generated back to the pty, but only when no attached client
-// will answer instead.
+// drainPending sends replies the emulator generated to the pty, in the order the program asked.
 //
-// These are answers to questions a program asked the terminal, such as a device status report.
-// Without them a program that queried the terminal waits for a reply that never comes.
+// These answer questions a program asked the terminal, such as a device status report. Without them a
+// program that queried the terminal waits for a reply that never comes, so they are always delivered:
+// unconditionally now, where this used to be skipped whenever an attached client looked able to answer.
 //
-// The condition is the fix for a bug that took a long time to find, and the reason it is a condition
-// rather than an unconditional write is worth stating plainly: cm answering while a real terminal is
-// also answering does not merely duplicate a reply, it corrupts an unrelated conversation.
+// That condition is gone because clients no longer answer. cm asks a client only for the queries its own
+// model cannot answer, and relays the reply itself, so cm is the single writer of every reply on this pty.
+// The condition existed to prevent two answerers, and one writer removes the possibility rather than
+// managing it. What it cost was four separate bugs, each a case where the election was wrong: a read-only
+// follower counted as an answerer and nothing replied; a reserved-but-unattached client counted and
+// nothing replied; two attached clients both replied; and across a restart cm replied and the reconnecting
+// client replied to the same query from the log.
 //
-// What was observed: `wallfacer -h` sends OSC 11 to ask the background color and blocks reading the
-// answer. Only the real terminal can answer that, so cm forwards it. Meanwhile a zsh prompt hook sent
-// CSI 6n, cm's emulator answered it, and this function injected `\x1b[2;1R` into the pty while
-// wallfacer was mid-read. wallfacer consumed the cursor report as though it were its own answer and
-// exited, so the terminal's OSC 11 reply arrived with nobody waiting for it, and the shell's line
-// editor printed it beside the prompt as ";rgb:2828/2c2c/3434". Under vi mode the leading ESC also
-// dropped the editor into command mode, wedging the prompt.
+// The ordering is the part that is not obvious and is the reason this defers to a queue. A program that
+// asks two questions expects two answers in order, and cm can answer some immediately while others need a
+// round trip to a client. Writing the fast one first reorders the conversation, and a program reading
+// positionally then takes the wrong answer for its question. That is the recorded `wallfacer -h`
+// corruption: wallfacer blocked reading an OSC 11 answer, a zsh prompt hook's CSI 6n was answered by the
+// emulator in the meantime, and the cursor report cm injected was consumed by wallfacer as though it were
+// the background colour. The real reply then arrived unclaimed and the line editor printed
+// ";rgb:2828/2c2c/3434". queueOrWriteReply holds a local reply behind any outstanding question so this
+// cannot happen.
 //
-// So an injected reply is not addressed to whoever happens to be reading. Two answerers on one pty is
-// the defect, independent of which query each one answers, and letting the terminal be the only
-// answerer whenever there is one is what removes it. zmx does the same, and does not have this bug.
-//
-// Deliberately not conditioned on which query it is. The emulator generates a reply only for a query
-// it recognized, and by the time the bytes are here there is nothing to distinguish them; the useful
-// question is not "which reply is this" but "is anyone else going to answer".
-//
-// TakePending is called unconditionally, and before the check, so a skipped answer is discarded
-// rather than retained. Holding it would deliver it at some later moment when a client happened to
-// detach, which is the same mistimed injection this exists to prevent.
+// TakePending is called unconditionally and before anything else, so the emulator's queue is always
+// emptied. Leaving bytes in it would deliver them at some later, unrelated moment.
 func (s *Session) drainPending() {
 	if s.term == nil {
 		return
 	}
-	pending := s.term.TakePending()
-	if s.hasAnsweringClient() {
-		return
-	}
-	for _, data := range pending {
-		if err := s.Write(context.Background(), data); err != nil {
-			// A program that queried the terminal is now waiting for an answer it will never get, so
-			// this explains an otherwise inexplicable hang.
-			s.log.Warn("delivering terminal response to the pty failed",
-				"session", s.name, "bytes", len(data), "error", err)
-			return
-		}
-	}
+	s.queueOrWriteReply(s.term.TakePending())
 }
 
 // noteMetadata records title and directory changes the shell reported.
@@ -1088,66 +1108,23 @@ func (s *Session) resumePoints() (shimSeq, clientSeq uint64) {
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
-// hasAnsweringClient reports whether some attached client will answer a terminal query.
+// The answerer election used to live here: hasAnsweringClient, answererLocked, and isAnswerer, which
+// together picked one attached client to answer terminal queries directly and dropped query replies from
+// every other client.
 //
-// Not the same question as "is anyone attached", and the difference is a hang. A read-only
-// follower's input is dropped rather than forwarded (see recvLoop), so its terminal's answer never
-// reaches the shell. Counting one as an answerer would leave a querying program waiting forever
-// while `cm read --follow` was running, which is a normal thing to be doing.
-func (s *Session) hasAnsweringClient() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.answererLocked() != nil
-}
-
-// answererLocked returns the one attachment responsible for answering terminal queries, or nil when
-// no attached client can.
+// All three are gone, and the deletion is the point of the proxy design rather than a side effect. Electing
+// an answerer has to be right in four separate situations, and each one was a bug in turn: a read-only
+// follower elected, so nothing answered and the querying program hung; a reserved-but-not-yet-attached
+// client elected, with the same result, in a window Service.Attach deliberately opens to resize before
+// snapshotting; two attached clients both answering, so a single CSI c came back as
+// "\x1b[?62;52;c\x1b[?62;52;c"; and across a server restart cm answering a query from the backlog that the
+// reconnecting client then answered again from the log, which typed a git branch name into the prompt.
 //
-// One rather than all, because output fans out to every client: two attached terminals both see a
-// query and both reply, so the shell receives two answers to one question. Measured, with two
-// interactive clients on one session, a single CSI c came back as
-// "\x1b[?62;52;c\x1b[?62;52;c". The program reads one and the other is left for the shell's line
-// editor, which is the same defect as cm answering alongside a terminal, just with a different
-// second answerer.
-//
-// The oldest attachment wins, and stability is the point rather than the choice of order. Picking by
-// map iteration would move the answerer between queries, so a program could get an answer from one
-// terminal and its next answer from another, and any dedupe keyed on the answerer would let a reply
-// through whenever the pick changed. Oldest also survives a new client attaching mid-conversation.
-//
-// Read-only followers are skipped: their input is dropped (see recvLoop), so a reply from one never
-// reaches the shell and electing it would answer nothing.
-//
-// So are reservations that have not become attachments, for the same reason one step earlier: an entry
-// made by reserveClient has no output stream and no input channel yet. Electing one makes a query
-// vanish, which is a hang rather than an artifact and is worse than the duplicate reply the election
-// exists to prevent. Service.Attach reserves, then resizes the pty, and that resize deliberately makes
-// the shell redraw, so a query emitted by a SIGWINCH handler lands in exactly this window. That is how
-// a shell hook's OSC and a branch name reached the line editor after the ordering fix.
-//
-// Callers must hold s.mu.
-func (s *Session) answererLocked() *attachToken {
-	var best *attachToken
-	var bestOrder uint64
-	for tok, cs := range s.clientSizes {
-		if cs.readOnly || !cs.attached {
-			continue
-		}
-		if best == nil || cs.order < bestOrder {
-			best, bestOrder = tok, cs.order
-		}
-	}
-	return best
-}
-
-// isAnswerer reports whether this attachment is the one that should answer terminal queries.
-//
-// Used to drop query replies from every other client, so one question gets one answer.
-func (s *Session) isAnswerer(tok *attachToken) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.answererLocked() == tok
-}
+// cm is now the only writer of a reply to a pty. It answers what its terminal model can answer, and for a
+// query only a real terminal can answer it asks one client and relays what comes back, matching the reply
+// to the request. There is no election because there is nothing to elect: a client is a source cm consults,
+// never an answerer. See internal/server/queryproxy.go, and docs/architecture.md for the comparison with
+// tmux, which works this way and does not have this family of bug.
 
 // EverWatched reports whether a client has attached in order to display this session.
 //
@@ -1205,6 +1182,14 @@ type attachment struct {
 	// output that a quiet session may not produce for hours. A flag would only be noticed on the next
 	// byte, so detaching an idle session would appear to hang.
 	evict chan struct{}
+	// queries carries questions cm needs this client's terminal to answer, such as the background colour
+	// or the clipboard. The attach loop forwards them to the client, which writes them to its terminal.
+	//
+	// Separate from the output stream because these are addressed to one client rather than to everything
+	// watching the session. Sending a question through the session's output would ask every attached
+	// terminal, and each would answer, which is the duplicate-reply bug again; it would also write into
+	// the session's scrollback a question the shell never asked.
+	queries chan []byte
 }
 
 // reserveClient registers a client for sizing before it has attached, returning its token.
@@ -1369,12 +1354,22 @@ func (s *Session) newAttachmentLocked(from uint64, restore []byte, tok *attachTo
 	}
 	s.evicts[token] = evict
 
+	// The channel carrying questions cm needs this client to answer. Buffered so the output pump is never
+	// blocked behind a client's socket: a full buffer costs one unanswered query, where blocking would
+	// stall every session's output behind the slowest terminal.
+	queries := make(chan []byte, 8)
+	if s.queries == nil {
+		s.queries = make(map[*attachToken]chan []byte)
+	}
+	s.queries[token] = queries
+
 	return attachment{
 		token:   token,
 		reader:  s.recent.Subscribe(from),
 		restore: restore,
 		first:   s.clients.Add(1) == 1,
 		evict:   evict,
+		queries: queries,
 	}
 }
 
@@ -1608,7 +1603,19 @@ func (s *Session) detach(a attachment) (last bool) {
 		// leave a client blocked on a channel nothing holds.
 		s.mu.Lock()
 		delete(s.evicts, a.token)
+		delete(s.queries, a.token)
+		// Any question still outstanding with this client will never be answered now, so it is released
+		// rather than left to expire. Waiting for the timeout would hold every reply queued behind it for
+		// up to requestTimeout after the client that could have answered has gone.
+		for _, r := range s.requests {
+			if r.proxied && r.tok == a.token {
+				r.proxied = false
+				r.data = nil
+			}
+		}
+		ready := s.takeReadyLocked()
 		s.mu.Unlock()
+		s.writeReplies(ready)
 
 		if rows, cols, x, y, resize := s.releaseClientSize(a.token); resize {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -8,18 +8,23 @@ import (
 	"time"
 )
 
-// A query reaches the attached terminal and that terminal's answer is the only one the shell sees.
+// cm answers a query its model can answer, and the client's terminal is never asked.
 //
-// The end-to-end half of the fix for "exiting vim leaves garbage below my prompt" and the
-// ";rgb:2828/2c2c/3434" that followed `wallfacer -h`. Both were one defect: cm's emulator answered a
-// query and wrote the reply to the pty while a real terminal was answering too. An injected reply is
-// not addressed to whoever is reading, so some program consumed the wrong one and the leftover was
-// printed by the shell's line editor.
+// The end-to-end half of the proxy design, and the contract here is the *reverse* of what this file
+// asserted before. The old rule was that a query travelled out to the attached terminal, that terminal
+// answered, and cm stayed silent. That needed cm to elect one client as the answerer, and the election was
+// wrong in four separate ways, each of which shipped: a read-only follower or a not-yet-attached client
+// elected meant nothing answered and the program hung; two clients meant a single CSI c came back as
+// "\x1b[?62;52;c\x1b[?62;52;c"; and after a server restart cm answered a backlog query which the
+// reconnecting client answered again from the log, typing a git branch name into the prompt.
 //
-// The unit tests in internal/server cover the decision. This covers the wiring the unit tests cannot:
-// that a query really does travel out to a client's terminal, and that the terminal's reply really
-// does come back to the shell, with cm staying silent throughout.
-func TestAttachedTerminalAnswersQueries(t *testing.T) {
+// So cm now answers everything its terminal model can answer, always, and only the queries it genuinely
+// cannot answer are put to a client. DA1 is one cm can answer, so the query is answered locally and the
+// client's terminal never sees it.
+//
+// The unit tests in internal/server cover the decision. This covers the wiring they cannot: that the reply
+// really does reach the shell through a real pty, and exactly once.
+func TestCMAnswersDA1WithoutAskingTheTerminal(t *testing.T) {
 	skipIfShort(t)
 
 	e := newEnv(t)
@@ -28,69 +33,132 @@ func TestAttachedTerminalAnswersQueries(t *testing.T) {
 	c := attachOnPty(t, e, "q")
 	c.waitReady()
 
-	// printf writes a real ESC [ c, which is what a program querying the terminal sends. Written as
-	// an octal escape the shell expands rather than a Go escape: a needle holding a literal
-	// backslash-x never matches real bytes, and that has made tests here pass while asserting nothing.
+	// printf writes a real ESC [ c, which is what a program querying the terminal sends. Written as an
+	// octal escape the shell expands rather than a Go escape: a needle holding a literal backslash-x never
+	// matches real bytes, and that has made tests here pass while asserting nothing.
 	e.mustRun("send", "q", `printf 'BEFORE\033[cAFTER\n'`, "--enter")
-
-	// The query must reach the pty, because the attached terminal is now the thing that answers it.
-	// Suppressing it would leave nothing to answer and the program that asked would hang.
-	onPty := ""
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		onPty = c.output()
-		if strings.Contains(onPty, "\x1b[c") {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !strings.Contains(onPty, "\x1b[c") {
-		t.Fatalf("the DA1 query never reached the pty, got %q.\n"+
-			"With a client attached the terminal is the answerer, so the query has to get there.", onPty)
-	}
-
-	// Answer the way a real terminal would, with a reply distinguishable from libghostty's own
-	// (?62;22c). Real kitty answers ?62;52;c, where 52 is its clipboard feature code.
-	const terminalReply = "\x1b[?64;1;9;15;52;c"
-	c.write([]byte(terminalReply))
 	time.Sleep(2 * time.Second)
 
 	raw := e.mustRun("read", "q", "--raw", "--lines", "40")
 
-	// The terminal's answer must reach the shell, or a querying program waits forever.
-	if !strings.Contains(raw, "64;1;9;15;52;c") {
-		t.Errorf("session output %q does not contain the terminal's reply.\n"+
-			"A client's terminal answered the query and that answer has to reach the shell.", raw)
+	// cm's own DA1 reply must reach the shell. libghostty answers ?62;22c (vt220 plus ansi_color).
+	if !strings.Contains(raw, "62;22c") {
+		t.Errorf("session output %q does not contain cm's DA1 reply (62;22c).\n"+
+			"cm answers what its model can answer, whatever is attached, because it is the only writer of "+
+			"a reply to this pty. Staying silent leaves the querying program waiting forever.", raw)
 	}
 
-	// And cm must not have answered as well. Two answerers on one pty is the defect: whichever reply
-	// a program happens to read, the other is left over and lands in the line editor.
-	if strings.Contains(raw, "62;22c") {
-		t.Errorf("session output %q contains cm's own DA1 reply (62;22c) alongside the terminal's.\n"+
-			"With a client attached cm must stay silent, or a program gets two answers and prints the "+
-			"one it did not consume.", raw)
+	// And exactly one reply, not two. The count is the assertion rather than the presence, because the
+	// defect this design removes is duplication rather than absence.
+	if n := strings.Count(raw, "62;22c"); n != 1 {
+		t.Errorf("session output %q contains %d DA1 replies, want exactly 1.\n"+
+			"Two answers to one question means the program consumes one and the shell's line editor "+
+			"prints the other.", raw, n)
 	}
 }
 
-// Two attached clients answer one query once, and both still deliver their own mouse events.
+// A query cm cannot answer is put to the attached terminal, and that terminal's reply reaches the shell.
 //
-// The duplicate is the bug: output fans out to every client, so both terminals see a query and both
-// reply, and the shell gets two answers to one question. Measured against a real kitty with two
-// clients on one session, a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c" where one client
-// gave one reply.
+// The other half, and the capability this design adds rather than merely fixes. OSC 11 asks the background
+// colour, which lives in the terminal's theme and which no terminal model can answer, so before this cm
+// simply never answered it and `wallfacer -h` hung reading a reply that never came. Now cm asks one client
+// and relays what comes back.
 //
-// Mouse events are the other half, and the reason the drop is narrow rather than "anything that is
-// not typing". A mouse report describes what happened in one window, so every client sends its own;
-// dropping them would make a session ignore the mouse in every window but the answerer's. Both halves
-// are asserted here because a fix for the first that breaks the second passes any test that only
-// checks for the duplicate.
-func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
+// Asserted through a real pty because the whole point is the round trip: the server has to send the
+// question to a client, the client has to write it to its terminal, and the reply has to travel back on the
+// input path and be matched to the request. No unit test spans all three hops.
+func TestTerminalOnlyQueryIsProxiedToTheClient(t *testing.T) {
 	skipIfShort(t)
 
 	e := newEnv(t)
-	// A shell, so waitReady sees a prompt, then a `cat` that writes what it reads to a file. The
-	// file is the observation point: what a client sends becomes shell input, and a shell consumes
-	// escape sequences rather than echoing them, so `cm read` cannot see them. `cm read --raw` is no
-	// help either, since it re-serializes the terminal model rather than replaying bytes.
+	e.mustRun("attach", "--no-attach", "bg")
+
+	c := attachOnPty(t, e, "bg")
+	c.waitReady()
+
+	// Record where the client's captured output already ends, so the check below cannot match the echo of
+	// the command being typed.
+	//
+	// This is the trap that made the first version of this test fail while the mechanism worked. `send`
+	// with --enter types the command into the shell, and the shell echoes it, so the literal text
+	// `\033]11;?\007` appears in the client's terminal as *characters* before the shell ever runs it.
+	// Searching the whole capture for the escape sequence matches that echo, and the test then reports
+	// either a false pass or a confusing failure. Only bytes arriving after this point are the real thing.
+	before := len(c.output())
+
+	// A program inside the session asks for the background colour.
+	e.mustRun("send", "bg", `printf 'BEFORE\033]11;?\007AFTER\n'`, "--enter")
+
+	// The question has to arrive at the client's terminal, which is the hop cm did not previously make.
+	//
+	// Polled tightly and answered as soon as it appears, because the request expires after requestTimeout
+	// (500ms). A real terminal replies in single-digit milliseconds, so that bound is generous in practice,
+	// but a test that polls leisurely and *then* writes the reply is answering a question cm has already
+	// given up on, and the reply is correctly discarded as unsolicited.
+	answered := false
+	fresh := ""
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		all := c.output()
+		if len(all) > before {
+			fresh = all[before:]
+		}
+		// The raw sequence, in bytes that arrived after the echo. A shell echoing the command shows the
+		// backslash-escaped text rather than a real ESC, so this only matches the sequence printf produced.
+		if strings.Contains(fresh, "\x1b]11;?") {
+			// Answer the way a real terminal would, immediately, while the request is still outstanding.
+			c.write([]byte("\x1b]11;rgb:2828/2c2c/3434\x07"))
+			answered = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !answered {
+		t.Fatalf("the OSC 11 query never reached the client's terminal; new output was %q.\n"+
+			"cm cannot answer this one, so it must ask a client or the program that sent it waits forever.",
+			fresh)
+	}
+	// What this test covers, and what it deliberately does not.
+	//
+	// Asserted: the question travelled from a program in the session, through the server, to a specific
+	// client's terminal. That is the hop cm never made before, and it is the whole reason OSC 11 used to
+	// hang. It is also the hop no unit test can span, since it crosses two processes and a real pty.
+	//
+	// Not asserted here: that the reply then reaches the querying program. Observing that end to end needs
+	// a program in the session reading its own stdin at the moment the reply arrives, and both available
+	// observation points fail for reasons that are about the harness rather than about cm. `cm read --raw`
+	// re-serializes the terminal model, so an injected reply appears nowhere in it, which is the trap
+	// docs/testing.md names explicitly and which produced a confusing failure here first. Driving a `cat`
+	// through the attached client to capture stdin races the shell's line editor, which consumes the
+	// sequence first.
+	//
+	// The return path is covered deterministically at the seam instead, by TestDetachReleases..., the
+	// ordering test, and TestDebugRoundTrip's successor in internal/server, which drive answerFromClient
+	// and assert on the bytes written to the pty. Splitting it this way is the same division the rest of
+	// this file uses: the seam tests own the decisions, the e2e tests own the wiring.
+	if !answered {
+		t.Fatal("the query never reached the client, so the wiring is not covered")
+	}
+}
+
+// One question goes to one client, and both clients still deliver their own mouse events.
+//
+// Two things are asserted together because a fix for either that breaks the other passes any test checking
+// only one. Output fans out to every client, so a question sent through the output stream would be asked of
+// every terminal and each would answer: measured against a real kitty with two clients, a single CSI c came
+// back as "\x1b[?62;52;c\x1b[?62;52;c". A question is therefore addressed to one client through its own
+// channel.
+//
+// Mouse events are the counterexample that keeps the restriction narrow. A mouse report describes what
+// happened in one window, so every client sends its own; restricting them would make a session ignore the
+// mouse in every window but one.
+func TestOneClientIsAskedButBothSendMouse(t *testing.T) {
+	skipIfShort(t)
+
+	e := newEnv(t)
+	// A shell, so waitReady sees a prompt, then a `cat` that writes what it reads to a file. The file is
+	// the observation point: what a client sends becomes shell input, and a shell consumes escape sequences
+	// rather than echoing them, so `cm read` cannot see them. `cm read --raw` is no help either, since it
+	// re-serializes the terminal model rather than replaying bytes.
 	e.mustRun("attach", "--no-attach", "two")
 
 	first := attachOnPty(t, e, "two")
@@ -98,18 +166,53 @@ func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
 	second := attachOnPty(t, e, "two")
 	second.waitReady()
 
-	// Start a reader that records raw stdin, so client-sent sequences are captured verbatim instead
-	// of being swallowed by the shell's line editor.
+	// Ask for the background colour *before* starting cat, because a foreground `cat` would swallow the
+	// command instead of the shell running it. That ordering mistake made an earlier version of this test
+	// report zero clients asked: `send` wrote the printf text into cat's stdin, so the query was never
+	// emitted at all.
+	//
+	// Marked from where each client's capture already ends, so the echo of the command being typed is not
+	// counted. `send --enter` types the text into the shell and the shell echoes it, so the literal
+	// characters appear in both terminals before the shell runs anything; matching those would report both
+	// clients as asked no matter what cm did.
+	firstBefore := len(first.output())
+	secondBefore := len(second.output())
+	e.mustRun("send", "two", `printf '\033]11;?\007'`, "--enter")
+	time.Sleep(2 * time.Second)
+
+	freshOf := func(c *ptyClient, from int) string {
+		all := c.output()
+		if len(all) <= from {
+			return ""
+		}
+		return all[from:]
+	}
+	// Both terminals see the query, and that is expected rather than a defect.
+	//
+	// This is the correction to an assumption that looked obviously right: cm forwards session output
+	// verbatim to every client, so a query a program prints is *displayed* by every attached terminal, and
+	// each terminal may answer it on its own. Suppressing that would mean editing the output stream, which
+	// was tried twice and reverted both times, the second time because removing bytes made the client log
+	// shorter than the shim's numbering and clamped a reconnecting client into the middle of an escape
+	// sequence.
+	//
+	// What makes one answer reach the shell is not that one terminal sees the question. It is that cm asked
+	// exactly one client through its own channel and recorded that request, so exactly one reply matches
+	// and every other is discarded as unsolicited. The matching is asserted deterministically at the seam
+	// (TestTerminalOnlyQueryGoesToOneClient and TestUnsolicitedClientReplyIsDiscarded); what this test
+	// covers is that the question reaches a real terminal at all.
+	firstAsked := strings.Contains(freshOf(first, firstBefore), "\x1b]11;?")
+	secondAsked := strings.Contains(freshOf(second, secondBefore), "\x1b]11;?")
+	if !firstAsked && !secondAsked {
+		t.Errorf("neither client's terminal saw the OSC 11 query (first=%v second=%v).\n"+
+			"cm cannot answer this one, so it has to reach a terminal or the asking program hangs.",
+			firstAsked, secondAsked)
+	}
+
+	// Now start the capture, for the mouse half. Started here rather than at the top because a foreground
+	// cat would have eaten the query command above.
 	sink := filepath.Join(e.state, "stdin.bin")
 	first.write([]byte("cat > " + sink + "\n"))
-
-	// Wait for cat to be the foreground process before sending anything, rather than sleeping and
-	// hoping. The replies below are only captured if cat is already reading: sent while the shell is
-	// still starting it, they reach the shell's line editor instead, which consumes them and leaves the
-	// file short. That made this test fail with both replies present, since the ones the shell ate
-	// never reached the file and the ones that did arrive were whatever landed after cat came up.
-	//
-	// The file existing is the signal that cat has opened it, which happens before it reads.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if _, err := os.Stat(sink); err == nil {
@@ -121,25 +224,11 @@ func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Both clients answer the same DA1 query, as two real terminals would. Distinguishable replies,
-	// so the assertion can say which arrived.
+	// Both report a mouse press, which is per window and must not be restricted.
 	//
-	// Spaced out rather than written back to back, because the dedupe only recognizes a reply that
-	// arrives as its own chunk. IsQueryReply is deliberately conservative: a chunk mixing a reply with
-	// other bytes is forwarded rather than dropped, since dropping a keystroke travelling alongside one
-	// is worse than a duplicate. A pty that batched these writes therefore produced two replies and
-	// failed this test on darwin while passing on linux. The gaps make what is being tested -- one
-	// clean reply per client -- actually what arrives.
-	//
-	// That conservatism is a real limitation and not only a test artifact: a terminal that coalesces a
-	// query reply with a keystroke gets both forwarded. The seam tests in internal/server cover the
-	// decision itself deterministically; this test covers the wiring.
-	first.write([]byte("\x1b[?62;11c"))
-	time.Sleep(300 * time.Millisecond)
-	second.write([]byte("\x1b[?62;22c"))
-	time.Sleep(300 * time.Millisecond)
-
-	// And both report a mouse press, which is per window and must not be dropped.
+	// Spaced out rather than written back to back: a pty that batches these writes produces a chunk mixing
+	// two reports, and IsUserInput is deliberately conservative about mixed chunks. The gaps make what is
+	// being tested actually what arrives.
 	first.write([]byte("\x1b[<0;11;11M"))
 	time.Sleep(300 * time.Millisecond)
 	second.write([]byte("\x1b[<0;22;22M"))
@@ -157,28 +246,12 @@ func TestTwoClientsAnswerOnceButBothSendMouse(t *testing.T) {
 	}
 	raw := string(captured)
 
-	// Exactly one of the two replies reaches the shell. Which one is not the point; that only one
-	// does is.
-	replies := 0
-	if strings.Contains(raw, "62;11c") {
-		replies++
-	}
-	if strings.Contains(raw, "62;22c") {
-		replies++
-	}
-	if replies != 1 {
-		t.Errorf("session output %q carried %d of the two DA1 replies, want exactly 1.\n"+
-			"Two clients each answering one query means the shell gets two answers, and the one the "+
-			"program does not consume is printed by its line editor.", raw, replies)
-	}
-
-	// Both mouse reports must arrive, from the answerer and the other client alike.
 	if !strings.Contains(raw, "11;11M") {
 		t.Errorf("session output %q is missing the first client's mouse report.", raw)
 	}
 	if !strings.Contains(raw, "22;22M") {
 		t.Errorf("session output %q is missing the second client's mouse report.\n"+
-			"Only query replies are restricted to one client. A mouse event describes one window, so "+
-			"dropping it makes the session ignore the mouse everywhere but the answerer.", raw)
+			"Only terminal queries are addressed to one client. A mouse event describes one window, so "+
+			"dropping it makes the session ignore the mouse everywhere but there.", raw)
 	}
 }

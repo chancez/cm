@@ -454,7 +454,28 @@ message AttachResponse {
     Exited exited = 3;
     Metadata metadata = 4;
     Detached detached = 5;
+    Query query = 6;
   }
+}
+
+// Query asks this client's terminal a question the server cannot answer itself.
+//
+// The background colour, the palette, the clipboard, and the window's pixel size all live in the
+// terminal rather than in a terminal model, so a program inside a session that asks for one can only be
+// answered by a real terminal. The server relays the question to exactly one client and matches the reply
+// it sends back, which is what keeps one question to one answer.
+//
+// Deliberately not sent as ordinary output. Output fans out to every attached client, so a question sent
+// that way would be asked of every terminal and each would answer, and it would also appear in the
+// session's scrollback as though the shell had printed it. This carries it to one client and stays out of
+// the session's recorded bytes.
+//
+// A client writes these to its terminal and lets the reply travel back on the normal input path, where
+// the server recognizes it as a query reply. A client that cannot answer, such as a read-only follower,
+// is never sent one.
+message Query {
+  // The escape sequence to write to the terminal, exactly as the program in the session sent it.
+  bytes data = 1;
 }
 
 // Detached confirms the server processed a client's Detach.

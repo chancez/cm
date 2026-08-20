@@ -308,6 +308,18 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				return err
 			}
 
+		case q := <-att.queries:
+			// A question cm cannot answer itself, addressed to this client's terminal. The client writes
+			// it out and the reply comes back on the input path, where answerFromClient matches it to the
+			// request. Read-only followers are never sent one, since their input is dropped.
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Query{
+					Query: &serverv1.Query{Data: q},
+				},
+			}); err != nil {
+				return err
+			}
+
 		case meta := <-metaSub.ch:
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Metadata{
@@ -457,20 +469,28 @@ func (s *Service) recvLoop(
 				continue
 			}
 			if !input.IsUserInput(req.GetInput().Data) {
-				// A reply to a terminal query, a mouse report, or a focus change. Forwarded to the
-				// shell, since the program asked for it, but it must not claim sizing: otherwise a
-				// window nobody is using takes over because the program polled the terminal.
+				// A reply to a terminal query, a mouse report, or a focus change. None of them may claim
+				// sizing: otherwise a window nobody is using takes over because the program polled the
+				// terminal.
 				//
-				// Except that a query reply is forwarded from one client only. Output fans out to every
-				// attached client, so two terminals both see a query and both answer it: measured with
-				// two clients on one session, a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c".
-				// The program reads one and the spare is left for the shell's line editor, which is the
-				// artifact that printed "62;52;c" beside a prompt.
+				// A query reply is not written to the pty here, and that is the core of the proxy design.
+				// It is handed to the session, which matches it against the question cm asked *this*
+				// client and writes it in the order the program's questions were asked. A reply matching
+				// no outstanding question is discarded.
 				//
-				// Only replies are dropped, not everything non-typing. Mouse and focus events describe
-				// one window rather than the session, so each client sends its own and dropping them
+				// This replaces electing one client to answer and forwarding its replies straight through.
+				// The election could be wrong in four ways and was, each in turn: a read-only follower or a
+				// reserved-but-unattached client elected meant nothing answered and the program hung; two
+				// attached clients meant a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c"; and after
+				// a restart cm answered a backlog query that the reconnecting client answered again from
+				// the log, typing a git branch name into the prompt. Matching a reply to a request cm
+				// actually made removes all four, because an unsolicited reply is now recognizable as such.
+				//
+				// Mouse and focus events are still forwarded from every client, unchanged. They describe
+				// one window rather than the session, so each client sends its own, and dropping them
 				// would make a session ignore the mouse in every window but one.
-				if input.IsQueryReply(req.GetInput().Data) && !sess.isAnswerer(tok) {
+				if input.IsQueryReply(req.GetInput().Data) {
+					sess.answerFromClient(tok, req.GetInput().Data)
 					continue
 				}
 				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
