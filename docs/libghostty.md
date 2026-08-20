@@ -102,31 +102,41 @@ touch the same terminal.
 responses the emulator generates have to reach the pty or programs that probe the
 terminal will hang waiting.
 
-But they must reach it *only when no attached client will answer instead*, which is the
-harder half and was learned the expensive way. Two answerers on one pty is not a duplicate
-reply, it is a corrupted conversation. `wallfacer -h` sends OSC 11 and blocks reading the
-answer; only the real terminal can answer that, so cm forwards it. Meanwhile a zsh prompt
-hook sent `CSI 6n`, the emulator answered it, and cm wrote `\x1b[2;1R` to the pty while
-wallfacer was mid-read. wallfacer took the cursor report as its own answer and exited, so
-the terminal's OSC 11 reply arrived unclaimed and the line editor printed it as
-`;rgb:2828/2c2c/3434`. Under zsh's vi mode the leading ESC also dropped the editor into
-command mode and wedged the prompt.
+These replies are now delivered **unconditionally**, and that is a reversal worth stating,
+because this file previously argued at length for the opposite.
 
-An injected reply is not addressed to whoever happens to be reading, so the guard is on
-*whether anyone else answers*, not on which query it is. See `Session.drainPending`. zmx
-gates the same way and does not have this bug.
+The old rule was that cm stayed silent whenever an attached client could answer, so a query
+travelled out to the real terminal and its reply came back. That needed cm to elect one client
+as the answerer, and the election was wrong in four separate ways, each of which shipped: a
+read-only follower elected, so nothing answered; a reserved-but-unattached client elected, the
+same; two attached clients both replying, so a single `CSI c` came back as
+`\x1b[?62;52;c\x1b[?62;52;c`; and across a server restart cm answering a backlog query that the
+reconnecting client answered again, which typed a git branch name into a prompt.
 
-The condition is "a client that can answer", not "a client is attached". A read-only
-follower's input is dropped, so `cm read --follow` counted as an answerer would leave a
-query unanswered and hang the caller.
+cm now answers everything its model can answer, and *asks* one client only for the queries no
+model can answer (`OSC 10/11/12`, `OSC 52`, XTGETTCAP, the XTWINOPS pixel reports), relaying the
+reply itself. cm is the only writer of a reply to a pty, so there is no election and an
+unsolicited reply is discarded. See `docs/architecture.md` for the full reasoning and the two
+rejected alternatives.
 
-And exactly *one* client answers, not every attached one. Output fans out to all of them, so
-two terminals both see a query and both reply: measured with two clients on one session, a
-single `CSI c` came back as `\x1b[?62;52;c\x1b[?62;52;c`. The oldest non-follower attachment
-is elected, and stability is the point rather than the order, since a moving answerer lets a
-duplicate through whenever the pick changes. Replies from every other client are dropped at
-the input path, and only replies: a mouse or focus event describes one window, so each client
-sends its own.
+What survives from the old reasoning is the ordering hazard, which the queue in
+`internal/server/queryproxy.go` now handles. `wallfacer -h` sends OSC 11 and blocks reading the
+answer. A zsh prompt hook then sent `CSI 6n`, the emulator answered it, and cm wrote
+`\x1b[2;1R` to the pty while wallfacer was mid-read. wallfacer took the cursor report as its own
+answer and exited, so the terminal's OSC 11 reply arrived unclaimed and the line editor printed
+it as `;rgb:2828/2c2c/3434`. Under zsh's vi mode the leading ESC also dropped the editor into
+command mode and wedged the prompt. A reply cm can produce immediately therefore queues behind
+any question still out with a client.
+
+One consequence for this package: the set of sequences the emulator answers is now load-bearing
+in a new way, since it decides which queries cm asks a client for. `TestQuerySetsAgreeWithEmulator`
+sweeps 24294 sequences against the live emulator to pin it, and it immediately caught two
+misclassifications that reading the source did not: libghostty answers the `OSC 4` palette query,
+which had been assumed terminal-only, and it ignores `OSC 4;c;?`, which parses structurally while
+naming no palette entry.
+
+Mouse and focus events are still forwarded from every client, unchanged: they describe one window
+rather than the session, so each client sends its own.
 
 ## What cm reports about itself
 

@@ -314,6 +314,96 @@ The condition is keyed on `NoRestore` rather than on whether `Output` is set: bo
 terminal", but `NoRestore` is the one that says a repaint is unwanted, and it is what the server
 already reads.
 
+## Terminal queries: cm answers, or asks one client and relays
+
+A program in a session can ask the terminal questions: what are you (`CSI c`), where is the cursor
+(`CSI 6n`), what is your background colour (`OSC 11`), what is on the clipboard (`OSC 52`). These are
+synchronous. The program writes the question and blocks in `read()`, usually with no timeout, because on a
+real terminal an answer always comes. So an unanswered query is a hang rather than a missing feature.
+
+A multiplexer has to decide who answers, and cm now answers **all** of them itself. Queries split into two
+sets, and the split is by what can possibly know the answer rather than by who is attached:
+
+- **Answerable** from a terminal model: device attributes, device status, cursor position, mode state,
+  XTVERSION, DECRQSS, and the OSC 4 palette query. cm answers these from its emulator, always.
+- **Terminal-only**, where the value lives in the window rather than in any model: the OSC colour queries,
+  the clipboard read, XTGETTCAP, and the XTWINOPS pixel reports. cm asks one attached client, waits for its
+  reply, and writes that reply to the pty itself.
+
+The invariant is that **cm is the only writer of a reply to a pty**. A client is a source cm consults, never
+an answerer in its own right. `internal/query` holds the classification, `internal/server/queryproxy.go` the
+mechanism, and the two sets are asserted disjoint and cross-checked against the live emulator by
+`TestQuerySetsAgreeWithEmulator`, which sweeps 24294 sequences rather than trusting a list.
+
+### Why not let the attached terminal answer
+
+That was the design until this change, and it is worth recording why it went, because it reads as the
+obvious approach: the real terminal knows the real answers, so forward the query and let it reply.
+
+It requires electing exactly one client to answer, and the election has to be right in four situations.
+Each was a shipped bug:
+
+- A **read-only follower** elected. Its input is dropped on the way back, so nothing answered and the
+  querying program hung while `cm read --follow` was running.
+- A **reserved but not yet attached** client elected. `Service.Attach` deliberately opens that window to
+  resize the pty before snapshotting the screen, and the resize makes the shell redraw, so a query from a
+  `TRAPWINCH` handler lands exactly there. Same hang.
+- **Two attached clients**, both answering. Output fans out, so both terminals saw the query and both
+  replied: measured against a real kitty, a single `CSI c` came back as `\x1b[?62;52;c\x1b[?62;52;c`. The
+  program reads one, and the spare is printed by the shell's line editor.
+- **Across a server restart**, cm answered a query from the adoption backlog and the reconnecting client
+  answered the same query again from the log. That is what typed a git branch name into a prompt, via a
+  title report.
+
+One writer removes the possibility rather than managing it. There is no election, and a reply that matches
+no request cm made is discarded, which is what makes the restart case safe: a client replaying a query out
+of the log produces bytes nobody asked for, and they go nowhere.
+
+Two rejected alternatives, both tried:
+
+- **Stripping the query from client-bound output** so no client could answer. Reverted twice. Unconditional
+  stripping silenced queries an attached terminal was going to answer. Conditional stripping was correct
+  about who answers and wrong about byte counts: removing bytes makes the client log shorter than the shim's
+  numbering accounts for, which inverts the resume-position ordering adoption depends on and clamped a
+  reconnecting client into the middle of an escape sequence. See `docs/libghostty.md`.
+- **Not answering at all**, which is what zmx does: it never wires libghostty's write-pty callback, so its
+  emulator produces no replies and it forwards output verbatim. Measured: a detached zmx session does not
+  answer `CSI 6n`, where cm and tmux both do. That avoids this whole bug family at the cost of hanging any
+  program that queries the terminal in a detached session, which `cm run` makes routine.
+
+### Ordering, and why a queue is needed
+
+A program asks its questions down one pty and reads the answers in order. cm can answer some immediately
+while others need a round trip to a client, so writing the fast answer first reorders the conversation and
+the program takes the wrong answer for its question.
+
+That is the recorded `wallfacer -h` failure, and it is worth following precisely because it looks like two
+unrelated bugs. `wallfacer -h` sent `OSC 11` and blocked. A zsh prompt hook then sent `CSI 6n`, cm's
+emulator answered it, and cm wrote the cursor report to the pty while wallfacer was mid-read. wallfacer
+consumed the cursor report as though it were the background colour and exited. The terminal's real `OSC 11`
+reply then arrived with nobody waiting, and the line editor printed `;rgb:2828/2c2c/3434`.
+
+So a locally-answerable reply queues behind any outstanding proxied question, and the queue drains in order.
+The queue is **per session, not per client**, because the order that must be preserved is the program's: it
+asked down one pty and does not know or care which client each question went to.
+
+A proxied question expires after 500ms, matching tmux's `INPUT_REQUEST_TIMEOUT`, and expiry releases
+everything queued behind it. Without that bound, one query a terminal does not implement wedges every later
+query on the session, which is much worse than the single unanswered query it replaces. Detach releases a
+client's outstanding questions immediately rather than waiting, since nothing can answer them once it has
+gone.
+
+### What is deliberately not suppressed
+
+Every attached terminal still *sees* a proxied query, because cm forwards session output verbatim and
+suppressing it would mean editing the stream, which is the reverted approach above. Several terminals may
+therefore each answer on their own. That is harmless here: cm asked exactly one client and recorded the
+request, so exactly one reply matches and the others are discarded unread.
+
+Mouse reports and focus events are also still forwarded from every client, unchanged. They describe one
+window rather than the session, so each client sends its own, and restricting them would make a session
+ignore the mouse in every window but one.
+
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an

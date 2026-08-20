@@ -73,7 +73,7 @@ attachment, and the resize deliberately happens inside it. Two things are theref
 in that interval: the shell has just been told to redraw, and the client that caused it has no
 output stream and no input channel yet.
 
-Anything the shell asks the terminal in that interval had no answerer. `answererLocked` counted
+Anything the shell asks the terminal in that interval had no answerer. The answerer election counted
 the reservation, so cm stayed silent because a client looked present, while the client never saw
 the question because it was not subscribed when the query went past. The querying program then
 consumed the *next* reply to arrive, which belonged to some later query, and the leftover landed
@@ -81,11 +81,15 @@ in zsh's line editor: a branch name from a title report and `;rgb:2828/2c2c/3434
 Under vi mode the reply's leading `ESC` also dropped the editor into command mode, so a following
 `v` opened the stray text in a scratch buffer.
 
-This is the mirror image of the artifact the answerer election exists to prevent, and the
-distinction that fixes both is **attached, not reserved**. Sizing must count a reservation, which
-is the entire reason it exists. Answering must not. Disqualifying entries by how they were created
-rather than by whether they are attached would count no interactive client at all, since every one
-now arrives through `reserveClient`, and cm would answer alongside the real terminal again.
+That was fixed by distinguishing **attached from reserved**, since sizing must count a reservation,
+which is the entire reason it exists, while answering must not.
+
+**The election is gone now, and with it this whole failure mode.** cm answers every query its own
+model can answer, whatever is attached, and asks a client only for the queries no model can answer.
+Nothing about this window can leave a query unanswered any more, because a reservation being
+ineligible no longer means silence: cm answers regardless. What remains true, and is still why the
+reserve-then-resize ordering exists, is that a reservation has no stream to carry a *proxied*
+question, so one is never sent to it. See `docs/architecture.md`.
 
 The test that shipped with the first fix could not catch the second break. It drives
 `sess.Resize` and `sess.attach` itself, in the correct order, and asserts on the session, so it
