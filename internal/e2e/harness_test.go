@@ -136,6 +136,13 @@ type env struct {
 	// reads. Kept as raw KEY=VALUE strings rather than a map, since that is what exec wants and the order is
 	// never interesting.
 	extraEnv []string
+	// serverEnv is appended to the server's environment only, not to clients'.
+	//
+	// Exists because a session used to inherit its environment from the server, so the only way to test
+	// that it no longer does is to give the two processes different environments. Everything else here
+	// deliberately shares one environment between server and client, which is why this is separate rather
+	// than a parameter to environ.
+	serverEnv []string
 }
 
 // newEnv returns an isolated cm installation with no config file.
@@ -147,12 +154,23 @@ func newEnv(t *testing.T) *env {
 	return newEnvWith(t, cmBinary(t), "")
 }
 
+// newEnvWithServerEnv returns an installation whose server holds variables no later client has.
+//
+// The variables reach only the invocation that starts the server, and are dropped immediately after,
+// so every client afterwards runs with the ordinary environment. That asymmetry is the point: a
+// session taking its environment from the server rather than from its client is invisible when the
+// two match, which is how the bug went unnoticed.
+func newEnvWithServerEnv(t *testing.T, serverEnv ...string) *env {
+	t.Helper()
+	return newEnvWith(t, cmBinary(t), "", serverEnv...)
+}
+
 // newEnvWith is newEnv with the binary and reported version chosen by the caller.
 //
 // Both have to be set before the first command rather than afterwards, because that command starts the
 // server: a version applied later would reach only subsequent clients while the server went on reporting the
 // real build, which is a test that passes for the wrong reason.
-func newEnvWith(t *testing.T, bin, version string) *env {
+func newEnvWith(t *testing.T, bin, version string, serverEnv ...string) *env {
 	t.Helper()
 
 	// os.MkdirTemp with a short prefix rather than t.TempDir(), which embeds the test name and blows
@@ -168,6 +186,8 @@ func newEnvWith(t *testing.T, bin, version string) *env {
 		version: version,
 		runtime: filepath.Join(root, "r"),
 		state:   filepath.Join(root, "s"),
+		// Applied to the server-starting command below, then cleared.
+		serverEnv: serverEnv,
 	}
 	for _, d := range []string{e.runtime, e.state} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -201,6 +221,8 @@ func newEnvWith(t *testing.T, bin, version string) *env {
 	// bound the socket. A test that read `cm list` while a client was still starting saw an empty list
 	// from the losing server and looked like a session that had vanished.
 	e.mustRun("list")
+	// Cleared now that the server holds them, so later clients differ from it.
+	e.serverEnv = nil
 	return e
 }
 
@@ -259,6 +281,7 @@ func (e *env) environ() []string {
 		out = append(out, paths.Env(paths.VersionEnvSuffix)+"="+e.version)
 	}
 	out = append(out, e.extraEnv...)
+	out = append(out, e.serverEnv...)
 	if e.config != "" {
 		out = append(out, "CM_CONFIG="+e.config)
 	} else {

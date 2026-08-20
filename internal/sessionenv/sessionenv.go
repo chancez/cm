@@ -58,6 +58,68 @@ var DefaultCapture = []string{
 	"SSH_TTY",
 }
 
+// NoInherit lists the variables a session does *not* take from the client that created it, even
+// though everything else is forwarded.
+//
+// A denylist rather than an allow-list, which is the opposite of DefaultCapture and deliberate. The
+// two answer different questions. Capture decides what gets *recorded*, so it has to be an
+// allow-list: a session record is a file on disk and a developer's environment holds credentials.
+// This decides what a shell is *born with*, which is not recorded anywhere, and where the useful
+// default is "what the creating client had" for the same reason a subshell inherits everything.
+//
+// Only the dynamic linker variables are excluded, and the reason is borrowed rather than invented.
+// sshd defaults PermitUserEnvironment to no, and says why: it "may enable users to bypass access
+// restrictions in some configurations using mechanisms such as LD_PRELOAD". These choose what code a
+// process loads rather than how it behaves, which is the one category worth treating differently.
+//
+// The trust boundary sshd defends is absent here, since cm's client is a local process already
+// running as the user, so this is closer to hygiene than to a security control. It is cheap and it
+// has a precedent, where a broader denylist guessing at which names hold secrets would be neither:
+// ARTIFACTORY_CLOUD_AUTH and HUBBLE_CLIENT_SECRET match a *_AUTH and *_SECRET pattern, and the next
+// one would not.
+//
+// A trailing "*" matches by prefix.
+var NoInherit = []string{
+	"LD_PRELOAD",
+	"LD_LIBRARY_PATH",
+	"LD_AUDIT",
+	// macOS spells them differently and has more of them, and DYLD_INSERT_LIBRARIES is the direct
+	// LD_PRELOAD equivalent.
+	"DYLD_*",
+}
+
+// Inherit returns the environment a newly created session takes from its client: everything the
+// client has, less NoInherit.
+//
+// Applied once when the shim spawns the shell and never afterwards, which is the whole model. That
+// is not a limitation to work around: a terminal split freezes its environment at creation too, and
+// picking up a changed shell config by closing a window and opening a new one is the normal
+// workflow. `cm get-env` covers the genuinely different case, where a terminal is replaced under a
+// shell that is already running.
+//
+// Input is KEY=VALUE entries as os.Environ produces them, and order is preserved so a spawn is
+// reproducible. Entries without '=' are skipped rather than guessed at.
+//
+// CM_SESSION needs no special case here even though a client inside a session has it: the shim
+// appends its own after this, and exec keeps the last occurrence of a name, so a forwarded value
+// cannot make a session claim to be its parent.
+func Inherit(environ []string) []string {
+	skip := NewMatcher(NoInherit)
+
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if skip.Match(k) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // Matcher decides whether a variable should be captured.
 type Matcher struct {
 	exact    map[string]struct{}

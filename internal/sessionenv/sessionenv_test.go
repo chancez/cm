@@ -246,3 +246,81 @@ func TestDefaultCaptureCoversTheStaleCases(t *testing.T) {
 		}
 	}
 }
+
+func TestInherit(t *testing.T) {
+	got := Inherit([]string{
+		"PATH=/client/bin:/usr/bin",
+		"TERM=xterm-kitty",
+		"KITTY_LISTEN_ON=unix:/tmp/kitty-123",
+		"HOME=/home/someone",
+		// Forwarded like anything else. A session gets what the client had, which is the whole
+		// point, and is what a terminal split gives you too.
+		"MY_API_TOKEN=shhh",
+		// Dropped: these choose what code a process loads rather than how it behaves.
+		"LD_PRELOAD=/tmp/evil.so",
+		"LD_LIBRARY_PATH=/tmp/evil",
+		"LD_AUDIT=/tmp/audit.so",
+		"DYLD_INSERT_LIBRARIES=/tmp/evil.dylib",
+		"DYLD_LIBRARY_PATH=/tmp/evil",
+		// Skipped rather than guessed at.
+		"malformed-no-equals",
+		"=novalue",
+	})
+	want := []string{
+		"PATH=/client/bin:/usr/bin",
+		"TERM=xterm-kitty",
+		"KITTY_LISTEN_ON=unix:/tmp/kitty-123",
+		"HOME=/home/someone",
+		"MY_API_TOKEN=shhh",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Inherit() = %+v, want %+v", got, want)
+	}
+}
+
+// Order is preserved rather than sorted, so a spawn is reproducible and a duplicated name resolves
+// the same way every time. exec keeps the last occurrence, so the order decides the winner.
+func TestInheritPreservesOrder(t *testing.T) {
+	got := Inherit([]string{"B=2", "A=1", "C=3", "A=4"})
+	want := []string{"B=2", "A=1", "C=3", "A=4"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Inherit() = %+v, want %+v", got, want)
+	}
+}
+
+// An empty value is a real value, distinct from the name being absent, so it survives.
+func TestInheritKeepsAnEmptyValue(t *testing.T) {
+	got := Inherit([]string{"PATH="})
+	want := []string{"PATH="}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Inherit() = %+v, want %+v", got, want)
+	}
+}
+
+// A client with nothing worth forwarding yields nothing, rather than being topped up here. What a
+// sparse client's session falls back to is shimEnv's decision, not this function's.
+func TestInheritWithAnEmptyEnvironment(t *testing.T) {
+	got := Inherit(nil)
+	want := []string{}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Inherit() = %+v, want %+v", got, want)
+	}
+}
+
+// The linker exclusions must not accidentally catch ordinary names that merely start the same way.
+// LD_ and DYLD_ are short prefixes, and DYLD_* is the only pattern here that matches by prefix.
+func TestNoInheritDoesNotOvermatch(t *testing.T) {
+	got := Inherit([]string{
+		"LDFLAGS=-L/usr/lib",
+		"LD_PRELOAD_ISH=nope",
+		"MY_LD_PRELOAD=nope",
+		"DYLD_PRINT_LIBRARIES=1",
+	})
+	// LD_PRELOAD_ISH and LDFLAGS survive because the LD_ entries are exact matches, while
+	// DYLD_PRINT_LIBRARIES goes because DYLD_* is a prefix pattern and every DYLD_ variable
+	// influences loading.
+	want := []string{"LDFLAGS=-L/usr/lib", "LD_PRELOAD_ISH=nope", "MY_LD_PRELOAD=nope"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Inherit() = %+v, want %+v", got, want)
+	}
+}

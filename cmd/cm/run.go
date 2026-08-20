@@ -109,7 +109,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					dir:     dir,
 					command: args,
 					persist: persist,
-					env:     env,
+					env:     sessionEnv(env),
 					tags:    sessionTags,
 				})
 				if err != nil {
