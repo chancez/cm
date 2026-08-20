@@ -290,6 +290,99 @@ a session from its output log. Today a dead shim means a dead session, and the p
 readable but not revivable. This is a real capability rather than a nicety, and it is bounded work: the
 restore path already replays a log into a screen.
 
+## Session environment
+
+**Forward more of the creating client's environment.** Today a session's shell starts from the
+*server's* environment, with only two things layered over it: the client's `PATH`, and the
+terminal-describing variables from the capture list. Everything else a client exports reaches nothing.
+So `cm attach foo` from a shell with `FOO=bar` exported gives a session with no `FOO`, which is not
+what "open a session from here" suggests.
+
+The expectation worth naming, because it is what a user has: creating a session by hand should behave
+roughly like starting a subshell, so the environment carries over. Creating one from a terminal
+emulator's own integration should behave like opening a new split, which is close to fresh apart from
+the working directory. Those sound contradictory and are not, and measuring the two kinds of client
+is what shows why.
+
+A client spawned by kitty's integration has kitty as its parent and launchd as its grandparent, with
+no shell in between: 14 variables and a 4 entry `PATH` on this machine. A client typed into a shell
+has that shell's environment, which after a login shell here is 60 variables and a 26 entry `PATH`.
+Both numbers come from the *client*, so forwarding the client's environment already produces both
+behaviors without a mode flag or a heuristic. The client's own ancestry is the signal.
+
+What this does not settle is what should happen to variables that describe a *process* rather than a
+user: `CM_SESSION`, `direnv`'s per-project exports, an agent's session id, credentials exported for
+one project. Forwarding them is right for the subshell case and wrong for anything else, and cm cannot
+tell the two apart by name. Pruning by name was considered and is not obviously correct: the variables
+worth pruning only appear when a user has deliberately started a session from a shell that has them,
+which is exactly the case where carrying them over is the point.
+
+There is also a larger version, and it goes the other way: build a session's environment from nothing
+rather than forwarding anything, as sshd does. sshd does not run as the user and copies nothing from
+any client, building from the passwd entry and a login shell instead, so every session is identically
+fresh. macOS `login -fq $USER` does this and works; `TMPDIR` is the one gap, since launchd sets it per
+user and a login shell does not build it, and it is recoverable through
+`getconf DARWIN_USER_TEMP_DIR` or by letting `mktemp` find the directory itself.
+
+That version is now the less attractive of the two, because it would flatten the distinction above
+rather than serve it: a hand-created session would stop resembling a subshell. It also lands
+differently per restore mode, since `restore_mode = shell` gets a login shell to rebuild everything
+while a session running a bare command has nothing to rebuild with, and `login(1)` brings a setuid
+binary into the spawn path with no clean Linux equivalent.
+
+A caution about measuring any of this, learned by getting it wrong here. Numbers taken from an agent's
+shell are not numbers about cm. An earlier version of this entry reported a 96 entry `PATH` with 71
+mise per tool install directories, and treated that as evidence that inheritance accumulates junk. It
+was an artifact of the measuring process: that shell had been started through a mise shim, which sets
+`__MISE_SHIM` and expands `PATH` to every tool's install directory. The user's own login shell was 26
+entries throughout, and kitty's was 4. Check `__MISE_SHIM` and the process ancestry before believing a
+number from an environment nobody chose.
+
+What the neighbours do, which bears on how urgent this is. tmux reaches for the same mechanism, a
+capture list plus an explicit `PATH` override at spawn, so the shape is not unusual. It is weaker
+support than it first looks, though, because tmux's server is explicit and can be multiplied with
+`-L`, while cm's is singular and close to invisible, so tmux is less exposed to the staleness that
+motivates this entry and its own comment argues only that a command should be findable.
+
+zmx is the interesting case here, because it is already what this entry proposes. It daemonizes from
+the client, so the shell it execs inherits the client's environment wholesale, and the session's
+environment simply *is* the creating client's. It needs no capture list and no `PATH` special case to
+get there. That is the behavior a subshell-like session wants, reached by process model rather than by
+copying, and it is evidence that forwarding a whole environment is liveable rather than reckless.
+
+What zmx gives up for it is the central server, and with it the single place for fanout, bookkeeping,
+and terminal state. cm cannot copy the mechanism without copying that trade, so forwarding explicitly
+is how cm would reach the same place. See [alternatives.md](alternatives.md).
+
+Two things the prior art settles, both looked up rather than reasoned about.
+
+**Do not write a forwarded environment to disk.** tmux keeps a session's environment on the heap only:
+`environ_free` on destroy, and no serialization anywhere in 153 source files. Its reboot-restore
+plugins do not save it either. sshd's posture is the same in the other direction, and stricter than
+expected: `AcceptEnv` defaults to empty with only `TERM` always accepted, and
+`PermitUserEnvironment` defaults to `no`. So nothing comparable persists an environment, which matters
+here because cm's session record is plaintext JSON in a file that has been observed at mode 0644, and
+`DefaultCapture`'s allow-list exists precisely to keep credentials out of it.
+
+That leaves reboot restore unresolved rather than solved. A revived session starts a fresh shell, and
+without a persisted environment that shell gets the server's values for anything outside the
+allow-list, which is the original staleness bug surviving in a corner. It is deferred rather than
+fixed: persistence is opt-in, and the case is unexercised today. The options were writing the
+environment to the record, which the paragraph above argues against, and taking the reviving client's
+environment, which is probably right and is a plumbing change once someone needs it.
+
+**A whole-environment forward should still exclude the dynamic linker variables.** `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, and the `DYLD_*` equivalents choose what code a process loads rather than how it
+behaves, and sshd names exactly this as the reason `PermitUserEnvironment` defaults to `no`, since it
+"may enable users to bypass access restrictions in some configurations". cm's client is a local
+process already running as the user, so the trust boundary sshd is defending is not present, and the
+exclusion is cheap and principled where a broader denylist would be guesswork.
+
+tmux also has a mechanism worth knowing about if cm ever needs the distinction: `ENVIRON_HIDDEN`
+marks a variable that lives in the session environment for tmux's own use, and `environ_push` skips
+it, so it never reaches a spawned process. cm has no equivalent of "tracked but not handed to the
+shell".
+
 ## Operational
 
 **A supervised server.** The server is started on demand by whichever command needs it. That is what makes

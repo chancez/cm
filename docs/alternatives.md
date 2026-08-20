@@ -75,6 +75,36 @@ shell rather than the one running in the session, and those differ precisely whe
 most confusing. cm also limits removals to variables it manages, so a prompt hook cannot delete
 unrelated parts of the environment. See [config.md](config.md).
 
+The agreement extends to the mechanism. A pane's environment starts from `global_environ`, which the
+*server* filled from its own `environ` at startup, since the client frees its copy on the way to
+becoming a client. `update-environment` is then a capture list of terminal and session variables,
+close to cm's `DefaultCapture`, applied on attach. `PATH` is handled outside that list in both:
+`spawn.c` overrides it from the client, because otherwise `tmux new myprogram` fails when `myprogram`
+is not on the server's path. tmux scopes the override to unattached clients, and falls back to
+`_PATH_DEFPATH` (`/usr/bin:/bin`) when nothing supplies one.
+
+It is tempting to read that as tmux confirming cm's design, and worth being careful about how much it
+confirms, because the two servers are not equivalent. tmux's server is explicit and plural: it has
+`kill-server` and `start-server`, a flag to refuse starting one, per-server log files, and `-L`/`-S`
+to run several independent servers on purpose. cm's is close to invisible, started on demand and
+replaced underneath the user during an upgrade, and there is one of it. Neither is one server per
+session, which is zmx's model rather than tmux's: tmux manages every session in a single server per
+socket, and a user opts into more sockets.
+
+That difference lands exactly on the argument cm's inherit list was built from. cm's case is
+environmental staleness accumulating over a server's lifetime, and tmux is less exposed to it, because
+someone who can name, kill, and multiply servers has cheap escapes that cm does not offer. tmux's own
+comment says nothing about staleness; its stated reason is narrower, that a command should be findable.
+Its scope matches that narrower reason.
+
+So what the comparison supports is the specific point that a client's `PATH` has to reach a spawned
+command, which two projects reached independently. It is not a second data point for the staleness
+argument, and cm's inherit list rests on its own evidence for that: a `PATH` that had grown to 88
+entries, and a session created today holding a directory deleted the day before.
+
+Neither builds a fresh environment the way sshd does, which is the deeper alternative and is recorded
+with its measurements in [ideas.md](ideas.md).
+
 *Driving a session from a script.* cm has `wait`, `read`, `send --wait`, and a `report` mechanism a
 program uses to say what it is doing. These exist for orchestrating work, and the design constraint
 is that cm never learns *what* is running: a reported state is just a state, and nothing in cm
@@ -124,6 +154,24 @@ tracks the nesting so a parent stops attributing its child's reports to itself.
 *Reboot persistence.* cm can bring a session's content back after a reboot, opt-in per session or by
 name pattern. zmx 0.7.0 keeps its sockets under `TMPDIR` and records no content outside its logs, so
 its persistence is across a terminal closing rather than across a reboot.
+
+*Session environment.* zmx gets this right for free, and the reason is its process model rather than
+any code about environments. It daemonizes *from the client*: `daemonize()` forks, the parent returns
+`error.IsClientProc`, and the child becomes the session daemon, so the shell is exec'd with
+`std.c.environ` inherited straight from the client that asked for the session. There is no long-lived
+process in between whose environment could go stale, and nothing to capture or replay, because the
+session's environment *is* the creating client's by construction.
+
+cm and tmux both pay for their central server here. A server outlives the shell that started it, so
+what it holds is stale by definition, and both end up reintroducing the client's values deliberately:
+cm through its inherit list, tmux through the `PATH` special case in `spawn.c`. That is the cost of the
+server, and it is a real one rather than an implementation detail. The trade is the same one everywhere
+else on this page: a daemon per session avoids a class of staleness, and gives up the single place for
+fanout, bookkeeping, and terminal state.
+
+The flip side is that zmx's model has no answer for a shell that is *already running* when its terminal
+is replaced, since there is no record of a newer client to consult. That is what `cm get-env` and
+tmux's `show-environment` exist for, and it is why cm needs both mechanisms where zmx needs neither.
 
 *Saying what a session is doing.* Both read OSC 2 and OSC 7 for title and directory, so this is not
 the difference it looks like: zmx tracks cwd from OSC 7 and replays the title on attach, and both
