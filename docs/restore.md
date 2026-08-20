@@ -114,6 +114,50 @@ already captured describe the old width.
   stored value. Forwarding the NUL is not cosmetic: kitty writes it into its session file and
   then cannot parse its own state back. (zmx issue 222.)
 
+## Replayed modes belong to the program, not to cm
+
+Serialization sets `modes: true`, so the blob opens with every terminal mode that differs from
+libghostty's defaults: the alternate screen, mouse tracking, bracketed paste, and the rest. This is
+correct and it is not optional. A full-screen program that is still running enabled those modes and
+is waiting on them, and it will not re-enable them because a new client arrived. Filtering them out
+gives a reattached TUI a dead mouse, or repaints it onto the main screen and destroys the client's
+scrollback.
+
+The consequence worth knowing before diagnosing anything: **that state describes the program, so it
+is not a signal about cm.** Whether a session replays `?1049h` and mouse tracking is decided by what
+is running in it and how it was started, and two invocations of the same program can differ. Measured
+on three sessions running Claude Code: `claude agents` serializes
+`?25l ?1000h ?1002h ?1003h ?1004h ?1006h ?1049h ?2004h ?2031h`, while plain `claude` in two separate
+sessions serializes `?25l ?1004h ?2004h ?2031h` in both, setting neither the alternate screen nor any
+mouse mode. The first grabs the mouse, so the wheel scrolls the program's own history; the second
+leaves scrolling to the terminal. Both are right, and neither is cm doing anything.
+
+That difference reads as a cm bug from the outside, because the symptom is "scrolling behaves
+differently in this session", and it cost a long debugging session that found three causes in a row
+that were not causes. Two mistakes are worth naming, since both look like evidence:
+
+- Mode state is emitted **once, as a preamble**. Grepping the whole of `cm history --format vt` for
+  `?1000h` also counts the sequence appearing as literal text anywhere in the scrollback. Diagnosing
+  this from inside the affected session is enough to trigger it: the grep reported 19 occurrences of
+  `?1000h` in a session whose actual mode state set none, because the investigation had printed the
+  sequence into that session's own scrollback. Read the first bytes, not a match count.
+- `cm list` showing `running(claude)` is the last command the shell reported via OSC 133, not a live
+  process. It says nothing about whether that program is still there.
+
+`cm history --format vt` is how to read the state, since it renders through the same formatter with
+`modes: true`. Its first bytes are the modes the next fresh client would receive.
+
+## Only a fresh client receives any of this
+
+A resuming client gets no blob at all. `attach` returns serialized state only when `resumeFrom` is
+nil; a client that reconnects with a position gets the bytes it missed and nothing else, because it
+already has the screen and the modes that came with it.
+
+So a mode that reaches one client need not reach another, and reattaching is not a way to
+resynchronize a client whose terminal has drifted from the model. The client's own reset on detach
+(`RIS`, `internal/client/terminal.go`) is what cleans a terminal up, and a connection that dies
+without detaching skips it.
+
 ## Prompt markers
 
 Every chunk of output has `redraw=0` forced into OSC 133;A prompt markers.
@@ -151,6 +195,15 @@ the screen is absolute, so unwrapping content that then occupies fewer rows leav
 row low and typing lands on the wrong line. Measured, and the reason the ordering above is the
 fix rather than an `unwrap: true`. It only matters when the model and the client disagree about
 width, which resizing first prevents.
+
+A screen replayed from a persisted log carries modes no program is waiting on. `replayPersisted`
+serializes through the same function, but it builds a throwaway emulator from the log of a session
+whose processes are gone, so an alternate screen or mouse tracking it reconstructs is stale by
+construction rather than possibly-live. The argument for replaying modes above does not apply there,
+and the neighbouring code already draws this distinction for a sibling case: pending output is
+discarded after the replay because it answers queries from a program that no longer exists. Not
+currently handled, and unmeasured, so it is recorded here rather than fixed on the strength of
+reading the code.
 
 ## Two sequence numbers, and why conflating them corrupted the prompt
 
