@@ -391,7 +391,7 @@ command, which is fine, but there is no way to say "keep one running". A launchd
 someone who wants that, and would change nothing about the on-demand path.
 
 **Upgradable shims, by re-exec rather than fd-passing.** Clients can now be upgraded in place
-(`cm client upgrade`) and the server has always been replaceable, which leaves shims as the one layer that
+(`cm clients upgrade`) and the server has always been replaceable, which leaves shims as the one layer that
 keeps whatever build it started with for its whole life. A machine with a session per terminal window
 accumulates builds visibly: one real install held twelve distinct builds across twenty-six shims, the
 oldest ten days old. `cm doctor`'s `shim-version-skew` reports that, and reporting is currently the entire

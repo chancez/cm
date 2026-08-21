@@ -349,7 +349,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return nil
 
 		case <-att.evict:
-			// `cm detach` asked this client to let go, or `cm client upgrade` asked it to come back on a
+			// `cm detach` asked this client to let go, or `cm clients upgrade` asked it to come back on a
 			// newer build.
 			//
 			// Told before the stream closes, so the client can report "detached by request" rather than

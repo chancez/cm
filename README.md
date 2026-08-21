@@ -89,8 +89,9 @@ Installing a new build does not disturb anything that is running, which is the p
 three layers, but it also means nothing picks the new build up on its own:
 
 ```sh
-cm server restart        # replace the server; sessions keep running
-cm client upgrade --all  # replace the clients; windows keep their screens
+cm clients list --stale   # what is still on an older build
+cm server restart         # replace the server; sessions keep running
+cm clients upgrade --all  # replace the clients; windows keep their screens
 ```
 
 A client re-execs itself and resumes where it stopped, so a window shows the same screen a
@@ -236,9 +237,16 @@ an error: a shim left holding a pty, a socket with nothing behind it, a client a
 different builds, how many builds the running shims span, a runtime directory long enough to
 break unix sockets.
 
-`cm ls --json` reports each attached client's build and pid, which is the other half of the same
-question: a version difference is legal here, since a session outlives its server on purpose, but
-the effect of one is silent, so being able to see what is attached matters.
+`cm clients list` is the other half of the same question. `cm list` is session-oriented, one row per
+session with a count of what is attached; this is one row per client, with the build each is running:
+
+```sh
+cm clients list           # every client, with its build
+cm clients list --stale   # only the ones not on the server's build
+```
+
+A version difference is legal here, since a session outlives its server on purpose, but the effect
+of one is silent, so being able to see it is the point.
 
 The diagnostic logs matter more than usual here, because cm swallows errors in anything
 advisory so that a failed title update or metadata write cannot end a session. Everything

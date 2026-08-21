@@ -103,7 +103,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newSignalCommand(g),
 		newDoctorCommand(g),
 		newDetachCommand(g),
-		newClientCommand(g),
+		newClientsCommand(g),
 		newKillCommand(g),
 		newServerCommand(g),
 		newSendCommand(g),

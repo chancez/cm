@@ -336,7 +336,7 @@ already reads.
 ## Upgrading a client, and why only a client can be upgraded
 
 A restart replaces the server and nothing else, which left two thirds of an installation on whatever
-build it started with. `cm client upgrade` covers the clients. Nothing covers the shims, and nothing
+build it started with. `cm clients upgrade` covers the clients. Nothing covers the shims, and nothing
 can.
 
 The asymmetry is the design rather than a limitation. Each of the three layers can be replaced exactly

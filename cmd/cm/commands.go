@@ -192,7 +192,7 @@ receives it and the window closes instead of detaching.`,
 	// something a person has a reason to type. A human passing the wrong value here gets a screen that
 	// resumes from the wrong place, which looks like corrupted output.
 	f.Uint64Var(&resumeFrom, "resume-from-seq", 0,
-		"resume output from this position instead of repainting (used by cm client upgrade)")
+		"resume output from this position instead of repainting (used by cm clients upgrade)")
 	_ = f.MarkHidden("resume-from-seq")
 	return cmd
 }

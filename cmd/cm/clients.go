@@ -16,27 +16,45 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
-// newClientCommand groups the commands that act on attached clients rather than on sessions.
+// newClientsCommand groups the commands whose subject is a client rather than a session.
 //
-// A parent with one subcommand today, because "upgrade" alone at the top level would read as upgrading
-// cm itself, which is the package manager's job and not something cm should claim. `cm client upgrade`
-// says what it acts on.
-func newClientCommand(g *globals) *cobra.Command {
+// Plural, and named for what it acts on rather than what it does. "upgrade" alone at the top level would
+// read as upgrading cm itself, which is the package manager's job; `cm clients upgrade` says what is being
+// upgraded. Plural rather than singular because every one of these acts on a set: a session can hold
+// several clients, and none of these commands takes one client as its subject.
+//
+// The listing is the reason this is a group rather than a single command. `cm list` is session-oriented and
+// stays that way -- one row per session is what a status line wants -- so a client-oriented view needs
+// somewhere of its own, and once it exists the client-specific actions belong beside it.
+//
+// Distinct from `cm logs client`, which is nested under logs and prints the shared client log. No
+// collision, and worth noting because the two read similarly.
+func newClientsCommand(g *globals) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "client",
-		Short: "Act on attached clients",
-		Long: `Act on the clients attached to sessions, rather than on the sessions themselves.
+		Use:     "clients",
+		Aliases: []string{"client"},
+		Short:   "List and act on attached clients",
+		Long: `List and act on the clients attached to sessions, rather than on the sessions
+themselves.
 
 A client is the process holding a terminal and streaming a session through it. It
 owns nothing that cannot be rebuilt: the session lives in its shim and the screen
 can be resumed from a recorded position, which is what makes a client the one part
-of cm that can be replaced without anyone losing work.`,
+of cm that can be replaced without anyone losing work.
+
+'cm list' answers "what sessions are there". These answer "what is attached", which
+is a different question and the one that matters when a build difference is
+involved, since a version mismatch between a client and its server fails silently
+rather than reporting an error.`,
 	}
-	cmd.AddCommand(newClientUpgradeCommand(g))
+	cmd.AddCommand(
+		newClientsListCommand(g),
+		newClientsUpgradeCommand(g),
+	)
 	return cmd
 }
 
-func newClientUpgradeCommand(g *globals) *cobra.Command {
+func newClientsUpgradeCommand(g *globals) *cobra.Command {
 	var (
 		asJSON  bool
 		all     bool
@@ -61,9 +79,9 @@ position because that is what it does every time the server restarts. Upgrading
 reuses that: the client re-execs itself and resumes where it stopped, so the
 terminal shows the same screen it did a moment earlier.
 
-  cm client upgrade          # the session I am in
-  cm client upgrade work     # a specific one
-  cm client upgrade --all    # every client the server has
+  cm clients upgrade          # the session I am in
+  cm clients upgrade work     # a specific one
+  cm clients upgrade --all    # every client the server has
 
 Shims are deliberately not upgraded, and cannot be. A shim holds the pty, so
 replacing one means ending the shell in it. 'cm doctor' reports how many builds the
@@ -96,7 +114,7 @@ server without checking first.`,
 				return err
 			}
 
-			// The calling session is the default target, like `cm detach`. A bare `cm client upgrade` from
+			// The calling session is the default target, like `cm detach`. A bare `cm clients upgrade` from
 			// inside a session upgrades that session's client, which is the shape a keybinding wants.
 			if len(args) == 0 && !all && len(tagArgs) == 0 {
 				name, err := sessionTarget(args, "upgrade the client of")
