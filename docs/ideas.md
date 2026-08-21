@@ -27,6 +27,53 @@ symptom is a reply that looks truncated for no reason. The `cm` skill tells an a
 writing a file. Whether cm could retain more is a libghostty question, not a cm one, and worth asking
 upstream before designing anything.
 
+Note the resumption-mark entry below covers the same gap from the other side: it does not recover the lost
+lines, but "what changed on the screen" is answerable for a full-screen program where a command boundary is
+not.
+
+**Kitty graphics across a reattach.** Images pass through as APC bytes while a client is watching and
+are absent after reattaching, because libghostty's formatter does not re-emit them. `alternatives.md`
+lists this under shared limitations, alongside zmx, as a property of the approach.
+
+That framing is now out of date, and the reason is worth stating precisely because the formatter has
+not changed. The pinned libghostty commit already ships an *inspection* API for kitty graphics:
+`third_party/ghostty/include/ghostty/vt/kitty_graphics.h`, added upstream in `bdc0b6c19` on 2026-07-03,
+where `GHOSTTY_REF` is `4d605bf0d` from 2026-07-30. Placements are iterated
+(`ghostty_kitty_graphics_placement_iterator_new`, `_next`, `_get`) and each resolves to an image handle
+whose `ghostty_kitty_graphics_image_get` reports width, height, pixel format, and a borrowed pointer to
+the pixels. `internal/vt` wraps none of it. So re-emission is something cm could build rather than
+something to wait on upstream for, which is a different kind of gap from the one recorded today.
+
+Two constraints decide the shape, and both are in the header rather than inferred:
+
+- **Storage is opt-in and needs a PNG decoder.** Nothing is retained unless
+  `GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT` is non-zero *and* a decoder callback is installed
+  through `ghostty_sys_set` with `GHOSTTY_SYS_OPT_DECODE_PNG`. cm sets neither, so cm's terminal model
+  currently holds no images at all. Supplying a PNG decoder is a dependency decision, not a flag.
+- **What comes back is decoded, uncompressed pixels, never the original PNG.** The header states the
+  reported format is never `GHOSTTY_KITTY_IMAGE_FORMAT_PNG` and that zlib payloads are inflated before
+  storage. Restoring therefore means re-transmitting raw RGB or RGBA, which can be far larger on the way
+  out than what arrived. That number is the first thing to measure, because it decides whether this is
+  viable at all: a screen of images is bounded by the storage limit cm chooses, not by what the program
+  sent.
+
+Borrowed handles are invalidated by the next mutating terminal call, which fits the existing
+single-writer discipline rather than fighting it. See [concurrency.md](concurrency.md).
+
+zellij shipped this in 0.45.0 and its design is worth reading first, since it solved the parts that are
+not about the C API. Images live in a session-global refcounted store with LRU eviction under a quota.
+Placements are anchored to a *canonical* (pre-wrap) line index rather than a screen row, so reflow on
+resize does not detach an image from the text it belongs to -- which is the same class of bug as the
+scrollback-shift on resize in [restore.md](restore.md). Re-emission is driven off a *per-client* map
+from internal image id to host image id, cleared on attach and detach, so a newly attached client
+re-transmits everything by construction rather than through a special reattach path. Host ids are
+allocated from 2,000,000,000 upward to avoid colliding with whatever else is talking to the terminal.
+
+Worth knowing what zellij does *not* do: images are not serialized to disk, so a zellij session
+survives reattach but not a reboot. cm persists content across a reboot, so cm would face a question
+zellij never answered, and the pixel-size measurement above is what decides whether the answer can be
+"yes" rather than "content only, minus images".
+
 **`cm doctor` checks as incidents arise.** The standing rule is that a debugging session that cost real
 time should leave a check behind. The obvious candidate -- a session that reports neither OSC 133 nor its own
 state, so `--wait idle` hangs -- is already covered by `no-shell-integration`, which checks both. What is not
@@ -69,6 +116,65 @@ would mean writing a position per command to the store, which is a row on the ho
 read back interactively. `cm run` already covers the ended-session case by saving output, so the gap is
 narrow: reading back a command that ran before the last server restart.
 
+**A resumption mark: "what happened while I was away".** Two use cases converge on one primitive, and they
+want different presentations of it, which is the part to settle before building anything.
+
+The human one, and the one that motivated this: coming back to a session you tabbed away from, and wanting
+to start reading where you stopped watching rather than at the bottom. Scrolling up to hunt for the place
+you left off is the actual daily annoyance, and it gets worse the more output arrived while you were gone.
+What is wanted is a position, not a diff: put the viewport where I was, and let me scroll down to now.
+
+The agent one: "what changed on the screen since I last looked". `--last-output` and `--since-commands`
+already answer this *when the shell emits OSC 133*, and better than a screen comparison could, because a
+command boundary is a real event rather than an inference. The case they do not cover is a full-screen
+program, which brackets nothing and draws on the alternate screen, and that is the same gap the
+alternate-screen entry above describes. AgentAPI exists for exactly this reason: it drives coding agents by
+comparing screen snapshots and attributing text that appears below the previous content to the agent.
+
+That comparison is worth being careful about, because it looks like the thing this file refuses under
+"Detecting what is running" and is not quite. Two separable things:
+
+- *Structuring the screen* -- "these rows differ from the rows I saw last time", "the screen stopped
+  changing". No program knowledge, nothing to chase as a UI changes, and cm's terminal model already holds
+  everything needed.
+- *Interpreting the screen* -- "this `>` is a prompt box", "this is an approval dialog". Needs per-program
+  knowledge and rots as the program changes. This is what the refusal is about and it should stay refused.
+
+AgentAPI is evidence the line is real: its segmentation is program-agnostic and only its cosmetic cleanup
+is UI-specific, so the parts fail independently. Worth writing the distinction into the refusal, since as
+stated it reads as forbidding both.
+
+What blocks the human half is not the reading, it is knowing when "away" began, and the answer is worse
+than it first appears. cm does not learn that a window lost focus unless the *program inside the session*
+enabled DECSET 1004, because `internal/client/terminal.go` never enables focus reporting for cm's own
+purposes -- it only puts the terminal in raw mode and resets it. So a session sitting at a shell prompt,
+which is the common case for tabbing away, reports nothing. `Session.ReportFocus` gates on
+`term.FocusReporting()` for this reason, and `service.go` calls it on first attach and last detach, so
+attach and detach are the only focus edges cm reliably knows.
+
+Three ways to get a mark, in increasing order of how much cm has to invent:
+
+1. *Detach and reattach.* Already an event cm sees, and the resume machinery already carries a position.
+   This is nearly free and covers closing the window, but not tabbing away, which is the case asked for.
+2. *An explicit mark.* `cm mark` from a keybinding, or a flag on read. Predictable and needs no detection
+   at all, but it asks the user to remember to say so before leaving, which is the one thing they will not
+   do.
+3. *cm enabling focus reporting itself* so it learns about tabbing away regardless of what is running.
+   Tempting and the most invasive: cm would be setting a mode on the user's terminal that nothing asked
+   for, and it has to be undone exactly. There is also a latent hazard to fix first --
+   `internal/server/service.go` forwards a client's focus events to the pty unconditionally, while
+   `ReportFocus` gates on whether the program asked. Consistent today only because the program that
+   enabled 1004 is the one receiving them; if cm enables it for itself, a program that never asked starts
+   receiving `ESC[I`/`ESC[O` as input.
+
+The cheap version worth trying first is (1) plus a read that takes a position, since both halves already
+exist: attach records a resume point, and `read --since-commands` proves a boundary-relative read is a
+shape people want. Note the presentation differs from every existing read: a mark wants output *and* a
+viewport placed inside it, where `read` prints a range and returns. Whether that belongs in `read`, in
+`attach`, or in the scrollback the terminal already owns is genuinely undecided, and the last option
+deserves weight -- if a mark were an OSC the emulator understood, the scrolling would be the emulator's
+job, which is the side of the line this project usually wants to be on.
+
 **A timeout on everything that can block.** Done: `cm read --follow --timeout`, plus one shared definition
 for the flag that wait, send, and run already had. See `docs/architecture.md`.
 
@@ -93,9 +199,40 @@ covered the case that motivated this, since a fan-out is usually created togethe
 is, and a caller with a list of unrelated names can still background one wait each. Worth revisiting only if
 something needs to wait on sessions it did not create and cannot tag.
 
+**Bracketed paste for `cm send`.** `cm send` writes exactly the bytes it was given. For a single line or a
+`--key` that is right, and for a multi-line block it is a footgun: a shell reading `a\nb\nc` runs three
+commands as the newlines arrive, and an editor auto-indents each line as though it were typed. The caller
+most likely to hit this is the one cm is built for, an agent sending a heredoc or a code block.
+
+The fix is to wrap the payload in bracketed paste (`ESC[200~` ... `ESC[201~`), which tells a program that
+supports it to treat the bytes as pasted data rather than keystrokes. wezterm's `cli send-text` defaults to
+this and has `--no-paste` for the raw form, which is the right way round: the safe behavior is the default
+and keystroke semantics are the opt-in.
+
+What needs deciding first is the compatibility question, and it is the reason this is recorded rather than
+done. Bracketed paste is a *mode*: a program that has not enabled DECSET 2004 receives the wrapper as
+literal `ESC[200~` text and puts it on its command line. cm already knows whether the mode is set, since
+the terminal model tracks it, so the choice is between honoring that (wrap only when the program asked,
+which is correct but makes the same command behave differently depending on what is running) and an
+explicit flag (predictable, but the default is then wrong for somebody). Note `--key` must never be
+wrapped, since a keystroke is not a paste, and that is the one part that is unambiguous.
+
+Not to be confused with what `cm send` already gets right: `--key` accepts named and control keys
+(`enter`, `up`, `f5`, `ctrl-c`, `c-c`, `^C`), so a caller wanting an interrupt does not have to produce
+the byte. `internal/input/keys.go` records the incident that motivated it. kitty's `send-key` and `ht`'s
+`sendKeys` are the same idea, and cm is not behind there.
+
 **Idempotent send.** `cm send` writes to a pty; if the call fails partway there is no way to know how much
 arrived, and no way to retry safely. This has not bitten anything yet, and would matter for a caller
 driving cm over a flaky link.
+
+Prior art worth having before designing it, because it is smaller than it looks. Eternal Terminal solves
+the same problem for a dropped TCP connection with a byte counter per direction: each side tracks how much
+it has consumed and announces that on reconnect, and the writer replays the difference from a bounded
+buffer. No idempotency tokens and no request ids, just a count. cm already has that shape across a
+*process* boundary rather than a network one, since the shim's sequenced log plus adoption replay is
+exactly "tell me your position and I will resend the delta". So this is less a new mechanism than the
+existing one applied to the input direction, which is currently uncounted.
 
 ## Reporting and integration
 
@@ -144,6 +281,50 @@ second delivery path for something already delivered.
 Note also that it does not reuse the output matcher `cm wait --match` is built on, despite an earlier claim
 in `docs/architecture.md` that it would. State changes come from the metadata subscription; "has this text
 appeared" is a different question.
+
+## Output delivery
+
+**Coalescing output to a client that has fallen behind.** cm streams bytes to every client. A client that
+cannot keep up falls behind and is eventually told there is a gap, at which point
+`internal/client/attach.go` drops its resume point and repaints from a fresh attach. That recovery works,
+and it means the failure is already handled: what is not exploited is that cm holds a terminal model and
+could therefore send a client *the current screen* instead of a backlog it will never care about.
+
+The payoff is not bandwidth, and describing it that way undersells it. mosh's argument is that a protocol
+obliged to deliver every byte fills network and pipe buffers, and a full buffer is what makes ctrl-c feel
+dead: the interrupt is delivered promptly but the output already queued ahead of it still has to drain.
+Because mosh is free to skip intermediate frames, it can regulate output so buffers never fill, and ctrl-c
+takes effect within a round trip. That is a responsiveness property, reached by giving up byte-exact
+delivery.
+
+**What makes this worth recording for cm specifically is that cm does not have to make that trade.**
+Coalescing would be a *client delivery* decision, while the shim's log stays byte-exact, so `read`,
+`history`, and `wait --match` keep seeing every byte. mosh cannot do this: it synchronizes screen state and
+therefore has no stream, which is why its own answer to scrollback is to tell you to run a multiplexer
+underneath. Eternal Terminal takes the opposite side, keeping the byte stream and therefore never skipping
+frames. cm holding both a model and a log is what makes both halves available at once, and no tool in the
+field appears to do that.
+
+What the neighbours do when a client falls behind, since the design space is narrow and all three answers
+are worse than the one above:
+
+- tmux keeps per-client, per-pane byte offsets into one buffer and drains it only to the minimum offset
+  across every consumer, so a slow client applies backpressure all the way to the pty -- when every
+  consumer is off, it stops reading the pty entirely. It then bounds the damage crudely: a control client
+  whose oldest queued block exceeds `CONTROL_MAXIMUM_AGE`, 300000 ms, is killed with "too far behind",
+  unless pause mode is on, in which case the pane is paused and a `%pause` notification is sent.
+- screen's `nonblock` declares a display blocked after a timeout and stops sending it output, which is the
+  same idea with no recovery story.
+- zellij pushes whole viewports to subscribers and diffs them, which coalesces by accident but re-sends the
+  entire viewport on any single-cell change.
+
+Two things to settle before building. cm's server cannot apply backpressure to the pty the way tmux does,
+because the shim owns it, so "stop reading" would have to become a shim protocol change -- which is
+probably an argument *for* coalescing rather than against, since coalescing needs no such thing. And
+switching a live client from byte stream to screen state mid-session is a different operation from
+restoring on attach: the serializer exists ([restore.md](restore.md)) but it is written for a client that
+is about to start painting, not one already mid-stream. The measurement that decides whether this is worth
+it is how far behind a real client actually gets, which nothing currently reports.
 
 ## Bigger expansions
 
@@ -470,6 +651,11 @@ multiplexer becomes the thing you fight. This is the founding constraint, not a 
 for approval. It deliberately does not: that means knowing every program's UI and chasing it as it changes.
 The report mechanism exists so the program can say instead, and a program describing itself is better
 evidence than a screenshot of it.
+
+What this does *not* refuse, since the wording has read as broader than intended: reporting that the screen
+changed, or stopped changing, needs no knowledge of any program and is not covered here. The line is
+between structuring a screen and interpreting one. See the resumption-mark entry above, which is on the
+allowed side of it.
 
 **Configuration per session in a file.** Sessions are created by whatever starts them, with flags. A file
 mapping session names to settings would move that decision away from the caller who has the context, and
