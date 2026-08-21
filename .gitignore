@@ -26,6 +26,17 @@ mise.local.toml
 CLAUDE.local.md
 AGENTS.local.md
 
+# The nvim end-to-end harness, for the same reason as the files above: it depends on this machine
+# rather than on cm. It drives the developer's own neovim config, with their plugins, inside an
+# installed kitty, against an installed zmx as the control. A contributor has none of those, so a
+# checked-in harness naming them is a dead end, and as a Go test it would fail for everyone who cloned
+# the repo and teach them to skip the suite.
+#
+# What it produces is meant to be committed. It is a bug *finder*: when it turns something up, the
+# deliverable is a unit test in internal/vt or internal/server that constructs the state directly and
+# runs on any machine. See .agents/skills/nvim-e2e/SKILL.md.
+.agents/skills/nvim-e2e/
+
 # Zig's build cache. mise's libghostty task builds inside third_party, which is already ignored, but
 # setup-zig in CI points ZIG_LOCAL_CACHE_DIR at the repo root. An untracked directory there makes the
 # Go build stamp vcs.modified=true, so every release binary reported its version with a "-dirty"
