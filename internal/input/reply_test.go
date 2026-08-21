@@ -107,6 +107,17 @@ func TestIsQueryReplyAndIsUserInputDisagreeWhereIntended(t *testing.T) {
 			wantTyped: true, wantReply: false,
 			explanation: "typing, so it claims sizing and is never dropped",
 		},
+		{
+			name: "kitty keyboard flags reply", input: "\x1b[?0u",
+			wantTyped: false, wantReply: true,
+			explanation: "the '?' marker makes this the answer to CSI ? u rather than a keypress, and " +
+				"claiming it as typing sent a whole batch of replies to the pty verbatim",
+		},
+		{
+			name: "kitty keyboard keypress", input: "\x1b[97u",
+			wantTyped: true, wantReply: false,
+			explanation: "a keycode rather than the '?' marker, so this really is someone typing 'a'",
+		},
 	}
 
 	for _, tc := range cases {
@@ -216,5 +227,46 @@ func TestSplitRepliesAgreesWithIsQueryReply(t *testing.T) {
 					in, isReply, split)
 			}
 		})
+	}
+}
+
+// A program's whole probe batch, answered by a real terminal in one write, must route to the query
+// proxy rather than to the pty.
+//
+// This is the reported yazi bug. yazi probes the terminal on startup with DECRQSS for the cursor style,
+// DECRQM for mode 12, CSI ? u for the kitty keyboard flags, and DA1, sent as one write. A real kitty
+// answers all four in a single write, and these are the bytes it sent, captured under a pty rather than
+// guessed:
+//
+//	\x1bP1$r1 q\x1b\\\x1b[?12;0$y\x1b[?0u
+//
+// The trailing kitty flags reply was classified as typing, and service.go asks IsUserInput before
+// IsQueryReply, so the entire blob was written to the pty as though someone had typed it. yazi saw "r q"
+// from the DECRQSS reply, minus the "\x1bP1$" introducer it never received: 'r' opens the rename prompt
+// and " q" lands in the box, which is the reported screenshot. On the first run the leaked 'q' quit yazi
+// outright instead.
+//
+// Asserted per sequence as well as on the whole blob, because the blob passing while a part fails would
+// mean the split hands the wrong bytes to a matched request.
+func TestTerminalProbeBatchIsNotTyping(t *testing.T) {
+	const batch = "\x1bP1$r1 q\x1b\\\x1b[?12;0$y\x1b[?0u"
+
+	if IsUserInput([]byte(batch)) {
+		t.Errorf("IsUserInput(%q) = true, so service.go writes the batch to the pty verbatim instead of "+
+			"matching it against the questions cm asked. yazi reads the DECRQSS reply as the keystrokes "+
+			"'r', ' ', 'q': rename, then \" q\" typed into the prompt.", batch)
+	}
+	if !IsQueryReply([]byte(batch)) {
+		t.Errorf("IsQueryReply(%q) = false, so the batch is forwarded to the pty rather than routed to "+
+			"the query proxy", batch)
+	}
+
+	want := []string{"\x1bP1$r1 q\x1b\\", "\x1b[?12;0$y", "\x1b[?0u"}
+	var got []string
+	for _, part := range SplitReplies([]byte(batch)) {
+		got = append(got, string(part))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("SplitReplies(%q) = %q, want %q", batch, got, want)
 	}
 }

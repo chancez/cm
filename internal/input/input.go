@@ -263,9 +263,26 @@ func classifyCSI(p []byte) (n int, typed bool) {
 
 	switch final {
 	case 'u':
-		// Kitty keyboard protocol. The third parameter is the event type, where 3 means release.
-		// A release alone should not claim sizing, since letting go of a key in a window you are
-		// leaving is not a reason to take it over.
+		// Kitty keyboard flags, answering CSI ? u, which is a reply rather than a keystroke. The '?'
+		// marker is the whole distinction: a keypress in this protocol carries a keycode where the
+		// reply carries the marker, and both end in 'u'. classifyReply already splits them this way,
+		// so leaving it out here made the two classifiers disagree about the same bytes.
+		//
+		// That disagreement is a bug rather than a cosmetic inconsistency, because service.go asks
+		// IsUserInput *first* and treats anything it claims as typing. Reported against yazi, which
+		// probes with DECRQSS, DECRQM, CSI ? u and DA1 in one burst; a real kitty answers all four in
+		// a single write, measured as "\x1bP1$r1 q\x1b\\\x1b[?12;0$y\x1b[?0u". The trailing flags
+		// reply made the whole blob read as typing, so instead of being matched against the questions
+		// cm asked, it went to the pty verbatim. yazi received "r q" out of the DECRQSS reply, whose
+		// "\x1bP1$" introducer it never saw: 'r' opens rename, then " q" is typed into the box. The
+		// first run instead quit outright on the leaked 'q'. Injecting that exact blob into a live
+		// yazi reproduces both.
+		if len(params) > 0 && params[0] == '?' {
+			return length, false
+		}
+		// The third parameter is the event type, where 3 means release. A release alone should not
+		// claim sizing, since letting go of a key in a window you are leaving is not a reason to take
+		// it over.
 		if kittyEventType(params) == 3 {
 			return length, false
 		}
