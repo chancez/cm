@@ -513,6 +513,10 @@ func (s *Service) recvLoop(
 				}
 				continue
 			}
+			// Recorded on every keystroke rather than only when sizing moves, so a listing can name
+			// the window someone is using under any resize policy. See clientSize.lastInputAt for why
+			// typing is the only signal that can identify one client out of several.
+			sess.noteClientInput(tok)
 			// Typing may transfer sizing, depending on the policy. Checked before the write so
 			// the shell is already at the right size when it sees the keystroke.
 			if rows, cols, x, y, resize := sess.claimLeadership(tok); resize {
@@ -622,11 +626,17 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 					Pid:      c.PID,
 					Version:  c.Version,
 					ReadOnly: c.ReadOnly,
+					Active:   c.Active,
 				}
 				// Left at zero rather than sending a bogus timestamp when unknown, which a
 				// zero time.Time would become through Unix().
 				if !c.AttachedAt.IsZero() {
 					ac.AttachedAtUnix = c.AttachedAt.Unix()
+				}
+				// Same reason, and reached more often: a client that has never typed has no last-input
+				// time at all, which is the ordinary state of a window that was just opened.
+				if !c.LastInputAt.IsZero() {
+					ac.LastInputAtUnix = c.LastInputAt.Unix()
 				}
 				item.AttachedClients = append(item.AttachedClients, ac)
 			}
@@ -796,7 +806,7 @@ func (s *Service) UpgradeClients(
 			resp.Asked[name] = 0
 			continue
 		}
-		asked, skipped := sess.UpgradeClients(req.Force, current)
+		asked, skipped := sess.UpgradeClients(req.Force, current, req.ActiveOnly)
 		resp.Asked[name] = uint32(asked)
 		if skipped > 0 {
 			resp.AlreadyCurrent[name] = uint32(skipped)

@@ -49,6 +49,7 @@ rather than reporting an error.`,
 	}
 	cmd.AddCommand(
 		newClientsListCommand(g),
+		newClientsCurrentCommand(g),
 		newClientsUpgradeCommand(g),
 	)
 	return cmd
@@ -59,6 +60,7 @@ func newClientsUpgradeCommand(g *globals) *cobra.Command {
 		asJSON  bool
 		all     bool
 		force   bool
+		current bool
 		tagArgs []string
 	)
 	cmd := &cobra.Command{
@@ -79,9 +81,20 @@ position because that is what it does every time the server restarts. Upgrading
 reuses that: the client re-execs itself and resumes where it stopped, so the
 terminal shows the same screen it did a moment earlier.
 
-  cm clients upgrade          # the session I am in
-  cm clients upgrade work     # a specific one
-  cm clients upgrade --all    # every client the server has
+  cm clients upgrade           # every client of the session I am in
+  cm clients upgrade --current # only the window I am typing in
+  cm clients upgrade work      # a specific session
+  cm clients upgrade --all     # every client the server has
+
+Naming a session upgrades every client attached to it, which is several windows when
+a session is open in more than one. --current narrows that to the one being used, so
+a keybinding upgrades the window it was pressed in and leaves the others painted.
+
+The active client is the one that typed most recently, which for a command typed at a
+prompt is the client that ran it: its keystrokes arrived on that connection. Where
+nothing has been typed yet there is no active client, and --current reports 0 asked
+rather than falling back to upgrading everything. 'cm clients current' says which
+client that is, and 'cm clients list' marks it with a '*'.
 
 Shims are deliberately not upgraded, and cannot be. A shim holds the pty, so
 replacing one means ending the shell in it. 'cm doctor' reports how many builds the
@@ -110,6 +123,10 @@ server without checking first.`,
 				// --tag means a subset, so one of the two was a mistake.
 				return errors.New("--all and --tag cannot be combined; --all is already every session")
 			}
+			// --current and --all are not refused together, unlike --all with --tag, and the difference is
+			// that these two narrow on different axes: --all chooses sessions, --current chooses which
+			// client within each. "the window I am using in every session" is a coherent request, and it is
+			// what a post-install hook wants when several sessions are open in several windows.
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
 			}
@@ -154,13 +171,14 @@ server without checking first.`,
 				// race a session created between the list and the request: it would be missed, leaving one
 				// window on the old build after a command that said it upgraded everything.
 				resp, err := cl.UpgradeClients(ctx, &serverv1.UpgradeClientsRequest{
-					Sessions: names,
-					Force:    force,
+					Sessions:   names,
+					Force:      force,
+					ActiveOnly: current,
 				})
 				if err != nil {
 					return err
 				}
-				return reportUpgrade(os.Stdout, resp, asJSON)
+				return reportUpgrade(os.Stdout, resp, asJSON, current)
 			})
 		},
 	}
@@ -168,6 +186,8 @@ server without checking first.`,
 	f.BoolVar(&all, "all", false, "upgrade the clients of every session")
 	f.BoolVar(&force, "force", false,
 		"ask clients already running the server's build to restart anyway")
+	f.BoolVar(&current, "current", false,
+		"upgrade only the client being used, rather than every client of the session")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"upgrade the clients of sessions with this tag, as key or key=value (repeatable)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
@@ -199,7 +219,13 @@ type upgradeJSON struct {
 // Errors are reported per session rather than aborting at the first, so an upgrade over a whole server
 // still reaches the rest when one record is bad. The exit status covers them, so a script does not have
 // to parse the output to notice.
-func reportUpgrade(w io.Writer, resp *serverv1.UpgradeClientsResponse, asJSON bool) error {
+// activeOnly changes what a zero count means, which is the only thing it is used for: without it zero
+// asked means nothing was attached, and with it the session may well have clients that were deliberately
+// left alone. Reporting "no clients attached" for that would be false and would send someone looking for
+// a lost window.
+func reportUpgrade(
+	w io.Writer, resp *serverv1.UpgradeClientsResponse, asJSON, activeOnly bool,
+) error {
 	names := make([]string, 0, len(resp.Asked)+len(resp.Errors))
 	for name := range resp.Asked {
 		names = append(names, name)
@@ -240,6 +266,11 @@ func reportUpgrade(w io.Writer, resp *serverv1.UpgradeClientsResponse, asJSON bo
 				// statement and is not a failure. This is the ordinary result of running the command twice,
 				// and it is worth saying even when some clients were also asked.
 				result = fmt.Sprintf("%d already current", r.AlreadyCurrent)
+			case r.Asked == 0 && activeOnly:
+				// Two causes, and neither is worth separating here: the session has nothing attached, or
+				// it has clients but none has typed. Both mean cm cannot say which window is being used,
+				// and the remedy for either is to drop --current.
+				result = "no active client"
 			case r.Asked == 0:
 				result = "no clients attached"
 			}

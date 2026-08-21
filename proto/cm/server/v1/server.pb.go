@@ -1597,8 +1597,21 @@ type AttachedClient struct {
 	ReadOnly bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
 	// When this client attached, as unix seconds.
 	AttachedAtUnix int64 `protobuf:"varint,4,opt,name=attached_at_unix,json=attachedAtUnix,proto3" json:"attached_at_unix,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// When this client last sent typing, as unix seconds, or zero if it never has.
+	LastInputAtUnix int64 `protobuf:"varint,5,opt,name=last_input_at_unix,json=lastInputAtUnix,proto3" json:"last_input_at_unix,omitempty"`
+	// Whether this is the client someone is using: the one that typed most recently. At most one client
+	// per session has it, and none does before anything is typed or when two timestamps tie.
+	//
+	// Decided by the server rather than by comparing last_input_at_unix here, because it needs every
+	// client's timestamp at once and a caller holding one message cannot see the others.
+	//
+	// Typing is the signal because nothing else can single out one client. A session's pty fans out to
+	// every attached client, so a query asking "which client are you" is answered by all of them, and cm
+	// only learns about focus when the program inside the session enabled DECSET 1004. A keystroke
+	// arrives on exactly one attach stream.
+	Active        bool `protobuf:"varint,6,opt,name=active,proto3" json:"active,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AttachedClient) Reset() {
@@ -1657,6 +1670,20 @@ func (x *AttachedClient) GetAttachedAtUnix() int64 {
 		return x.AttachedAtUnix
 	}
 	return 0
+}
+
+func (x *AttachedClient) GetLastInputAtUnix() int64 {
+	if x != nil {
+		return x.LastInputAtUnix
+	}
+	return 0
+}
+
+func (x *AttachedClient) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
 }
 
 type Input struct {
@@ -2741,7 +2768,17 @@ type UpgradeClientsRequest struct {
 	// Off by default, so upgrading is idempotent and running it twice does not make every window blink
 	// for no reason. On, it is a way to restart clients without changing the binary, which is the shape of
 	// "pick up a config change".
-	Force         bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	Force bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
+	// Ask only the active client of each named session, rather than every client attached to it.
+	//
+	// This is what an upgrade bound to a keybinding wants. Without it the only way to upgrade the window
+	// you are in is to name its session, which asks every client attached to that session, so upgrading
+	// one window repaints the others.
+	//
+	// A session whose active client cannot be identified is left alone and reports zero asked, rather
+	// than falling back to upgrading everything. Guessing here would make the flag mean "one client,
+	// usually" and repaint windows a caller explicitly asked to spare.
+	ActiveOnly    bool `protobuf:"varint,3,opt,name=active_only,json=activeOnly,proto3" json:"active_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2786,6 +2823,13 @@ func (x *UpgradeClientsRequest) GetSessions() []string {
 func (x *UpgradeClientsRequest) GetForce() bool {
 	if x != nil {
 		return x.Force
+	}
+	return false
+}
+
+func (x *UpgradeClientsRequest) GetActiveOnly() bool {
+	if x != nil {
+		return x.ActiveOnly
 	}
 	return false
 }
@@ -3871,12 +3915,14 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
-	"\x10_resume_from_seqJ\x04\b\a\x10\b\"\x83\x01\n" +
+	"\x10_resume_from_seqJ\x04\b\a\x10\b\"\xc8\x01\n" +
 	"\x0eAttachedClient\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1b\n" +
 	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12(\n" +
-	"\x10attached_at_unix\x18\x04 \x01(\x03R\x0eattachedAtUnix\"\x1b\n" +
+	"\x10attached_at_unix\x18\x04 \x01(\x03R\x0eattachedAtUnix\x12+\n" +
+	"\x12last_input_at_unix\x18\x05 \x01(\x03R\x0flastInputAtUnix\x12\x16\n" +
+	"\x06active\x18\x06 \x01(\bR\x06active\"\x1b\n" +
 	"\x05Input\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"b\n" +
 	"\x06Resize\x12\x12\n" +
@@ -3950,10 +3996,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\x1a9\n" +
 	"\vErrorsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"I\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"j\n" +
 	"\x15UpgradeClientsRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
-	"\x05force\x18\x02 \x01(\bR\x05force\"\xc4\x03\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\x12\x1f\n" +
+	"\vactive_only\x18\x03 \x01(\bR\n" +
+	"activeOnly\"\xc4\x03\n" +
 	"\x16UpgradeClientsResponse\x12E\n" +
 	"\x05asked\x18\x01 \x03(\v2/.cm.server.v1.UpgradeClientsResponse.AskedEntryR\x05asked\x12a\n" +
 	"\x0falready_current\x18\x02 \x03(\v28.cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntryR\x0ealreadyCurrent\x12H\n" +

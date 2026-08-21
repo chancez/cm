@@ -462,6 +462,19 @@ message AttachedClient {
   bool read_only = 3;
   // When this client attached, as unix seconds.
   int64 attached_at_unix = 4;
+  // When this client last sent typing, as unix seconds, or zero if it never has.
+  int64 last_input_at_unix = 5;
+  // Whether this is the client someone is using: the one that typed most recently. At most one client
+  // per session has it, and none does before anything is typed or when two timestamps tie.
+  //
+  // Decided by the server rather than by comparing last_input_at_unix here, because it needs every
+  // client's timestamp at once and a caller holding one message cannot see the others.
+  //
+  // Typing is the signal because nothing else can single out one client. A session's pty fans out to
+  // every attached client, so a query asking "which client are you" is answered by all of them, and cm
+  // only learns about focus when the program inside the session enabled DECSET 1004. A keystroke
+  // arrives on exactly one attach stream.
+  bool active = 6;
 }
 
 message Input {
@@ -665,6 +678,17 @@ message UpgradeClientsRequest {
   // for no reason. On, it is a way to restart clients without changing the binary, which is the shape of
   // "pick up a config change".
   bool force = 2;
+
+  // Ask only the active client of each named session, rather than every client attached to it.
+  //
+  // This is what an upgrade bound to a keybinding wants. Without it the only way to upgrade the window
+  // you are in is to name its session, which asks every client attached to that session, so upgrading
+  // one window repaints the others.
+  //
+  // A session whose active client cannot be identified is left alone and reports zero asked, rather
+  // than falling back to upgrading everything. Guessing here would make the flag mean "one client,
+  // usually" and repaint windows a caller explicitly asked to spare.
+  bool active_only = 3;
 }
 
 message UpgradeClientsResponse {

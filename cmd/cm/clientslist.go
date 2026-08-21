@@ -35,6 +35,15 @@ matters when builds differ.
   cm clients list work            # just this session's
   cm clients list --stale         # only clients not on the server's build
 
+A '*' marks the client someone is using, which is the one that typed most recently.
+Nothing is marked until something is typed, and only one client per session is ever
+marked. 'cm clients current' prints that client alone, with the time it last typed.
+
+Typing is the signal because nothing else can tell one client from another. A
+session's pty fans out to every attached client, so a sequence asking "which client
+are you" is answered by all of them, and a client cannot be identified from inside
+the session at all: a command's stdout is the pty, not any one terminal.
+
 Version differences are expected rather than broken. A session outlives its server
 by design, so a client and server from different builds is a normal state and cm is
 built for it. It is worth being able to see because the effect is silent: protobuf
@@ -112,6 +121,16 @@ type clientRowJSON struct {
 	// AttachedAt is RFC 3339, empty when unknown. AttachedAtUnix is the same instant, 0 when unknown.
 	AttachedAt     string `json:"attached_at"`
 	AttachedAtUnix int64  `json:"attached_at_unix"`
+	// Active marks the client someone is using: the one that typed most recently. At most one row per
+	// session has it, and no row does when nothing has typed yet.
+	Active bool `json:"active"`
+	// LastInputAt is when this client last sent typing, RFC 3339 and empty when it never has.
+	// LastInputAtUnix is the same instant, 0 when never.
+	//
+	// Reported alongside Active because the mark alone cannot say how old it is, and a client that last
+	// typed days ago is the active one only in the sense that nothing else has typed since.
+	LastInputAt     string `json:"last_input_at"`
+	LastInputAtUnix int64  `json:"last_input_at_unix"`
 }
 
 // clientRows flattens sessions into one row per attached client.
@@ -146,17 +165,22 @@ func clientRows(
 				continue
 			}
 			row := clientRowJSON{
-				Session:        s.Name,
-				PID:            c.Pid,
-				Version:        c.Version,
-				Stale:          isStale,
-				ReadOnly:       c.ReadOnly,
-				AttachedAtUnix: c.AttachedAtUnix,
+				Session:         s.Name,
+				PID:             c.Pid,
+				Version:         c.Version,
+				Stale:           isStale,
+				ReadOnly:        c.ReadOnly,
+				AttachedAtUnix:  c.AttachedAtUnix,
+				Active:          c.Active,
+				LastInputAtUnix: c.LastInputAtUnix,
 			}
 			// Formatted only for a real instant. Rendering zero would print 1970, which reads as a client
 			// attached decades ago rather than one whose attach time is unknown.
 			if c.AttachedAtUnix != 0 {
 				row.AttachedAt = time.Unix(c.AttachedAtUnix, 0).Format(time.RFC3339)
+			}
+			if c.LastInputAtUnix != 0 {
+				row.LastInputAt = time.Unix(c.LastInputAtUnix, 0).Format(time.RFC3339)
 			}
 			rows = append(rows, row)
 		}
@@ -176,11 +200,18 @@ func printClientRows(w io.Writer, rows []clientRowJSON, serverVersion string) er
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SESSION\tPID\tKIND\tBUILD\tATTACHED")
+	// An unnamed first column for the active marker, the shape `git branch` and `tmux list-clients` use.
+	// A header over it would have to be a word wider than the mark it labels, which pushes every row
+	// right to caption one character; the legend under the table does that job instead.
+	fmt.Fprintln(tw, "\tSESSION\tPID\tKIND\tBUILD\tATTACHED")
 	for _, r := range rows {
 		kind := "terminal"
 		if r.ReadOnly {
 			kind = "follower"
+		}
+		mark := ""
+		if r.Active {
+			mark = "*"
 		}
 		// The build column carries the comparison rather than only the value, since a bare hash means
 		// nothing without the server's to compare against, and the whole point of this view is the
@@ -196,17 +227,26 @@ func printClientRows(w io.Writer, rows []clientRowJSON, serverVersion string) er
 		if attached == "" {
 			attached = "unknown"
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", r.Session, r.PID, kind, build, attached)
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\n", mark, r.Session, r.PID, kind, build, attached)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 
 	stale := 0
+	active := false
 	for _, r := range rows {
 		if r.Stale {
 			stale++
 		}
+		if r.Active {
+			active = true
+		}
+	}
+	// Only when something is marked. Explaining a symbol that does not appear invites a hunt for it, and
+	// with a single client attached the mark says nothing anyway.
+	if active {
+		fmt.Fprintln(w, "\n* the client last typed in")
 	}
 	if serverVersion != "" {
 		fmt.Fprintf(w, "\nserver is %s", serverVersion)

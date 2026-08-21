@@ -288,6 +288,28 @@ type clientSize struct {
 	pid     int32
 	// attachedAt is when this attachment became live, for reporting. Zero for a reservation.
 	attachedAt time.Time
+	// lastInputAt is when this client last sent something a person typed. Zero until it does.
+	//
+	// This is how cm identifies the client someone is actually using, and it is the only signal that
+	// works. A client cannot be identified from inside the session: a command's stdout is the shim's
+	// pty, which fans out to every attached client, so any escape sequence asking "which client are
+	// you" is broadcast to all of them and answered by whichever replies first. That is the duplicate
+	// reply bug the query proxy exists to prevent, in a new costume. Focus is no better: cm only hears
+	// about focus if the program inside the session enabled DECSET 1004, so a session at a shell prompt
+	// reports nothing, and zero focused clients is the ordinary case anyway once the window is behind a
+	// browser.
+	//
+	// Typing has neither problem, because it is causal rather than inferred. A `cm clients upgrade`
+	// typed at a prompt reached the shell as keystrokes on one specific attach stream, strictly before
+	// the RPC arrived, so the client that sent them is the client that ran the command.
+	//
+	// Recorded whatever the resize policy is, which is why this is not simply Session.leader. Leadership
+	// is only maintained under ResizeLeader, since claimLeadership returns early for the other three
+	// policies, and "which window am I in" is a question worth answering under all four. Under the
+	// default policy the two agree.
+	//
+	// Reporting only, and never used for a decision. Sizing still goes through the policy.
+	lastInputAt time.Time
 	// attached distinguishes a live attachment from a reservation that has not become one yet.
 	//
 	// Sizing deliberately does not care: reserveClient exists so the session can be resized to a
@@ -1138,6 +1160,16 @@ type AttachedClientInfo struct {
 	Version    string
 	ReadOnly   bool
 	AttachedAt time.Time
+	// LastInputAt is when this client last sent typing, zero if it never has. See clientSize.lastInputAt
+	// for why typing is the signal.
+	LastInputAt time.Time
+	// Active marks the client that typed most recently, which is the one someone is using. At most one
+	// client per session has it, and none does when nothing has typed yet.
+	//
+	// Computed by the session rather than left to the caller, because deciding it needs every client's
+	// timestamp at once and a caller holding only its own row cannot. A CLI comparing timestamps itself
+	// would also have to re-derive the ties-go-to-nobody rule below.
+	Active bool
 }
 
 // noteClientIdentity records what a client said about itself, for reporting only.
@@ -1153,6 +1185,26 @@ func (s *Session) noteClientIdentity(tok *attachToken, version string, pid int32
 	defer s.mu.Unlock()
 	if cs := s.clientSizes[tok]; cs != nil {
 		cs.version, cs.pid = version, pid
+	}
+}
+
+// noteClientInput records that this client sent typing, so it can be reported as the active one.
+//
+// Separate from claimLeadership, which is called on the same keystrokes, because the two answer
+// different questions and must not be merged. Leadership is a *decision* about the pty's size, gated on
+// the configured policy and refused to a follower. This is a *record* of who is being used, wanted under
+// every policy. Folding this into claimLeadership would silently stop recording for anyone running
+// resize_policy other than the default, since that function returns early for the other three.
+//
+// A no-op for an unknown token, which is a detach racing a keystroke that was already in flight.
+func (s *Session) noteClientInput(tok *attachToken) {
+	if tok == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cs := s.clientSizes[tok]; cs != nil {
+		cs.lastInputAt = s.now()
 	}
 }
 
@@ -1173,16 +1225,20 @@ func (s *Session) AttachedClients() []AttachedClientInfo {
 		order uint64
 		info  AttachedClientInfo
 	}
+	active := s.activeClientLocked()
+
 	entries := make([]entry, 0, len(s.clientSizes))
-	for _, cs := range s.clientSizes {
+	for tok, cs := range s.clientSizes {
 		if !cs.attached {
 			continue
 		}
 		entries = append(entries, entry{cs.order, AttachedClientInfo{
-			PID:        cs.pid,
-			Version:    cs.version,
-			ReadOnly:   cs.readOnly,
-			AttachedAt: cs.attachedAt,
+			PID:         cs.pid,
+			Version:     cs.version,
+			ReadOnly:    cs.readOnly,
+			AttachedAt:  cs.attachedAt,
+			LastInputAt: cs.lastInputAt,
+			Active:      active != nil && tok == active,
 		}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })
@@ -1192,6 +1248,69 @@ func (s *Session) AttachedClients() []AttachedClientInfo {
 		out = append(out, e.info)
 	}
 	return out
+}
+
+// activeClientLocked returns the attachment that typed most recently, or nil when none can be named.
+//
+// One definition, shared by the listing and by `cm clients upgrade --current`, so the mark a user sees
+// and the client an upgrade acts on cannot disagree. Two copies of this comparison would be two chances
+// to drift, and the drift would be invisible: the listing would star one window while the upgrade
+// repainted another.
+//
+// Nil in three cases, and all three are deliberately not guesses. Nothing has typed yet, so no window
+// has been used. Only reservations are present, which are clients that may never attach. Or two
+// timestamps tie, which cannot happen from real keystrokes and means an injected clock that does not
+// advance; picking one by map order would move the mark between identical calls.
+//
+// Followers are eligible only in the sense that they can never win: a read-only client's input is
+// dropped before it reaches here, so its lastInputAt stays zero and it is skipped for that reason
+// rather than by a readOnly test. Checking readOnly here as well would be a second rule to keep in step
+// with the input path.
+func (s *Session) activeClientLocked() *attachToken {
+	var (
+		best *attachToken
+		when time.Time
+		tied bool
+	)
+	for tok, cs := range s.clientSizes {
+		if !cs.attached || cs.lastInputAt.IsZero() {
+			continue
+		}
+		switch {
+		case best == nil || cs.lastInputAt.After(when):
+			best, when, tied = tok, cs.lastInputAt, false
+		case cs.lastInputAt.Equal(when):
+			tied = true
+		}
+	}
+	if tied {
+		return nil
+	}
+	return best
+}
+
+// ActiveClient describes the client someone is using, and whether one could be named.
+//
+// Exposed separately from AttachedClients because a caller asking about one client should not have to
+// scan a list and re-apply the rule. The bool distinguishes "no active client" from a zero struct, which
+// a client that has typed but reported no pid or version would otherwise be indistinguishable from.
+func (s *Session) ActiveClient() (AttachedClientInfo, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tok := s.activeClientLocked()
+	if tok == nil {
+		return AttachedClientInfo{}, false
+	}
+	cs := s.clientSizes[tok]
+	return AttachedClientInfo{
+		PID:         cs.pid,
+		Version:     cs.version,
+		ReadOnly:    cs.readOnly,
+		AttachedAt:  cs.attachedAt,
+		LastInputAt: cs.lastInputAt,
+		Active:      true,
+	}, true
 }
 
 // The answerer election used to live here: hasAnsweringClient, answererLocked, and isAnswerer, which
@@ -1667,7 +1786,7 @@ func (s *Session) setRestored(blob []byte) {
 // Idempotent. A second call while the first eviction is still in flight finds the channel already
 // closed and skips it, so a retry cannot panic on a double close.
 func (s *Session) EvictClients() int {
-	asked, _ := s.evictClients(false, "")
+	asked, _ := s.evictClients(false, "", false)
 	return asked
 }
 
@@ -1682,8 +1801,11 @@ func (s *Session) EvictClients() int {
 // set. That keeps the command idempotent: running it twice after one upgrade does not make every window
 // repaint for nothing. A client that reported no version is never skipped, since an unknown build is
 // more likely to be old than current.
-func (s *Session) UpgradeClients(force bool, current string) (asked, alreadyCurrent int) {
-	return s.evictClients(true, map[bool]string{true: "", false: current}[force])
+//
+// activeOnly upgrades just the client someone is using, leaving every other window attached to the same
+// session alone. Zero asked when no active client can be named, rather than upgrading all of them.
+func (s *Session) UpgradeClients(force bool, current string, activeOnly bool) (asked, alreadyCurrent int) {
+	return s.evictClients(true, map[bool]string{true: "", false: current}[force], activeOnly)
 }
 
 // evictClients closes each client's eviction channel, optionally marking the request as an upgrade.
@@ -1693,11 +1815,29 @@ func (s *Session) UpgradeClients(force bool, current string) (asked, alreadyCurr
 //
 // skipVersion names a build to leave alone, or is empty to ask everyone. Only the upgrade path passes
 // one; a detach applies to every client regardless of what it is running.
-func (s *Session) evictClients(upgrade bool, skipVersion string) (asked, skipped int) {
+//
+// activeOnly restricts the eviction to the client someone is using. With no active client to name,
+// nothing is asked and nothing is skipped: the caller asked for one specific window and cm does not know
+// which it is, so acting on all of them would be the opposite of the request.
+func (s *Session) evictClients(upgrade bool, skipVersion string, activeOnly bool) (asked, skipped int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var only *attachToken
+	if activeOnly {
+		only = s.activeClientLocked()
+		if only == nil {
+			return 0, 0
+		}
+	}
+
 	for tok, ch := range s.evicts {
+		if only != nil && tok != only {
+			// Not counted as skipped. That count means "left alone for already being current" and is
+			// reported as such, so folding in the clients this flag was never going to touch would tell a
+			// caller that windows were up to date when nothing looked at their version.
+			continue
+		}
 		if skipVersion != "" {
 			// Compared against what the client reported. An empty version is never skipped: a client too
 			// old to say is more likely to be an old build than a current one, and asking it costs a
