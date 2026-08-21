@@ -260,6 +260,41 @@ func TestExpireAfterValidation(t *testing.T) {
 	}
 }
 
+// Zero is accepted here where expire_after refuses it, and that difference is the point of the test.
+//
+// What zero would destroy is what separates them: for expire_after it deletes a session's record the moment
+// it ends, which is never what someone means, while here it keeps a file that survives forever today. So
+// "keep every shim log" has to be sayable, and only a negative duration is an error.
+func TestKeepShimLogsForValidation(t *testing.T) {
+	// Unset means the default rather than never.
+	cfg := &Config{}
+	got, err := cfg.KeepShimLogsFor()
+	if err != nil || got != DefaultShimLogRetention {
+		t.Errorf("KeepShimLogsFor() = (%v, %v), want (%v, nil)", got, err, DefaultShimLogRetention)
+	}
+
+	// Zero disables pruning rather than pruning everything, which is the opposite of what an inverted
+	// reading would do: it must not delete every shim log the moment its shell exits.
+	cfg = &Config{ShimLogRetention: "0"}
+	got, err = cfg.KeepShimLogsFor()
+	if err != nil || got != 0 {
+		t.Errorf("KeepShimLogsFor(\"0\") = (%v, %v), want (0, nil)", got, err)
+	}
+
+	cfg = &Config{ShimLogRetention: "48h"}
+	got, err = cfg.KeepShimLogsFor()
+	if err != nil || got != 48*time.Hour {
+		t.Errorf("KeepShimLogsFor(\"48h\") = (%v, %v), want (48h, nil)", got, err)
+	}
+
+	for _, spec := range []string{"-1h", "nonsense", "7"} {
+		cfg = &Config{ShimLogRetention: spec}
+		if _, err := cfg.KeepShimLogsFor(); err == nil {
+			t.Errorf("KeepShimLogsFor(%q) = nil error, want a rejection", spec)
+		}
+	}
+}
+
 // The allowlist matches the program name only, which is why it is documented as a convenience. The
 // test pins that behavior so the limitation is not mistaken for a bug later.
 func TestCommandIsSafeToRerun(t *testing.T) {

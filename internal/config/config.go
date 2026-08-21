@@ -59,6 +59,13 @@ type Config struct {
 	// swallowed to keep a session alive. Logging is what keeps that from being silent.
 	LogLevel string `toml:"log_level"`
 
+	// ShimLogRetention is how long an exited shim's diagnostic log is kept, as a Go duration. Empty
+	// means DefaultShimLogRetention, and "0" disables pruning.
+	//
+	// A top-level setting rather than one under [persist], because a shim log is written for every
+	// session whether or not its output persists.
+	ShimLogRetention string `toml:"shim_log_retention"`
+
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 }
@@ -117,6 +124,18 @@ const (
 
 // DefaultExpireAfter is how long a dead persisted session is kept.
 const DefaultExpireAfter = 7 * 24 * time.Hour
+
+// DefaultShimLogRetention is how long an exited shim's diagnostic log is kept.
+//
+// A week, matching DefaultExpireAfter rather than the 24 hours `cm doctor` scans back over. The two answer
+// different questions: the scan window is how old an error can be and still describe what is happening
+// now, while this is how long the record of a finished session stays worth having. A shim log outliving
+// the session record is the point, since a session that vanished without a trace leaves nothing else.
+//
+// Sized against a measurement: a real install had accumulated 202 shim logs, one per terminal window
+// opened, with the oldest thirteen days out. A week keeps roughly the last hundred on that machine and
+// bounds the directory at a few days' worth of windows instead of every window ever opened.
+const DefaultShimLogRetention = 7 * 24 * time.Hour
 
 // DefaultForgetUnpersistedAfter is how long an ended session that saved no output is kept.
 //
@@ -340,6 +359,28 @@ func (c *Config) ForgetUnpersistedAfter() (time.Duration, error) {
 		// it reads the exit status back from the record after the command finishes.
 		return 0, fmt.Errorf("forget_unpersisted_after must be positive, got %q",
 			c.Persist.ForgetUnpersistedAfter)
+	}
+	return d, nil
+}
+
+// KeepShimLogsFor returns how long an exited shim's diagnostic log is kept.
+//
+// Zero is accepted here and means "never prune", unlike expire_after and forget_unpersisted_after, which
+// reject it. The difference is what zero would destroy: there it would delete a session's record the
+// moment it ended, which is never what someone means, while here it keeps a file that already survives
+// forever today. Someone who wants every shim log kept has to be able to say so.
+// Named for the question rather than after the field, since a method cannot share a struct field's name.
+// Logging() does the same for log_level.
+func (c *Config) KeepShimLogsFor() (time.Duration, error) {
+	if c.ShimLogRetention == "" {
+		return DefaultShimLogRetention, nil
+	}
+	d, err := time.ParseDuration(c.ShimLogRetention)
+	if err != nil {
+		return 0, fmt.Errorf("shim_log_retention: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("shim_log_retention cannot be negative, got %q", c.ShimLogRetention)
 	}
 	return d, nil
 }
