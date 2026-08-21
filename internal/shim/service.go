@@ -67,6 +67,9 @@ func (s *Service) State(context.Context, *shimv1.StateRequest) (*shimv1.StateRes
 		ExitCode:  int32(code),
 		Rows:      uint32(rows),
 		Cols:      uint32(cols),
+		// The build this shim is running, which is not necessarily the server's: a shim keeps its pty
+		// across restarts and upgrades, so it outlives the binary that spawned it by design.
+		Version: paths.Version(),
 	}, nil
 }
 

@@ -73,12 +73,20 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 
 	var findings []Finding
 	seen := make(map[string]bool, len(sockets))
+	// Collected from the probes below rather than by probing again, since each shim is already being
+	// asked about itself here and a second round trip per session would double the cost of the command.
+	shimVersions := make(map[string]string, len(sockets))
 
 	for _, sock := range sockets {
 		name := sessionFromSocket(sock)
 		seen[name] = true
 
 		st, alive := probeShimState(ctx, sock)
+		if alive {
+			// Recorded even when empty. A shim too old to report a version is itself skew of at least
+			// that much, and the check below says so rather than treating it as agreement.
+			shimVersions[name] = st.Version
+		}
 		switch {
 		case !alive:
 			// Nothing answers. Either a shim died without unlinking, or one is mid-startup; the caller is
@@ -124,6 +132,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// non-destructive, so they all run rather than stopping at the first thing found: a reader debugging a
 	// problem wants the whole picture, not the first item alphabetically.
 	findings = append(findings, m.checkVersionSkew(clientVersion)...)
+	findings = append(findings, m.checkShimVersionSkew(shimVersions)...)
 	findings = append(findings, m.checkTerminal()...)
 	findings = append(findings, m.checkEmulatorSpeed()...)
 	findings = append(findings, m.checkSocketPath()...)

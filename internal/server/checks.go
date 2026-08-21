@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/chancez/cm/internal/paths"
@@ -26,6 +27,9 @@ const (
 	FindingNoShellIntegration = "no-shell-integration"
 	// FindingSessionBacklog is a large number of finished session records.
 	FindingSessionBacklog = "session-backlog"
+	// FindingShimVersionSkew is running shims spanning several builds. Expected rather than broken, and
+	// reported because the consequences of a version difference are silent.
+	FindingShimVersionSkew = "shim-version-skew"
 )
 
 // checkVersionSkew reports a client and server built from different sources.
@@ -60,6 +64,88 @@ func (m *Manager) checkVersionSkew(clientVersion string) []Finding {
 		}}
 	}
 	return nil
+}
+
+// shimSkewReportThreshold is how many distinct shim builds are worth mentioning.
+//
+// Not one, and that is the whole design of this check. A shim outlives the binary that spawned it by
+// design: it holds a pty across every server restart and upgrade, so a session started before an
+// upgrade legitimately runs an older build than the server managing it. Reporting the first difference
+// would fire on every healthy install that has ever been upgraded, and a diagnostic that fires on
+// healthy installs teaches people to ignore diagnostics.
+//
+// Three, calibrated against a real install rather than picked. A machine with a session per terminal
+// window and a few upgrades a week sat at twelve builds across twenty-six shims, which is where
+// identifying "which client is which" stopped being possible by hand. Two builds is the ordinary shape
+// of "upgraded, some sessions predate it" and says nothing. Three or more means upgrades are
+// accumulating faster than sessions turn over, which is the state where a silently missing feature
+// becomes hard to attribute.
+const shimSkewReportThreshold = 3
+
+// checkShimVersionSkew reports how many distinct builds the running shims span.
+//
+// Informational rather than a fault, for the reason above: this is a designed-for condition, not a
+// broken one. It is worth surfacing because the *consequence* is silent. Protobuf reads a field a peer
+// never sent as its zero value rather than as an error, so a server asking an old shim for something it
+// does not implement gets a plausible-looking answer instead of a failure. That is the same silence
+// checkVersionSkew exists for, one hop further away and harder to see, since nothing about a session
+// says which build is holding its pty.
+//
+// The remedy is deliberately not stated as "restart the server". Restarting adopts the same shims and
+// changes none of this; only ending a session and starting a new one replaces its shim, which costs the
+// shell. So the finding says what is true and leaves the trade to the reader.
+func (m *Manager) checkShimVersionSkew(shimVersions map[string]string) []Finding {
+	if len(shimVersions) == 0 {
+		return nil
+	}
+
+	// Counted by build so the detail can name the spread rather than just its size. An unreported version
+	// is its own bucket: a shim too old to answer is not evidence of agreement with anything.
+	const unknown = "unknown"
+	counts := make(map[string]int, len(shimVersions))
+	for _, v := range shimVersions {
+		if v == "" {
+			v = unknown
+		}
+		counts[v]++
+	}
+	if len(counts) < shimSkewReportThreshold {
+		return nil
+	}
+
+	// Sorted by count and then by name, so the same installation always produces the same string. Map
+	// iteration order would otherwise reshuffle the detail between runs of a diagnostic people diff.
+	builds := make([]string, 0, len(counts))
+	for v := range counts {
+		builds = append(builds, v)
+	}
+	sort.Slice(builds, func(i, j int) bool {
+		if counts[builds[i]] != counts[builds[j]] {
+			return counts[builds[i]] > counts[builds[j]]
+		}
+		return builds[i] < builds[j]
+	})
+
+	var b strings.Builder
+	for i, v := range builds {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s (%d)", v, counts[v])
+	}
+
+	return []Finding{{
+		Kind: FindingShimVersionSkew,
+		Detail: fmt.Sprintf(
+			"%d sessions are running %d different builds: %s. This is expected, since a shim keeps its "+
+				"pty across restarts and so outlives the build that started it, and a restart adopts the "+
+				"same shims rather than replacing them. It is reported because the effect is silent: a "+
+				"feature one side does not implement reads as a zero value rather than an error. Only "+
+				"ending a session replaces its shim, which costs the shell in it, so this is a trade "+
+				"rather than a repair. Server is %s",
+			len(shimVersions), len(counts), b.String(), m.Version()),
+		Fixable: false,
+	}}
 }
 
 // checkTerminal reports a build without the emulator.

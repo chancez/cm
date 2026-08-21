@@ -92,8 +92,18 @@ type StateResponse struct {
 	// Exit status, meaningful only when exited is true.
 	ExitCode int32 `protobuf:"varint,7,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
 	// Window size currently set on the pty.
-	Rows          uint32 `protobuf:"varint,8,opt,name=rows,proto3" json:"rows,omitempty"`
-	Cols          uint32 `protobuf:"varint,9,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows uint32 `protobuf:"varint,8,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols uint32 `protobuf:"varint,9,opt,name=cols,proto3" json:"cols,omitempty"`
+	// The build this shim is running.
+	//
+	// A shim is the one part of cm that routinely outlives the binary that spawned it: it holds a pty
+	// across server restarts and upgrades, so a long-lived install legitimately runs many builds at once.
+	// One real install had twelve distinct builds across twenty-six shims, the oldest ten days old.
+	//
+	// Reported so `cm doctor` can say that rather than leaving it to be reconstructed from process
+	// listings and binary inodes. Empty from a shim predating this field, which is itself a skew of at
+	// least that much and is reported as unknown rather than guessed at.
+	Version       string `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -189,6 +199,13 @@ func (x *StateResponse) GetCols() uint32 {
 		return x.Cols
 	}
 	return 0
+}
+
+func (x *StateResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
 }
 
 type SubscribeRequest struct {
@@ -733,7 +750,7 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\n" +
 	"\x15cm/shim/v1/shim.proto\x12\n" +
 	"cm.shim.v1\"\x0e\n" +
-	"\fStateRequest\"\xf8\x01\n" +
+	"\fStateRequest\"\x92\x02\n" +
 	"\rStateResponse\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x19\n" +
 	"\bshim_pid\x18\x02 \x01(\x05R\ashimPid\x12\x1b\n" +
@@ -744,7 +761,9 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\x06exited\x18\x06 \x01(\bR\x06exited\x12\x1b\n" +
 	"\texit_code\x18\a \x01(\x05R\bexitCode\x12\x12\n" +
 	"\x04rows\x18\b \x01(\rR\x04rows\x12\x12\n" +
-	"\x04cols\x18\t \x01(\rR\x04cols\"-\n" +
+	"\x04cols\x18\t \x01(\rR\x04cols\x12\x18\n" +
+	"\aversion\x18\n" +
+	" \x01(\tR\aversion\"-\n" +
 	"\x10SubscribeRequest\x12\x19\n" +
 	"\bfrom_seq\x18\x01 \x01(\x04R\afromSeq\"@\n" +
 	"\x06Output\x12\x10\n" +

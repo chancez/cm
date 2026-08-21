@@ -66,6 +66,17 @@ message StateResponse {
   // Window size currently set on the pty.
   uint32 rows = 8;
   uint32 cols = 9;
+
+  // The build this shim is running.
+  //
+  // A shim is the one part of cm that routinely outlives the binary that spawned it: it holds a pty
+  // across server restarts and upgrades, so a long-lived install legitimately runs many builds at once.
+  // One real install had twelve distinct builds across twenty-six shims, the oldest ten days old.
+  //
+  // Reported so `cm doctor` can say that rather than leaving it to be reconstructed from process
+  // listings and binary inodes. Empty from a shim predating this field, which is itself a skew of at
+  // least that much and is reported as unknown rather than guessed at.
+  string version = 10;
 }
 
 message SubscribeRequest {
