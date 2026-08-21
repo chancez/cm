@@ -475,53 +475,81 @@ Mouse reports and focus events are also still forwarded from every client, uncha
 window rather than the session, so each client sends its own, and restricting them would make a session
 ignore the mouse in every window but one.
 
-### Left/right margins: the one answer cm does not take from its model
+### The answers cm does not take from its model
 
-Answering mode state from the emulator is right for every mode but one. Left/right margin mode (DECLRMM,
-private mode 69) is reported as **not recognized**, whatever the model's real state is. `DenyMarginMode` in
-`internal/vt/margins.go` rewrites the reply.
+Answering mode state from the emulator is right for almost every mode. Two are reported as **not
+recognized**, whatever the model's real state is: left/right margin mode (DECLRMM, private mode 69) and
+in-band size reports (private mode 2048). `DenyModes` in `internal/vt/denymodes.go` rewrites the replies,
+and `deniedModes` there is the list.
 
-The mode plus DECSLRM confine scrolling to a range of *columns*, which is how a program scrolls one side of a
-vertical split without touching the other. libghostty implements it correctly, and that is the trap, because
-the sequences that act on it are forwarded verbatim to a terminal that generally does not: kitty has no mode
-69 at all, logs "Unsupported screen mode", and drops the DECSLRM. The insert-line and delete-line operations
-that follow then apply full width. The symptom was nvim scrolling **both** halves of a vertical split.
+This is a third category, cutting across the two above: answerable by a model, but the answer is only true
+if something outside the model cooperates. The test for membership is whether the reply makes the program
+rely on something the model does not control. The two members fail in opposite directions, which is why the
+category is about the *dependency* rather than about forwarding.
 
-So this is a third category, cutting across the two above: answerable by a model, but the answer is only true
-if the window agrees. Mode 69 is the only member found so far. The test for membership is whether the reply
-causes the program to emit sequences whose *effect* lives in the terminal rather than in the model.
+**Mode 69** plus DECSLRM confine scrolling to a range of *columns*, which is how a program scrolls one side
+of a vertical split without touching the other. libghostty implements it correctly, and that is the trap,
+because the sequences that act on it are forwarded verbatim to a terminal that generally does not: kitty has
+no mode 69 at all, logs "Unsupported screen mode", and drops the DECSLRM. The insert-line and delete-line
+operations that follow then apply full width. The symptom was nvim scrolling **both** halves of a vertical
+split.
+
+**Mode 2048** is the reverse: nothing is forwarded, because a terminal that sets it promises to *originate*
+something. It reports every resize as `CSI 48 ; rows ; cols ; ypixel ; xpixel t`, and a program given that
+promise stops relying on SIGWINCH. cm answered "supported" and then never sent a report, since libghostty
+emits them from `StreamHandler.resize` while cm resizes through `ghostty_terminal_resize`. The pty was
+resized correctly and nvim was no longer listening to it. The symptom was nvim keeping half the window after
+a kitty split closed, until something else forced a redraw.
 
 Measured in one kitty window, same probe, same moment:
 
-| host | reply to `CSI ? 69 $ p` |
-| --- | --- |
-| bare kitty | `?69;0$y` (not recognized) |
-| zmx 0.7.0 | `?69;0$y`, because zmx proxies DECRQM to the terminal |
-| cm, before this | `?69;2$y` (supported, reset) |
-| tmux 3.5a | no reply; DECRQM arrived in 3.6 |
+| host | reply to `CSI ? 69 $ p` | reply to `CSI ? 2048 $ p` |
+| --- | --- | --- |
+| bare kitty | `?69;0$y` (not recognized) | supported; kitty implements the mode |
+| zmx 0.7.0 | `?69;0$y`, because zmx proxies DECRQM to the terminal | no reply; proxied to the terminal |
+| cm, before this | `?69;2$y` (supported, reset) | `?2048;2$y` (supported, reset) |
+| tmux 3.5a | no reply; DECRQM arrived in 3.6 | no reply; neither version implements 2048 |
 
-Three details that make this harder to diagnose than it looks:
+Three details that make these harder to diagnose than they look:
 
 - **Reset is as damaging as set.** nvim's `tui_handle_term_mode` sets `has_left_and_right_margin_mode` for
-  set, permanently-set, *and* reset: the flag records that the mode can be *changed*. cm answered `;2`, so a
-  fix that only suppressed `;1` would have changed nothing.
-- **The damage outlives the query.** nvim probes once at startup and never re-asks, so every later scroll
-  takes the margin path. The complaint is "all scrolling is broken now", which does not sound like a
-  capability answer given once.
-- **`cm read` looks correct throughout.** cm's model honours margins, so the model's screen is right and only
-  the attached terminal is wrong. Comparing `cm read` against the terminal is what separates the two.
+  set, permanently-set, *and* reset: the flag records that the mode can be *changed*. cm answered `;2` for
+  both modes, so a fix that only suppressed `;1` would have changed nothing.
+- **The damage outlives the query.** nvim probes once at startup and never re-asks, so every later scroll or
+  resize takes the wrong path. The complaint is "all scrolling is broken now", or "it stopped resizing",
+  neither of which sounds like a capability answer given once.
+- **`cm read` looks correct throughout.** cm's model honours both modes, so the model's screen is right and
+  only the attached terminal is wrong. Comparing `cm read` against the terminal is what separates the two.
 
-`0` rather than `4` (permanently reset) because it is what the terminals themselves say: kitty answers `0`,
-and tmux answers `0` from the default arm of its DECRQM switch for every mode it does not know. What it costs
-is nvim's terminal-side scroll optimization in a vertical split, where it repaints instead: measured at 14114
-bytes against 6696 for the same ten-line scroll. That is not a regression against the alternative, since
-nvim still scrolls whenever the region is full width, so an unsplit window and a horizontal split are
-untouched and the only case that changes is the one that was rendering incorrectly. It is also where zmx
-already sits.
+`0` rather than `4` (permanently reset) because it is what the terminals themselves say: kitty answers `0`
+for mode 69, and tmux answers `0` from the default arm of its DECRQM switch for every mode it does not know.
+
+What denying mode 69 costs is nvim's terminal-side scroll optimization in a vertical split, where it repaints
+instead: measured at 14114 bytes against 6696 for the same ten-line scroll. Denying 2048 costs nothing
+measurable, because SIGWINCH already carries the same news: with the mode denied, a shrink and a grow emitted
+4298 and 11202 bytes, against 4302 and 11206 for bare nvim in a plain pty. Neither is a regression against
+the alternative, and both are where zmx already sits.
+
+Mode 2048 could be implemented rather than denied, and a fake terminal answering `;2` and then sending real
+reports confirms nvim repaints correctly, so the option is real. It was rejected because implementing it
+means owning both directions. cm forwards the probe to the attached client *as well as* answering it, and a
+real kitty does support the mode, so kitty's own reports already arrive on the client's input stream, where
+`IsQueryReply` classifies them as answers to questions cm asked and discards them as unsolicited. Emitting
+reports outbound would not fix that half. The promise is also all-or-nothing: sizing changes for reasons that
+never reach the model, and a program receiving some reports and not others is worse off than one relying on a
+signal the kernel delivers every time.
 
 Rewriting the reply rather than stripping the DECSLRM from the output stream is deliberate, and it is the
 same reasoning as "Why not let the attached terminal answer" above: removing bytes desynchronizes the shim's
 numbering from the server's. A reply cm generates never enters the log, so rewriting one moves no positions.
+
+The same reasoning permits the one deletion `DenyModes` does make. A program can set mode 2048 without asking
+first, and libghostty then emits a size report on the next resize, so `dropSizeReports` removes those. They
+are model-generated bytes destined for the pty rather than session output, so they were never in the log
+either. Found by a test asserting that a resize with the mode set queues nothing for the pty, and worth
+having for a second reason: nothing drains the emulator's queue on the resize path, so a report sat there
+until the next output arrived and was then delivered as though it answered whatever query came after it,
+which is the `wallfacer -h` corruption's failure mode.
 
 ## Terminal state
 
