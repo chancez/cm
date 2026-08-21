@@ -190,6 +190,9 @@ eval "$(cm shell-init zsh)"          # bash likewise; fish: cm shell-init fish |
 cm_report blocked "waiting for approval"
 ```
 
+That line also sets up completions, so in zsh it belongs after `compinit`. Use
+`--no-completions` for the integration alone, which loads anywhere.
+
 Nothing here is program-specific. cm never learns what is running in a session and has no
 patterns matched against a program's output, so anything that can run a command on a state
 change can report, and a program cm has never heard of works exactly as well as one it has.
@@ -219,8 +222,8 @@ captures its terminal's environment once, at startup, so reattaching from a term
 since restarted leaves it holding a dead `KITTY_LISTEN_ON` or `SSH_AUTH_SOCK`. `cm get-env` and
 a prompt hook refresh them. See [docs/config.md](docs/config.md).
 
-Session names complete dynamically, annotated with each session's state, once
-`cm completions zsh` is installed.
+Session names complete dynamically, annotated with each session's state. `cm shell-init` prints
+the completions along with the integration, so the one line above sets up both.
 
 ## When something looks wrong
 

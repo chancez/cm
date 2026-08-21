@@ -168,6 +168,8 @@ eval "$(cm shell-init zsh)"          # or bash; fish: cm shell-init fish | sourc
 cm_report blocked "waiting for approval"
 ```
 
+That also sets up completions, so in zsh it goes after `compinit`; `--no-completions` prints the integration alone.
+
 Both end up in the same place. A report takes precedence over what cm derives, because a program describing itself is better evidence than a shell marker.
 
 A program with no OSC 133 and no reporting is invisible to `--wait` and `cm wait`. Making it report is what turns it into something you can orchestrate.

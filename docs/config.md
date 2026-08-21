@@ -144,9 +144,26 @@ This is the diagnostic log, not session output. `cm history` is what the shell p
 
 ## Completion
 
+`cm shell-init` prints the completions ahead of the integration, so a startup file needs one cm
+invocation for both rather than two, at a measured 23ms each:
+
+```
+eval "$(cm shell-init zsh)"
+```
+
+In zsh that has to come after `compinit`: the completion half asks the shell to register a
+completion function and needs that machinery in place, while the integration half does not. Where
+the ordering is awkward, the two are still separable, and this is what a setup that predates the
+bundling looks like:
+
 ```
 cm completions zsh > "${fpath[1]}/_cm"
+eval "$(cm shell-init zsh --no-completions)"
 ```
+
+Caching the output is worth it either way, since both halves are the same bytes on every startup.
+Loading the completions twice is harmless, so a stale cache alongside the bundled form costs
+nothing beyond the time to parse it.
 
 Session names complete dynamically for every command that takes one, annotated with each session's
 state, so it is visible that attaching to a `dead` session will restore it rather than join it.

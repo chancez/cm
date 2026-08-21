@@ -256,9 +256,9 @@ because a comparison that lists only strengths is not useful.
 ## If you are still deciding
 
 Install cm alongside whatever you use now. Nothing here conflicts: cm has its own socket and its own
-state directory, and it needs no shell configuration to work. `cm shell-init` exists and adds a
-`cm_report` helper, but it is optional, and the command and directory reporting come from OSC 133 and
-OSC 7, which a modern shell or prompt already emits.
+state directory, and it needs no shell configuration to work. `cm shell-init` exists and adds
+completions and a `cm_report` helper, but it is optional, and the command and directory reporting
+come from OSC 133 and OSC 7, which a modern shell or prompt already emits.
 
 Start one session in it, work in that session for a day, and see whether giving layout back to your
 terminal feels like a loss or a relief. That answer is personal and no comparison table can supply it.

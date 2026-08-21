@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -11,27 +12,42 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
+// completionShells lists the shells cobra can generate completions for.
+//
+// A superset of the shells with an integration: powershell gets completions and has no cm_report,
+// since the integration writes an OSC sequence from a POSIX-ish shell.
+var completionShells = []string{"bash", "zsh", "fish", "powershell"}
+
 func newCompletionsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:       "completions <shell>",
 		Short:     "Print a shell completion script",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		ValidArgs: completionShells,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			root := cmd.Root()
-			switch args[0] {
-			case "bash":
-				return root.GenBashCompletionV2(os.Stdout, true)
-			case "zsh":
-				return root.GenZshCompletion(os.Stdout)
-			case "fish":
-				return root.GenFishCompletion(os.Stdout, true)
-			case "powershell":
-				return root.GenPowerShellCompletionWithDesc(os.Stdout)
-			default:
-				return fmt.Errorf("unsupported shell %q", args[0])
-			}
+			return writeCompletions(cmd.Root(), os.Stdout, args[0])
 		},
+	}
+}
+
+// writeCompletions writes the completion script for a shell.
+//
+// Split out so `cm shell-init` can emit the same bytes rather than reimplementing the switch. The two
+// commands drifting apart is the failure this avoids: a shell gaining completions here but not there
+// would be invisible until someone noticed tab completion missing in one setup and not the other.
+func writeCompletions(root *cobra.Command, w io.Writer, shell string) error {
+	switch shell {
+	case "bash":
+		return root.GenBashCompletionV2(w, true)
+	case "zsh":
+		return root.GenZshCompletion(w)
+	case "fish":
+		return root.GenFishCompletion(w, true)
+	case "powershell":
+		return root.GenPowerShellCompletionWithDesc(w)
+	default:
+		return fmt.Errorf("unsupported shell %q, want one of %s",
+			shell, strings.Join(completionShells, ", "))
 	}
 }
 
