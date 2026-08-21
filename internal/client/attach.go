@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -69,6 +70,11 @@ func (o Options) Open(session string) *serverv1.Open {
 		Tags:          o.Tags,
 		NoRestore:     o.NoRestore,
 		InsideSession: o.InsideSession,
+		// Set here rather than by each caller, which is the whole point of this constructor: a field
+		// added to one Open and missed on another is how --tag came to work everywhere except
+		// --no-attach. Every client describes itself the same way as a result.
+		ClientVersion: paths.Version(),
+		ClientPid:     int32(os.Getpid()),
 	}
 }
 

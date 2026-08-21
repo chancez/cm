@@ -234,6 +234,12 @@ func startRun(
 				// the session stays eligible for prompt cleanup rather than being kept for the week a
 				// persisted session gets.
 				CaptureOutput: true,
+				// Reported like every other client's, so a `cm run` holding a session appears in a
+				// listing with a build and a pid rather than as an anonymous attachment. This Open is
+				// built by hand rather than through Options.Open, which is the drift that constructor
+				// exists to prevent, so anything added there has to be repeated here.
+				ClientVersion: paths.Version(),
+				ClientPid:     int32(os.Getpid()),
 			},
 		},
 	}); err != nil {

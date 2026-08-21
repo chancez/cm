@@ -1,9 +1,11 @@
 package client
 
 import (
+	"os"
 	"reflect"
 	"testing"
 
+	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -40,6 +42,11 @@ func TestOptionsOpenCarriesEveryField(t *testing.T) {
 		Tags:          map[string]string{"project": "cm", "review": ""},
 		NoRestore:     true,
 		InsideSession: "parent",
+		// Not from Options: these describe the running process rather than the attachment, so they come
+		// from paths.Version and os.Getpid inside Open. Taken from the same sources here rather than
+		// hard-coded, since a literal would make this test fail on every version bump.
+		ClientVersion: paths.Version(),
+		ClientPid:     int32(os.Getpid()),
 		// Rows, Cols, and ResumeFromSeq are deliberately not set here: only the caller knows a
 		// terminal's size or where a reconnecting client left off.
 	}

@@ -93,6 +93,38 @@ type sessionJSON struct {
 	// attach its shell is blocked inside `cm attach` and reports nothing, so those values are its last
 	// true ones rather than stale ones. Empty rather than null for the usual case, like Tags.
 	Hosting []string `json:"hosting"`
+	// AttachedClients describes each client attached now, alongside the Clients count above.
+	//
+	// Added because diagnosing a lost session meant reconstructing what was attached from `ps` and
+	// lsof, comparing binary inodes by hand to find which clients were running which build. Since a
+	// shim outlives servers by design, a healthy install spans several builds at once: one incident
+	// had twelve across twenty-six sessions. Empty rather than null, like Tags and Hosting.
+	AttachedClients []attachedClientJSON `json:"attached_clients"`
+}
+
+// attachedClientJSON is the JSON shape of one attached client.
+//
+// Values a client reports about itself, so they are advisory: cm does not verify either, and a client
+// older than this field sends neither. Both are reported as their zero value in that case rather than
+// guessed at, which is why version is documented as possibly empty rather than as always present.
+type attachedClientJSON struct {
+	// PID is the client process, 0 when it did not report one. Meaningful only on this host, which is
+	// where clients are.
+	PID int32 `json:"pid"`
+	// Version is the client's build, empty when it did not report one.
+	//
+	// A difference from the server's own build is legal rather than a fault: cm is built so a session
+	// outlives its server, which means a client and server from different builds are expected. It is
+	// worth seeing because the failure mode is silent, since protobuf reads a field a peer never sent
+	// as its zero value rather than as an error.
+	Version string `json:"version"`
+	// ReadOnly reports a follower rather than an interactive terminal. A follower never sizes the
+	// session and never answers a terminal query.
+	ReadOnly bool `json:"read_only"`
+	// AttachedAt is an RFC 3339 timestamp, empty when unknown. AttachedAtUnix is the same instant in
+	// seconds, and 0 when unknown.
+	AttachedAt     string `json:"attached_at"`
+	AttachedAtUnix int64  `json:"attached_at_unix"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -116,6 +148,23 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		hosting = []string{}
 	}
 
+	// Empty rather than null, like the two above.
+	clients := make([]attachedClientJSON, 0, len(s.AttachedClients))
+	for _, c := range s.AttachedClients {
+		ac := attachedClientJSON{
+			PID:            c.Pid,
+			Version:        c.Version,
+			ReadOnly:       c.ReadOnly,
+			AttachedAtUnix: c.AttachedAtUnix,
+		}
+		// Formatted only when there is a real instant. Rendering zero would print 1970, which reads as
+		// a client attached decades ago rather than as one whose attach time is unknown.
+		if c.AttachedAtUnix != 0 {
+			ac.AttachedAt = time.Unix(c.AttachedAtUnix, 0).Format(time.RFC3339)
+		}
+		clients = append(clients, ac)
+	}
+
 	return sessionJSON{
 		Name:                s.Name,
 		State:               stateName(s),
@@ -137,6 +186,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedSource:      s.ReportedSource,
 		Tags:                sessionTags,
 		Hosting:             hosting,
+		AttachedClients:     clients,
 	}
 }
 

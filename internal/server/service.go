@@ -125,6 +125,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 
 	tok := sess.reserveClient()
+	// Recorded as soon as there is a token to hang it on, so a client that fails between here and
+	// attaching is still described while it exists. Advisory and never used for a decision: an older
+	// client sends neither field, and the zero values report as unknown.
+	sess.noteClientIdentity(tok, open.ClientVersion, open.ClientPid)
 	if open.ReadOnly {
 		// Recorded before anything is pumped. A follower cannot answer a terminal query, since its
 		// input is dropped, and counting one as an answerer makes the emulator stay silent and the
@@ -598,6 +602,23 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// live attachments, so a stored value would come back after a restart claiming a nesting
 			// that ended with the previous server.
 			item.Hosting = sess.Hosting()
+
+			// Same argument as Hosting: an attachment is live state and nothing about it is worth
+			// persisting. Kept alongside the count rather than replacing it, since a count is what a
+			// status line wants and this is what a diagnosis wants.
+			for _, c := range sess.AttachedClients() {
+				ac := &serverv1.AttachedClient{
+					Pid:      c.PID,
+					Version:  c.Version,
+					ReadOnly: c.ReadOnly,
+				}
+				// Left at zero rather than sending a bogus timestamp when unknown, which a
+				// zero time.Time would become through Unix().
+				if !c.AttachedAt.IsZero() {
+					ac.AttachedAtUnix = c.AttachedAt.Unix()
+				}
+				item.AttachedClients = append(item.AttachedClients, ac)
+			}
 
 			title, cwd := sess.Metadata()
 			if title != "" {

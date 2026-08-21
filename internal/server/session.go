@@ -270,6 +270,16 @@ type clientSize struct {
 	// readOnly clients never own sizing, since a follower reflowing the window it watches is the
 	// bug this whole policy exists to avoid.
 	readOnly bool
+	// version and pid are what the client said about itself, for reporting only.
+	//
+	// Kept on this entry rather than in a parallel map because it is already the per-attachment record
+	// and a second map keyed by the same token would be one more thing for detach to forget to clean.
+	// Never used for a decision: both are advisory, an older client sends neither, and reporting an
+	// empty value as unknown is better than inferring one.
+	version string
+	pid     int32
+	// attachedAt is when this attachment became live, for reporting. Zero for a reservation.
+	attachedAt time.Time
 	// attached distinguishes a live attachment from a reservation that has not become one yet.
 	//
 	// Sizing deliberately does not care: reserveClient exists so the session can be resized to a
@@ -1108,6 +1118,68 @@ func (s *Session) resumePoints() (shimSeq, clientSeq uint64) {
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
+// AttachedClientInfo is one attached client, for reporting.
+type AttachedClientInfo struct {
+	PID        int32
+	Version    string
+	ReadOnly   bool
+	AttachedAt time.Time
+}
+
+// noteClientIdentity records what a client said about itself, for reporting only.
+//
+// Separate from attach rather than a parameter on it, because attach is called by paths that have no
+// client to describe: a reservation, and the internal attachments the tests and `cm run` use. A no-op
+// for an unknown token, which is what a detach racing the identity arriving looks like.
+func (s *Session) noteClientIdentity(tok *attachToken, version string, pid int32) {
+	if tok == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cs := s.clientSizes[tok]; cs != nil {
+		cs.version, cs.pid = version, pid
+	}
+}
+
+// AttachedClients describes the clients attached right now.
+//
+// Reservations are excluded: one is a client that has not attached yet and may never, and reporting it
+// would say a session has a client watching it when nothing is. That distinction is the same one the
+// query proxy had to learn, where counting a reservation as an attachment left a program's query
+// unanswered. Sizing is the only thing that deliberately counts reservations.
+//
+// Ordered by attach order so repeated calls agree, since Go randomizes map iteration and a listing that
+// reshuffles its own output on every call is hard to read and impossible to diff.
+func (s *Session) AttachedClients() []AttachedClientInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	type entry struct {
+		order uint64
+		info  AttachedClientInfo
+	}
+	entries := make([]entry, 0, len(s.clientSizes))
+	for _, cs := range s.clientSizes {
+		if !cs.attached {
+			continue
+		}
+		entries = append(entries, entry{cs.order, AttachedClientInfo{
+			PID:        cs.pid,
+			Version:    cs.version,
+			ReadOnly:   cs.readOnly,
+			AttachedAt: cs.attachedAt,
+		}})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })
+
+	out := make([]AttachedClientInfo, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.info)
+	}
+	return out
+}
+
 // The answerer election used to live here: hasAnsweringClient, answererLocked, and isAnswerer, which
 // together picked one attached client to answer terminal queries directly and dropped query replies from
 // every other client.
@@ -1343,6 +1415,9 @@ func (s *Session) newAttachmentLocked(from uint64, restore []byte, tok *attachTo
 	// reason the size entry is registered here.
 	if cs := s.clientSizes[token]; cs != nil {
 		cs.attached = true
+		// Stamped here for the same reason attached is: this is the moment the attachment becomes live,
+		// and both paths out of attach come through here. Reported only.
+		cs.attachedAt = s.now()
 	}
 
 	evict := make(chan struct{})

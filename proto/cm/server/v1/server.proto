@@ -417,6 +417,37 @@ message Open {
   // find that session to act on it, and a flag would leave it guessing which of its sessions the
   // client's terminal belongs to.
   string inside_session = 18;
+
+  // This client's build and process id, so a listing can name the clients attached to a session.
+  //
+  // Added because diagnosing a session loss meant working out what was attached from `ps` and lsof,
+  // matching binary inodes by hand. The server knew a *count* of clients and nothing about any of
+  // them. A shim outlives servers by design, so a running install legitimately spans many builds:
+  // one incident had twelve distinct builds across twenty-six shims, and telling which client was
+  // which took longer than reading the logs.
+  //
+  // Both are advisory and neither is trusted for anything. The pid is only meaningful on the same
+  // host, which is where clients are, and version is whatever the client says. An old client sends
+  // neither, and empty is reported as unknown rather than guessed at.
+  string client_version = 19;
+  int32 client_pid = 20;
+}
+
+// AttachedClient describes one client attached to a session.
+//
+// Reported so `cm list --json` can say what is attached rather than only how many things are, which
+// is what a version-skew investigation needs and what a bare count cannot give.
+message AttachedClient {
+  // Process id as the client reported it, or zero from a client too old to send one.
+  int32 pid = 1;
+  // The client's build, or empty from a client too old to send it. Compare against the server's own
+  // version in StatusResponse: a difference is legal here, since cm is built for a client and server
+  // from different builds, but it is worth being able to see.
+  string version = 2;
+  // Whether this client attached read-only, which is a follower rather than a terminal.
+  bool read_only = 3;
+  // When this client attached, as unix seconds.
+  int64 attached_at_unix = 4;
 }
 
 message Input {
@@ -705,6 +736,14 @@ message Session {
   // whatever is running inside it. Not persisted: this describes two live attachments, and a stored
   // value would come back after a restart claiming a nesting that ended with the previous server.
   repeated string hosting = 20;
+
+  // The clients attached right now, one entry each.
+  //
+  // Alongside the count above rather than replacing it: clients is what a status line wants and is
+  // cheap, while this is what a diagnosis wants. Not persisted, for the same reason hosting is not.
+  // An attachment is live state, and a stored one would come back after a restart describing a
+  // client that left with the previous server.
+  repeated AttachedClient attached_clients = 21;
 }
 
 message KillRequest {

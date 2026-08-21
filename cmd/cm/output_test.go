@@ -56,6 +56,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		"last_command_exit_code", "command_finished",
 		"reported_state", "reported_detail", "reported_source",
 		"tags", "hosting",
+		// What is attached, alongside the "clients" count above.
+		"attached_clients",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -90,6 +92,10 @@ func TestSessionJSONValues(t *testing.T) {
 		Tags:           map[string]string{"project": "cm", "review": ""},
 		// Empty rather than nil, like Tags, so a script indexing into it needs no null check.
 		Hosting: []string{},
+		// Also empty rather than nil. The fixture describes a session whose clients the server did not
+		// report, which is what an older server looks like; TestSessionJSONReportsAttachedClients
+		// covers the populated case.
+		AttachedClients: []attachedClientJSON{},
 	}
 	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
 	want.CreatedAt = got.CreatedAt
@@ -100,6 +106,50 @@ func TestSessionJSONValues(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.CreatedAt, "2023-11-14") && !strings.HasPrefix(got.CreatedAt, "2023-11-15") {
 		t.Errorf("CreatedAt = %q, want an RFC 3339 timestamp for the given instant", got.CreatedAt)
+	}
+}
+
+// Each attached client must be reported with its build, since that is what the count cannot say.
+//
+// The count alone is what made a real investigation slow: after losing a session, working out what was
+// attached meant reading `ps` and matching binary inodes with lsof to find which clients ran which
+// build. A shim outlives servers by design, so several builds at once is normal rather than a fault,
+// and one incident had twelve across twenty-six sessions.
+//
+// Two clients, deliberately, with the second read-only and reporting no version. That is what an older
+// client looks like on the wire, and reporting an unknown build as empty rather than inventing one is
+// the behavior worth pinning.
+func TestSessionJSONReportsAttachedClients(t *testing.T) {
+	s := sampleWireSession("work")
+	s.AttachedClients = []*serverv1.AttachedClient{
+		{Pid: 4242, Version: "v0.1.2-9-g4352aa4", AttachedAtUnix: 1_700_000_000},
+		{Pid: 5150, ReadOnly: true},
+	}
+
+	got := toSessionJSON(s).AttachedClients
+	want := []attachedClientJSON{
+		{
+			PID:            4242,
+			Version:        "v0.1.2-9-g4352aa4",
+			AttachedAtUnix: 1_700_000_000,
+			// Rendered in the local zone, so it is filled in from the result below rather than pinned.
+			AttachedAt: got[0].AttachedAt,
+		},
+		{
+			PID:      5150,
+			ReadOnly: true,
+			// No version and no timestamp. AttachedAt stays empty rather than rendering 1970, which
+			// would read as a client attached decades ago instead of one whose time is unknown.
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("AttachedClients = %+v\nwant %+v", got, want)
+	}
+	if !strings.HasPrefix(got[0].AttachedAt, "2023-11-1") {
+		t.Errorf("AttachedAt = %q, want an RFC 3339 timestamp for the given instant", got[0].AttachedAt)
+	}
+	if got[1].AttachedAt != "" {
+		t.Errorf("AttachedAt = %q for a client that reported no time, want empty", got[1].AttachedAt)
 	}
 }
 
