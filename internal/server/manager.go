@@ -59,6 +59,12 @@ type Manager struct {
 	persist *PersistPolicy
 	// log records what the manager does. Never nil, so callers do not have to check.
 	log *slog.Logger
+	// shimLogRetention is how long an exited shim's diagnostic log is kept. Zero disables pruning.
+	//
+	// Separate from the PersistPolicy despite both being retention, because this one applies whatever
+	// persistence is set to: a shim log is written for every session, and gating it on persist.enabled
+	// is the mistake that left a default install with no expiry at all.
+	shimLogRetention time.Duration
 	// resizePolicy is applied to every session created or adopted. Empty behaves as ResizeLeader.
 	resizePolicy ResizePolicy
 	// socketInode is the inode of the server socket as bound at startup, or zero when unknown.
@@ -147,6 +153,9 @@ func (m *Manager) SetLogger(l *slog.Logger) {
 
 // SetPersistPolicy enables persistence.
 func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }
+
+// SetShimLogRetention sets how long an exited shim's diagnostic log is kept. Zero disables pruning.
+func (m *Manager) SetShimLogRetention(d time.Duration) { m.shimLogRetention = d }
 
 // SetServerSocketInode records which socket this server is actually serving on.
 //
