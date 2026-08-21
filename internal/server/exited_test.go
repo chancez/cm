@@ -257,8 +257,18 @@ func (f *resizeFailShim) Shutdown(
 // service and so cannot host a fake.
 func serveFakeShim(t *testing.T, svc shimv1.ShimService) string {
 	t.Helper()
-
 	socket := filepath.Join(shortTempDir(t), "s.sock")
+	serveFakeShimOn(t, socket, svc)
+	return socket
+}
+
+// serveFakeShimOn is serveFakeShim on a caller-chosen path.
+//
+// Separate because the doctor's checks work by scanning the runtime directory for sockets, so a fake on a
+// private temp path is invisible to them and every assertion would pass or fail for the wrong reason.
+func serveFakeShimOn(t *testing.T, socket string, svc shimv1.ShimService) {
+	t.Helper()
+
 	l, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
@@ -283,7 +293,6 @@ func serveFakeShim(t *testing.T, svc shimv1.ShimService) string {
 		}
 	})
 	waitSocket(t, socket)
-	return socket
 }
 
 // The server must acknowledge a detach that asked for one.

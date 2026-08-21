@@ -2,14 +2,17 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
+	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
 // startShimInRuntimeDir starts a shim on the socket path a real one would use.
@@ -205,6 +208,80 @@ func TestRepairStopsOrphansAndSparesHealthySessions(t *testing.T) {
 	// And the healthy one is untouched, which is the property that makes this safe to run on a live machine.
 	if _, alive := probeShimState(ctx, healthy.ShimSocket); !alive {
 		t.Error("a healthy session's shim was stopped by a repair, want it left alone")
+	}
+}
+
+// lostReplyShim answers a probe but loses the reply to a Shutdown, which is what a shim that exits
+// while its response is in flight looks like from the server.
+//
+// Only the two calls Repair makes are real. Reaching anything else would mean the test is exercising
+// something other than the path it claims, so the rest reports that rather than passing quietly.
+type lostReplyShim struct {
+	shimv1.ShimService
+	shutdownCalled atomic.Bool
+}
+
+func (f *lostReplyShim) State(context.Context, *shimv1.StateRequest) (*shimv1.StateResponse, error) {
+	// Non-zero pids, since a finding without them is not actionable and the diagnosis reports them.
+	return &shimv1.StateResponse{ShimPid: 4242, ShellPid: 4243, Rows: 24, Cols: 80}, nil
+}
+
+func (f *lostReplyShim) Shutdown(
+	context.Context, *shimv1.ShutdownRequest,
+) (*shimv1.ShutdownResponse, error) {
+	f.shutdownCalled.Store(true)
+	// The error a shim produces when its reply is lost to its own exit. Returned rather than raced for:
+	// whether the real transport delivers the response or the close first is a scheduling coin-toss, so
+	// a test that arranges the race passes against the bug most of the time. Verified, at 20 runs out
+	// of 20 against the unfixed shim.
+	return nil, errors.New("ttrpc: closed")
+}
+
+// An orphan that was stopped is reported as stopped, even if its reply was lost.
+//
+// The failure this prevents is a diagnostic that lies in the expensive direction. Repair force-kills the
+// shell first and only then loses the reply, so treating the transport error as failure made
+// `cm doctor --repair` print "0 things" right after reaping an orphan. An operator reading that believes
+// a pty is still leaked and goes looking for a process that no longer exists, and the leak they were
+// chasing is invisible by definition, which is why the command exists.
+//
+// Surfaced as TestRepairStopsOrphansAndSparesHealthySessions failing about 1 run in 8 under parallel
+// load with "Repair() did 0 things", where the cause was invisible because newTestManager discards the
+// manager's log and the warning naming the error went with it. The shim no longer signals its exit
+// before replying, which removes the common cause, but a shim outlives the server that spawned it: after
+// an upgrade this server still talks to shims from the old build.
+func TestRepairReportsAnOrphanItStoppedWhenTheReplyIsLost(t *testing.T) {
+	mgr, _, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// On the path Diagnose scans, so the shim is discovered the way a real orphan is. With no session
+	// record, which is what makes it an orphan.
+	socket := dirs.ShimSocket("dropme")
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	fake := &lostReplyShim{}
+	serveFakeShimOn(t, socket, fake)
+
+	found, err := mgr.Diagnose(ctx, paths.Version())
+	if err != nil {
+		t.Fatalf("Diagnose() error = %v", err)
+	}
+	orphans := findingsByKind(found)[FindingOrphanShim]
+	if len(orphans) != 1 || !orphans[0].Fixable {
+		t.Fatalf("Diagnose() = %+v, want one fixable orphan-shim: without one Repair has nothing to "+
+			"act on and this test would pass for the wrong reason", found)
+	}
+
+	done := mgr.Repair(ctx, found)
+	if !fake.shutdownCalled.Load() {
+		t.Fatal("the shim was never asked to shut down, so the path under test did not run")
+	}
+	want := []string{"stopped orphaned shim for dropme (pid 4242)"}
+	if len(done) != len(want) || (len(done) > 0 && done[0] != want[0]) {
+		t.Errorf("Repair() = %v, want %v: a shim that took the request and dropped the connection was "+
+			"stopped, and reporting otherwise tells an operator a pty is still leaked when it is not",
+			done, want)
 	}
 }
 

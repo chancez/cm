@@ -177,10 +177,39 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 			// outcome is what makes that reviewable afterwards.
 			m.log.Info("shutting down an orphaned shim",
 				"session", f.Session, "socket", f.Socket, "shim_pid", f.ShimPID)
-			if err := shutdownShim(ctx, f.Socket); err != nil {
+			// A shim that took the request and then dropped the connection did what was asked. The
+			// transport carries the reply, not the shutdown: by the time one can be lost the shell has
+			// already been signalled, so treating the error as failure reports the opposite of what
+			// happened. `cm kill` reaches the same conclusion in two places for the same reason, via
+			// isTransportClosed.
+			//
+			// This is the whole finding a reader acts on, which is what made it worth fixing here rather
+			// than only in the shim. `cm doctor --repair` printing "0 things" after reaping an orphan tells
+			// an operator a shell is still leaked, and the next move for a leaked pty is to go hunting for a
+			// process that is already gone. Surfaced as TestRepairStopsOrphansAndSparesHealthySessions
+			// failing about 1 run in 8 under parallel load with "Repair() did 0 things", where the discarded
+			// warning said `ttrpc: closed` and the shim was confirmed gone every time.
+			//
+			// Kept even though the shim no longer signals its exit before replying, because a shim outlives
+			// the server that spawned it: after an upgrade this server still talks to shims from the old
+			// build, which do.
+			if err := shutdownShim(ctx, f.Socket); err != nil && !isTransportClosed(err) {
 				m.log.Warn("shutting down an orphaned shim failed",
 					"session", f.Session, "socket", f.Socket, "error", err)
 				continue
+			}
+			// Wait for the socket to stop answering before reporting it stopped, since the shell is
+			// signalled before the shim replies and the shim then takes a moment to release the socket.
+			// Without this, `cm doctor` run twice in quick succession finds the same shim again, now as a
+			// stale socket, which reads as the repair having failed. Bounded rather than open-ended: a shim
+			// that will not let go is a real problem, and the report is already accurate about the
+			// shutdown having been accepted.
+			// Logged rather than returned: it is still reported as stopped, because the shutdown was
+			// accepted and the shell signalled before any of this, and a shim that is slow to release its
+			// socket has not undone that.
+			if err := waitForSocketFree(ctx, f.Socket, shimReleaseTimeout); err != nil {
+				m.log.Warn("an orphaned shim was slow to release its socket after shutting down",
+					"session", f.Session, "socket", f.Socket, "error", err)
 			}
 			done = append(done, fmt.Sprintf("stopped orphaned shim for %s (pid %d)", f.Session, f.ShimPID))
 
