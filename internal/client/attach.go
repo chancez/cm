@@ -438,9 +438,12 @@ func runSession(
 	}
 
 	rows, cols := tty.Size()
+	xpixel, ypixel := tty.PixelSize()
 	open := opts.Open(result.Session)
 	open.Rows = uint32(rows)
 	open.Cols = uint32(cols)
+	open.XPixel = uint32(xpixel)
+	open.YPixel = uint32(ypixel)
 	open.ResumeFromSeq = *resumeFrom
 	if err := stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Open{Open: open},
@@ -712,9 +715,16 @@ func runSession(
 			if rows == 0 || cols == 0 {
 				continue
 			}
+			// Pixels are re-read on every resize rather than remembered from the attach: the window
+			// changing size is exactly when they change, and a font size change moves them without
+			// changing the cell count at all.
+			xpixel, ypixel := tty.PixelSize()
 			if err := stream.Send(&serverv1.AttachRequest{
 				Event: &serverv1.AttachRequest_Resize{
-					Resize: &serverv1.Resize{Rows: uint32(rows), Cols: uint32(cols)},
+					Resize: &serverv1.Resize{
+						Rows: uint32(rows), Cols: uint32(cols),
+						XPixel: uint32(xpixel), YPixel: uint32(ypixel),
+					},
 				},
 			}); err != nil {
 				return outcomeReconnect, nil

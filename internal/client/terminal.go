@@ -127,6 +127,25 @@ func (t *TTY) Size() (rows, cols uint16) {
 	return ws.Row, ws.Col
 }
 
+// PixelSize reports the terminal's current size in pixels. Zeros mean the terminal did not say, which
+// is common and must be passed on as zero: a program treats zero as "unknown" rather than as a size,
+// so inventing a value would be worse than reporting none.
+//
+// Reported so the session's pty can carry them. A program drawing images reads the pty's pixel fields
+// to work out how large a cell is, and `kitten icat` refuses to transmit anything when they are zero,
+// so a session whose pty never received them cannot show an image however faithfully cm forwards the
+// bytes.
+//
+// Separate from Size rather than returning four values, because every existing caller compares cells
+// and would otherwise start depending on pixels by accident.
+func (t *TTY) PixelSize() (xpixel, ypixel uint16) {
+	ws, err := unix.IoctlGetWinsize(int(t.out.Fd()), unix.TIOCGWINSZ)
+	if err != nil {
+		return 0, 0
+	}
+	return ws.Xpixel, ws.Ypixel
+}
+
 // Clear clears the screen, used before painting restored session state. It does nothing
 // when output is not a terminal, where escape bytes would just corrupt the stream.
 func (t *TTY) Clear() error {
