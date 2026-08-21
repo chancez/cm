@@ -2,12 +2,38 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
+
+func newCompletionsCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:       "completions <shell>",
+		Short:     "Print a shell completion script",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root := cmd.Root()
+			switch args[0] {
+			case "bash":
+				return root.GenBashCompletionV2(os.Stdout, true)
+			case "zsh":
+				return root.GenZshCompletion(os.Stdout)
+			case "fish":
+				return root.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return root.GenPowerShellCompletionWithDesc(os.Stdout)
+			default:
+				return fmt.Errorf("unsupported shell %q", args[0])
+			}
+		},
+	}
+}
 
 // completeSessionNames returns a completion function offering live session names.
 //
