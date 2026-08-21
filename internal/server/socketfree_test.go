@@ -5,7 +5,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -55,6 +57,21 @@ func TestWaitForSocketFreeReturnsImmediatelyForAMissingFile(t *testing.T) {
 // exits so its exit status can still be collected; creating a session under the same name inside that window
 // used to spawn a shim that could not bind, which died with "already served by a live shim". Waiting here
 // makes the create path outlast the old shim instead of racing it.
+// Run inside a synctest bubble, which is what makes the timing assertion mean anything.
+//
+// The wall-clock version of this test failed about 2 runs in 60 under parallel load, and not because
+// waitForSocketFree was wrong. `start` is read on this goroutine *after* launching the closer, so the
+// listener's 200ms life began before the interval being measured. Preempt this goroutine in between and
+// the listener can already be closed by the time the wait starts, and since Go unlinks a unix socket on
+// Close the first dial then gets ENOENT and returns at once. Confirmed by widening that gap with a
+// sleep: elapsed dropped to 78-227 microseconds every run.
+//
+// A bubble removes the skew rather than hiding it. Fake time only advances when every goroutine in the
+// bubble is durably blocked, so the closer's sleep cannot run ahead of this goroutine's clock read.
+// Real socket I/O still happens: net.Dial is not durably blocking, so the bubble simply does not
+// advance time across it, which is why the poll loop still exercises real dials. Measured at exactly
+// 210ms of fake time on all 50 runs, against 200ms of wall clock plus the one 10ms poll that observes
+// the close.
 func TestWaitForSocketFreeWaitsForALiveListenerToClose(t *testing.T) {
 	dir, err := os.MkdirTemp("", "cmsock")
 	if err != nil {
@@ -62,36 +79,44 @@ func TestWaitForSocketFreeWaitsForALiveListenerToClose(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	socket := filepath.Join(dir, "s.sock")
-	ln, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatalf("listening on %s: %v", socket, err)
-	}
-	defer ln.Close()
+	synctest.Test(t, func(t *testing.T) {
+		socket := filepath.Join(dir, "s.sock")
+		ln, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatalf("listening on %s: %v", socket, err)
+		}
+		defer ln.Close()
 
-	// Closed from another goroutine, which is what the real shim's exit looks like from here.
-	closed := make(chan struct{})
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		ln.Close()
-		close(closed)
-	}()
+		// Closed from another goroutine, which is what the real shim's exit looks like from here.
+		//
+		// The flag is set *before* the close rather than after, and that ordering is the whole point: the
+		// only thing that can make this socket vanish is this Close, so a wait that observed the socket
+		// gone must have observed the flag too. Signalling afterwards is a race the test loses on its own,
+		// because a bubble controls fake time and not parallelism: real socket I/O is not durably blocking,
+		// so the polling goroutine genuinely runs alongside this one and can see the unlinked socket in the
+		// instant between Close returning and the signal being sent. That reported "returned while the
+		// listener was still up" against a wait that had done exactly the right thing, 2 runs in 30.
+		var closing atomic.Bool
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			closing.Store(true)
+			ln.Close()
+		}()
 
-	start := time.Now()
-	if err := waitForSocketFree(context.Background(), socket, 5*time.Second); err != nil {
-		t.Fatalf("waitForSocketFree = %v, want nil once the listener closed", err)
-	}
-	elapsed := time.Since(start)
+		start := time.Now()
+		if err := waitForSocketFree(context.Background(), socket, 5*time.Second); err != nil {
+			t.Fatalf("waitForSocketFree = %v, want nil once the listener closed", err)
+		}
+		elapsed := time.Since(start)
 
-	select {
-	case <-closed:
-	default:
-		t.Fatal("waitForSocketFree returned while the listener was still up, " +
-			"so a replacement shim would fail to bind")
-	}
-	if elapsed < 200*time.Millisecond {
-		t.Errorf("returned after %s, want at least the 200ms the listener stayed up", elapsed)
-	}
+		if !closing.Load() {
+			t.Fatal("waitForSocketFree returned while the listener was still up, " +
+				"so a replacement shim would fail to bind")
+		}
+		if elapsed < 200*time.Millisecond {
+			t.Errorf("returned after %s, want at least the 200ms the listener stayed up", elapsed)
+		}
+	})
 }
 
 // A listener that never closes produces an error naming the timeout.
