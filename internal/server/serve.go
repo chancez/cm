@@ -90,8 +90,30 @@ func Serve(ctx context.Context, l net.Listener, svc *Service) error {
 	// record each session's resume point.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Resume points are written *before* the transport shuts down, and the order is the whole point.
+	//
+	// ttrpc.Shutdown closes the listeners first and only then waits for connections to go idle, so the
+	// socket stops accepting at its very first step. `cm server restart` decides the old server is gone
+	// by dialing (waitServerGone), so it proceeds as soon as that happens, and the new server's
+	// Reconcile then reads last_seq and client_seq while this one had not written them yet. The next
+	// server therefore resubscribed from a stale position, or from zero for a session whose points had
+	// never been written at all.
+	//
+	// The symptom was not an error anywhere. Each adopted session came back with an "output gap
+	// detected" repaint instead of a seamless resume, which looks like the gap detection working rather
+	// than like a resume point that was never saved. Found in a live restart at 17:12:06 where sessions
+	// were adopted with from_seq=0 while the store held positions in the millions, and the 26ms between
+	// "shutting down on request" and "server starting" is the window.
+	//
+	// Closing the manager first costs nothing: it stops consuming shim output and writes each position,
+	// and sessions are deliberately left running either way. An in-flight client call can still be
+	// served by the transport shutdown below, and a client whose session stopped being consumed
+	// reconnects to the new server, which is the same thing it does across any restart.
+	closeErr := svc.mgr.Close()
+
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
-	return svc.mgr.Close()
+	return closeErr
 }
