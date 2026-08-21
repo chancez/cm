@@ -8,6 +8,20 @@ import (
 	"github.com/chancez/cm/internal/shellinit"
 )
 
+// zshCompinit initializes zsh's completion system ahead of loading cm's output.
+//
+// `-u` rather than a bare `compinit`: on a machine with a group-writable directory in fpath, compinit
+// stops and asks via `read -q` whether to continue, answering itself with `n` when nothing is
+// interactive, which aborts and unfunctions compdef. The completions half then prints
+// `command not found: compdef` and the test reports cm as broken. `-u` accepts those directories without
+// asking, which is what a test wants: the audit guards against another user's completion functions and
+// nothing here asserts on fpath permissions.
+//
+// stderr is not redirected, on purpose. With `-u` compinit is silent, so anything printed from here on is
+// a real finding rather than noise to mask. See the longer note in internal/e2e/shellinit_test.go, where
+// this same prompt corrupted a pty's input and cost most of a CI run to diagnose.
+const zshCompinit = "autoload -Uz compinit; compinit -u -D\n"
+
 // runShellInit returns what `cm shell-init <shell> [args...]` writes to stdout.
 //
 // Driven through the real root command rather than by calling the generators directly, since the
@@ -100,7 +114,7 @@ func TestShellInitDoesNotAbortTheStartupFile(t *testing.T) {
 			case "zsh":
 				// compinit first, since the completions half registers a completion function and this is
 				// the ordering the help tells the user to use.
-				load = "autoload -Uz compinit; compinit -D 2>/dev/null\n" +
+				load = zshCompinit +
 					"eval " + shellSingleQuote(script) + "\necho STILL-HERE"
 			default:
 				load = "eval " + shellSingleQuote(script) + "\necho STILL-HERE"
@@ -130,7 +144,7 @@ func TestShellInitLoadsBothHalves(t *testing.T) {
 	}
 
 	script := runShellInit(t, "zsh")
-	load := "autoload -Uz compinit; compinit -D 2>/dev/null\n" +
+	load := zshCompinit +
 		"eval " + shellSingleQuote(script) + "\n" +
 		"typeset -f cm_report >/dev/null && echo REPORT-DEFINED\n" +
 		"(( $+functions[_cm] )) && echo COMPLETION-DEFINED\n"

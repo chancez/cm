@@ -72,6 +72,12 @@ jobs:
           # skip_global_compinit is Debian's own documented escape hatch, named in that file. Set in
           # /etc/zsh/zshenv because zshenv is read before zshrc, which is the only ordering that gets
           # ahead of the compinit call.
+          #
+          # This handles the *global* compinit only, and it is not the whole fix. The tests run their own
+          # `compinit` too, which prompts on the same runner for the same reason and is why three tests
+          # still failed with this in place. That call passes `-u`; see the note on zshCompinit in
+          # internal/e2e/shellinit_test.go. Both are needed, so do not drop one on the grounds that the
+          # other covers it.
           if [ -d /etc/zsh ]; then
             echo 'skip_global_compinit=1' | sudo tee -a /etc/zsh/zshenv >/dev/null
             echo "disabled global compinit, which prompts interactively on this runner"

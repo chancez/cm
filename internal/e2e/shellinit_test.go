@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+// zshCompinit is how these tests initialize zsh's completion system before loading cm's output.
+//
+// `-u` is the load-bearing flag and it is not a style choice. compinit audits every directory in fpath,
+// and on a directory that is group or world writable it stops and asks, with `read -q`, whether to
+// continue. Two things about that prompt make it corrupt any test that touches zsh:
+//
+//   - It is written to /dev/tty, not stderr, so `2>/dev/null` does not suppress it. Under a pty it lands
+//     on the session's first screen and *consumes a keystroke*. A `cm send` of `d='a;b\c 50% x'; ...`
+//     arriving while it waits loses the leading `d` to the prompt, and zsh runs the rest, so the failure
+//     presents as `reported_state = ""` or a timed-out wait rather than as anything about compinit.
+//   - Answering `n`, which is what a non-interactive read does, aborts compinit and unfunctions compdef.
+//     The next line of cm's completions then prints `command not found: compdef`.
+//
+// `-u` uses the insecure directories without asking, which is right here: the fpath under test is the
+// runner's own, the audit protects against another user's completion functions, and no test asserts
+// anything about fpath permissions. `-i` (ignore them) would also silence the prompt but drops those
+// directories from fpath, so a machine whose only completion directory is group writable would load zsh's
+// completions from nowhere and fail differently.
+//
+// Reproduced directly before fixing: with one group-writable directory in fpath, `compinit -D` leaves
+// compdef undefined while `compinit -u -D` defines it.
+//
+// stderr deliberately not redirected. Masking it is what hid `compinit: initialization aborted` and left
+// only the downstream symptoms to diagnose from. With `-u` compinit is silent -- verified against a
+// missing fpath directory, a group-writable one, and a world-writable file inside one -- so anything it
+// does print from here on is news, and the tests below assert on exactly that.
+const zshCompinit = "autoload -Uz compinit; compinit -u -D\n"
+
 // shellRC writes a startup file loading cm's integration and returns how to make the shell read it.
 //
 // Loaded the way the help documents it, since that is the part worth testing: `eval "$(cm shell-init ...)"`
@@ -41,7 +69,7 @@ func (e *env) shellRC(t *testing.T, shell, path string) (env []string, argv []st
 		// function, so loading them first puts `command not found: compdef` on the session's very first
 		// screen. Harmless to the integration and visible to anyone reading the session.
 		write(filepath.Join(dir, ".zshrc"),
-			"autoload -Uz compinit; compinit -D 2>/dev/null\n"+
+			zshCompinit+
 				"eval \"$("+e.bin+" shell-init zsh)\"\n")
 		return []string{"--env", "ZDOTDIR=" + dir}, []string{path}
 
@@ -251,7 +279,7 @@ func TestShellIntegrationIsSafeOutsideASession(t *testing.T) {
 						// The ordering `cm shell-init --help` documents. Without it the completions half
 						// prints "command not found: compdef", which is what a session's first screen
 						// showed for real.
-						"zsh": "autoload -Uz compinit; compinit -D 2>/dev/null\n",
+						"zsh": zshCompinit,
 					}[shell],
 				},
 			} {
