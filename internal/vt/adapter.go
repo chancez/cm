@@ -61,8 +61,14 @@ func NewSessionTerminal(rows, cols uint16, scrollbackLines int) (*SessionTermina
 	term, err := New(rows, cols, Callbacks{
 		// Queued rather than written directly: this fires inside Write, and touching the pty
 		// from here would mean re-entering code the emulator has locked.
+		//
+		// The margin-mode rewrite happens here rather than in the server, because this is where a
+		// reply the *model* generated can still be told apart from anything else on the pty. See
+		// DenyMarginMode: the emulator implements left/right margins correctly and the real terminal
+		// usually does not, so reporting the model's own answer scrolled both halves of an nvim
+		// vertical split.
 		WritePty: func(data []byte) {
-			st.pending = append(st.pending, data)
+			st.pending = append(st.pending, DenyMarginMode(data))
 		},
 		TitleChanged: func(title string) { st.title = title },
 		PwdChanged:   func(pwd string) { st.pwd = pwd },
