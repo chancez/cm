@@ -1,6 +1,7 @@
 package input
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -268,5 +269,85 @@ func TestTerminalProbeBatchIsNotTyping(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("SplitReplies(%q) = %q, want %q", batch, got, want)
+	}
+}
+
+// A chunk holding a query reply next to bytes only the program should see splits into both, with each
+// part routed on its own.
+//
+// This is the reported kitty graphics corruption. `kitten icat` probes the terminal with APC
+// (ESC _ G ... ST), and a real kitty answered the graphics response together with an unsolicited DA1
+// reply in one write. Captured from a real session rather than constructed:
+//
+//	\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c
+//
+// IsQueryReply is all-or-nothing, so it rejected the blob, IsUserInput did not claim it either, and it
+// fell through to the verbatim pty write. The tty then echoed it back in caret notation, which is the
+// "=1;OK" and "/62;52;c" garbage reported beside the prompt.
+//
+// The graphics response must stay a non-reply, and that is the load-bearing half. cm asks no graphics
+// query -- internal/query/query.go classifies no APC at all -- so routing the response to the query
+// proxy would match no outstanding request and hit the unmatched-reply discard, and `icat`, which did
+// ask, would never get its answer. Measured while designing this: recognizing APC in classifyReply
+// alone makes IsQueryReply return true for an APC-only chunk, which is exactly that discard path.
+func TestSplitInputRoutesMixedChunks(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Part
+	}{
+		{
+			name:  "graphics response then unsolicited DA1 reply",
+			input: "\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c",
+			want: []Part{
+				{Data: []byte("\x1b_Gi=1;OK\x1b\\")},
+				{Data: []byte("\x1b[?62;52;c"), Reply: true},
+			},
+		},
+		{
+			name:  "reply first, then graphics response",
+			input: "\x1b[?62;52;c\x1b_Gi=1;OK\x1b\\",
+			want: []Part{
+				{Data: []byte("\x1b[?62;52;c"), Reply: true},
+				{Data: []byte("\x1b_Gi=1;OK\x1b\\")},
+			},
+		},
+		{
+			name:  "focus event beside a reply",
+			input: "\x1b[I\x1b[12;34R",
+			want: []Part{
+				{Data: []byte("\x1b[I")},
+				{Data: []byte("\x1b[12;34R"), Reply: true},
+			},
+		},
+		{
+			name:  "mouse report beside a reply",
+			input: "\x1b[<0;10;20M\x1b[0n",
+			want: []Part{
+				{Data: []byte("\x1b[<0;10;20M")},
+				{Data: []byte("\x1b[0n"), Reply: true},
+			},
+		},
+		{
+			name:  "a graphics error response is still not a reply",
+			input: "\x1b_Gi=3;EBADF:Bad file descriptor\x1b\\",
+			want:  []Part{{Data: []byte("\x1b_Gi=3;EBADF:Bad file descriptor\x1b\\")}},
+		},
+
+		// Unrecognized or incomplete content forwards whole, which is the existing conservative rule:
+		// dropping the front of something that turns out to be a keystroke is worse than a duplicate.
+		{"typing", "hello", nil},
+		{"reply then typing", "\x1b[0nx", nil},
+		{"incomplete graphics response", "\x1b_Gi=1;OK", nil},
+		{"empty", "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SplitInput([]byte(tt.input))
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("SplitInput(%q) = %+v, want %+v", tt.input, got, tt.want)
+			}
+		})
 	}
 }

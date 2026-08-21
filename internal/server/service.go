@@ -508,6 +508,29 @@ func (s *Service) recvLoop(
 					sess.answerFromClient(tok, req.GetInput().Data)
 					continue
 				}
+				// A chunk holding replies *and* bytes only the program should see, which is what a real
+				// terminal writes when a program probes it while a window event lands. IsQueryReply is
+				// all-or-nothing, so before this the whole blob fell through to the verbatim write below
+				// and the reply half was echoed back by the tty in caret notation. Reported against
+				// `kitten icat`, whose APC probe was answered together with an unsolicited DA1 reply:
+				// "\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c" printed as "=1;OK" and "/62;52;c" beside the prompt.
+				//
+				// Each part goes where it belongs rather than the chunk going one way. A graphics
+				// response is deliberately *not* a reply: cm asks no graphics query, so it would match
+				// no outstanding request and be discarded as unsolicited, and the program that asked
+				// would never receive it.
+				if parts := input.SplitInput(req.GetInput().Data); len(parts) > 1 {
+					for _, part := range parts {
+						if part.Reply {
+							sess.answerFromClient(tok, part.Data)
+							continue
+						}
+						if err := sess.Write(ctx, part.Data); err != nil {
+							return fmt.Errorf("writing to session %s: %w", sess.name, err)
+						}
+					}
+					continue
+				}
 				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
 					return fmt.Errorf("writing to session %s: %w", sess.name, err)
 				}

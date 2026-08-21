@@ -128,3 +128,60 @@ func TestOnlyTheAnsweringSequenceIsTakenFromAReplyChunk(t *testing.T) {
 			"must be dropped rather than carried to the pty by the reply beside it.", got)
 	}
 }
+
+// A graphics response reaches the pty rather than being discarded as an unsolicited reply.
+//
+// The reported kitty graphics corruption, and the reason its fix is not "recognize APC as a reply". cm
+// asks no graphics query: internal/query/query.go classifies no APC at all, because a graphics response
+// answers `kitten icat`, not cm. So an APC response can never match an outstanding request, and anything
+// routed to answerFromClient with nothing outstanding is discarded on purpose, which is the fix for the
+// git-branch-typed-into-a-prompt bug.
+//
+// Treating it as a reply therefore swaps one bug for a worse one: instead of echoed garbage, `icat` never
+// receives the answer it is waiting on and the image never renders. Measured while designing this, the
+// naive change does exactly that, since adding APC to classifyReply makes IsQueryReply true for an
+// APC-only chunk.
+//
+// Asserted at the session seam because the routing decision lives in Service.Attach, above this, so this
+// pins the invariant the routing depends on: a graphics response handed to the pty path arrives, and one
+// handed to the reply path does not. The second half is what fails if a later change reclassifies APC.
+func TestGraphicsResponseReachesThePty(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "gfxreply",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	// What the routing does with a graphics response: writes it through, since the program asked.
+	const gfx = "\x1b_Gi=1;OK\x1b\\"
+	if err := sess.Write(t.Context(), []byte(gfx)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if got := awaitStream(t, sess, "_Gi=1;OK", 3*time.Second); !strings.Contains(got, "_Gi=1;OK") {
+		t.Errorf("the graphics response never reached the pty; stream was %q.\n"+
+			"`kitten icat` asked for this and waits on it, so it has to arrive whatever cm does with "+
+			"replies.", got)
+	}
+
+	// And what the reply path would do with it: drop it, because cm asked no graphics query. This is the
+	// assertion that fails if APC is ever reclassified as a reply.
+	sess.answerFromClient(att.token, []byte("\x1b_Gi=2;OK\x1b\\"))
+	if got := awaitStream(t, sess, "_Gi=2;OK", 700*time.Millisecond); strings.Contains(got, "_Gi=2;OK") {
+		t.Errorf("a graphics response survived the reply path; stream was %q.\n"+
+			"cm registers no APC question, so this matched nothing and should have been discarded. That "+
+			"it arrived means the discard is not protecting the pty, and the routing in Service.Attach "+
+			"must keep APC out of answerFromClient rather than relying on it.", got)
+	}
+}

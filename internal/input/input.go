@@ -108,6 +108,114 @@ func SplitReplies(p []byte) [][]byte {
 	return out
 }
 
+// Part is one piece of a client's input chunk, and where it has to go.
+//
+// Three destinations rather than two, which is the distinction SplitInput exists to make. A chunk can
+// hold answers to questions cm asked, bytes only the program should see, or both at once, and the
+// difference decides whether a sequence may be matched against an outstanding request or must be
+// written to the pty untouched.
+type Part struct {
+	// Data is the sequence itself.
+	Data []byte
+	// Reply is set when this sequence answers a query cm asked a client, so the caller may match it
+	// against an outstanding request and drop it when it matches nothing.
+	//
+	// False does not mean "typing": a mouse report, a focus event, and a kitty graphics response are
+	// all not-replies that must still reach the program.
+	Reply bool
+}
+
+// SplitInput breaks a client's input chunk into its sequences and says where each one goes.
+//
+// This exists because IsQueryReply is all-or-nothing, and a real terminal does not write chunks that
+// way. Reported against kitty graphics: `kitten icat` probes with APC (`ESC _ G ... ST`) and the
+// terminal answered a graphics response and an unsolicited DA1 reply in one write, measured as
+// "\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c". Neither IsUserInput nor IsQueryReply claimed the blob, so it went
+// to the pty verbatim and the tty echoed the whole thing back in caret notation, which is the reported
+// "=3;EBADF:...=1;OK" and "/62;52;c" garbage beside the prompt.
+//
+// The important half of that is *why* a graphics response must not be treated as a reply. cm never asks
+// a graphics query: internal/query/query.go classifies no APC at all, so an icat response matches no
+// outstanding request, and routing it to the query proxy would hit the unmatched-reply discard that
+// exists for the git-branch-into-a-prompt bug. The program asked, so the program must receive it. That
+// makes the naive "recognize APC as a reply" fix actively wrong, and it was measured: adding APC to
+// classifyReply alone makes IsQueryReply return true for an APC-only chunk, which is the discard path.
+//
+// Returns nil when the chunk holds anything unrecognized, which keeps the existing conservative rule:
+// a chunk that does not parse cleanly is forwarded whole rather than picked apart, since dropping the
+// front of something that turns out to be a keystroke is worse than forwarding a duplicate.
+func SplitInput(p []byte) []Part {
+	var out []Part
+	for i := 0; i < len(p); {
+		if p[i] != 0x1b {
+			return nil
+		}
+		n, reply := classifyReply(p[i:])
+		if n > 0 && reply {
+			out = append(out, Part{Data: p[i : i+n], Reply: true})
+			i += n
+			continue
+		}
+		// Not a reply. Recognized non-reply sequences still have to reach the program, so they are
+		// carried as parts rather than abandoning the split: that is the whole point, since giving up
+		// here is what let a reply ride to the pty inside its neighbour.
+		if n = passthroughLen(p[i:]); n > 0 {
+			out = append(out, Part{Data: p[i : i+n]})
+			i += n
+			continue
+		}
+		return nil
+	}
+	return out
+}
+
+// passthroughLen reports the length of a sequence that is not a reply but must still reach the program.
+//
+// APC, PM, and DCS-shaped responses the emulator never asked for, plus mouse and focus reports. Each
+// describes the program's or the window's own business rather than answering a question cm posed, so
+// none may be matched against an outstanding request and none may be dropped.
+//
+// Zero when the sequence is incomplete or unrecognized, which makes SplitInput give up and forward the
+// chunk whole.
+func passthroughLen(p []byte) int {
+	if len(p) < 2 || p[0] != 0x1b {
+		return 0
+	}
+	switch p[1] {
+	case '_', '^':
+		// APC and PM. A kitty graphics response arrives here, and cm asked no graphics query, so this
+		// is the program's answer and not cm's to consume.
+		return consumeString(p)
+	case '[':
+		// Mouse and focus reports. Every attached terminal is entitled to send its own, so these are
+		// forwarded from each client rather than treated as a single session-wide answer.
+		//
+		// Scanned to the final byte the same way classifyReply does, rather than with the richer parser
+		// in internal/query, so the two agree about extent within this package.
+		i := 2
+		for i < len(p) && !isCSIFinal(p[i]) {
+			i++
+		}
+		if i >= len(p) {
+			return 0
+		}
+		final, params, length := p[i], p[2:i], i+1
+		if final == 'M' && len(params) == 0 {
+			// X10 mouse carries three raw coordinate bytes after the final, which are consumed here so
+			// one cannot be mistaken for a keystroke on the next pass.
+			return min(length+3, len(p))
+		}
+		if len(params) > 0 && params[0] == '<' {
+			return length
+		}
+		if len(params) == 0 && (final == 'I' || final == 'O') {
+			return length
+		}
+		return 0
+	}
+	return 0
+}
+
 // classifyReply consumes one escape sequence, reporting its length and whether it answers a query.
 //
 // A length of zero means the sequence is incomplete, which is treated as not-a-reply by the caller:
