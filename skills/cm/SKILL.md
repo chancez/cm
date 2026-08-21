@@ -325,7 +325,7 @@ cm run --env 'CI=1' --dir /path/to/repo -- ./script
 
 `--env` applies only when the call creates the session; it is ignored when reusing one. `--dir` defaults to the caller's cwd.
 
-cm exports `CM_SESSION` into every session, so a program inside knows which session it is in without being told, which is what lets `cm report` take no argument there.
+cm exports `CM_SESSION` into every session, so a program inside knows which session it is in without being told, which is what lets `cm report` take no argument there. It is also how an agent gives another one a return address: see the `a2a` skill for messaging an agent working the same repository in another worktree.
 
 ## Reading output: which command
 
