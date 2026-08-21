@@ -38,10 +38,17 @@ var deniedModeChecks = []deniedModeCheck{
 	{
 		mode: 2048,
 		what: "in-band size reports (DECRQM private mode 2048)",
-		symptom: "A program told the mode is available stops relying on SIGWINCH and waits for cm to " +
-			"report each resize in band, which cm does not do, so the program never learns the " +
-			"window changed. The visible symptom is nvim keeping its old height after a terminal " +
-			"split closes",
+		// cm does now send these reports, from its resize path, so the mode is denied and honored at
+		// once. The denial still matters: it keeps cm's answer consistent with what tmux says and stops
+		// a program relying on a promise the *model* would make on cm's behalf, since the model's own
+		// report is generated inside the emulator's resize and arrives out of turn. What made this a
+		// real bug was nvim setting the mode without waiting for any answer, so the report is what
+		// fixes it and this check only guards the reply.
+		symptom: "A program told the mode is available stops relying on SIGWINCH and waits to be told " +
+			"about each resize in band. cm sends those reports itself, from the size it sets, so the " +
+			"reply here should still say the mode is unavailable: answering otherwise means the model " +
+			"is promising on cm's behalf, and the model's own reports arrive out of turn. The visible " +
+			"symptom of that going wrong is nvim keeping its old height after a terminal split closes",
 	},
 }
 

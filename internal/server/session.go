@@ -313,6 +313,12 @@ type Terminal interface {
 	Restore() ([]byte, error)
 	// Resize changes the model's size so a restore matches the terminal showing it.
 	Resize(rows, cols uint16) error
+	// SizeReport returns the in-band size report owed to the program for a resize to this size, or
+	// nil when the program has not asked to be told about resizes in band (mode 2048).
+	//
+	// The size is passed in rather than read back, so this can be called before or after Resize and
+	// still describe the new size.
+	SizeReport(rows, cols uint16) ([]byte, error)
 	// TakePending returns bytes the emulator generated that must reach the pty, such as
 	// responses to device queries. A program that asks the terminal a question blocks until
 	// answered, so these have to be delivered.
@@ -1844,8 +1850,48 @@ func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32,
 		if err := term.Resize(uint16(rows), uint16(cols)); err != nil {
 			return fmt.Errorf("resizing terminal model: %w", err)
 		}
+		s.reportSize(uint16(rows), uint16(cols))
 	}
 	return nil
+}
+
+// reportSize tells a program that asked for in-band size reports that the size changed.
+//
+// The pty ioctl above is not enough on its own. A program that enables mode 2048 stops acting on
+// SIGWINCH and waits to be told in band, so without this it keeps drawing at the old size no matter how
+// many times the kernel signals it. Measured: nvim held 30x100 through four consecutive resizes while
+// the pty correctly reported 14x99, 9x89, 15x109, and 11x79 in turn, and a single hand-fed report moved
+// it immediately.
+//
+// After the ioctl rather than before, so the program cannot read a size the pty does not have yet: a
+// report is an invitation to call TIOCGWINSZ, and nvim does exactly that. Ordering it the other way
+// makes the report a lie for as long as the two calls are apart.
+//
+// Sent through the same queue as every other reply, so it cannot overtake an outstanding question. A
+// report arriving out of turn is consumed as the answer to whatever was asked before it, which is the
+// recorded `wallfacer -h` corruption, and this is a reply the program did not ask for at a moment it may
+// well be mid-query.
+//
+// Failures are logged rather than returned. The resize itself has already succeeded at the only layer
+// that must not fail, and refusing a resize because a capability query failed would trade a stale
+// repaint for a broken session.
+func (s *Session) reportSize(rows, cols uint16) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return
+	}
+	report, err := term.SizeReport(rows, cols)
+	if err != nil {
+		s.log.Warn("reading the in-band resize mode failed, so no size report was sent",
+			"session", s.name, "error", err)
+		return
+	}
+	if len(report) == 0 {
+		return
+	}
+	s.queueOrWriteReply([][]byte{report})
 }
 
 // Read renders the tail of the session's contents, with soft-wrapped lines optionally rejoined.

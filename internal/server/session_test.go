@@ -16,6 +16,7 @@ import (
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/vt"
 )
 
 // fakeTerminal stands in for the libghostty-backed emulator. It records what it was fed and
@@ -45,6 +46,17 @@ type fakeTerminal struct {
 	// friends this way; without this the fake never produces pending bytes and a test about
 	// answering would pass while testing nothing.
 	answers map[string]string
+
+	// inBandResize stands in for the program having set mode 2048, which is what obliges cm to report
+	// every resize in band. Off by default, matching a program that never asked, so a test about size
+	// reports has to turn it on deliberately rather than inheriting it.
+	inBandResize bool
+	// sizeReportErr makes SizeReport fail, for the path where reading the mode errors and a resize
+	// must still succeed.
+	sizeReportErr error
+	// sizeReports records every report handed out, so a test can assert on the sequence rather than
+	// only the last one. Two resizes owe two reports, and a fake that overwrote would hide that.
+	sizeReports [][]byte
 }
 
 func (f *fakeTerminal) Write(p []byte) error {
@@ -86,6 +98,22 @@ func (f *fakeTerminal) Resize(rows, cols uint16) error {
 	defer f.mu.Unlock()
 	f.rows, f.cols = rows, cols
 	return nil
+}
+
+// SizeReport mirrors the real adapter: nil unless the program enabled mode 2048, and the same byte
+// shape so a test asserting on what reaches the pty is asserting on the real sequence.
+func (f *fakeTerminal) SizeReport(rows, cols uint16) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sizeReportErr != nil {
+		return nil, f.sizeReportErr
+	}
+	if !f.inBandResize {
+		return nil, nil
+	}
+	report := vt.SizeReport(rows, cols)
+	f.sizeReports = append(f.sizeReports, report)
+	return report, nil
 }
 
 func (f *fakeTerminal) TakePending() [][]byte {
