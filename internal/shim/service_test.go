@@ -341,6 +341,74 @@ func TestServiceShutdownStopsShell(t *testing.T) {
 	t.Error("shell still running after Shutdown")
 }
 
+// A Shutdown must not signal the shim to exit until its reply has left the handler.
+//
+// The reply is the only thing that tells a caller the shutdown happened, and losing it made
+// `cm doctor --repair` stop an orphaned shim and then report doing nothing, so an operator reading
+// "did 0 things" believed a shell was still leaked when it had already been reaped. `cm kill` has the
+// same exposure and works around it by treating a transport error as success.
+//
+// The mechanism is ttrpc's idea of an idle connection. It recomputes a connection's active/idle state
+// only when its write loop next wakes, so while a connection's sole request sits inside its handler the
+// recorded state is still *idle*, and the write loop is parked in a select whose "closed" branch is
+// live. Signalling from inside the handler lets Serve reach srv.Shutdown, whose closeIdleConns then
+// closes that connection with the response still pending, and the caller sees `ttrpc: closed` for a
+// shutdown that fully happened. Confirmed by widening the gap with a 50ms sleep at that point: 0/30
+// failures became 30/30, and the shim was gone every time the error came back.
+//
+// Asserted on the ordering rather than through a socket, because a socket-level version of this test
+// passed 20 out of 20 times against the unmodified bug: whether the write loop picks the response or
+// the close is a scheduling coin-toss that only load biases. This is the same condition where it can be
+// constructed instead. TestServiceShutdownStopsShell covers the socket path.
+func TestServiceShutdownRepliesBeforeSignallingItsExit(t *testing.T) {
+	session, err := Start(Config{
+		Session: "shutdownreply",
+		Command: []string{"/bin/sh", "-c", "i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done"},
+		Rows:    24, Cols: 80,
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = session.Signal(syscall.SIGKILL, true) })
+	svc := NewService(session)
+
+	// Force, because that is what `cm doctor --repair` sends and it is the worse case: SIGKILL means the
+	// shell is already gone by the time the reply is lost, so nothing is left to ask.
+	resp, err := svc.Shutdown(context.Background(), &shimv1.ShutdownRequest{Force: true})
+	if err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	// The bug, deterministically: Serve is free to tear the RPC server down the instant this is closed,
+	// and here the reply has not even been marshalled yet.
+	select {
+	case <-svc.ShutdownRequested():
+		t.Error("the shim was told to exit before its reply left the handler, so ttrpc can close the " +
+			"connection as idle with the response still pending and the caller sees `ttrpc: closed` " +
+			"for a shutdown that happened")
+	default:
+	}
+
+	// The control. Without this, never signalling at all would pass the check above, and a shim that
+	// never exits is a worse bug than a lost reply: it holds a pty, and macOS caps those at 511.
+	select {
+	case <-svc.ShutdownRequested():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the shim was never told to exit, so Serve would keep running and leak a pty")
+	}
+
+	// Asserted whole, since the pgid and the surviving list are what `cm kill` shows the user and a
+	// reply carrying either one wrongly is its own bug. The pgid is not predictable, so it is checked
+	// for being populated and then cleared to keep the rest an exact comparison.
+	if resp.SignalledPgid <= 0 {
+		t.Errorf("SignalledPgid = %d, want the process group it signalled", resp.SignalledPgid)
+	}
+	resp.SignalledPgid = 0
+	if got, want := resp.String(), (&shimv1.ShutdownResponse{}).String(); got != want {
+		t.Errorf("Shutdown() = %s, want %s: SIGKILL leaves nothing surviving", got, want)
+	}
+}
+
 // Two servers must never share one session's socket, or both would drive the same pty.
 func TestListenRefusesWhenAlreadyServed(t *testing.T) {
 	socket := filepath.Join(shortTempDir(t), "s.sock")

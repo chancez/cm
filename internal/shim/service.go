@@ -186,12 +186,39 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 			"signal", sig, "pgid", pgid, "surviving", surviving,
 			"hint", "they hold a pty; use a stronger signal")
 	}
-	s.shutdownOnce.Do(func() { close(s.shutdown) })
+	// Signalled after this handler returns, not here, so the reply is on the wire before Serve starts
+	// tearing the RPC server down. Closing it inline is a race the caller loses: ttrpc recomputes a
+	// connection's active/idle state only when its write loop next wakes, so a connection whose sole
+	// request is still inside its handler is recorded as *idle*, and srv.Shutdown's closeIdleConns
+	// closes it out from under the pending response. The caller then sees `ttrpc: closed` for a
+	// shutdown that fully happened.
+	//
+	// That cost `cm doctor --repair` its report: Repair stopped an orphaned shim, took the transport
+	// error as failure, and said it did nothing, leaving the operator to believe a shell was still
+	// leaked when it had already been reaped. Surfaced as TestRepairStopsOrphansAndSparesHealthySessions
+	// failing about 1 run in 8 under parallel load, and measured directly: inserting a 50ms sleep here
+	// took shutdownShim from 0/30 failures to 30/30, and a probe confirmed the shim was gone every time
+	// the error was returned.
+	//
+	// AfterFunc rather than a bare goroutine because the delay is the point: it has to outlast this
+	// return and the write that follows it. A tiny delay is enough since the write is a local socket,
+	// and being late costs nothing, as Serve is only waiting to exit.
+	time.AfterFunc(shutdownReplyGrace, func() {
+		s.shutdownOnce.Do(func() { close(s.shutdown) })
+	})
 	return &shimv1.ShutdownResponse{
 		SurvivingPids: int32s(surviving),
 		SignalledPgid: int32(pgid),
 	}, nil
 }
+
+// shutdownReplyGrace is how long the shim waits after replying to a Shutdown before letting Serve exit.
+//
+// Covers one local socket write, so it is generous by orders of magnitude rather than tuned. It only
+// delays a process that is already leaving, and nothing waits on it: the shell has been signalled before
+// this starts, so the session is over either way. Erring long is therefore free, while erring short
+// reintroduces the lost reply.
+const shutdownReplyGrace = 50 * time.Millisecond
 
 // shutdownGrace is how long the shim waits before checking what survived its signal.
 //
