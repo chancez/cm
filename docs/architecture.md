@@ -595,7 +595,7 @@ The `cm list` table abbreviates a directory under home to `~/...`, and does so o
 That the host is decoded is what makes the distinction available: a remote session's home is the remote
 user's, so rewriting `/home/user/x` against this machine's home would assert a relationship that does
 not exist, and both hosts putting users under `/home` is what makes it look right. The abbreviation is
-display-only for the reason `docs/config.md` gives, that `~` expands in a shell and nowhere else.
+display-only for the reason `docs/cli.md` gives, that `~` expands in a shell and nowhere else.
 
 ### Sizing the TITLE column
 

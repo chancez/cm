@@ -158,7 +158,7 @@ that case as `no-shell-integration`.
 
 `list`, `info`, `kill`, `get-env`, and the waiting commands accept `--json`, whose shape is a
 documented contract rather than whatever the wire format happens to be. See
-[docs/config.md](docs/config.md#json-output).
+[docs/cli.md](docs/cli.md#json-output).
 
 For a fuller guide to orchestrating work this way, including running other agents in sessions,
 see [skills/cm/SKILL.md](skills/cm/SKILL.md). Claude Code users can install it as a plugin
@@ -281,7 +281,8 @@ rejected.
 - [alternatives.md](docs/alternatives.md) - tmux, zmx, and libghostty: what differs and why
 - [architecture.md](docs/architecture.md) - why three layers, and what each owns
 - [restore.md](docs/restore.md) - how screen restore works, and why each detail is there
-- [config.md](docs/config.md) - the config file, and the session environment problem
+- [config.md](docs/config.md) - every config option, its values, and its default
+- [cli.md](docs/cli.md) - the `--json` contract, and shell startup
 - [persistence.md](docs/persistence.md) - reboot persistence, and what can survive
 - [rpc.md](docs/rpc.md) - why ttrpc, measured against gRPC and ConnectRPC
 - [libghostty.md](docs/libghostty.md) - using libghostty-vt from Go, and its constraints
