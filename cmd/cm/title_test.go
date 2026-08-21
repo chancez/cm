@@ -61,6 +61,9 @@ func TestSessionsTableOmitsTitleWhenNoneReported(t *testing.T) {
 // A per-row decision misaligns the table, which is worse than an empty cell: the untitled row would
 // put its CWD under the header's TITLE.
 func TestSessionsTableTitleColumnIsAllOrNothing(t *testing.T) {
+	// The offsets below are found by searching for the fixture's directory, so it must not abbreviate.
+	pinHome(t)
+
 	titled := sampleWireSession("titled")
 	titled.Title = "~/p/cm (main)"
 	titled.Tags = nil
@@ -96,6 +99,9 @@ func TestSessionsTableTitleColumnIsAllOrNothing(t *testing.T) {
 // Two optional columns is where a format-string-per-combination approach drifts: four combinations,
 // each with its own column order to keep in step.
 func TestSessionsTableWithTitleAndTags(t *testing.T) {
+	// The values checked below include the fixture's directory, so it must not abbreviate.
+	pinHome(t)
+
 	s := sampleWireSession("work")
 	s.Title = "~/p/cm (main)"
 	s.Tags = map[string]string{"project": "cm"}

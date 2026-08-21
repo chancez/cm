@@ -128,6 +128,9 @@ func TestSessionsTableShowsTags(t *testing.T) {
 // One tagged session must add the column for every row, or the header and the rows disagree and the
 // columns stop lining up.
 func TestSessionsTableTagsColumnIsAllOrNothing(t *testing.T) {
+	// The offsets below are found by searching for the fixture's directory, so it must not abbreviate.
+	pinHome(t)
+
 	tagged := sampleWireSession("tagged")
 	tagged.Tags = map[string]string{"project": "cm"}
 	untagged := sampleWireSession("plain")

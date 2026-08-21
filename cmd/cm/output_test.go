@@ -35,6 +35,19 @@ func sampleWireSession(name string) *serverv1.Session {
 	}
 }
 
+// pinHome points HOME somewhere unrelated to the fixture's directory, so the CWD column renders that
+// directory verbatim.
+//
+// Needed because the column abbreviates a path under home to "~/...", and the fixture's
+// /home/user/projects is under the home directory of a real developer whose account is "user" on Linux.
+// Without this, a test looking for the literal path passes on one machine and fails on another, which is
+// the kind of failure that gets blamed on the machine rather than on the test.
+func pinHome(t *testing.T) {
+	t.Helper()
+	// os.UserHomeDir reads HOME on both platforms cm supports.
+	t.Setenv("HOME", "/pinned-elsewhere")
+}
+
 // The JSON shape is a contract that scripts depend on, so the exact key set is asserted rather than
 // a few fields. Adding a key is fine; renaming or dropping one breaks callers.
 func TestSessionJSONKeys(t *testing.T) {
@@ -571,6 +584,100 @@ func TestSessionsTableMarksASessionHostingANestedAttach(t *testing.T) {
 				t.Errorf("sessionCwdColumn() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A path under home abbreviates to "~/...", the way a shell prompt writes it.
+//
+// Width is the reason: CWD sits last, so every column before it eats into the path, and a home prefix is
+// the longest part of a path that carries the least information. The cases below are the ones that turn a
+// shortener into a liar.
+func TestShortenHome(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		home string
+		want string
+	}{
+		{name: "under home", path: "/home/user/projects/cm", home: "/home/user", want: "~/projects/cm"},
+		{name: "home itself", path: "/home/user", home: "/home/user", want: "~"},
+		// A sibling whose name merely starts with home's must be left alone. Matching without the
+		// separator would render this as "~2", which names a directory that does not exist.
+		{name: "sibling sharing a prefix", path: "/home/user2/projects", home: "/home/user", want: "/home/user2/projects"},
+		{name: "not under home", path: "/var/log", home: "/home/user", want: "/var/log"},
+		// A trailing slash on HOME would make the prefix "//", so it is trimmed rather than trusted.
+		{name: "home with a trailing slash", path: "/home/user/projects", home: "/home/user/", want: "~/projects"},
+		// Home as root would abbreviate every absolute path to "~", which hides the path rather than
+		// shortening it.
+		{name: "home is root", path: "/var/log", home: "/", want: "/var/log"},
+		{name: "no home", path: "/var/log", home: "", want: "/var/log"},
+		{name: "no path", path: "", home: "/home/user", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shortenHome(tc.path, tc.home); got != tc.want {
+				t.Errorf("shortenHome(%q, %q) = %q, want %q", tc.path, tc.home, got, tc.want)
+			}
+		})
+	}
+}
+
+// The CWD column abbreviates home, and only for a directory on this machine.
+//
+// A remote session's home belongs to the remote user, so rewriting it against this machine's would claim
+// a relationship that does not exist: the path only looks like it is under home because both hosts put
+// users in /home. Asserted through the column rather than shortenHome alone, since the locality check is
+// the part that lives here.
+func TestSessionCwdColumnAbbreviatesLocalHomeOnly(t *testing.T) {
+	// os.UserHomeDir reads HOME on both platforms cm supports.
+	t.Setenv("HOME", "/home/user")
+
+	for _, tc := range []struct {
+		name    string
+		cwd     string
+		isLocal bool
+		want    string
+	}{
+		{name: "local under home", cwd: "/home/user/projects", isLocal: true, want: "~/projects"},
+		{name: "local outside home", cwd: "/var/log", isLocal: true, want: "/var/log"},
+		{
+			name:    "remote path that resembles a home path",
+			cwd:     "/home/user/projects",
+			isLocal: false,
+			want:    "/home/user/projects (remote)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := sampleWireSession("work")
+			s.Cwd = tc.cwd
+			s.CwdIsLocal = tc.isLocal
+
+			if got := sessionCwdColumn(s); got != tc.want {
+				t.Errorf("sessionCwdColumn() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The abbreviation is for the table only. The JSON output and `cm info --field cwd` stay absolute.
+//
+// Those are read by scripts that cd into the value or hand it to a terminal emulator opening a window
+// there, and "~" only expands in a shell: a Go or Python caller would create a directory named "~".
+func TestCwdStaysAbsoluteOutsideTheTable(t *testing.T) {
+	t.Setenv("HOME", "/home/user")
+
+	s := sampleWireSession("work")
+	s.Cwd = "/home/user/projects"
+
+	if got := toSessionJSON(s).Cwd; got != "/home/user/projects" {
+		t.Errorf("JSON cwd = %q, want the absolute path a script can act on", got)
+	}
+
+	var buf bytes.Buffer
+	if err := printSessionInfo(&buf, s, "cwd"); err != nil {
+		t.Fatalf("printSessionInfo(field=cwd) error = %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "/home/user/projects" {
+		t.Errorf("cm info --field cwd = %q, want the absolute path", got)
 	}
 }
 

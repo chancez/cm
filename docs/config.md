@@ -181,6 +181,10 @@ Details worth knowing when scripting against it:
 - `cwd` is empty when the session reported a directory on another host, because acting on a remote
   path locally would open the wrong place or fail. `cwd_uri` still carries the reported value, so a
   caller can distinguish "remote" from "nothing reported".
+- `cwd` is absolute, and stays absolute. The `cm list` table abbreviates a path under home to
+  `~/...`, but that is a rendering for a person: `~` only expands in a shell, so a Go or Python
+  caller handed one would create a directory named `~`. `cm info --field cwd` is absolute for the
+  same reason, since a terminal emulator opening a window there passes it to a syscall.
 - `kill --json` reports partial failure in the payload *and* exits non-zero, so a script can check
   the status without parsing.
 - Ordering is stable: oldest first, ties broken by name.

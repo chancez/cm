@@ -543,6 +543,12 @@ Title comes from OSC 2, and working directory from OSC 7, decoded rather than pa
 sends a percent-encoded URI with a host, so a session that has ssh'd elsewhere reports a path that does
 not exist locally, and acting on it would open the wrong place.
 
+The `cm list` table abbreviates a directory under home to `~/...`, and does so only for a local one.
+That the host is decoded is what makes the distinction available: a remote session's home is the remote
+user's, so rewriting `/home/user/x` against this machine's home would assert a relationship that does
+not exist, and both hosts putting users under `/home` is what makes it look right. The abbreviation is
+display-only for the reason `docs/config.md` gives, that `~` expands in a shell and nowhere else.
+
 Whether a command is running comes from OSC 133, via `internal/osc.CommandTracker`. This is the one an
 emulator cannot work out for itself: cm owns the pty, so kitty only ever sees `cm attach` running and
 cannot tell a session sitting at a prompt from one in the middle of a build. It is what a close

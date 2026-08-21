@@ -301,9 +301,47 @@ func sessionStateColumn(s *serverv1.Session) string {
 	return state
 }
 
+// shortenHome abbreviates a path under home to "~/...", the way a shell prompt does.
+//
+// Display only, and deliberately not applied to the JSON output or `cm info --field cwd`: those are read
+// by scripts that cd into the value or hand it to a terminal emulator, and "~" only expands in a shell.
+// The table is the one place the reader is a person, and the abbreviation buys back the width that
+// matters most, since CWD sits last and every column before it eats into the path.
+//
+// Callers must pass a local path. A remote session's home is the remote user's, so rewriting it against
+// this machine's would claim a directory relationship that does not exist.
+//
+// home is a parameter rather than looked up here so the behaviour is testable without setting HOME for
+// the process.
+func shortenHome(path, home string) string {
+	// A trailing slash on HOME would otherwise make the prefix check below "//", so it is trimmed. Home
+	// being empty or the root is not abbreviated at all: every absolute path is under "/", and rewriting
+	// them all to "~" would hide the path rather than shorten it.
+	home = strings.TrimSuffix(home, "/")
+	if path == "" || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	// The separator is part of the prefix, so a sibling directory whose name merely starts with home's --
+	// /home/user2 against /home/user -- is left alone rather than turned into "~2".
+	if strings.HasPrefix(path, home+"/") {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
 // sessionCwdColumn renders the CWD cell, marking a directory that is not on this machine.
 func sessionCwdColumn(s *serverv1.Session) string {
 	cwd := s.Cwd
+	if s.CwdIsLocal {
+		// An unresolvable home is not worth failing over: the column falls back to the full path, which
+		// is what it printed before.
+		if home, err := os.UserHomeDir(); err == nil {
+			cwd = shortenHome(cwd, home)
+		}
+	}
 	if !s.CwdIsLocal && cwd != "" {
 		// Marked rather than hidden: in a table the user wants to see that the session went
 		// somewhere, which an empty column would not convey.
