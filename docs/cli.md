@@ -6,7 +6,7 @@ Notes on using cm from a script or a shell startup file. For the config file, se
 ## JSON output
 
 `list`, `info`, `kill`, `get-env`, `tag`, `wait`, `send`, `run`, `status`, `doctor`, `config`,
-`version`, `detach`, `clients`, and `clients list` accept `--json`.
+`version`, `detach`, `clients`, `clients list`, and `clients current` accept `--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.
 Fields are only ever added, never renamed or removed, and a test asserts the exact key set.
@@ -32,6 +32,13 @@ Details worth knowing when scripting against it:
 - `kill --json` reports partial failure in the payload *and* exits non-zero, so a script can check
   the status without parsing.
 - Ordering is stable: oldest first, ties broken by name.
+- `active` marks the client someone is using and is set on at most one client per session, so a script
+  can take the first match. It is unset on every client until something is typed, which is the state a
+  freshly attached session is in, so a caller has to handle "nobody". `cm clients current` exits
+  non-zero there rather than printing an empty record.
+- `last_input_at` is empty and `last_input_at_unix` is 0 for a client that has never typed, rather than
+  rendering the epoch. Read it alongside `active`, since the mark alone does not say how old it is: a
+  client that last typed days ago is active only in the sense that nothing else has typed since.
 
 ## Shell startup
 

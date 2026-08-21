@@ -248,10 +248,23 @@ session with a count of what is attached; this is one row per client, with the b
 ```sh
 cm clients list           # every client, with its build
 cm clients list --stale   # only the ones not on the server's build
+cm clients current        # just the one being used, in the session I am in
 ```
 
 A version difference is legal here, since a session outlives its server on purpose, but the effect
 of one is silent, so being able to see it is the point.
+
+A `*` marks the client someone is using, which is the one that typed most recently. That is the only
+signal available: a session's pty fans out to every attached client, so an escape sequence asking
+"which client are you" is answered by all of them, and a command inside the session cannot see its own
+client at all, since its stdout is the pty rather than any one terminal. Keystrokes arrive on exactly
+one connection, which also makes the answer causally right for a command typed at a prompt.
+
+That is what `--current` acts on, which matters when a session is open in more than one window:
+
+```sh
+cm clients upgrade --current   # upgrade the window I am typing in, leave the others painted
+```
 
 The diagnostic logs matter more than usual here, because cm swallows errors in anything
 advisory so that a failed title update or metadata write cannot end a session. Everything

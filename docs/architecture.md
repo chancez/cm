@@ -385,6 +385,52 @@ closes the stream, so whether a client returns is known only to the client, and 
 understand the flag exits instead. Reporting "upgraded" would be claiming an outcome the server cannot
 observe.
 
+### Which client is being used, and why typing is the only signal
+
+`cm clients upgrade --current` upgrades one window rather than every client of a session, which needs an
+answer to "which client is someone using". Three ways to get one look plausible. Two are impossible and
+the third is invasive and still wrong, so the mechanism is worth stating alongside the reason the
+obvious approaches were not taken.
+
+**Asking is impossible, because the pty is a broadcast medium.** A session's output fans out to every
+attached client, so an escape sequence asking "which client are you" reaches all of them and every one
+answers. That is not a new problem: it is exactly the duplicate-reply bug the query proxy exists to
+prevent, where two attached terminals turned a single `CSI c` into `\x1b[?62;52;c\x1b[?62;52;c`. A
+per-client question would have to go down the query channel, which already exists for this reason, but
+that only moves the problem: cm would be asking a client it had already chosen.
+
+**A command inside the session cannot see its own client.** Its stdout is the shim's pty rather than any
+one terminal, and the client is not among its ancestors. This is the same asymmetry that forced a nested
+attach to *declare* itself rather than be detected: a nested client's output arrives on the parent's pty
+indistinguishable from the parent shell's own.
+
+**Focus reporting would need cm to enable a mode nobody asked for.** cm only learns about focus when the
+program inside the session enabled DECSET 1004, so a session sitting at a shell prompt reports nothing,
+which is the common case. Enabling it for cm's own purposes means setting a mode on the user's terminal
+that nothing requested, and `service.go` forwards client focus events to the pty unconditionally, so a
+program that never asked would start receiving `ESC[I` and `ESC[O` as input. Even with that fixed, focus
+does not answer the question: zero focused clients is ordinary once the window is behind a browser, and
+several terminals report focus independently.
+
+**Keystrokes have none of those problems, and are causal rather than inferred.** For the motivating case,
+a `cm clients upgrade --current` typed at a prompt, the Enter that ran it travelled client to server to
+pty to shell to `cm`, so the server saw it on one specific attach stream strictly before the RPC
+arrived. The client that typed is the client that ran the command. `clientSize.lastInputAt` records it.
+
+Recorded separately from `Session.leader`, which is the tempting shortcut. Leadership is a decision about
+the pty's *size*, gated on `resize_policy` and refused to a follower; this is a record of who is being
+used, wanted under every policy. Since `claimLeadership` returns early for three of the four policies,
+reading the leader would have left anyone running `smallest` or `first-attach` with nothing marked, and
+the failure would be silent, because a session with one client looks identical either way.
+
+Three cases decline to answer rather than guessing: nothing typed yet, a bare reservation, and two
+timestamps that tie. The reservation exclusion is the same distinction the query proxy had to learn,
+where counting a not-yet-attached client as the answerer left a program's query answered by nobody. The
+tie cannot arise from real keystrokes and means an injected clock, where resolving by map order put the
+mark on pid 1000 and then 1001 across two identical calls. `--current` on a session with no identifiable
+active client asks nobody and reports zero, rather than falling back to every client: a caller reached
+for the flag precisely to spare the other windows.
+
 ## Terminal queries: cm answers, or asks one client and relays
 
 A program in a session can ask the terminal questions: what are you (`CSI c`), where is the cursor
