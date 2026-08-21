@@ -62,13 +62,20 @@ func NewSessionTerminal(rows, cols uint16, scrollbackLines int) (*SessionTermina
 		// Queued rather than written directly: this fires inside Write, and touching the pty
 		// from here would mean re-entering code the emulator has locked.
 		//
-		// The margin-mode rewrite happens here rather than in the server, because this is where a
+		// The mode-denial rewrite happens here rather than in the server, because this is where a
 		// reply the *model* generated can still be told apart from anything else on the pty. See
-		// DenyMarginMode: the emulator implements left/right margins correctly and the real terminal
-		// usually does not, so reporting the model's own answer scrolled both halves of an nvim
-		// vertical split.
+		// DenyModes: the emulator implements left/right margins and in-band size reports correctly,
+		// and for both of them cm cannot keep the promise its model would make. Reporting the model's
+		// own answer scrolled both halves of an nvim vertical split, and stopped nvim resizing when a
+		// kitty split closed.
 		WritePty: func(data []byte) {
-			st.pending = append(st.pending, DenyMarginMode(data))
+			// Nothing is queued when the rewrite consumed the whole chunk, which happens when the model
+			// emitted only an in-band size report. An empty entry would be an entry: TakePending's
+			// callers treat one as a reply to deliver, and a zero-length write to the pty is a write
+			// that took a queue slot and an ordering position for nothing.
+			if out := DenyModes(data); len(out) > 0 {
+				st.pending = append(st.pending, out)
+			}
 		},
 		TitleChanged: func(title string) { st.title = title },
 		PwdChanged:   func(pwd string) { st.pwd = pwd },
