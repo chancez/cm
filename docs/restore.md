@@ -148,6 +148,12 @@ that were not causes. Two mistakes are worth naming, since both look like eviden
 - `cm list` showing `running(claude)` is the last command the shell reported via OSC 133, not a live
   process. It says nothing about whether that program is still there.
 
+One scrolling complaint *was* cm, and it is worth knowing so the paragraph above does not read as
+"scrolling is never cm". It is a different mechanism from mode replay: not what cm repeats to a
+client, but what cm *answers* a program. See "Left/right margins" in `docs/architecture.md`. The
+discriminator is the shape of the window rather than the program: it needed a **vertical** split,
+because a full-width scroll region never routes through margins at all.
+
 `cm history --format vt` is how to read the state, since it renders through the same formatter with
 `modes: true`. Its first bytes are the modes the next fresh client would receive.
 

@@ -475,6 +475,54 @@ Mouse reports and focus events are also still forwarded from every client, uncha
 window rather than the session, so each client sends its own, and restricting them would make a session
 ignore the mouse in every window but one.
 
+### Left/right margins: the one answer cm does not take from its model
+
+Answering mode state from the emulator is right for every mode but one. Left/right margin mode (DECLRMM,
+private mode 69) is reported as **not recognized**, whatever the model's real state is. `DenyMarginMode` in
+`internal/vt/margins.go` rewrites the reply.
+
+The mode plus DECSLRM confine scrolling to a range of *columns*, which is how a program scrolls one side of a
+vertical split without touching the other. libghostty implements it correctly, and that is the trap, because
+the sequences that act on it are forwarded verbatim to a terminal that generally does not: kitty has no mode
+69 at all, logs "Unsupported screen mode", and drops the DECSLRM. The insert-line and delete-line operations
+that follow then apply full width. The symptom was nvim scrolling **both** halves of a vertical split.
+
+So this is a third category, cutting across the two above: answerable by a model, but the answer is only true
+if the window agrees. Mode 69 is the only member found so far. The test for membership is whether the reply
+causes the program to emit sequences whose *effect* lives in the terminal rather than in the model.
+
+Measured in one kitty window, same probe, same moment:
+
+| host | reply to `CSI ? 69 $ p` |
+| --- | --- |
+| bare kitty | `?69;0$y` (not recognized) |
+| zmx 0.7.0 | `?69;0$y`, because zmx proxies DECRQM to the terminal |
+| cm, before this | `?69;2$y` (supported, reset) |
+| tmux 3.5a | no reply; DECRQM arrived in 3.6 |
+
+Three details that make this harder to diagnose than it looks:
+
+- **Reset is as damaging as set.** nvim's `tui_handle_term_mode` sets `has_left_and_right_margin_mode` for
+  set, permanently-set, *and* reset: the flag records that the mode can be *changed*. cm answered `;2`, so a
+  fix that only suppressed `;1` would have changed nothing.
+- **The damage outlives the query.** nvim probes once at startup and never re-asks, so every later scroll
+  takes the margin path. The complaint is "all scrolling is broken now", which does not sound like a
+  capability answer given once.
+- **`cm read` looks correct throughout.** cm's model honours margins, so the model's screen is right and only
+  the attached terminal is wrong. Comparing `cm read` against the terminal is what separates the two.
+
+`0` rather than `4` (permanently reset) because it is what the terminals themselves say: kitty answers `0`,
+and tmux answers `0` from the default arm of its DECRQM switch for every mode it does not know. What it costs
+is nvim's terminal-side scroll optimization in a vertical split, where it repaints instead: measured at 14114
+bytes against 6696 for the same ten-line scroll. That is not a regression against the alternative, since
+nvim still scrolls whenever the region is full width, so an unsplit window and a horizontal split are
+untouched and the only case that changes is the one that was rendering incorrectly. It is also where zmx
+already sits.
+
+Rewriting the reply rather than stripping the DECSLRM from the output stream is deliberate, and it is the
+same reasoning as "Why not let the attached terminal answer" above: removing bytes desynchronizes the shim's
+numbering from the server's. A reply cm generates never enters the log, so rewriting one moves no positions.
+
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an
