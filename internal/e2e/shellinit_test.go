@@ -36,7 +36,13 @@ func (e *env) shellRC(t *testing.T, shell, path string) (env []string, argv []st
 
 	switch shell {
 	case "zsh":
-		write(filepath.Join(dir, ".zshrc"), "eval \"$("+e.bin+" shell-init zsh)\"\n")
+		// compinit before the eval, which is the ordering `cm shell-init --help` documents. shell-init
+		// prints the completions ahead of the integration, and the completions register a completion
+		// function, so loading them first puts `command not found: compdef` on the session's very first
+		// screen. Harmless to the integration and visible to anyone reading the session.
+		write(filepath.Join(dir, ".zshrc"),
+			"autoload -Uz compinit; compinit -D 2>/dev/null\n"+
+				"eval \"$("+e.bin+" shell-init zsh)\"\n")
 		return []string{"--env", "ZDOTDIR=" + dir}, []string{path}
 
 	case "bash":
@@ -212,6 +218,18 @@ func TestShellIntegrationUnblocksAWaiter(t *testing.T) {
 // top of each script runs on every shell they open, cm session or not. An early `return` there silently
 // skipped the rest of a zsh rc file and printed an error on every bash startup.
 //
+// Two forms are checked, because `cm shell-init` prints the completions ahead of the integration and only
+// the integration claims to load anywhere:
+//
+//   - `--no-completions` is the integration alone, and must be silent in every shell with no setup at all.
+//     That is the claim the help makes and the invariant this test was written for.
+//   - The bundled default, loaded the way the help documents it, which in zsh means after compinit. The
+//     completions register a completion function, so they need that machinery in place.
+//
+// Asserting only the bundled form and only the documented ordering would stop measuring the integration's
+// own safety, which is the more important half: a user can load the completions wherever they like, but the
+// integration is what runs in every shell.
+//
 // Run as a plain subprocess rather than in a session, since being outside one is the condition under test.
 func TestShellIntegrationIsSafeOutsideASession(t *testing.T) {
 	skipIfShort(t)
@@ -219,33 +237,56 @@ func TestShellIntegrationIsSafeOutsideASession(t *testing.T) {
 
 	for _, shell := range []string{"zsh", "bash", "fish"} {
 		t.Run(shell, func(t *testing.T) {
-			path := shellPath(t, shell)
+			for _, form := range []struct {
+				name string
+				args []string
+				// setup runs before the eval, for the machinery a form needs.
+				setup string
+			}{
+				{name: "integration alone", args: []string{"shell-init", shell, "--no-completions"}},
+				{
+					name: "bundled with completions",
+					args: []string{"shell-init", shell},
+					setup: map[string]string{
+						// The ordering `cm shell-init --help` documents. Without it the completions half
+						// prints "command not found: compdef", which is what a session's first screen
+						// showed for real.
+						"zsh": "autoload -Uz compinit; compinit -D 2>/dev/null\n",
+					}[shell],
+				},
+			} {
+				t.Run(form.name, func(t *testing.T) {
+					path := shellPath(t, shell)
 
-			script, err := exec.Command(e.bin, "shell-init", shell).Output()
-			if err != nil {
-				t.Fatalf("shell-init %s failed: %v", shell, err)
-			}
+					script, err := exec.Command(e.bin, form.args...).Output()
+					if err != nil {
+						t.Fatalf("%s failed: %v", strings.Join(form.args, " "), err)
+					}
 
-			var load string
-			if shell == "fish" {
-				load = string(script) + "\necho STILL-HERE"
-			} else {
-				load = "eval " + shellQuoteForTest(string(script)) + "\necho STILL-HERE"
-			}
+					var load string
+					if shell == "fish" {
+						load = form.setup + string(script) + "\necho STILL-HERE"
+					} else {
+						load = form.setup + "eval " + shellQuoteForTest(string(script)) + "\necho STILL-HERE"
+					}
 
-			cmd := exec.Command(path, "-c", load)
-			// CM_SESSION deliberately unset: this is a shell outside cm, which is the case being checked.
-			cmd.Env = append(os.Environ(), "CM_SESSION=")
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("loading the %s integration outside a session failed: %v\n%s", shell, err, out)
-			}
-			if !strings.Contains(string(out), "STILL-HERE") {
-				t.Errorf("%s stopped executing after loading the integration: %q", shell, out)
-			}
-			// Nothing but the marker: no error message, no stray escape sequence.
-			if got := strings.TrimSpace(string(out)); got != "STILL-HERE" {
-				t.Errorf("%s printed %q outside a session, want only the marker", shell, got)
+					cmd := exec.Command(path, "-c", load)
+					// CM_SESSION deliberately unset: this is a shell outside cm, which is the case being
+					// checked.
+					cmd.Env = append(os.Environ(), "CM_SESSION=")
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("loading the %s integration outside a session failed: %v\n%s",
+							shell, err, out)
+					}
+					if !strings.Contains(string(out), "STILL-HERE") {
+						t.Errorf("%s stopped executing after loading the integration: %q", shell, out)
+					}
+					// Nothing but the marker: no error message, no stray escape sequence.
+					if got := strings.TrimSpace(string(out)); got != "STILL-HERE" {
+						t.Errorf("%s printed %q outside a session, want only the marker", shell, got)
+					}
+				})
 			}
 		})
 	}

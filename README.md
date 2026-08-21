@@ -186,12 +186,14 @@ From a shell, load the integration and use the function instead, which writes an
 sequence directly and costs nothing where a cm invocation costs about 23ms:
 
 ```sh
+autoload -Uz compinit; compinit             # zsh only, and it has to come first
 eval "$(cm shell-init zsh)"          # bash likewise; fish: cm shell-init fish | source
 cm_report blocked "waiting for approval"
 ```
 
-That line also sets up completions, so in zsh it belongs after `compinit`. Use
-`--no-completions` for the integration alone, which loads anywhere.
+That line also sets up completions, so in zsh it belongs after `compinit`; before it, every new
+shell prints `command not found: compdef`. Use `--no-completions` for the integration alone, which
+loads anywhere.
 
 Nothing here is program-specific. cm never learns what is running in a session and has no
 patterns matched against a program's output, so anything that can run a command on a state
