@@ -135,7 +135,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	findings = append(findings, m.checkShimVersionSkew(shimVersions)...)
 	findings = append(findings, m.checkTerminal()...)
 	findings = append(findings, m.checkEmulatorSpeed()...)
-	findings = append(findings, m.checkMarginMode()...)
+	findings = append(findings, m.checkDeniedModes()...)
 	findings = append(findings, m.checkSocketPath()...)
 	findings = append(findings, m.checkShellIntegration()...)
 	findings = append(findings, m.checkSessionBacklog(ctx)...)
