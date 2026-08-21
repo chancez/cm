@@ -157,6 +157,20 @@ func (s *Service) Shutdown(_ context.Context, req *shimv1.ShutdownRequest) (*shi
 	//
 	// A shell that has already exited is not an error here: the caller wants the session gone, and it
 	// is. Both errors mean that, since Signal reports it one way and the pty guards report it another.
+	// Logged before signalling, and unconditionally.
+	//
+	// A session lost to a signal used to be unattributable. The shim recorded only "shim exiting" with
+	// exit_code=-1, which says the shell died by *some* signal and nothing about which, or who asked.
+	// `cm kill`, `cm doctor --repair`, and an external `kill` from outside cm all left byte-identical
+	// traces, so the first question after losing real work had no answer in any log.
+	//
+	// Before rather than after, because this is the record that survives the shim dying mid-shutdown, and
+	// at Info rather than Debug: it is one line per session lifetime and it is the line someone reads
+	// after losing a shell.
+	s.session.log.Info("shutdown requested",
+		"session", s.session.cfg.Session, "signal", sig, "force", req.Force,
+		"explicit_signal", req.Signal > 0)
+
 	pgid, surviving, err := s.session.SignalAndCheck(sig, shutdownGrace)
 	if err != nil && !errors.Is(err, seqlog.ErrClosed) && !errors.Is(err, ErrSessionOver) {
 		return nil, err

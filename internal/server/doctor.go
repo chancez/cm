@@ -161,6 +161,12 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 		}
 		switch f.Kind {
 		case FindingOrphanShim:
+			// Logged before the attempt, since this force-kills a shell. An orphan is by definition
+			// something no client is watching, but "orphan" is a judgement this code made, and if it was
+			// wrong the shell it took down was someone's. Recording the decision separately from the
+			// outcome is what makes that reviewable afterwards.
+			m.log.Info("shutting down an orphaned shim",
+				"session", f.Session, "socket", f.Socket, "shim_pid", f.ShimPID)
 			if err := shutdownShim(ctx, f.Socket); err != nil {
 				m.log.Warn("shutting down an orphaned shim failed",
 					"session", f.Session, "socket", f.Socket, "error", err)

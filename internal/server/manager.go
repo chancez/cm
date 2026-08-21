@@ -1135,6 +1135,14 @@ func (m *Manager) Kill(
 	sess, live := m.sessions[name]
 	m.mu.Unlock()
 
+	// Logged because this function used to log nothing at all, and it deletes the session record.
+	//
+	// That combination made a killed session indistinguishable from one killed from outside cm. All that
+	// was left afterwards was the shim's "shim exiting" with exit_code=-1, which names neither the signal
+	// nor who sent it, so after losing real work there was nothing to read. The shim logs its side too;
+	// this is the side that knows a *request* arrived and what asked for it.
+	m.log.Info("killing session", "session", name, "force", force, "signal", sig, "live", live)
+
 	if live {
 		// A session whose shell has already exited is not a failure to stop, whatever the RPC says.
 		//
