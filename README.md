@@ -83,6 +83,25 @@ cm detach inner    # a specific one
 cm detach --all    # every client the server has
 ```
 
+## Upgrading
+
+Installing a new build does not disturb anything that is running, which is the point of the
+three layers, but it also means nothing picks the new build up on its own:
+
+```sh
+cm server restart        # replace the server; sessions keep running
+cm client upgrade --all  # replace the clients; windows keep their screens
+```
+
+A client re-execs itself and resumes where it stopped, so a window shows the same screen a
+moment later rather than repainting. Clients already on the server's build are skipped, so
+running it twice does nothing.
+
+Shims are the exception and stay where they are. A shim holds the pty, so replacing one ends the
+shell in it, and only a new session gets a new shim. `cm doctor` reports how many builds the
+running shims span; on a machine with a session per window that is routinely several, and the
+only way to change it is to finish with a session.
+
 ## Tags
 
 Tags group sessions that a name cannot, including every session cm named for itself:
@@ -214,7 +233,12 @@ cm logs shim work    # one session's
 `cm doctor` is the first thing to reach for. Every check in it corresponds to something that
 actually went wrong and was slow to diagnose because it failed silently rather than reporting
 an error: a shim left holding a pty, a socket with nothing behind it, a client and server from
-different builds, a runtime directory long enough to break unix sockets.
+different builds, how many builds the running shims span, a runtime directory long enough to
+break unix sockets.
+
+`cm ls --json` reports each attached client's build and pid, which is the other half of the same
+question: a version difference is legal here, since a session outlives its server on purpose, but
+the effect of one is silent, so being able to see what is attached matters.
 
 The diagnostic logs matter more than usual here, because cm swallows errors in anything
 advisory so that a failed title update or metadata write cannot end a session. Everything
