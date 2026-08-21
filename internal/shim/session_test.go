@@ -148,6 +148,45 @@ func TestSessionReportsInitialSize(t *testing.T) {
 	}
 }
 
+func TestSessionReportsInitialPixelSize(t *testing.T) {
+	// A pty created without pixel dimensions reports zero for them, and `kitten icat` reads exactly that
+	// before it transmits anything: zero means "this terminal cannot report pixel sizes", so it refuses
+	// to send the image and names kitty as a terminal to use instead. The values reached the server on
+	// the wire and were dropped on the way to the shim, so the symptom was that an image worked in a
+	// session that had been resized and never in a fresh one.
+	//
+	// Asserted at this seam rather than end to end because this is where they were lost, and a pty's
+	// winsize is directly observable. The shell sleeps so the pty is still live when it is queried, for
+	// the reason the test above records.
+	s, err := Start(Config{
+		Session: "test",
+		Command: []string{"/bin/sh", "-c", "sleep 30"},
+		Rows:    30, Cols: 100,
+		XPixel: 800, YPixel: 600,
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	xpixel, ypixel, err := s.PixelSize()
+	if err != nil {
+		t.Fatalf("PixelSize() error = %v", err)
+	}
+	if xpixel != 800 || ypixel != 600 {
+		t.Errorf("PixelSize() = (%d, %d), want (800, 600)", xpixel, ypixel)
+	}
+
+	// Cells must survive setting pixels. TIOCSWINSZ writes the whole struct, so an implementation that
+	// set pixels in a second ioctl would zero these, and a test asserting only pixels would pass.
+	rows, cols, err := s.Size()
+	if err != nil {
+		t.Fatalf("Size() error = %v", err)
+	}
+	if rows != 30 || cols != 100 {
+		t.Errorf("Size() = (%d, %d), want (30, 100)", rows, cols)
+	}
+}
+
 // Resizing must reach the shell as SIGWINCH, which is what makes a reattached client at a
 // different size get a correct repaint.
 func TestSessionResizeSignalsShell(t *testing.T) {

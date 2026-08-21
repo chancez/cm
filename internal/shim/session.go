@@ -55,6 +55,14 @@ type Config struct {
 	Env []string
 	// Rows and Cols are the initial window size.
 	Rows, Cols uint16
+	// XPixel and YPixel are the initial window size in pixels, zero when the client did not say.
+	//
+	// Carried separately from Rows and Cols because a program reads them separately, and because
+	// leaving them zero is not cosmetic: `kitten icat` reads the pty's ws_xpixel/ws_ypixel before it
+	// sends anything, and zero there means "this terminal cannot report pixel sizes", so it refuses
+	// to transmit an image at all rather than falling back. The wire and Resize have always carried
+	// these; only session creation dropped them, so images worked after any resize and not before.
+	XPixel, YPixel uint16
 	// LogBytes overrides DefaultLogBytes when non-zero.
 	LogBytes int
 	// PersistPath, when set, is a file the output log is also written to, so a session's content
@@ -152,7 +160,11 @@ func Start(cfg Config) (*Session, error) {
 	defer tty.Close()
 
 	if cfg.Rows > 0 && cfg.Cols > 0 {
-		if err := pty.Setsize(ptmx, &pty.Winsize{Rows: cfg.Rows, Cols: cfg.Cols}); err != nil {
+		// Pixels are set alongside rows and cols rather than in a second ioctl: TIOCSWINSZ writes the
+		// whole struct, so a later call carrying only pixels would zero the cell size.
+		if err := pty.Setsize(ptmx, &pty.Winsize{
+			Rows: cfg.Rows, Cols: cfg.Cols, X: cfg.XPixel, Y: cfg.YPixel,
+		}); err != nil {
 			ptmx.Close()
 			return nil, fmt.Errorf("setting initial pty size: %w", err)
 		}
@@ -375,6 +387,22 @@ func (s *Session) Size() (rows, cols uint16, err error) {
 		return 0, 0, err
 	}
 	return ws.Rows, ws.Cols, nil
+}
+
+// PixelSize reports the pty's current window size in pixels, zero when it has none.
+//
+// Separate from Size rather than widening it, because Size has a caller that compares only cells and
+// widening the return would make every such comparison silently depend on pixels too.
+func (s *Session) PixelSize() (xpixel, ypixel uint16, err error) {
+	var ws *pty.Winsize
+	if err := s.withPty(func(f *os.File) error {
+		var ferr error
+		ws, ferr = pty.GetsizeFull(f)
+		return ferr
+	}); err != nil {
+		return 0, 0, err
+	}
+	return ws.X, ws.Y, nil
 }
 
 // ShellPID reports the shell's process id, or 0 once it has exited.

@@ -25,6 +25,7 @@ func newShimCommand(g *globals) *cobra.Command {
 		session         string
 		dir             string
 		rows, cols      uint16
+		xpixel, ypixel  uint16
 		logBytes        int
 		persistPath     string
 		persistMaxLines int
@@ -57,6 +58,8 @@ func newShimCommand(g *globals) *cobra.Command {
 				Dir:         dir,
 				Rows:        rows,
 				Cols:        cols,
+				XPixel:      xpixel,
+				YPixel:      ypixel,
 				LogBytes:    logBytes,
 				PersistPath: persistPath,
 				PersistLimits: seqlog.FileLimits{
@@ -72,6 +75,10 @@ func newShimCommand(g *globals) *cobra.Command {
 	f.StringVar(&dir, "dir", "", "working directory for the shell")
 	f.Uint16Var(&rows, "rows", 24, "initial window rows")
 	f.Uint16Var(&cols, "cols", 80, "initial window columns")
+	// Zero rather than a guessed default: pixels depend on the font the client renders with, so there is
+	// no sensible fallback, and inventing one would tell a program the window is a size it is not.
+	f.Uint16Var(&xpixel, "xpixel", 0, "initial window width in pixels (0 if unknown)")
+	f.Uint16Var(&ypixel, "ypixel", 0, "initial window height in pixels (0 if unknown)")
 	f.IntVar(&logBytes, "log-bytes", 0, "bytes of output to retain (0 for the default)")
 	f.StringVar(&persistPath, "persist-path", "",
 		"file to mirror output to, so the session survives this process")
