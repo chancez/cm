@@ -104,7 +104,7 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Called out rather than left for the reader to compare, since the whole reason for printing both is
 		// that a mismatch is silent. Not an error: cm is designed for a session to outlive its server.
 		fmt.Fprintf(os.Stdout,
-			"         (differs from this binary; restart with `%s server stop` to pick this one up)\n",
+			"         (differs from this binary; restart with `%s server restart` to pick this one up)\n",
 			paths.Name)
 	}
 	if !out.Terminal {
