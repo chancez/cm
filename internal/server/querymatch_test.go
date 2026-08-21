@@ -78,3 +78,53 @@ func TestReplyMustAnswerTheQuestionAsked(t *testing.T) {
 			"colour waits out the timeout for an answer its terminal already sent.", got)
 	}
 }
+
+// A reply chunk carrying an answer plus something unasked passes on only the answer.
+//
+// The half of the reported bug that matching alone does not fix, and it was found by driving the real
+// termenv probe into a session with a real kitty attached rather than by reading the code. The client
+// answered both queries it had seen in one write, "OSC 11 colour" immediately followed by the cursor report
+// for the CSI 6n cm forwards to every client. The colour matched the outstanding question, so the whole
+// blob was stored as the answer and the cursor report reached the pty inside it. On screen that was
+// "^[]11;rgb:...^[\^[]11;rgb:...^[\^[[3;1R^[[3;1R": four replies for two questions.
+func TestOnlyTheAnsweringSequenceIsTakenFromAReplyChunk(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "replysplit",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	sess.noteQueries([]byte("\x1b]11;?\x1b\\"))
+	select {
+	case <-att.queries:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the client was never asked the OSC 11 query")
+	}
+
+	// One write carrying the answer and, behind it, the terminal's own answer to the CSI 6n it saw in the
+	// forwarded output stream. Exactly what a real kitty sent.
+	sess.answerFromClient(att.token, []byte("\x1b]11;rgb:2828/2c2c/3434\x1b\\\x1b[3;1R"))
+
+	got := awaitStream(t, sess, "]11;rgb:2828/2c2c/3434", 3*time.Second)
+	if !strings.Contains(got, "]11;rgb:2828/2c2c/3434") {
+		t.Fatalf("the colour reply never reached the pty; stream was %q", got)
+	}
+	if strings.Contains(got, "^[[3;1R") {
+		t.Errorf("a cursor report rode along with the colour reply; stream was %q.\n"+
+			"A terminal answers several questions in one write, so each sequence has to be matched to its "+
+			"own question. cm answers CSI 6n from its own model, so this one answers nothing cm asked and "+
+			"must be dropped rather than carried to the pty by the reply beside it.", got)
+	}
+}

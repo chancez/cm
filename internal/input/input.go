@@ -79,6 +79,35 @@ func IsQueryReply(p []byte) bool {
 	return true
 }
 
+// SplitReplies breaks a chunk of replies into the individual sequences it holds.
+//
+// A terminal answers several questions in one write, so the bytes arriving here are routinely more than
+// one reply, and each has to be matched to its own question. Handing the whole chunk to a single
+// outstanding request was the second half of the reported `gh pr create --web` corruption: cm asked the
+// background colour, and the client's terminal replied with the colour *and* a cursor report in one write,
+// because it had also seen the CSI 6n cm forwards to every client. The colour matched, so the whole chunk
+// including the cursor report was written to the pty as the answer.
+//
+// Returns nil unless the chunk is entirely recognized replies, which is the same conservative rule
+// IsQueryReply applies and for the same reason: a chunk with anything unrecognized in it is forwarded
+// whole rather than picked apart, since dropping the front of something that turns out to be typing is
+// worse than forwarding a duplicate.
+func SplitReplies(p []byte) [][]byte {
+	var out [][]byte
+	for i := 0; i < len(p); {
+		if p[i] != 0x1b {
+			return nil
+		}
+		n, reply := classifyReply(p[i:])
+		if n <= 0 || !reply {
+			return nil
+		}
+		out = append(out, p[i:i+n])
+		i += n
+	}
+	return out
+}
+
 // classifyReply consumes one escape sequence, reporting its length and whether it answers a query.
 //
 // A length of zero means the sequence is incomplete, which is treated as not-a-reply by the caller:

@@ -1,6 +1,9 @@
 package input
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestIsQueryReply(t *testing.T) {
 	tests := []struct {
@@ -113,6 +116,104 @@ func TestIsQueryReplyAndIsUserInputDisagreeWhereIntended(t *testing.T) {
 			if typed != tc.wantTyped || reply != tc.wantReply {
 				t.Errorf("for %q: IsUserInput = %v (want %v), IsQueryReply = %v (want %v)\n%s",
 					tc.input, typed, tc.wantTyped, reply, tc.wantReply, tc.explanation)
+			}
+		})
+	}
+}
+
+// A chunk of replies splits into the individual sequences it holds.
+//
+// A terminal answers several questions in one write, and each answer belongs to a different question, so
+// the caller has to match them one at a time. Handing a whole chunk to a single outstanding request is the
+// reported `gh pr create --web` corruption: a real kitty replied with the background colour and a cursor
+// report concatenated, the colour matched the question cm had asked, and the cursor report reached the pty
+// inside the same blob.
+func TestSplitReplies(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		// The measured shape of the bug: termenv's OSC 11 probe and the CSI 6n sentinel behind it, answered
+		// together in one write.
+		{
+			name:  "colour reply and cursor report",
+			input: "\x1b]11;rgb:2828/2c2c/3434\x1b\\\x1b[3;1R",
+			want:  []string{"\x1b]11;rgb:2828/2c2c/3434\x1b\\", "\x1b[3;1R"},
+		},
+		{
+			name:  "single reply",
+			input: "\x1b[12;34R",
+			want:  []string{"\x1b[12;34R"},
+		},
+		{
+			name:  "three replies",
+			input: "\x1b[0n\x1b[?62;22c\x1b[12;34R",
+			want:  []string{"\x1b[0n", "\x1b[?62;22c", "\x1b[12;34R"},
+		},
+		// Both terminators, since cm's own replies use BEL while a real kitty uses ST, so a chunk can mix
+		// them and splitting on one alone would swallow the sequence after it.
+		{
+			name:  "BEL and ST terminated OSC together",
+			input: "\x1b]11;rgb:0000/0000/0000\x07\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+			want:  []string{"\x1b]11;rgb:0000/0000/0000\x07", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\"},
+		},
+
+		// Nothing is returned unless the whole chunk is recognized replies, matching IsQueryReply. A chunk
+		// with typing in it is forwarded whole rather than picked apart, because dropping the front of
+		// something that turns out to be a keystroke is worse than forwarding a duplicate.
+		{"typing", "hello", nil},
+		{"reply then typing", "\x1b[0nx", nil},
+		{"typing then reply", "x\x1b[0n", nil},
+		{"mouse report", "\x1b[<0;10;20M", nil},
+		{"reply then mouse", "\x1b[0n\x1b[<0;10;20M", nil},
+		{"incomplete trailing reply", "\x1b[0n\x1b[", nil},
+		{"empty", "", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SplitReplies([]byte(tt.input))
+			gotStr := make([]string, 0, len(got))
+			for _, s := range got {
+				gotStr = append(gotStr, string(s))
+			}
+			if !slices.Equal(gotStr, tt.want) {
+				t.Errorf("SplitReplies(%q) = %q, want %q", tt.input, gotStr, tt.want)
+			}
+		})
+	}
+}
+
+// Splitting a chunk must agree with IsQueryReply about whether it is one.
+//
+// The two are consulted in sequence on the same bytes: recvLoop asks IsQueryReply whether to route a chunk
+// to the proxy at all, and the proxy then splits it. A chunk IsQueryReply accepts but SplitReplies rejects
+// falls back to being matched whole, which is the behavior the split exists to remove, and the
+// disagreement would be invisible.
+func TestSplitRepliesAgreesWithIsQueryReply(t *testing.T) {
+	inputs := []string{
+		"\x1b]11;rgb:2828/2c2c/3434\x1b\\\x1b[3;1R",
+		"\x1b[12;34R",
+		"\x1b[0n\x1b[?62;22c",
+		"\x1b]52;c;aGk=\x07",
+		"\x1bP>|kitty(0.42.2)\x1b\\",
+		"hello",
+		"\x1b[<0;10;20M",
+		"\x1b[0nx",
+		"\x1b[",
+		"",
+	}
+
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			isReply := IsQueryReply([]byte(in))
+			split := SplitReplies([]byte(in)) != nil
+			if isReply != split {
+				t.Errorf("for %q: IsQueryReply = %v but SplitReplies returning anything = %v.\n"+
+					"These are consulted on the same bytes in sequence, so a disagreement means a chunk "+
+					"routed to the proxy as a reply is then matched whole instead of per sequence.",
+					in, isReply, split)
 			}
 		})
 	}

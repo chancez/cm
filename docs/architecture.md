@@ -466,10 +466,31 @@ gone.
 
 ### What is deliberately not suppressed
 
-Every attached terminal still *sees* a proxied query, because cm forwards session output verbatim and
-suppressing it would mean editing the stream, which is the reverted approach above. Several terminals may
-therefore each answer on their own. That is harmless here: cm asked exactly one client and recorded the
-request, so exactly one reply matches and the others are discarded unread.
+Every attached terminal still *sees* every query, both the proxied ones and the ones cm answers itself,
+because cm forwards session output verbatim and suppressing it would mean editing the stream, which is the
+reverted approach above. Terminals therefore answer questions cm never asked them, and those answers arrive
+on the same input path as the one cm is waiting for.
+
+Discarding them takes more than checking which client replied, and getting that wrong was the reported
+`gh pr create --web` and `wallfacer sync` corruption: `^[[42;1R^[[42;1R` printed beside the prompt. Both
+programs use termenv, which probes with `OSC 11` and sends `CSI 6n` immediately behind it as a sentinel,
+because a terminal that ignores `OSC 11` still answers a cursor report and that is how termenv knows to stop
+reading. cm proxies the `OSC 11` and answers the `CSI 6n` from its model, and the client answers both. So two
+things have to hold, and each was a separate defect:
+
+- **A reply must answer the question that was asked.** Matching on the client alone accepted the terminal's
+  cursor report as the background colour, wrote it to the pty, released cm's own cursor report from behind
+  it, and discarded the real colour reply as unsolicited. `query.AnswersQuery` holds that correspondence,
+  next to the classifier because it is the same knowledge from the other direction.
+- **A reply chunk must be split first.** A terminal answers several questions in one write, measured against
+  a real kitty as the colour reply and the cursor report concatenated. Fixing only the matching left the
+  doubling in place: the colour matched, and the cursor report rode to the pty inside the same blob.
+  `input.SplitReplies` breaks the chunk up so each sequence is matched on its own.
+
+Matching is conservative in the direction of *not* matching, and a mismatched reply does not consume the
+request. An unrecognized reply costs the asking program only its 500ms expiry, which is what already happens
+for every query cm cannot proxy, while a wrong match writes an answer to the wrong question. Because the
+request survives, the real answer still lands if it arrives afterwards, which is the order termenv produces.
 
 Mouse reports and focus events are also still forwarded from every client, unchanged. They describe one
 window rather than the session, so each client sends its own, and restricting them would make a session

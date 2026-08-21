@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/query"
 )
 
@@ -165,26 +166,50 @@ func (s *Session) queryTargetLocked() *attachToken {
 // the log after reconnecting, produces bytes nobody asked for, and forwarding them is the duplicate answer
 // that printed a branch name into a prompt.
 //
-// The match is on the *question*, not only on the client, and that distinction is the reported
-// `gh pr create --web` and `wallfacer sync` corruption. cm forwards the queries its own model answers to
-// every client verbatim, so a client's terminal answers those too and its replies arrive here alongside the
-// one cm is waiting for. termenv, which both of those programs use, sends OSC 11 and then CSI 6n as a
-// sentinel: cm proxies the OSC 11 and answers the CSI 6n itself, and matching on the token alone accepted
-// the terminal's cursor report as the background colour. cm wrote it to the pty, released its own cursor
-// report queued behind it, and discarded the real colour reply as unsolicited, which printed
-// "^[[42;1R^[[42;1R" beside the prompt.
+// Two things beyond the client's identity have to hold, and both were the reported
+// `gh pr create --web` and `wallfacer sync` corruption, which printed "^[[42;1R^[[42;1R" beside the prompt.
+//
+// The cause of both is that cm forwards the queries its own model answers to every client verbatim, on
+// purpose, so a client's terminal sees questions cm never asked it and answers them anyway. termenv, which
+// both of those programs use, sends OSC 11 and then CSI 6n behind it as a sentinel. cm proxies the OSC 11
+// and answers the CSI 6n itself, and the client answers both.
+//
+// So, first, a reply has to answer the question that was asked: matching on the token alone accepted the
+// terminal's cursor report as the background colour, wrote it to the pty, released cm's own cursor report
+// from behind it, and discarded the real colour reply as unsolicited.
+//
+// And second, the chunk has to be split, because a terminal answers several questions in one write. Fixing
+// only the matching left the doubling in place, measured in a real kitty: the client replied
+// "OSC 11 colour" and "CSI 6n cursor report" concatenated, the colour matched the outstanding question, and
+// the cursor report rode along in the same blob to the pty. Each sequence is therefore matched
+// independently, and the ones answering nothing cm asked are dropped rather than carried by their
+// neighbour.
 func (s *Session) answerFromClient(tok *attachToken, data []byte) {
+	// Split into individual sequences, since one write can carry answers to several questions. A chunk that
+	// does not split cleanly is matched whole, which is what IsQueryReply already vouched for.
+	replies := input.SplitReplies(data)
+	if len(replies) == 0 {
+		replies = [][]byte{data}
+	}
+
 	s.mu.Lock()
-	var matched bool
-	for _, r := range s.requests {
-		if r.proxied && r.tok == tok && r.data == nil && query.AnswersQuery(r.seq, data) {
-			r.data = append([]byte(nil), data...)
-			r.proxied = false
-			matched = true
-			break
+	var matched, unmatched int
+	for _, reply := range replies {
+		var found bool
+		for _, r := range s.requests {
+			if r.proxied && r.tok == tok && r.data == nil && query.AnswersQuery(r.seq, reply) {
+				r.data = append([]byte(nil), reply...)
+				r.proxied = false
+				found = true
+				matched++
+				break
+			}
+		}
+		if !found {
+			unmatched++
 		}
 	}
-	if !matched {
+	if matched == 0 {
 		s.mu.Unlock()
 		s.log.Debug("discarding an unsolicited reply from a client",
 			"session", s.name, "bytes", len(data))
@@ -193,6 +218,12 @@ func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 	ready := s.takeReadyLocked()
 	s.mu.Unlock()
 
+	if unmatched > 0 {
+		// Worth a line: this is the shape of the reported bug, and it is otherwise invisible because the
+		// dropped bytes are exactly the ones that used to appear beside the prompt.
+		s.log.Debug("dropped replies answering nothing cm asked",
+			"session", s.name, "count", unmatched)
+	}
 	s.writeReplies(ready)
 }
 
