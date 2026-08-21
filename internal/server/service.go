@@ -64,6 +64,34 @@ func (s *Service) Shutdown(
 // NewService wraps a manager.
 func NewService(m *Manager) *Service { return &Service{mgr: m} }
 
+// openOptionsFrom translates a client's Open into the options a session is created from.
+//
+// A function rather than a literal inside Attach so what it copies can be asserted without a stream, a
+// terminal, or a spawned shim. The failure mode is silent and has happened: a field present on the wire
+// and missing here produces a session that works with one property quietly absent, which is how a
+// client's pixel size reached the server and never reached the pty. `kitten icat` then refused to draw
+// and blamed the terminal, so nothing pointed at cm.
+//
+// Note ResumeFromSeq, ReadOnly, and NoRestore are deliberately absent: they describe this attachment
+// rather than the session, and Attach reads them directly.
+func openOptionsFrom(open *serverv1.Open) OpenOptions {
+	return OpenOptions{
+		Name:          open.Session,
+		Rows:          uint16(open.Rows),
+		Cols:          uint16(open.Cols),
+		XPixel:        uint16(open.XPixel),
+		YPixel:        uint16(open.YPixel),
+		Command:       open.Command,
+		Dir:           open.Cwd,
+		Env:           open.Env,
+		ClientEnv:     open.ClientEnv,
+		Persist:       open.Persist,
+		CaptureOutput: open.CaptureOutput,
+		OnRestore:     RestoreAction(open.OnRestore),
+		Tags:          open.Tags,
+	}
+}
+
 // Attach runs one client's attachment for its lifetime.
 //
 // The first message must be an Open. After that, input, resize, and detach arrive on the
@@ -85,19 +113,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		return err
 	}
 
-	sess, created, err := s.mgr.Open(ctx, OpenOptions{
-		Name:          open.Session,
-		Rows:          uint16(open.Rows),
-		Cols:          uint16(open.Cols),
-		Command:       open.Command,
-		Dir:           open.Cwd,
-		Env:           open.Env,
-		ClientEnv:     open.ClientEnv,
-		Persist:       open.Persist,
-		CaptureOutput: open.CaptureOutput,
-		OnRestore:     RestoreAction(open.OnRestore),
-		Tags:          open.Tags,
-	})
+	sess, created, err := s.mgr.Open(ctx, openOptionsFrom(open))
 	if err != nil {
 		return err
 	}

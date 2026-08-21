@@ -406,6 +406,10 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	// program that checks in the meantime gets a plausible answer rather than zeros.
 	open.Rows = 24
 	open.Cols = 80
+	// Pixels are deliberately left at zero, unlike rows and cols above. There is no convention to fall
+	// back on, since pixels depend on the font a client renders with, and zero is exactly the value a
+	// program reads as "this terminal cannot report pixel sizes". A made-up number would instead have it
+	// compute cell dimensions from a window that does not exist.
 	// No repaint to receive, since nothing is being painted.
 	open.NoRestore = true
 
