@@ -48,6 +48,9 @@ type TTY struct {
 // When stdin is not a terminal, which happens when input is piped, no mode is changed at
 // all. Calling tcsetattr with a state that was never read would apply uninitialized
 // settings to whatever stdin actually is.
+//
+// For a client that only displays output, use OpenTTYCooked instead: raw mode disables ISIG, so a
+// process that has no use for the keyboard would still swallow ctrl-c.
 func OpenTTY(in, out *os.File) (*TTY, error) {
 	t := &TTY{
 		in:    in,
@@ -67,6 +70,25 @@ func OpenTTY(in, out *os.File) (*TTY, error) {
 	}
 	t.prevState = prev
 	return t, nil
+}
+
+// OpenTTYCooked wraps the terminal without changing its mode, for a client that only displays output.
+//
+// Raw mode exists so an interactive attachment can deliver every keystroke to the session, including
+// the ones the tty layer would otherwise turn into signals. A follower wants the opposite: it sends no
+// input, so the only thing raw mode achieves is to disable ISIG and swallow the ctrl-c the user is
+// pressing to stop it. `cm read --follow` was unkillable from its own terminal for that reason, which
+// is worse than it sounds because that command is the documented way to capture a session's real byte
+// stream, so the tool for diagnosing escape-sequence bugs could not be exited.
+//
+// Everything else a TTY provides still works: the size, whether output is a terminal, and writing. Only
+// the mode change is skipped, so Close has nothing to restore.
+func OpenTTYCooked(in, out *os.File) (*TTY, error) {
+	return &TTY{
+		in:    in,
+		out:   out,
+		isTTY: term.IsTerminal(int(out.Fd())),
+	}, nil
 }
 
 // makeRawPreservingSignals enters raw mode but keeps Ctrl-\ deliverable as a byte.

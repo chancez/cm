@@ -64,7 +64,9 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 		Output:    followWriter(raw),
 	}
 
-	tty, err := client.OpenTTY(os.Stdin, os.Stdout)
+	// Cooked, so ctrl-c still reaches this process. A follower sends no input, so raw mode would buy
+	// nothing and cost the only key a user has to stop it. See OpenTTYCooked.
+	tty, err := client.OpenTTYCooked(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
 	}
@@ -338,7 +340,8 @@ func followSessionSignalling(
 		OnOutput: onOutput,
 	}
 
-	tty, err := client.OpenTTY(os.Stdin, os.Stdout)
+	// Cooked, for the same reason as followSession above: this streams output and sends no input.
+	tty, err := client.OpenTTYCooked(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
 	}
