@@ -118,9 +118,28 @@ session sustaining more than roughly 9 MB/s through the whole restart window ove
 interactive shell or a coding agent does not. The lever is `shim.DefaultLogBytes`, at a fixed memory
 cost per session.
 
-What did go wrong twice was bookkeeping. The bytes were retained and the client asked for them by
-the wrong number: see "Adoption needs both resume points" below, and `docs/restore.md` for the
+What did go wrong three times was bookkeeping. The bytes were retained and the client asked for them
+by the wrong number: see "Adoption needs both resume points" below, and `docs/restore.md` for the
 reservation window that made a query go unanswered.
+
+The third was an ordering bug in shutdown itself, and it is the reason a restart's resume points are
+written before its socket closes. `Serve` used to call the transport's `Shutdown` before
+`Manager.Close`. ttrpc closes its listeners as the *first* step of `Shutdown` and only then waits for
+connections to go idle, so the socket stopped accepting while every resume point was still unwritten.
+`cm server restart` decides the old server is gone by dialing that socket, so it launched the
+replacement inside that window, and the new server's `Reconcile` read positions the old server had not
+written yet.
+
+The symptom is why it survived so long: no error anywhere, just every adopted session coming back
+through the "output gap detected" repaint instead of resuming. That reads as the gap detection doing
+its job. It was caught in a live restart where sessions were adopted with `from_seq=0` while the store
+held positions in the millions, 26ms after the shutdown line.
+
+Two things about the test are worth keeping. Polling the socket cannot catch this: the window is
+sub-millisecond, so a dialing loop passes with the bug present, which is worse than no test. The
+regression test wraps the listener and reads the store inside `Close`, which is the exact instant a
+replacement server could observe. And it was confirmed by reverting the fix, where it fails every run
+with the same `(0, 0)` the live incident produced.
 
 ## State: sqlite for metadata, files for bytes
 
