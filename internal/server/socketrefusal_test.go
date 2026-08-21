@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -240,10 +241,20 @@ func TestWaitForSocketFreeWaitsThroughARefusalFromALiveListener(t *testing.T) {
 	//
 	// Accepting has to begin inside socketRefusalGrace, or the wait gives up on the sustained refusal
 	// and returns while the listener is still up. That is correct behavior rather than a bug, since a
-	// sustained refusal is how a stale socket is recognised, but it makes the timing load-bearing.
-	closed := make(chan struct{})
+	// sustained refusal is how a stale socket is recognised, but it makes the timing load-bearing. It
+	// begins as soon as the goroutine is scheduled rather than after a delay, which leaves the whole
+	// grace as margin: the wait's first dial is refused whatever happens, since fillBacklog returned
+	// before the wait started.
+	//
+	// The flag is set before the close, not after, and that ordering is what makes the check below
+	// sound. This Close is the only thing that can unlink the socket, so a wait that saw the path gone
+	// must have seen the flag too. Signalling afterwards is a race the test loses on its own: the
+	// polling goroutine runs alongside this one and could observe the unlinked socket in the instant
+	// between Close returning and the signal being sent, which reported a correct wait as an early
+	// return. Measured at 2 runs in 40 on unmodified code, and the same window cost the sibling test in
+	// socketfree_test.go 2 runs in 30.
+	var closing atomic.Bool
 	go func() {
-		time.Sleep(20 * time.Millisecond)
 		accepting := make(chan struct{})
 		go func() {
 			close(accepting)
@@ -262,16 +273,14 @@ func TestWaitForSocketFreeWaitsThroughARefusalFromALiveListener(t *testing.T) {
 		// Comfortably longer than the grace, so a return before the close can only mean the refusal
 		// was misread rather than the grace legitimately expiring.
 		time.Sleep(4 * socketRefusalGrace)
+		closing.Store(true)
 		ln.Close()
-		close(closed)
 	}()
 
 	if err := waitForSocketFree(context.Background(), socket, 5*time.Second); err != nil {
 		t.Fatalf("waitForSocketFree = %v, want nil once the listener closed", err)
 	}
-	select {
-	case <-closed:
-	default:
+	if !closing.Load() {
 		t.Error("waitForSocketFree returned while the listener was still up, so a replacement " +
 			"shim would fail to bind")
 	}
