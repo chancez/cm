@@ -80,6 +80,32 @@ and a bidirectional `Attach` with interleaved keystroke round-trips. It also con
 that `Open.resume_from_seq` distinguishes absent from present, which the resume path
 depends on to tell a fresh attach from a reconnect.
 
+## A handler must not trigger its own server's shutdown
+
+ttrpc decides whether a connection is idle by a state it recomputes only when the connection's write
+loop next wakes from its `select`. While a connection's only request is still inside its handler, the
+recorded state is therefore still *idle*, even though a call is plainly in flight. `Server.Shutdown`
+closes idle connections, so a handler that starts its own server's shutdown races its own reply, and
+the caller sees `ttrpc: closed` for work that completed.
+
+The shim's `Shutdown` did exactly that: it closed the channel `Serve` waits on, and `Serve` went
+straight to `srv.Shutdown`. Measured by widening the gap with a 50ms sleep between closing the channel
+and returning, which took a `shutdownShim` call from 0 failures in 30 to 30 in 30. The shim was
+confirmed gone every time the error came back, which is what made it damaging: the shell is signalled
+before the reply, so the work happens and the report says it did not. `cm doctor --repair` took the
+error as failure and printed "did 0 things" after reaping an orphan.
+
+The fix is to signal the exit on a short timer rather than inline, so the reply is on the wire first.
+50ms covers one local socket write and is generous rather than tuned: nothing waits on it, since the
+process is already leaving and its shell is already signalled, so erring long is free while erring
+short brings the lost reply back.
+
+Callers still tolerate the error rather than relying on that alone, because a shim outlives the server
+that spawned it and an upgraded server still talks to shims from the old build. `isTransportClosed`
+marks those three places, in `cm kill` and in `cm doctor --repair`. The reasoning that makes it safe is
+narrow and worth restating wherever it is used: the transport carries the *reply*, not the shutdown, so
+by the time a reply can be lost the shell has already been signalled.
+
 ## Conventions
 
 Services are named `Shim` and `Server`, not `ShimService`. The ttrpc generator appends

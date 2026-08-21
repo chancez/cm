@@ -137,6 +137,30 @@ Before believing "it does not reproduce":
 - Beware `script(1)` and `send-text`: neither answers queries, so a mode that needs an answer never
   turns on.
 
+## A timing assertion needs fake time, even around real sockets
+
+A test that times a real operation and asserts a lower bound is measuring the scheduler as much as the
+code. `TestWaitForSocketFreeWaitsForALiveListenerToClose` read `start` *after* launching the goroutine
+that sleeps 200ms and closes a listener, so the listener's life began before the interval being
+measured. Under parallel load, preempting the main goroutine in between left the listener already
+closed when the wait began, and a wait that correctly returns at once then looks like a wait that
+returned too early. It failed about 2 runs in 60.
+
+`testing/synctest` fixes that without touching production code, and it works around real I/O, which is
+the part worth knowing: fake time advances only when every goroutine in the bubble is durably blocked,
+and `net.Dial` is not durably blocking, so the bubble simply does not advance time across a dial. Real
+sockets are still real, real dials still happen, and the timing becomes exact. The rewritten test
+reports 210ms of fake time on every run, against a wall-clock version that varied by orders of
+magnitude.
+
+Two things to check when converting one:
+
+- **Confirm the test can still fail.** Break the code it guards and watch. This one catches
+  `waitForSocketFree` returning on the first successful dial 5 times out of 5.
+- **Do not assume a synctest conversion is the whole fix.** It is the right answer when the *test*
+  measured the wrong interval, which has to be established first. A neighbouring flake in the same area
+  looked identical and was a production bug in the shim.
+
 ## Real-terminal checks that are worth the trouble
 
 Unit tests at the seam cover the decision; a real terminal covers the wiring. Both, for anything
