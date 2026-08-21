@@ -109,7 +109,7 @@ func TestVersionTextFlagsAMismatch(t *testing.T) {
 		t.Errorf("output does not flag the mismatch:\n%s", out)
 	}
 	// And the advice is actionable rather than just a warning.
-	if !strings.Contains(out, "server stop") {
+	if !strings.Contains(out, "server restart") {
 		t.Errorf("output does not say how to resolve it:\n%s", out)
 	}
 }
