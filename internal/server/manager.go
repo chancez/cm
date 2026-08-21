@@ -502,8 +502,9 @@ func (m *Manager) watch(sess *Session) {
 	// name", and only the delete below may use it.
 	//
 	// The clobbering it was meant to prevent was never the real cause of what prompted it either: that was
-	// a replacement shim unable to claim the socket while the old one still held it, recorded in
-	// docs/ideas.md.
+	// a replacement shim unable to claim the socket while the old one still held it. That incident is why
+	// the upgradable-shims entry in docs/ideas.md rules out fd-passing between two processes and re-execs
+	// a single one instead.
 
 	state := store.StateExited
 	if code < 0 {

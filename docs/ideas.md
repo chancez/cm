@@ -390,6 +390,64 @@ cm need no setup, and it means the server's own lifetime is not managed: a crash
 command, which is fine, but there is no way to say "keep one running". A launchd/systemd unit would suit
 someone who wants that, and would change nothing about the on-demand path.
 
+**Upgradable shims, by re-exec rather than fd-passing.** Clients can now be upgraded in place
+(`cm client upgrade`) and the server has always been replaceable, which leaves shims as the one layer that
+keeps whatever build it started with for its whole life. A machine with a session per terminal window
+accumulates builds visibly: one real install held twelve distinct builds across twenty-six shims, the
+oldest ten days old. `cm doctor`'s `shim-version-skew` reports that, and reporting is currently the entire
+remedy, because replacing a shim means ending the shell it holds.
+
+The mechanism is `syscall.Exec` in the shim itself, and the parts that sound hardest were measured rather
+than assumed. A standalone program that opens a pty, spawns a shell on it, and then re-execs itself:
+
+- The pty master survives, **but only after clearing `FD_CLOEXEC`**, which Go sets by default on a pty
+  from `pty.Open`. Verified: without clearing it the fd is gone in the new image, with it the fd is live
+  and its window size is intact across the exec.
+- The re-execed image **can still reap the shell**, verified by having the child `exit 7` and reading that
+  status back with `wait4` after the exec. This is the part most likely to be assumed impossible: it works
+  because exec keeps the pid, so the process is still the child's parent.
+- The listening socket needs nothing special, for the same reason the pty does not: one process throughout.
+
+Worth recording a false negative from that experiment, because it is the shape of a wrong conclusion that
+would have killed the idea. The first run reported the child was never reaped, which read as a kernel
+limitation. It was the test's own bug: the shell was blocked writing into a pty nobody was draining, so it
+had not exited yet. Draining the pty made it reap correctly on the first try.
+
+**`SCM_RIGHTS` fd-passing is the wrong tool here**, despite being the usual answer to "hand off a
+descriptor". It needs two processes, which means the new shim has to bind a socket the old one still holds,
+and that contention has already caused a real bug: a replacement shim could not claim the socket while the
+previous one held it, and the symptom was misdiagnosed as one session's record clobbering another's, which
+produced a fix that silently broke every detached session. The comment at `internal/server/manager.go`
+records it. exec has one process from start to finish, so nothing contends for the socket and nothing is
+re-bound, which removes the failure rather than handling it.
+
+What actually blocks it is not the fd at all. **A shim owns four things, and only three survive an exec.**
+The fourth is the 4 MiB in-memory output log and its sequence numbering, which is ordinary process memory
+and is exactly what makes a server restart lossless: adoption replays from the shim's oldest retained
+sequence to rebuild the terminal model. Losing it means every server restart after a shim upgrade shows a
+blank screen until the shell happens to redraw, which is the bug `docs/architecture.md` describes under
+adoption, reintroduced deliberately.
+
+The route through that is not a new serialization format, and most of it already exists. `--persist-path`
+writes a shim's log to a file through `seqlog.File`, which on open calls `load()` to recover its contents
+and reports its own `Bounds()` and `ReadFrom()`. So an upgrade could persist unconditionally to a temp
+file, exec, and reopen it, rather than inventing anything. The sequence numbers must come back identical,
+since `last_seq` in the store points into that space, and `seqlog.NewAt` exists precisely to start a log at
+a given number.
+
+That makes the shape of the work: persist-then-exec-then-reload, with the fd moved to a known descriptor
+and the shell's pid passed on the command line so the new image can `wait4` it. None of the four pieces
+needs a new mechanism, which is the argument for it being bounded, and the reason it is still not free is
+below.
+
+Two reasons this is recorded rather than built. It puts a self-rewriting code path in the one process that
+must not fail: if the exec fails after the pty has been moved, the shell is unreachable, and exec failing
+is not hypothetical here, since replacing a binary under a running process gets later invocations SIGKILLed
+on macOS. And the payoff is currently theoretical: the shim protocol has been stable since v0.1.2, with no
+changes to `shim.proto` in that range other than adding the version field the doctor check reads, so the
+skew it would fix is real but so far harmless. The order to do these in is the order of what breaks: this
+becomes worth building the first time a shim-protocol change makes old shims actually misbehave.
+
 **Resource limits per session.** Scrollback is bounded per session by configuration, and a session that
 produces output faster than anything reads it is bounded by the log. There is no ceiling on session *count*,
 so a runaway script can create ptys until the system's limit, which `cm doctor`'s `pty-pressure` check
