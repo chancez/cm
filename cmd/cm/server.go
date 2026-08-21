@@ -271,6 +271,16 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	mgr.SetPersistPolicy(policy)
 
+	// Set separately from the persist policy, and deliberately not part of it: a shim log is written for
+	// every session regardless of whether its output is persisted, so folding this into a policy that
+	// persistence configures would tie it to an unrelated setting.
+	shimLogRetention, err := cfg.KeepShimLogsFor()
+	if err != nil {
+		l.Close()
+		return err
+	}
+	mgr.SetShimLogRetention(shimLogRetention)
+
 	// Adopt sessions whose shims survived a previous server before accepting clients, so a
 	// client that reconnects immediately finds its session already present.
 	if err := mgr.Reconcile(ctx); err != nil {
@@ -290,6 +300,14 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		logger.Warn("expiring sessions failed", "error", err)
 	}
 	go expirePeriodically(ctx, mgr, logger)
+	// Prune shim logs on the same schedule-plus-startup shape as expiry, for the same reason: startup is
+	// when a reboot's accumulation is visible, and the ticker covers a server that stays up for weeks.
+	// A server that only pruned at startup would never prune on this machine, where one has been up long
+	// enough to accumulate 202 of these files.
+	if _, err := mgr.PruneShimLogs(ctx, time.Now()); err != nil {
+		logger.Warn("pruning shim logs failed", "error", err)
+	}
+	go pruneShimLogsPeriodically(ctx, mgr, logger)
 	// Notice if this server's own socket path stops referring to it, and say so in the log.
 	//
 	// Needed because such a server cannot be asked: its socket is unlinked, so no client can name it, and
@@ -409,6 +427,30 @@ func expirePeriodically(ctx context.Context, mgr *server.Manager, logger *slog.L
 		case <-t.C:
 			if _, err := mgr.ExpireDeadSessions(ctx, time.Now()); err != nil {
 				logger.Warn("expiring sessions failed", "error", err)
+			}
+		}
+	}
+}
+
+// pruneInterval is how often exited shims' logs are swept while the server runs.
+//
+// An hour rather than the minute expiry uses, because the two sweeps cost different amounts and are chasing
+// different deadlines. Expiry is a query over a small table and has to be prompt, since a session that saved
+// no output is forgotten within minutes. This one stats and reads every file in the shim log directory,
+// which was 202 files on a real install, against a retention measured in days. Nothing is waiting on it.
+const pruneInterval = time.Hour
+
+// pruneShimLogsPeriodically sweeps exited shims' logs until the context is cancelled.
+func pruneShimLogsPeriodically(ctx context.Context, mgr *server.Manager, logger *slog.Logger) {
+	t := time.NewTicker(pruneInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := mgr.PruneShimLogs(ctx, time.Now()); err != nil {
+				logger.Warn("pruning shim logs failed", "error", err)
 			}
 		}
 	}

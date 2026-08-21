@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -51,15 +52,18 @@ type configJSON struct {
 	// Sources records how the directories were resolved, since that is the part with precedence.
 	Sources map[string]string `json:"sources"`
 
-	ScrollbackLines int      `json:"scrollback_lines"`
-	ResizePolicy    string   `json:"resize_policy"`
-	DetachKey       string   `json:"detach_key"`
-	LogLevel        string   `json:"log_level"`
-	LogEnabled      bool     `json:"log_enabled"`
-	RestoreMode     string   `json:"restore_mode"`
-	ExpireAfter     string   `json:"expire_after"`
-	ForgetAfter     string   `json:"forget_unpersisted_after"`
-	EnvCapture      []string `json:"env_capture"`
+	ScrollbackLines int    `json:"scrollback_lines"`
+	ResizePolicy    string `json:"resize_policy"`
+	DetachKey       string `json:"detach_key"`
+	LogLevel        string `json:"log_level"`
+	LogEnabled      bool   `json:"log_enabled"`
+	RestoreMode     string `json:"restore_mode"`
+	ExpireAfter     string `json:"expire_after"`
+	ForgetAfter     string `json:"forget_unpersisted_after"`
+	// ShimLogRetention is reported like the other retention settings, since "my setting does nothing" is
+	// the question this command exists to answer, and a value that cannot be read back cannot be checked.
+	ShimLogRetention string   `json:"shim_log_retention"`
+	EnvCapture       []string `json:"env_capture"`
 }
 
 func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -108,6 +112,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	if err != nil {
 		return err
 	}
+	shimLogRetention, err := cfg.KeepShimLogsFor()
+	if err != nil {
+		return err
+	}
 
 	detach := cfg.DetachKey
 	if detach == "" {
@@ -132,7 +140,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		RestoreMode:     string(restore),
 		ExpireAfter:     expire.String(),
 		ForgetAfter:     forget.String(),
-		EnvCapture:      cfg.EnvPatterns(),
+		// Spelled "never" rather than "0s" when pruning is off, since zero here means "keep every shim log"
+		// rather than "prune immediately", and "0s" reads as the second.
+		ShimLogRetention: durationOrNever(shimLogRetention),
+		EnvCapture:       cfg.EnvPatterns(),
 	}
 
 	if asJSON {
@@ -160,8 +171,20 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "restore_mode             %s\n", out.RestoreMode)
 	fmt.Fprintf(os.Stdout, "expire_after             %s\n", out.ExpireAfter)
 	fmt.Fprintf(os.Stdout, "forget_unpersisted_after %s\n", out.ForgetAfter)
+	fmt.Fprintf(os.Stdout, "shim_log_retention       %s\n", out.ShimLogRetention)
 	fmt.Fprintf(os.Stdout, "env capture              %s\n", strings.Join(out.EnvCapture, " "))
 	return nil
+}
+
+// durationOrNever renders a retention period, naming the disabled case rather than printing zero.
+//
+// Zero means "keep forever" for shim log pruning, which is the opposite of what "0s" suggests, and a
+// diagnostic that reads as the opposite of the behavior is worse than one that says nothing.
+func durationOrNever(d time.Duration) string {
+	if d <= 0 {
+		return "never (pruning disabled)"
+	}
+	return d.String()
 }
 
 // dirSource names where a directory setting came from.

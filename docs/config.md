@@ -72,6 +72,10 @@ resize_policy = "leader"
 # Diagnostic log level: debug, info, warn, error, or off. Defaults to info.
 log_level = "info"
 
+# How long an exited shim's diagnostic log is kept. Defaults to a week.
+# "0" keeps every one of them.
+shim_log_retention = "168h"
+
 # The key that detaches a client. "none" disables detaching by key, which is useful when a
 # program inside the session wants that key for itself.
 detach_key = "ctrl-\\"
@@ -141,6 +145,30 @@ and command lines, and rotate at 4 MiB keeping one previous generation. `log_lev
 them.
 
 This is the diagnostic log, not session output. `cm history` is what the shell printed.
+
+### Shim log retention
+
+There is one shim log per session, so without pruning a machine that opens a session per terminal
+window accumulates one file per window without bound.
+
+The server prunes a shim log once nothing suggests its session still exists and
+`shim_log_retention` has passed, defaulting to a week. Whether the session is over is decided by the
+store and the shim, never by the log:
+
+- A session with a record, one live in the registry, or one with a shim socket on disk keeps its log
+  whatever its age, so `cm logs shim NAME` works for as long as the name is listed. The socket is
+  checked for existence rather than dialled, since `ECONNREFUSED` means a full backlog as often as an
+  absent listener.
+- Age comes from the log's newest entry, falling back to its modification time. Not from the exit
+  line, which a shim writes only when it returns cleanly: keying on it would exempt every session
+  killed rather than ended, and those are 30 of 210 files on a real install.
+
+The sweep runs hourly rather than with the per-minute session expiry, since it reads every file in the
+directory against a deadline measured in days and nothing is waiting on it.
+
+`shim_log_retention = "0"` keeps every shim log. Zero is accepted here where `expire_after = "0s"` is
+refused, because of what each would destroy: there it would delete a session's record the moment it
+ended, while here it only declines to remove anything.
 
 ## Completion
 
