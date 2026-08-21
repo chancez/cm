@@ -420,7 +420,11 @@ func runInExistingSession(
 	matchRaw bool,
 	log *slog.Logger,
 ) error {
-	data := strings.Join(command, " ") + "\r"
+	// The submitting CR is held apart from the command line rather than appended, so the server writes it
+	// as its own pty write. See writeInputThenEnter: concatenating them makes a long command line arrive
+	// as a multi-read burst that a full-screen reader treats as a paste, swallowing the CR.
+	data := strings.Join(command, " ")
+	const enter = "\r"
 
 	// Detached, or asked to say nothing: send and return without watching. `--detach` means "do not wait", and
 	// that reading is the same whether the session was created or reused.
@@ -439,6 +443,7 @@ func runInExistingSession(
 		if _, err := cl.Send(ctx, &serverv1.SendRequest{
 			Session:       name,
 			Data:          []byte(data),
+			Enter:         []byte(enter),
 			WaitUntil:     until,
 			Match:         match,
 			MatchRaw:      matchRaw,
@@ -461,17 +466,17 @@ func runInExistingSession(
 		// output the caller wanted and read as truncation. Reading afterwards prints a complete view of
 		// what the session has, which is what --match is for on a shell that cannot say when a command
 		// ended.
-		return sendMatchThenRead(ctx, dirs, name, data, match, matchRaw, timeout, raw)
+		return sendMatchThenRead(ctx, dirs, name, data, enter, match, matchRaw, timeout, raw)
 	}
 
-	return sendAndFollow(ctx, dirs, name, data, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
+	return sendAndFollow(ctx, dirs, name, data, enter, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
 }
 
 // sendMatchThenRead sends input, waits for a pattern, and prints the session's recent output.
 func sendMatchThenRead(
 	ctx context.Context,
 	dirs paths.Dirs,
-	name, data, match string,
+	name, data, enter, match string,
 	matchRaw bool,
 	timeout time.Duration,
 	raw bool,
@@ -485,6 +490,7 @@ func sendMatchThenRead(
 	resp, err := cl.Send(ctx, &serverv1.SendRequest{
 		Session:       name,
 		Data:          []byte(data),
+		Enter:         []byte(enter),
 		Match:         match,
 		MatchRaw:      matchRaw,
 		WaitTimeoutMs: uint64(timeout.Milliseconds()),

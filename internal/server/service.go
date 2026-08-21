@@ -18,6 +18,17 @@ import (
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
+// enterDelay is how long a send waits between writing its text and writing the CR that submits it.
+//
+// Needed because a full-screen reader doing paste detection is still assembling the burst when the CR
+// arrives, and consumes it as pasted content rather than as the submitting key. Splitting the writes
+// without a gap fixed 845 bytes but not 1643; 50ms was enough at 2843 bytes across repeated runs, and
+// 200ms held at every size tried. Set above the measured floor rather than at it, since the reader's
+// timing is not cm's to control and the cost is paid once per send.
+//
+// See writeInputThenEnter for the measurements and the reported symptom.
+const enterDelay = 200 * time.Millisecond
+
 // Service adapts a Manager to the client-facing ttrpc API.
 type Service struct {
 	mgr *Manager
@@ -865,7 +876,7 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	}
 
 	if req.WaitUntil == serverv1.WaitState_WAIT_STATE_UNSPECIFIED {
-		if err := sess.Write(ctx, req.Data); err != nil {
+		if err := writeInputThenEnter(ctx, sess, req.Data, req.Enter); err != nil {
 			return nil, err
 		}
 		// StateRuns rather than CommandRuns, so a session driven by explicit reports is not described as
@@ -892,7 +903,7 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	// evident from the count having moved.
 	runsBefore := sess.StateRuns()
 
-	if err := sess.Write(ctx, req.Data); err != nil {
+	if err := writeInputThenEnter(ctx, sess, req.Data, req.Enter); err != nil {
 		return nil, err
 	}
 
@@ -906,6 +917,52 @@ func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv
 	// resolve wants to know whether the shell was already reporting, and this call's own command would
 	// otherwise make every session look like it reports.
 	return &serverv1.SendResponse{Wait: wait, ShellReports: runsBefore > 0}, nil
+}
+
+// writeInputThenEnter writes a send's text and its submitting keypress as two separate pty writes.
+//
+// Two writes rather than one concatenated buffer, because a pty read returns at most 1022 bytes and one
+// large write therefore arrives as several reads: 1201 bytes came back as [1022, 179], measured. A
+// full-screen program doing paste detection sees that multi-read burst as a paste and consumes a trailing
+// CR as pasted content rather than as the keypress that submits it.
+//
+// The symptom is a send that lands in the program's input box and sits there. Reported driving a Claude
+// Code session, which showed the text as "[Pasted text #4]" unsubmitted, where a second
+// `cm send --key enter` submitted it. Measured against a real one with only the length varying: 42 bytes
+// submitted, 121 and 281 bytes landed without submitting, 842 bytes did not appear until a separate enter
+// arrived, and two writes submitted at every size.
+//
+// Both writes happen here, inside whatever wait the caller armed, because the command starts on the CR: a
+// client making two Send calls would arm its wait after the text and miss the transition.
+//
+// A short shell prompt is unaffected either way, since it reads a small write in one go, so this is not a
+// behavior change for the ordinary case. It is deliberately not done in Session.Write, which also carries
+// query replies, where splitting a sequence from its terminator would be the bug rather than the fix.
+//
+// Splitting alone is not sufficient above about 1 KB, which is the part that took measuring. A bare split
+// fixed 845 bytes but not 1643, because the reader was still mid-paste when the CR landed and swallowed it
+// anyway. The gap is what makes it work: 2843 bytes submitted reliably with as little as 50ms between the
+// writes, and failed with none. That is why enterDelay exists rather than the two writes going out
+// back-to-back, and it is also why the original two-call workaround succeeded, since an RPC round trip
+// supplied the same gap by accident.
+func writeInputThenEnter(ctx context.Context, sess *Session, data, enter []byte) error {
+	if len(data) > 0 {
+		if err := sess.Write(ctx, data); err != nil {
+			return err
+		}
+	}
+	if len(enter) == 0 {
+		return nil
+	}
+	// Only after text, since a keys-only send has no paste for the reader to still be assembling.
+	if len(data) > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(enterDelay):
+		}
+	}
+	return sess.Write(ctx, enter)
 }
 
 // readableSession returns the session to render from, or nil to read from disk instead.

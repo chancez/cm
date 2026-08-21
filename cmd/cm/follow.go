@@ -181,7 +181,7 @@ func followWarning() string {
 func sendAndFollow(
 	ctx context.Context,
 	dirs paths.Dirs,
-	session, data string,
+	session, data, enter string,
 	until serverv1.WaitState,
 	timeout time.Duration,
 	raw bool,
@@ -241,6 +241,7 @@ func sendAndFollow(
 	resp, sendErr := cl.Send(ctx, &serverv1.SendRequest{
 		Session:       session,
 		Data:          []byte(data),
+		Enter:         []byte(enter),
 		WaitUntil:     until,
 		WaitTimeoutMs: uint64(timeout.Milliseconds()),
 	})

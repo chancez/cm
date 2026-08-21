@@ -51,6 +51,13 @@ because the failure is otherwise silent: 'cm send build ctrl-c' types the
 characters "ctrl-c" onto the command line and the build keeps running, which reads
 as cm having ignored the request.
 
+--enter's carriage return is written separately from the text, after a short pause,
+rather than appended to it. A pty read returns at most 1022 bytes, so a long line
+reaches the program as several reads, and a full-screen program treats that burst as
+a paste: a carriage return inside it is pasted content rather than the key that
+submits. Sending it on its own is what makes a long prompt to an agent submit
+instead of sitting in its input box.
+
 --key goes through the pty, so it reaches whatever has the terminal in the state a
 keypress would. Use 'cm signal' instead when the target is the process rather than
 the keyboard: a program that reads ctrl-c as a byte rather than as an interrupt
@@ -117,10 +124,24 @@ follower connects, which for a fast command can be all of it.`,
 				}
 				data += string(encoded)
 			}
+			// Carriage return, not newline: a shell at its prompt has the pty in raw mode, where CR is
+			// what accept-line is bound to.
+			//
+			// Held separately rather than appended, because concatenating it into the same pty write is
+			// what made `--enter` fail to submit against a full-screen reader. A pty read returns at most
+			// 1022 bytes, measured, so one large write arrives as several reads: 1201 bytes came back as
+			// [1022, 179], with the CR in that 179-byte tail. A program doing paste detection sees a
+			// multi-read burst, treats it as pasted content, and consumes the trailing CR as part of the
+			// paste rather than as the keypress that submits it.
+			//
+			// Reported driving a Claude Code session with cm send: the prompt appeared in its input box
+			// as "[Pasted text #4]" and sat there unsubmitted, and a second `cm send --key enter`
+			// submitted it. Measured against a real one, holding everything but length constant: 42 bytes
+			// submitted, 121 and 281 bytes landed without submitting, and 842 bytes did not appear at all
+			// until a separate enter arrived. Two writes submitted at every size.
+			enter := ""
 			if newline {
-				// Carriage return, not newline: a shell at its prompt has the pty in raw
-				// mode, where CR is what accept-line is bound to.
-				data += "\r"
+				enter = "\r"
 			}
 
 			if match != "" && until != "" {
@@ -171,12 +192,13 @@ follower connects, which for a fast command can be all of it.`,
 				if closeLog != nil {
 					defer closeLog.Close()
 				}
-				return sendAndFollow(cmd.Context(), dirs, name, data, state, timeout, raw, logger)
+				return sendAndFollow(cmd.Context(), dirs, name, data, enter, state, timeout, raw, logger)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Send(ctx, &serverv1.SendRequest{
 					Session:       name,
 					Data:          []byte(data),
+					Enter:         []byte(enter),
 					WaitUntil:     state,
 					Match:         match,
 					MatchRaw:      matchRaw,

@@ -3486,7 +3486,18 @@ type SendRequest struct {
 	// Mutually exclusive with wait_until, refused rather than combined.
 	Match string `protobuf:"bytes,5,opt,name=match,proto3" json:"match,omitempty"`
 	// Match the bytes the program emitted rather than the text they rendered to. See WaitRequest.match_raw.
-	MatchRaw      bool `protobuf:"varint,6,opt,name=match_raw,json=matchRaw,proto3" json:"match_raw,omitempty"`
+	MatchRaw bool `protobuf:"varint,6,opt,name=match_raw,json=matchRaw,proto3" json:"match_raw,omitempty"`
+	// The submitting keypress, written as its own pty write after data rather than appended to it.
+	//
+	// Separate because a pty read returns at most 1022 bytes, so one large write arrives as several reads:
+	// 1201 bytes came back as [1022, 179]. A full-screen program doing paste detection sees that burst as a
+	// paste and consumes a trailing CR as pasted content rather than as the key that submits it. Measured
+	// against a real Claude Code session, varying only length: 42 bytes submitted, 121 and 281 bytes landed
+	// in its input box without submitting, and 842 bytes did not appear until a separate enter arrived.
+	//
+	// A field rather than the client making two Send calls, because the wait has to be armed around both
+	// writes. Two calls would arm it after the text, and the command starts on the CR.
+	Enter         []byte `protobuf:"bytes,7,opt,name=enter,proto3" json:"enter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3561,6 +3572,13 @@ func (x *SendRequest) GetMatchRaw() bool {
 		return x.MatchRaw
 	}
 	return false
+}
+
+func (x *SendRequest) GetEnter() []byte {
+	if x != nil {
+		return x.Enter
+	}
+	return nil
 }
 
 type SendResponse struct {
@@ -4063,7 +4081,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x126\n" +
 	"\x05value\x18\x02 \x01(\v2 .cm.server.v1.SurvivingProcessesR\x05value:\x028\x01\"(\n" +
 	"\x12SurvivingProcesses\x12\x12\n" +
-	"\x04pids\x18\x01 \x03(\x05R\x04pids\"\xce\x01\n" +
+	"\x04pids\x18\x01 \x03(\x05R\x04pids\"\xe4\x01\n" +
 	"\vSendRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x126\n" +
@@ -4071,7 +4089,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"wait_until\x18\x03 \x01(\x0e2\x17.cm.server.v1.WaitStateR\twaitUntil\x12&\n" +
 	"\x0fwait_timeout_ms\x18\x04 \x01(\x04R\rwaitTimeoutMs\x12\x14\n" +
 	"\x05match\x18\x05 \x01(\tR\x05match\x12\x1b\n" +
-	"\tmatch_raw\x18\x06 \x01(\bR\bmatchRaw\"c\n" +
+	"\tmatch_raw\x18\x06 \x01(\bR\bmatchRaw\x12\x14\n" +
+	"\x05enter\x18\a \x01(\fR\x05enter\"c\n" +
 	"\fSendResponse\x12#\n" +
 	"\rshell_reports\x18\x03 \x01(\bR\fshellReports\x12.\n" +
 	"\x04wait\x18\x01 \x01(\v2\x1a.cm.server.v1.WaitResponseR\x04wait\"_\n" +

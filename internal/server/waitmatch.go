@@ -123,15 +123,17 @@ func (s *Service) sendAndAwaitMatch(
 	// would otherwise make every session look like it reports.
 	runsBefore := sess.StateRuns()
 
-	if err := sess.Write(ctx, req.Data); err != nil {
+	if err := writeInputThenEnter(ctx, sess, req.Data, req.Enter); err != nil {
 		return nil, err
 	}
 
 	// The shell echoes the input back, and that echo contains the command, so a pattern naming anything in
 	// the command would match the echo rather than the output. Skipping the bytes just written steps over
 	// it. This is the match-wait counterpart of the afterInput qualifier a state wait uses.
+	//
+	// Both writes are counted, since the echo covers the submitting keypress as well as the text.
 	wait, err := s.matchOn(
-		ctx, sess, reader, req.Match, req.MatchRaw, req.WaitTimeoutMs, len(req.Data))
+		ctx, sess, reader, req.Match, req.MatchRaw, req.WaitTimeoutMs, len(req.Data)+len(req.Enter))
 	if err != nil {
 		return nil, err
 	}

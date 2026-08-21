@@ -895,6 +895,18 @@ message SendRequest {
   string match = 5;
   // Match the bytes the program emitted rather than the text they rendered to. See WaitRequest.match_raw.
   bool match_raw = 6;
+
+  // The submitting keypress, written as its own pty write after data rather than appended to it.
+  //
+  // Separate because a pty read returns at most 1022 bytes, so one large write arrives as several reads:
+  // 1201 bytes came back as [1022, 179]. A full-screen program doing paste detection sees that burst as a
+  // paste and consumes a trailing CR as pasted content rather than as the key that submits it. Measured
+  // against a real Claude Code session, varying only length: 42 bytes submitted, 121 and 281 bytes landed
+  // in its input box without submitting, and 842 bytes did not appear until a separate enter arrived.
+  //
+  // A field rather than the client making two Send calls, because the wait has to be armed around both
+  // writes. Two calls would arm it after the text, and the command starts on the CR.
+  bytes enter = 7;
 }
 
 message SendResponse {
