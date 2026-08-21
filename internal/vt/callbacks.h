@@ -38,5 +38,6 @@ void cm_set_xtversion(const char *s);
 GhosttyMode cm_mode_sync_output(void);
 GhosttyMode cm_mode_focus_event(void);
 GhosttyMode cm_mode_alt_screen_save(void);
+GhosttyMode cm_mode_in_band_resize(void);
 
 #endif

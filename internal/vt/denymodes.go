@@ -59,6 +59,26 @@ var modeReports = func() []modeReport {
 // is what turns these on, and dropSizeReports removes them.
 var sizeReportPrefix = []byte("\x1b[48;")
 
+// SizeReport builds the in-band size report for a size, the sequence mode 2048 promises.
+//
+// Pixel dimensions are reported as 0, which is the honest answer rather than a placeholder: cm has a
+// grid in cells and no font, so it does not know how large a cell is. Zero is the value kitty itself
+// sends when it cannot determine pixel size, and the sequence's own definition allows it, so a program
+// reading it sees "unknown" rather than a number cm made up. nvim only reads the cell fields.
+//
+// Built here rather than in the server because this package owns every byte cm sends a program on the
+// emulator's behalf, and because dropSizeReports next door has to recognize the same shape. Keeping the
+// producer and the recognizer in one file is what stops them drifting apart.
+func SizeReport(rows, cols uint16) []byte {
+	out := make([]byte, 0, len(sizeReportPrefix)+16)
+	out = append(out, sizeReportPrefix...)
+	out = strconv.AppendUint(out, uint64(rows), 10)
+	out = append(out, ';')
+	out = strconv.AppendUint(out, uint64(cols), 10)
+	out = append(out, ";0;0t"...)
+	return out
+}
+
 // DenyModes rewrites DECRPM replies about the modes in deniedModes to say the mode is not recognized,
 // and drops any in-band size report the model produced.
 //
@@ -94,13 +114,35 @@ var sizeReportPrefix = []byte("\x1b[48;")
 // of its DECRQM switch for every mode it does not know, both of these included. Matching the terminals
 // rather than inventing an answer keeps cm's reply indistinguishable from the truth.
 //
-// Denying 2048 rather than implementing it is deliberate, and the reason is stronger than cost:
-// implementing it means owning both directions. cm forwards the probe to the attached client as well
-// as answering it, and a real kitty does support the mode, so kitty's own reports arrive on the
-// client's input stream where IsQueryReply classifies them as answers to questions cm asked and
-// discards them as unsolicited. Emitting reports outbound would not fix that half. Neither zmx nor
-// tmux implements the mode, and zmx proxies the question to the terminal rather than answering it, so
-// denying it puts cm where both already sit.
+// Mode 2048 is denied *and* honored, which reads like a contradiction and is the only combination that
+// works. The denial stops a program that asks and believes the answer. nvim is not that program: it
+// sends CSI ? 2048 h in the same startup burst as 2026, 2027, and 2031, without waiting for the reply
+// to the query it also sends. Measured by relaying nvim's own output stream: one query, one set, no
+// reset. So the DECRQM answer cannot be the whole mechanism, and cm has to keep the promise for any
+// program that sets the mode regardless of what it was told.
+//
+// An earlier version of this comment argued cm could not honor the mode because "kitty's own reports
+// arrive on the client's input stream where IsQueryReply discards them, so emitting reports outbound
+// would not fix that half". Both halves were measured and it is wrong. Two DECRPM replies really do
+// exist, cm's ";0" and the client's ";2", and cm's wins: the program received "\x1b[?2048;0$y" while
+// the debug log recorded "\x1b[?2048;2$y" being discarded from the client. The inbound half is already
+// correct, so honoring the mode is only the outbound half.
+//
+// Where the multiplexers sit, all three measured with the same probe in the same terminal:
+//
+//   - zmx answers ";2" and its reports work, because it answers nothing itself and passes the leader
+//     client's bytes straight to the pty. kitty answered, kitty reports, zmx is a pipe.
+//   - tmux never implements the mode: it is absent from its DECRQM switch, so it falls to the default
+//     "not recognized" arm, and it takes its size from TIOCGWINSZ instead. It also consumes a client's
+//     CSI ... t for its own bookkeeping and never forwards one to a pane, gated on TTY_WINSIZEQUERY
+//     with the comment "If we did not request this, ignore it".
+//   - cm cannot be either. It is not a pipe, because it answers what its model can answer and filters
+//     client replies to stop a query being answered twice. And it cannot ignore the mode the way tmux
+//     does, because programs inside cm enable it anyway.
+//
+// So cm emits the reports itself, from the size it just set, which is the one place that knows every
+// resize. That is what makes the promise keepable: a report generated at the resize covers changes that
+// never pass through a client at all, which is the case a forwarded client report would miss.
 //
 // Deliberately a rewrite of the reply rather than a strip of the acting bytes on the way out. Removing
 // bytes from the output stream desynchronizes the shim's numbering from the server's, and that has
@@ -131,11 +173,15 @@ func DenyModes(data []byte) []byte {
 // the recorded `wallfacer -h` corruption, where a reply arriving out of turn was consumed as the answer
 // to a different question.
 //
-// Dropped rather than delivered, because cm cannot honor the mode in general even though the model can.
-// The report describes the size cm just set, and the promise mode 2048 makes is that *every* resize is
-// reported. Sizing changes for reasons that do not pass through the model at all, and a program that
-// receives some reports and not others is worse off than one relying on SIGWINCH, which the kernel
-// delivers every time.
+// Still dropped now that cm emits its own reports, and dropping is what makes emitting correct rather
+// than being in tension with it. The model's report is untimely: it is produced inside the emulator's
+// resize and sits in the queue until the next output arrives, which is how it came to be delivered as
+// the answer to a later query. cm's own report is sent from the resize path at the moment of the
+// resize, in order, through the same queue as every other reply. Keeping both would send two reports
+// per resize, and the model's would be the one arriving out of turn.
+//
+// So the division is: the model decides *whether* a report is owed, since it tracks the mode the
+// program set, and the server decides *when* one is sent. See SizeReport and Session.resize.
 //
 // Safe to drop here for the reason the rewrite is safe: these are bytes the model generated for the pty,
 // not session output, so they were never in the log and removing one moves no sequence numbers. See

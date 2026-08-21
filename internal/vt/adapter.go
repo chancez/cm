@@ -125,6 +125,32 @@ func (s *SessionTerminal) Resize(rows, cols uint16) (err error) {
 	return s.term.Resize(rows, cols)
 }
 
+// SizeReport returns the in-band size report owed for a resize to this size, or nil when none is.
+//
+// Nil when the program has not enabled mode 2048, which is the overwhelmingly common case: sending an
+// unrequested report would put bytes on the pty that the program has no reason to expect, and a shell
+// would echo them at its prompt.
+//
+// Combined into one call rather than exposing the mode and the formatter separately, so a caller cannot
+// send a report without checking, which is the only way to get this wrong. The size is passed in rather
+// than read from the model because the caller knows the size it is setting and the model may not have
+// been resized yet; the report has to describe the new size either way.
+//
+// An error reading the mode is reported as "no report owed" rather than propagated. The caller is the
+// resize path, and failing a resize because a capability query failed would turn a cosmetic problem into
+// a broken session. The consequence of a wrong nil here is the bug this exists to fix, which is why the
+// error is returned as well as swallowed: the caller logs it.
+func (s *SessionTerminal) SizeReport(rows, cols uint16) (report []byte, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "reading the in-band resize mode") }()
+	on, err := s.term.InBandResizeMode()
+	if err != nil || !on {
+		return nil, err
+	}
+	return SizeReport(rows, cols), nil
+}
+
 // TakePending returns and clears bytes the emulator generated for the pty.
 //
 // The caller must deliver these, since programs that query the terminal block until answered.

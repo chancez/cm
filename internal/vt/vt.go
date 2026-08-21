@@ -349,3 +349,17 @@ func (t *Terminal) focusEventMode() (bool, error) {
 	}
 	return t.mode(C.cm_mode_focus_event())
 }
+
+// InBandResizeMode reports whether the program has enabled mode 2048, in-band size reports.
+//
+// Read from the model rather than tracked separately because the model is already parsing every byte
+// the program writes, so a second tracker would be a second thing to keep correct. The distinction that
+// matters is between the program's request and cm's answer: cm answers DECRQM for this mode with "not
+// recognized" (see DenyModes), and nvim sets it anyway without waiting for the reply. This reports what
+// the program actually asked for, which is what decides whether a report is owed.
+func (t *Terminal) InBandResizeMode() (bool, error) {
+	if t.closed {
+		return false, nil
+	}
+	return t.mode(C.cm_mode_in_band_resize())
+}

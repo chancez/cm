@@ -89,3 +89,5 @@ GhosttyMode cm_mode_sync_output(void) { return GHOSTTY_MODE_SYNC_OUTPUT; }
 GhosttyMode cm_mode_focus_event(void) { return GHOSTTY_MODE_FOCUS_EVENT; }
 
 GhosttyMode cm_mode_alt_screen_save(void) { return GHOSTTY_MODE_ALT_SCREEN_SAVE; }
+
+GhosttyMode cm_mode_in_band_resize(void) { return GHOSTTY_MODE_IN_BAND_RESIZE; }
