@@ -174,6 +174,14 @@ type Session struct {
 	// evicts holds each attachment's eviction channel, so `cm detach` can reach a client that is
 	// blocked waiting for output. Keyed by the same token as clientSizes, and removed by detach.
 	evicts map[*attachToken]chan struct{}
+	// upgrading marks the evictions that are upgrade requests rather than plain detaches, so the
+	// streaming loop knows which kind of Detached to send.
+	//
+	// A side table rather than a field on the channel, because the channel is a bare signal and closing
+	// it is the only thing that wakes a blocked client. Written before the close for that reason: the
+	// reader wakes as soon as the channel closes, so a flag set afterwards would sometimes arrive too
+	// late and the client would exit instead of coming back.
+	upgrading map[*attachToken]bool
 	// queries holds each attachment's channel for questions cm needs that client to answer: the
 	// background colour, the clipboard, the window's pixel size. Keyed like evicts, and removed by detach.
 	//
@@ -1653,20 +1661,75 @@ func (s *Session) setRestored(blob []byte) {
 // Idempotent. A second call while the first eviction is still in flight finds the channel already
 // closed and skips it, so a retry cannot panic on a double close.
 func (s *Session) EvictClients() int {
+	asked, _ := s.evictClients(false, "")
+	return asked
+}
+
+// UpgradeClients asks attached clients to re-exec and come back, returning how many were asked and how
+// many were left alone for already running current.
+//
+// Unlike EvictClients this preserves the attachment: the client is expected to replace itself with the
+// newest binary and reattach from where it left off, which it already knows how to do because that is
+// what it does across a server restart.
+//
+// current is the build to compare against, and a client already running it is skipped unless force is
+// set. That keeps the command idempotent: running it twice after one upgrade does not make every window
+// repaint for nothing. A client that reported no version is never skipped, since an unknown build is
+// more likely to be old than current.
+func (s *Session) UpgradeClients(force bool, current string) (asked, alreadyCurrent int) {
+	return s.evictClients(true, map[bool]string{true: "", false: current}[force])
+}
+
+// evictClients closes each client's eviction channel, optionally marking the request as an upgrade.
+//
+// Shared by both callers so the bookkeeping cannot drift: the upgrade flag has to be recorded before the
+// channel is closed, since closing it is what wakes the streaming loop that reads the flag.
+//
+// skipVersion names a build to leave alone, or is empty to ask everyone. Only the upgrade path passes
+// one; a detach applies to every client regardless of what it is running.
+func (s *Session) evictClients(upgrade bool, skipVersion string) (asked, skipped int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	n := 0
-	for _, ch := range s.evicts {
+	for tok, ch := range s.evicts {
+		if skipVersion != "" {
+			// Compared against what the client reported. An empty version is never skipped: a client too
+			// old to say is more likely to be an old build than a current one, and asking it costs a
+			// repaint while wrongly skipping it leaves the stale client in place, which is the failure
+			// this command exists to fix.
+			if cs := s.clientSizes[tok]; cs != nil && cs.version == skipVersion {
+				skipped++
+				continue
+			}
+		}
 		select {
 		case <-ch:
 			// Already evicted and not yet torn down, so it is not asked twice and not counted twice.
 		default:
+			// Recorded before the close, which is what wakes the loop that reads it. Setting it after
+			// would race the streaming loop and send an ordinary detach, making the client exit instead
+			// of coming back: a window closing rather than upgrading.
+			if upgrade {
+				if s.upgrading == nil {
+					s.upgrading = make(map[*attachToken]bool, 1)
+				}
+				s.upgrading[tok] = true
+			}
 			close(ch)
-			n++
+			asked++
 		}
 	}
-	return n
+	return asked, skipped
+}
+
+// isUpgrading reports whether this attachment's eviction was an upgrade request.
+//
+// Read by the streaming loop once its eviction channel closes, to decide which kind of Detached to
+// send: one the client exits on, or one it comes back from.
+func (s *Session) isUpgrading(tok *attachToken) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.upgrading[tok]
 }
 
 // detach releases a subscriber, reporting whether it was the last one.
@@ -1679,6 +1742,10 @@ func (s *Session) detach(a attachment) (last bool) {
 		s.mu.Lock()
 		delete(s.evicts, a.token)
 		delete(s.queries, a.token)
+		// Dropped with the channel it describes. Left behind, an entry would accumulate for the life of
+		// the session, and since tokens are pointers a later one could reuse the address and be treated
+		// as an upgrade it never asked for.
+		delete(s.upgrading, a.token)
 		// Any question still outstanding with this client will never be answered now, so it is released
 		// rather than left to expire. Waiting for the timeout would hold every reply queued behind it for
 		// up to requestTimeout after the client that could have answered has gone.

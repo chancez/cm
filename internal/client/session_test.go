@@ -216,6 +216,11 @@ func (c *fakeClient) Detach(
 ) (*serverv1.DetachResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) UpgradeClients(
+	context.Context, *serverv1.UpgradeClientsRequest,
+) (*serverv1.UpgradeClientsResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Send(context.Context, *serverv1.SendRequest) (*serverv1.SendResponse, error) {
 	panic("unused")
 }

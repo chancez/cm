@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/chancez/cm/internal/store"
@@ -35,7 +36,11 @@ func TestKillIsAttributableInTheLog(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	var logged bytes.Buffer
+	// Locked, because the manager logs from more than one goroutine. Kill logs on this one while the
+	// session's watch goroutine logs "session ended" as the shell dies, so a bare bytes.Buffer is a real
+	// data race: caught by -race failing about one run in four, and the same reason internal/client has
+	// a lockedBuffer.
+	var logged lockedBuffer
 	mgr.SetLogger(slog.New(slog.NewTextHandler(&logged, nil)))
 
 	if _, err := mgr.Kill(ctx, "attributable", false, 9); err != nil {
@@ -56,4 +61,27 @@ func TestKillIsAttributableInTheLog(t *testing.T) {
 				want, got)
 		}
 	}
+}
+
+// lockedBuffer is a bytes.Buffer safe for a logger written from more than one goroutine.
+//
+// The manager logs from the caller's goroutine and from each session's watch goroutine, so a test that
+// asserts on its output has two writers and a reader. Mirrors the one in internal/client, which exists
+// for the same reason; kept per package rather than shared, since a test helper exported between
+// packages would have to live in non-test code.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

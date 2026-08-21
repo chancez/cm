@@ -21,6 +21,7 @@ type ServerService interface {
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
+	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -134,6 +135,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Detach(ctx, &req)
 			},
+			"UpgradeClients": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req UpgradeClientsRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.UpgradeClients(ctx, &req)
+			},
 			"Status": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req StatusRequest
 				if err := unmarshal(&req); err != nil {
@@ -175,6 +183,7 @@ type ServerClient interface {
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
+	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 }
@@ -314,6 +323,14 @@ func (c *serverClient) Tag(ctx context.Context, req *TagRequest) (*TagResponse, 
 func (c *serverClient) Detach(ctx context.Context, req *DetachRequest) (*DetachResponse, error) {
 	var resp DetachResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Detach", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) UpgradeClients(ctx context.Context, req *UpgradeClientsRequest) (*UpgradeClientsResponse, error) {
+	var resp UpgradeClientsResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "UpgradeClients", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

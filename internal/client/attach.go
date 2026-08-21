@@ -155,6 +155,17 @@ type Options struct {
 	// terminal, so it can retitle a tab or open a new window in the right place.
 	OnMetadata func(SessionMetadata)
 
+	// ResumeFrom, when set, starts this attachment as a resume rather than a fresh one.
+	//
+	// For a client replacing one that was asked to upgrade: the terminal already shows the session, so it
+	// wants the bytes it missed rather than a repaint. Without it an upgrade would clear and redraw the
+	// screen, which is exactly the visible seam the feature exists to avoid, and would also lose the
+	// scrollback the terminal holds above the current screen.
+	//
+	// Distinct from the reconnect position the loop maintains internally, which describes an outage this
+	// process lived through. This one is inherited across an exec, so it cannot be discovered locally.
+	ResumeFrom *uint64
+
 	// OnOutput, when set, is called after each chunk of output is written, with the position one past its
 	// last byte.
 	//
@@ -181,6 +192,18 @@ type Result struct {
 	Session string
 	// Detached is true when the user detached rather than the session ending.
 	Detached bool
+	// Upgrade is true when the server asked this client to come back on a newer build rather than
+	// exit. Detached is also set, since an upgrade is a detach that returns.
+	//
+	// Acted on by the caller rather than here, because replacing the process needs the argv this one
+	// was started with and the terminal it owns, neither of which belongs to this package.
+	Upgrade bool
+	// ResumeFrom is how far output had been consumed when the attachment ended, so a replacement
+	// process can pick up exactly there instead of repainting.
+	//
+	// Only meaningful with Upgrade. Nil when the client never got far enough to have a position, in
+	// which case a replacement does an ordinary fresh attach.
+	ResumeFrom *uint64
 	// Exited is true when the session's shell exited.
 	Exited   bool
 	ExitCode int
@@ -203,7 +226,11 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 
 	// resumeFrom tracks how far output has been consumed, so a reconnect asks for exactly
 	// what was missed instead of a fresh repaint.
-	var resumeFrom *uint64
+	//
+	// Seeded from the options when this process is replacing one that was asked to upgrade. Its terminal
+	// still shows the session, so the first attach is a resume rather than a repaint, which is what makes
+	// an upgrade look like a freeze instead of a redraw.
+	resumeFrom := opts.ResumeFrom
 
 	// Keystrokes typed while the server is away are held here and flushed on reconnect, so
 	// a freeze does not silently swallow input.
@@ -262,6 +289,12 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 
 		switch outcome {
 		case outcomeDone:
+			// Carried out so a replacement process can resume exactly here rather than repainting. Set
+			// only for an upgrade: every other way of finishing is a client that is not coming back, and
+			// handing out a position would invite a caller to reattach after a session ended.
+			if result.Upgrade {
+				result.ResumeFrom = resumeFrom
+			}
 			return result, err
 		case outcomeReconnect:
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
@@ -519,8 +552,12 @@ func runSession(
 			//
 			// Always unsolicited, since no client asks for an acknowledgement any more: every Detach
 			// this client sends sets no_ack, so the server never replies to one.
-			if msg.resp.GetDetached() != nil {
+			if d := msg.resp.GetDetached(); d != nil {
 				result.Detached = true
+				// An upgrade is a detach that comes back. The re-exec itself is left to the caller, which
+				// owns the terminal and the argv this process was started with; reported here so the
+				// reconnect loop stops rather than treating the close as an outage.
+				result.Upgrade = d.Upgrade
 				return outcomeDone, nil
 			}
 			if q := msg.resp.GetQuery(); q != nil {

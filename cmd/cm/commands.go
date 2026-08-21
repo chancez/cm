@@ -33,6 +33,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		detachKeyArg string
 		noAttach     bool
 		tagArgs      []string
+		resumeFrom   uint64
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -134,6 +135,12 @@ receives it and the window closes instead of detaching.`,
 				// reading the bytes passing through it as reports about itself.
 				InsideSession: insideCmSession(),
 			}
+			// Set only when a previous client handed over a position, so an ordinary attach still
+			// repaints. Zero is not a usable resume point: it would ask for the whole retained log,
+			// which is the opposite of resuming.
+			if resumeFrom > 0 {
+				opts.ResumeFrom = &resumeFrom
+			}
 			logger, closeLog := newClientLogger(dirs, cfg)
 			if closeLog != nil {
 				defer closeLog.Close()
@@ -158,7 +165,9 @@ receives it and the window closes instead of detaching.`,
 					fmt.Fprintf(os.Stdout, "\x1b]2;%s\x07", meta.Title)
 				}
 			}
-			return runAttach(cmd.Context(), dirs, opts)
+			return runAttach(cmd.Context(), dirs, opts, func(res client.Result) []string {
+				return upgradeArgv(cmd, args, res)
+			})
 		},
 	}
 	f := cmd.Flags()
@@ -179,6 +188,12 @@ receives it and the window closes instead of detaching.`,
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
+	// Hidden, because it is how one client hands its position to the process replacing it rather than
+	// something a person has a reason to type. A human passing the wrong value here gets a screen that
+	// resumes from the wrong place, which looks like corrupted output.
+	f.Uint64Var(&resumeFrom, "resume-from-seq", 0,
+		"resume output from this position instead of repainting (used by cm client upgrade)")
+	_ = f.MarkHidden("resume-from-seq")
 	return cmd
 }
 
@@ -252,7 +267,15 @@ func newClientLogger(dirs paths.Dirs, cfg *config.Config) (*slog.Logger, io.Clos
 	return logger.With("pid", os.Getpid(), "boot", paths.BootID()), closer
 }
 
-func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
+// runAttach attaches a terminal to a session and reports how it ended.
+//
+// upgradeArgv builds the argv for a replacement process when the server asks this client to upgrade, or
+// is nil for a caller that cannot be upgraded. Passed in rather than built here because it depends on
+// the parsed command, which belongs to the caller: only it knows which flags were actually set.
+func runAttach(
+	ctx context.Context, dirs paths.Dirs, opts client.Options,
+	upgradeArgv func(client.Result) []string,
+) error {
 	// Attaching must work whether or not a server happens to be running, which is what
 	// lets the user never think about one.
 	if err := ensureServer(ctx, dirs); err != nil {
@@ -265,6 +288,27 @@ func runAttach(ctx context.Context, dirs paths.Dirs, opts client.Options) error 
 	}
 
 	res, attachErr := client.Attach(ctx, tty, opts)
+
+	// An upgrade replaces this process before the terminal is restored, deliberately.
+	//
+	// tty.Close writes a full reset and puts the terminal back the way it was found, which is right for
+	// a client that is finishing and wrong for one that is about to be replaced: the reset clears the
+	// session off the screen, and restoring cooked mode means the replacement has to enter raw mode
+	// again. Both are visible, and avoiding them is the whole point of upgrading in place rather than
+	// telling someone to close the window. exec keeps the same process, the same descriptors, and the
+	// terminal exactly as it is, so the replacement resumes into a screen that never changed.
+	//
+	// Errors fall through to the ordinary teardown below. A failed exec means this process is still
+	// here holding a terminal in raw mode, so it has to restore it and report, rather than leaving a
+	// window that looks alive and answers nothing.
+	if res.Upgrade && attachErr == nil && upgradeArgv != nil {
+		if err := reexecForUpgrade(upgradeArgv(res)); err != nil {
+			// Restored first, for the reason above: the message must be readable and the shell that
+			// regains this terminal must not inherit raw mode.
+			_ = tty.Close()
+			return fmt.Errorf("upgrading the client for %s: %w", res.Session, err)
+		}
+	}
 
 	// Restore the terminal before printing anything, so the message is not erased by the
 	// reset sequence. Close is idempotent, but calling it once keeps the reset from being

@@ -349,16 +349,27 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			return nil
 
 		case <-att.evict:
-			// `cm detach` asked this client to let go.
+			// `cm detach` asked this client to let go, or `cm client upgrade` asked it to come back on a
+			// newer build.
 			//
 			// Told before the stream closes, so the client can report "detached by request" rather than
 			// treating a server-initiated close as an outage and trying to reconnect. Failure is ignored:
 			// the client is going away regardless, and this is the same best-effort notice the recv loop
 			// sends.
+			//
+			// The upgrade flag is read here rather than carried on the channel, which is a bare signal.
+			// It is set before the close for that reason, so by the time this wakes it is already there.
+			upgrade := sess.isUpgrading(att.token)
 			_ = srv.Send(&serverv1.AttachResponse{
-				Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
+				Event: &serverv1.AttachResponse_Detached{
+					Detached: &serverv1.Detached{Upgrade: upgrade},
+				},
 			})
-			s.mgr.log.Info("client detached on request", "session", sess.name)
+			if upgrade {
+				s.mgr.log.Info("client asked to upgrade", "session", sess.name)
+			} else {
+				s.mgr.log.Info("client detached on request", "session", sess.name)
+			}
 			return nil
 
 		case err := <-recvErr:
@@ -740,6 +751,63 @@ func (s *Service) Detach(
 	}
 	if len(resp.Errors) == 0 {
 		resp.Errors = nil
+	}
+	return resp, nil
+}
+
+// UpgradeClients asks attached clients to replace themselves with the newest binary on disk.
+//
+// An empty session list means every session, unlike Detach, which requires names. The asymmetry is
+// deliberate and follows what each command is for: detaching one window while leaving others is an
+// ordinary thing to want, while upgrading one window and leaving the rest on an old build is the state
+// this command exists to get out of.
+//
+// Resolved against live sessions only, on the same reasoning as Detach: a session nothing is attached to
+// has no client to upgrade, so zero is a satisfied request rather than a failure.
+func (s *Service) UpgradeClients(
+	ctx context.Context, req *serverv1.UpgradeClientsRequest,
+) (*serverv1.UpgradeClientsResponse, error) {
+	names := req.Sessions
+	if len(names) == 0 {
+		records, err := s.mgr.List(ctx, "")
+		if err != nil {
+			return nil, fmt.Errorf("listing sessions to upgrade: %w", err)
+		}
+		for _, rec := range records {
+			names = append(names, rec.Name)
+		}
+	}
+
+	resp := &serverv1.UpgradeClientsResponse{
+		Asked:          make(map[string]uint32),
+		AlreadyCurrent: make(map[string]uint32),
+		Errors:         make(map[string]string),
+	}
+	// The build clients are asked to converge on. The server's own, since it is the newest thing known to
+	// be installed: a client re-execs the binary on disk, and the server was started from that same path.
+	current := s.mgr.Version()
+	for _, name := range names {
+		sess, live := s.mgr.Get(name)
+		if !live {
+			if _, err := s.mgr.store.Get(ctx, name); err != nil {
+				resp.Errors[name] = trimNamePrefix(err.Error(), name)
+				continue
+			}
+			resp.Asked[name] = 0
+			continue
+		}
+		asked, skipped := sess.UpgradeClients(req.Force, current)
+		resp.Asked[name] = uint32(asked)
+		if skipped > 0 {
+			resp.AlreadyCurrent[name] = uint32(skipped)
+		}
+	}
+	// Omitted rather than sent empty, matching Detach, so a caller checking for problems tests one thing.
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
+	if len(resp.AlreadyCurrent) == 0 {
+		resp.AlreadyCurrent = nil
 	}
 	return resp, nil
 }

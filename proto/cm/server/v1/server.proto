@@ -86,6 +86,20 @@ service Server {
   // it, since every existing route to detaching is a keystroke.
   rpc Detach(DetachRequest) returns (DetachResponse);
 
+  // UpgradeClients asks attached clients to replace themselves with the newest binary on disk.
+  //
+  // Exists because a server restart upgrades the server and nothing else. Shims are deliberately left
+  // alone, since replacing one means ending the shell it holds, but a *client* holds nothing: its
+  // terminal is the user's, its session is the shim's, and it already knows how to reattach from a
+  // recorded position because that is what it does across every server restart. So a client is the one
+  // part of cm that can be upgraded without asking anyone to lose work, and it was the one part with no
+  // way to do it short of closing the window.
+  //
+  // Separate from Detach rather than a flag on it, because the two differ in what the caller wants
+  // afterwards. A detach ends an attachment; this preserves it and changes what is running underneath.
+  // Sharing one RPC would make "did you mean to keep this session on screen" depend on a bool.
+  rpc UpgradeClients(UpgradeClientsRequest) returns (UpgradeClientsResponse);
+
   // Status reports facts about the running server: its pid, how long it has been up, and how many
   // sessions it holds.
   //
@@ -515,7 +529,21 @@ message Query {
 // the send is asynchronous, so the connection is torn down before the message is transmitted, and the
 // server then sees a client that vanished without detaching. For an owned session that means being
 // destroyed, which is the opposite of what detaching asks for.
-message Detached {}
+message Detached {
+  // Asks the client to come back on a newer build rather than exit.
+  //
+  // A plain Detached means the client is done, so it returns to the shell that started it. With this
+  // set, the client is expected to replace itself with the newest binary on disk and reattach to the
+  // same session from where it left off, which is what makes a client upgrade look like the brief
+  // freeze a server restart already looks like.
+  //
+  // A flag on the existing event rather than a new one, because everything else about the two is
+  // identical: the server stops streaming, closes the stream, and leaves the session running. A client
+  // too old to understand this field reads the message as an ordinary detach and exits, which is a
+  // worse outcome than upgrading but not a broken one, and it is the reason `cm client upgrade` reports
+  // which clients it asked.
+  bool upgrade = 1;
+}
 
 // Metadata reports what the shell has said about itself, so a client can act on it.
 //
@@ -624,6 +652,34 @@ message DetachResponse {
   map<string, uint32> detached = 1;
   // Sessions that could not be detached, keyed by name. Shaped like KillResponse.errors.
   map<string, string> errors = 2;
+}
+
+message UpgradeClientsRequest {
+  // Sessions whose clients to upgrade. Empty means every session, since upgrading one window and
+  // leaving the rest is rarely what a caller wants after installing a new build.
+  repeated string sessions = 1;
+
+  // Ask clients already running this build to re-exec anyway.
+  //
+  // Off by default, so upgrading is idempotent and running it twice does not make every window blink
+  // for no reason. On, it is a way to restart clients without changing the binary, which is the shape of
+  // "pick up a config change".
+  bool force = 2;
+}
+
+message UpgradeClientsResponse {
+  // How many clients were asked, keyed by session name.
+  //
+  // Asked rather than upgraded, and the distinction is honest rather than pedantic: the server sends the
+  // request and closes the stream, so whether a client comes back is something only the client knows. A
+  // client too old to understand the request exits instead of returning, which is why this counts what
+  // was sent rather than claiming an outcome.
+  map<string, uint32> asked = 1;
+  // Clients skipped because they already run the server's build, keyed by session name. Absent when
+  // force is set, since nothing is skipped then.
+  map<string, uint32> already_current = 2;
+  // Sessions that could not be reached, keyed by name. Shaped like KillResponse.errors.
+  map<string, string> errors = 3;
 }
 
 message ListRequest {

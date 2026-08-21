@@ -333,6 +333,58 @@ The condition is keyed on `NoRestore` rather than on whether `Output` is set: bo
 terminal", but `NoRestore` is the one that says a repaint is unwanted, and it is what the server
 already reads.
 
+## Upgrading a client, and why only a client can be upgraded
+
+A restart replaces the server and nothing else, which left two thirds of an installation on whatever
+build it started with. `cm client upgrade` covers the clients. Nothing covers the shims, and nothing
+can.
+
+The asymmetry is the design rather than a limitation. Each of the three layers can be replaced exactly
+as far as what it *owns* allows:
+
+- A **server** owns bookkeeping, all of it rediscoverable, so it can exit and be replaced. That is what
+  Reconcile is for.
+- A **client** owns a terminal and a stream position. The terminal is the user's and survives the
+  process; the position is recorded and resumable. So a client can be replaced with nothing lost.
+- A **shim** owns the pty and the shell. Replacing one means ending the shell, so it cannot be upgraded
+  at all: only a new session gets a new shim. `cm doctor` reports the spread instead, since knowing is
+  the only available remedy.
+
+A client upgrade reuses the reconnect path rather than adding one. The server sends the same `Detached`
+event `cm detach` sends, with `upgrade` set, and closes the stream. The client re-execs itself and
+attaches again with `resume_from_seq`, which is the identical sequence it performs on every server
+restart. What the flag changes is only whether it comes back.
+
+Two details carry the whole "seamless" claim, and both are about what *not* to do.
+
+`syscall.Exec` rather than spawning a child, so the process id, the descriptors, and the terminal are
+kept. A child would mean the original exits, its shell prints a prompt over the session, and the
+terminal is restored and re-rawed: three visible artifacts for a feature whose entire purpose is
+invisibility.
+
+The terminal is deliberately not restored first. `TTY.Close` writes a full reset, which is right for a
+client that is finishing and wrong for one being replaced: the reset clears the session off the screen.
+So the exec happens before teardown, and teardown runs only if the exec *fails*, in which case the
+process is still holding a raw terminal and has to put it back.
+
+The argv is rebuilt from the flags cobra parsed, not by editing the original. Editing means guessing
+which bare word is the session name, and `--dir /tmp` puts a bare word directly after a flag: the first
+implementation took `/tmp` for the session name. Two things are then forced. The resolved session name
+is always written out, because a client started with no name had one allocated by the server, and
+re-execing without it would allocate a *second* session and orphan the first with the user's shell in
+it. And only flags that were actually set are emitted, so a default that changed in the new build takes
+effect instead of being pinned to the old one's value.
+
+A client already running the server's build is skipped, so running the command twice does not make every
+window repaint. A client that reported *no* version is asked anyway: the field exists because older
+clients did not send one, so an unknown build is more likely to be stale than current, and the ambiguous
+case resolves toward the action that fixes things.
+
+What the response counts is what was *asked*, not what was upgraded. The server sends the request and
+closes the stream, so whether a client returns is known only to the client, and a client too old to
+understand the flag exits instead. Reporting "upgraded" would be claiming an outcome the server cannot
+observe.
+
 ## Terminal queries: cm answers, or asks one client and relays
 
 A program in a session can ask the terminal questions: what are you (`CSI c`), where is the cursor

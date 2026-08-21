@@ -81,6 +81,11 @@ func (s *stubService) Detach(
 ) (*serverv1.DetachResponse, error) {
 	panic("unused")
 }
+func (s *stubService) UpgradeClients(
+	context.Context, *serverv1.UpgradeClientsRequest,
+) (*serverv1.UpgradeClientsResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Send(context.Context, *serverv1.SendRequest) (*serverv1.SendResponse, error) {
 	panic("unused")
 }
