@@ -137,6 +137,32 @@ Before believing "it does not reproduce":
 - Beware `script(1)` and `send-text`: neither answers queries, so a mode that needs an answer never
   turns on.
 
+## A pty read caps at 1022 bytes, in both directions
+
+Measured on darwin, varying only the reader's buffer size: a `read()` on a pty returns at most 1022
+bytes whatever you ask for. At a 512-byte buffer the chunks come back `[512, 510, ...]`; at 4096 and
+at 65536 they are both `[1022, 1022, ...]`. So a buffer larger than 1022 buys nothing, and any
+payload above it is *guaranteed* to fragment rather than merely likely to.
+
+This has bitten twice, once in each direction, and both times the visible symptom pointed elsewhere.
+
+**Inbound**, a client reply longer than 1022 bytes arrives as several messages, and cm classifies each
+one on its own. An 18008-byte OSC 52 clipboard reply arrived as 18 chunks. The leading fragment is
+detectable, since `classifyReply` returns `n == 0` for an unterminated sequence, but a *continuation*
+fragment is plain text and indistinguishable from typing, so the tail is routed to the pty as
+keystrokes.
+
+**Outbound**, a single large write to the pty is read by the program in the same 1022-byte chunks: a
+1201-byte write came back as `[1022, 179]`. A full-screen program doing paste detection sees that
+burst as a paste, so a carriage return travelling at the end of it is consumed as pasted content
+rather than as the key that submits. That is why `cm send --enter` writes the CR separately, and why
+splitting alone was not enough: a bare split fixed 845 bytes but not 1643, and the writes also need a
+gap, measured as reliable from 50ms. See `enterDelay`.
+
+The testing lesson is the same as the rest of this file: assert on the *sequence of writes* rather
+than on "the CR was sent somewhere". The buggy version did send it, in the same write as the text, so
+any assertion looking only for its presence passes while the bug is live.
+
 ## A timing assertion needs fake time, even around real sockets
 
 A test that times a real operation and asserts a lower bound is measuring the scheduler as much as the

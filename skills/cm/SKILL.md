@@ -185,6 +185,27 @@ cm wait reviewer --until blocked --timeout 10m
 
 Keep the instruction on one line. `cm send` writes exactly what you give it, so an embedded newline submits the prompt early and the rest arrives as a second, separate input.
 
+If a long prompt lands in the agent's input box without being submitted, check `cm version`: cm sends the
+submitting keypress as its own pty write, with a short pause first, and a build predating that concatenated
+it onto the text. A pty read caps at 1022 bytes, so a large prompt arrives as a burst the agent reads as a
+paste, and a trailing carriage return inside that burst is consumed as pasted content rather than as the
+key that submits. The symptom in Claude Code is the prompt showing as `[Pasted text #1]` and sitting there.
+On an older build, send the text and the key as two calls:
+
+```bash
+cm send agent 'a long prompt...'
+cm send agent --key enter
+```
+
+Verify submission rather than assuming it, whatever the build. Reading the screen straight after a send can
+show the prompt sitting unsubmitted, and an agent that never received a prompt looks identical to one still
+thinking:
+
+```bash
+cm read agent --lines 5          # the input box should be empty
+cm info agent --field busy       # or wait for a report
+```
+
 This is the most reliable way to drive an agent that cm cannot otherwise read, and it is worth preferring over content-matching on its output. The agent knows when it has finished; cm cannot infer it from a screen that may still be redrawing. `CM_SESSION` is already set inside the session, so the agent needs no name and no plumbing.
 
 If the agent has a hook for "finished" or "needs input" (a stop hook, a notification hook), wiring `cm report` to it once is better still, because then every turn reports without being asked. Pass `--source` when you do, so one reporter is distinguishable from another:
