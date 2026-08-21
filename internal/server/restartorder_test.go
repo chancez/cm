@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/transport"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // storeAtClose records what the store held at the instant the listener closed.
@@ -26,6 +29,10 @@ type storeAtClose struct {
 	// rec is what the store held when Close ran, and err is why it could not be read.
 	rec store.Session
 	err error
+	// closed reports whether Close ran at all, so a test can tell "the store was empty at the close"
+	// from "there was no close to observe". Those print identically otherwise, since an unread rec holds
+	// the same zeros the bug produces.
+	closed bool
 }
 
 func (l *storeAtClose) Close() error {
@@ -33,8 +40,35 @@ func (l *storeAtClose) Close() error {
 	// moment before anything else can notice.
 	l.once.Do(func() {
 		l.rec, l.err = l.st.Get(context.Background(), l.name)
+		l.closed = true
 	})
 	return l.Listener.Close()
+}
+
+// waitServing blocks until a server on this socket answers an RPC.
+//
+// Distinct from waitSocket, which only dials: a test that binds its own listener and hands it to Serve
+// has a socket that accepts connections before ttrpc has registered it, so a dial proves nothing about
+// whether the server is running yet.
+func waitServing(t *testing.T, socket string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, cl, err := transport.DialServer(socket)
+		if err == nil {
+			_, lastErr = cl.List(context.Background(), &serverv1.ListRequest{})
+			conn.Close()
+			if lastErr == nil {
+				return
+			}
+		} else {
+			lastErr = err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no server answered on %s within 10s: %v", socket, lastErr)
 }
 
 // A restart must persist resume points before the socket stops accepting.
@@ -92,6 +126,19 @@ func TestRestartPersistsResumePointsBeforeReleasingTheSocket(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- Serve(serveCtx, l, NewService(mgr)) }()
 
+	// Wait until the server has taken ownership of the listener before asking it to stop. Cancelling
+	// immediately is a race the test loses about 6 runs in 20 on Linux: ttrpc's Serve checks whether it
+	// is already shutting down *before* registering the listener, so a context cancelled first makes it
+	// return straight away having never registered anything, and the later Shutdown then has no listener
+	// to close. The wrapper's Close never runs, `rec` keeps its zero value, and the assertion reads that
+	// as resume points having been lost. Confirmed by counting: every failure had zero Closes and a store
+	// holding the correct (9,9) by the end, so the production ordering was right the whole time.
+	//
+	// A real client call rather than a dial or a sleep, since the socket is bound by the test's own
+	// net.Listen and therefore answers a dial before ttrpc has registered it. A completed RPC proves the
+	// accept loop is running, which is the state that makes the shutdown path observable.
+	waitServing(t, base.Addr().String())
+
 	cancel()
 	if err := <-served; err != nil {
 		t.Errorf("Serve() error = %v", err)
@@ -99,6 +146,12 @@ func TestRestartPersistsResumePointsBeforeReleasingTheSocket(t *testing.T) {
 
 	if l.err != nil {
 		t.Fatalf("reading the store as the listener closed: %v", l.err)
+	}
+	// Checked before the values, because an unobserved close leaves the same zeros the bug does, so
+	// without this the test can fail while reporting a symptom that never happened.
+	if !l.closed {
+		t.Fatal("the listener was never closed, so nothing was observed: this test cannot say " +
+			"whether resume points were written before the socket was released")
 	}
 	// Compared as a pair rather than field by field: the two positions count the same output in
 	// different spaces, and checking one while the other is wrong is how they diverged before.
