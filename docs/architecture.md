@@ -522,14 +522,30 @@ emits them from `StreamHandler.resize` while cm resizes through `ghostty_termina
 resized correctly and nvim was no longer listening to it. The symptom was nvim keeping half the window after
 a kitty split closed, until something else forced a redraw.
 
+Mode 2048 is now **denied and honored at the same time**, which reads like a contradiction and is the only
+combination that works. cm still answers "not recognized", and it also sends the reports itself from its
+resize path. The reason is that the denial does not stop the mode being set: nvim sends `CSI ? 2048 h` in the
+same startup burst as 2026, 2027, and 2031, **without waiting for the reply** to the query it also sends.
+Measured by relaying nvim's own output stream: one query, one set, no reset. So the reply is not what decides
+whether a report is owed, and the model's mode state is. See "Honoring mode 2048" below.
+
 Measured in one kitty window, same probe, same moment:
 
 | host | reply to `CSI ? 69 $ p` | reply to `CSI ? 2048 $ p` |
 | --- | --- | --- |
 | bare kitty | `?69;0$y` (not recognized) | supported; kitty implements the mode |
-| zmx 0.7.0 | `?69;0$y`, because zmx proxies DECRQM to the terminal | no reply; proxied to the terminal |
+| zmx 0.7.0 | `?69;0$y`, because zmx passes the terminal's reply through | `?2048;2$y`, kitty's own answer |
 | cm, before this | `?69;2$y` (supported, reset) | `?2048;2$y` (supported, reset) |
-| tmux 3.5a | no reply; DECRQM arrived in 3.6 | no reply; neither version implements 2048 |
+| cm, now | `?69;0$y` (not recognized) | `?2048;0$y`, and cm sends the reports itself |
+| tmux 3.5a | no reply observed | no reply observed; not in its DECRQM switch |
+
+Two rows were re-measured later with a cleaner probe, and the corrections are worth keeping rather than
+quietly fixing. zmx's mode 2048 answer is kitty's `;2` arriving through it, not "no reply": zmx answers
+nothing itself, so the terminal's reply reaches the program unchanged. And tmux does implement DECRQM at
+3.5a, contrary to the earlier note that it arrived in 3.6, with `{ 'p', "?$", INPUT_CSI_QUERY_PRIVATE }` in
+its parse table and mode 2048 simply absent from the switch it dispatches to. The empty tmux column is what
+a probe inside a tmux pane returned and is not explained; the source says it should answer `;0` for any mode
+it does not know, so treat that cell as unresolved rather than as evidence.
 
 Three details that make these harder to diagnose than they look:
 
@@ -547,30 +563,80 @@ for mode 69, and tmux answers `0` from the default arm of its DECRQM switch for 
 
 What denying mode 69 costs is nvim's terminal-side scroll optimization in a vertical split, where it repaints
 instead: measured at 14114 bytes against 6696 for the same ten-line scroll. Denying 2048 costs nothing
-measurable, because SIGWINCH already carries the same news: with the mode denied, a shrink and a grow emitted
-4298 and 11202 bytes, against 4302 and 11206 for bare nvim in a plain pty. Neither is a regression against
-the alternative, and both are where zmx already sits.
+measurable in itself, because SIGWINCH already carries the same news: with the mode denied, a shrink and a
+grow emitted 4298 and 11202 bytes, against 4302 and 11206 for bare nvim in a plain pty.
 
-Mode 2048 could be implemented rather than denied, and a fake terminal answering `;2` and then sending real
-reports confirms nvim repaints correctly, so the option is real. It was rejected because implementing it
-means owning both directions. cm forwards the probe to the attached client *as well as* answering it, and a
-real kitty does support the mode, so kitty's own reports already arrive on the client's input stream, where
-`IsQueryReply` classifies them as answers to questions cm asked and discards them as unsolicited. Emitting
-reports outbound would not fix that half. The promise is also all-or-nothing: sizing changes for reasons that
-never reach the model, and a program receiving some reports and not others is worse off than one relying on a
-signal the kernel delivers every time.
+That last number is where the reasoning went wrong, and it is worth naming because the measurement was
+correct and the conclusion drawn from it was not. It shows only that a program *still using* SIGWINCH loses
+nothing. It says nothing about a program that has stopped, which nvim has by the time it matters, and the
+byte counts look reassuring precisely because the test program was one that never set the mode.
+
+### Honoring mode 2048
+
+Denying the mode was not enough, and the reason is that nvim never reads the answer. cm answers `;0`, nvim
+sets the mode anyway, and then waits to be told about resizes that cm was not sending. The pty tracked four
+consecutive resizes (14x99, 9x89, 15x109, 11x79) while nvim held 30x100 throughout; feeding it one report by
+hand moved it immediately. So cm emits the reports itself, from `Session.reportSize` on the resize path.
+
+An earlier version of this section argued the opposite, and recorded a reason that measurement refuted. It
+said cm could not honor the mode because "cm forwards the probe to the attached client as well as answering
+it, so kitty's own reports arrive on the client's input stream where `IsQueryReply` discards them as
+unsolicited; emitting reports outbound would not fix that half." Both halves were then measured. Two DECRPM
+replies really do exist and **cm's wins**: with a client attached, the program received `\x1b[?2048;0$y`
+while the debug log recorded `\x1b[?2048;2$y` being discarded from the client. The inbound half was already
+correct, so honoring the mode was only the outbound half. The claim was plausible, was never measured, and
+cost the bug an extra diagnosis.
+
+Where the three multiplexers sit, measured with the same probe in the same terminal, mode 2048 enabled by the
+program and two resizes driven:
+
+| host | answer to `CSI ? 2048 $ p` | reports delivered |
+| --- | --- | --- |
+| zmx 0.7.0 | `;2` (set), from kitty | all 3: `[48;30;100;390;700t`, `[48;24;90;312;630t`, `[48;30;100;390;700t` |
+| cm, before this | `;0` (not recognized) | none |
+| tmux 3.5a | no reply; not in its DECRQM switch | none, and none owed |
+
+The three positions are genuinely different, and cm cannot hold either of the others:
+
+- **zmx is a pipe.** Its emulator generates no replies and `handleInput` queues the leader client's bytes
+  straight to the pty (`src/loop.zig`), so kitty answered and kitty reports. Mode 2048 works there as a
+  consequence of forwarding everything.
+- **tmux never implements the mode**, so nothing inside it enables one. It takes its size from `TIOCGWINSZ`
+  and only queries the terminal for *pixel* dimensions. It also consumes a client's `CSI ... t` for its own
+  bookkeeping and never forwards one to a pane, gated on `TTY_WINSIZEQUERY` with the comment "If we did not
+  request this, ignore it" (`tty-keys.c`).
+- **cm is neither.** It is not a pipe, because it answers what its model can answer and filters client
+  replies so one query cannot be answered twice. And it cannot ignore the mode the way tmux does, because
+  programs inside cm enable it regardless of the answer.
+
+Generating the report rather than forwarding the client's is what makes the promise keepable. The promise is
+all-or-nothing, and sizing changes for reasons that never pass through a client at all; a report built from
+the size cm is setting covers those, while a forwarded one would miss exactly them. Pixel dimensions are
+reported as `0`, which is what kitty itself sends when it cannot determine them: cm has a grid in cells and
+no font, so any other number would be invented. nvim reads only the cell fields.
+
+Two orderings are load-bearing, and both have a test. The report is sent **after** the pty ioctl, because a
+report invites the program to call `TIOCGWINSZ` and nvim does exactly that, so the other order makes the
+report briefly a lie. And it goes through `queueOrWriteReply` rather than straight to the pty, so it cannot
+overtake an outstanding proxied query: a size report is a reply the program did not ask for, arriving when it
+may be mid-query, which is precisely the `wallfacer -h` failure shape. Writing it directly passes every other
+test in the file and fails only that one.
 
 Rewriting the reply rather than stripping the DECSLRM from the output stream is deliberate, and it is the
 same reasoning as "Why not let the attached terminal answer" above: removing bytes desynchronizes the shim's
 numbering from the server's. A reply cm generates never enters the log, so rewriting one moves no positions.
 
-The same reasoning permits the one deletion `DenyModes` does make. A program can set mode 2048 without asking
-first, and libghostty then emits a size report on the next resize, so `dropSizeReports` removes those. They
-are model-generated bytes destined for the pty rather than session output, so they were never in the log
-either. Found by a test asserting that a resize with the mode set queues nothing for the pty, and worth
-having for a second reason: nothing drains the emulator's queue on the resize path, so a report sat there
-until the next output arrived and was then delivered as though it answered whatever query came after it,
-which is the `wallfacer -h` corruption's failure mode.
+The same reasoning permits the one deletion `DenyModes` does make. libghostty emits its own size report on a
+resize once the mode is set, and `dropSizeReports` removes those. They are model-generated bytes destined for
+the pty rather than session output, so they were never in the log either.
+
+Dropping the model's report is what makes sending cm's own correct, rather than being in tension with it. The
+model's is untimely: nothing drains the emulator's queue on the resize path, so it sat there until the next
+output arrived and was then delivered as though it answered whatever query came after it, which is the
+`wallfacer -h` corruption's failure mode. cm's is sent at the moment of the resize, in order, through the
+reply queue. Keeping both would send two reports per resize and the model's would be the one arriving out of
+turn. So the division is that the model decides *whether* a report is owed, since it tracks the mode the
+program set, and the server decides *when* one is sent.
 
 ## Terminal state
 
