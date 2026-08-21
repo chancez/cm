@@ -35,7 +35,12 @@ AGENTS.local.md
 # What it produces is meant to be committed. It is a bug *finder*: when it turns something up, the
 # deliverable is a unit test in internal/vt or internal/server that constructs the state directly and
 # runs on any machine. See .agents/skills/nvim-e2e/SKILL.md.
-.agents/skills/nvim-e2e/
+#
+# No trailing slash, for the same reason as /third_party above: a worktree has none of this directory,
+# and symlinking it to the main checkout is how the harness tests a worktree's own build. With a
+# trailing slash that symlink is a file rather than a directory, so it is not ignored and an `add -A`
+# commits it.
+.agents/skills/nvim-e2e
 
 # Zig's build cache. mise's libghostty task builds inside third_party, which is already ignored, but
 # setup-zig in CI points ZIG_LOCAL_CACHE_DIR at the repo root. An untracked directory there makes the
