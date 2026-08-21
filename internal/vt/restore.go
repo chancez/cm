@@ -43,6 +43,45 @@ func (t *Terminal) Restore() ([]byte, error) {
 
 	var buf bytes.Buffer
 
+	// Say which screen this content belongs to, rather than leaving it to the default.
+	//
+	// The formatter emits only modes that differ from libghostty's defaults, and the main screen *is*
+	// the default, so a main-screen blob carries no ?1049l at all. That is silently wrong for a client
+	// whose terminal is on the alternate screen: the repaint lands on the alternate screen, over the
+	// program's own display, and the real main screen underneath still holds whatever was there. The
+	// next ?1049l any program sends then pops the terminal back to that stale screen and discards
+	// everything cm painted.
+	//
+	// The symptom was quitting nvim and being left at a prompt with the whole nvim window still above
+	// it. It reads as cm failing to clear the screen, and the screen it failed to leave is one cm never
+	// knew the client was on.
+	//
+	// The two sides are not symmetric, which is why only this direction needs writing out. A blob for a
+	// session *on* the alternate screen already opens with ?1049h from the mode state, so it says where
+	// it belongs; a main-screen blob had no way to say so.
+	//
+	// Unconditional rather than only when the model was ever on the alternate screen. cm cannot see the
+	// client's terminal, so "did this session use the alternate screen" is the wrong question: a client
+	// can be left there by a program that ran before cm was in the path, and after a server restart the
+	// model does not remember either way. Safe to send always, measured both ways rather than assumed:
+	// against libghostty the contents are byte-identical with and without it, and in a real kitty all
+	// 60 lines of scrollback survive it with the visible screen unchanged.
+	//
+	// The clear belongs *after* the switch, which is the part that is easy to get wrong. A client
+	// clears its terminal before writing this blob, so that clear lands on whichever screen the
+	// terminal is currently on: the alternate one gets wiped, the switch to main follows, and main
+	// still holds its stale contents. Measured that way, the restored screen came back as
+	// "STALE_REAL_MAIN\nSHELL_HISTORY\nPROMPT_LINE" with the stale line on top. Clearing here mirrors
+	// the other direction rather than adding anything, since ?1049h is defined as save cursor, switch,
+	// *and clear*. That ?1049l does not clear is the asymmetry that produced the bug.
+	//
+	// Held aside rather than written now, so it stays in front of the content and out of the empty
+	// check below. See the prepend at the end.
+	screenPrefix := ""
+	if onAlt, err := t.mode(C.cm_mode_alt_screen_save()); err == nil && !onAlt {
+		screenPrefix = "\x1b[?1049l\x1b[2J\x1b[H"
+	}
+
 	hasScrollback, err := t.emitScrollback(&buf)
 	if err != nil {
 		return nil, err
@@ -99,7 +138,9 @@ func (t *Terminal) Restore() ([]byte, error) {
 	if buf.Len() == 0 {
 		return nil, nil
 	}
-	return buf.Bytes(), nil
+	// Prepended rather than written first, so an empty screen still returns nothing at all. See
+	// screenPrefix above.
+	return append([]byte(screenPrefix), buf.Bytes()...), nil
 }
 
 // emitScrollback writes scrollback content, reporting whether there was any.

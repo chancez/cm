@@ -37,5 +37,6 @@ void cm_set_xtversion(const char *s);
 // exposed as ordinary functions.
 GhosttyMode cm_mode_sync_output(void);
 GhosttyMode cm_mode_focus_event(void);
+GhosttyMode cm_mode_alt_screen_save(void);
 
 #endif

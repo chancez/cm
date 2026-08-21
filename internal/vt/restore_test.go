@@ -229,6 +229,80 @@ func TestRestoreDoesNotLeakAlternateScreen(t *testing.T) {
 	}
 }
 
+// A main-screen restore must put the client's terminal back on the main screen, not assume it is
+// already there.
+//
+// The bug: quitting nvim inside cm left the whole nvim window above the prompt. The formatter emits
+// only modes that differ from libghostty's defaults, and the main screen is the default, so a
+// main-screen blob carried no ?1049l. A client whose terminal was on the alternate screen therefore
+// had the repaint painted onto that screen, over the program's display, while the real main screen
+// underneath kept its stale contents. The next ?1049l popped the terminal back to those and threw
+// away everything cm had painted.
+//
+// Asserted through a destination terminal left on the alternate screen, which is the state cm cannot
+// see and must not assume away. Replaying the blob has to land on the main screen and show the
+// session, and the alternate screen's stale content must be gone from view.
+func TestRestoreReturnsAClientToTheMainScreen(t *testing.T) {
+	// The session: a program ran, painted, and quit, so the model is back on the main screen.
+	src := newTerminal(t, 10, 40)
+	if err := src.Write([]byte("SHELL_HISTORY\r\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := src.Write([]byte("\x1b[?1049h\x1b[H\x1b[2JTUI_BODY")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := src.Write([]byte("\x1b[?1049lPROMPT_LINE")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	restore, err := src.Restore()
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	// The client's terminal, sitting on the alternate screen with content of its own. Reached by a
+	// program that ran before cm was in the path, or by a stream whose ?1049l went missing in a gap.
+	dst, err := New(10, 40, Callbacks{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer dst.Close()
+	if err := dst.Write([]byte("STALE_REAL_MAIN\r\n\x1b[?1049h\x1b[H\x1b[2JSTALE_ALT_BODY")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	// The clear a client performs before painting restored state, as client.runSession does.
+	if err := dst.Write([]byte("\x1b[2J\x1b[H")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := dst.Write(restore); err != nil {
+		t.Fatalf("replaying restore bytes: %v", err)
+	}
+
+	got, err := dst.Plain()
+	if err != nil {
+		t.Fatalf("Plain() error = %v", err)
+	}
+	// The whole value, not a substring: what is on screen is exactly the session's main screen, with
+	// neither the alternate screen's body nor the stale main screen anywhere in it.
+	if want := "SHELL_HISTORY\nPROMPT_LINE"; normalize(string(got)) != want {
+		t.Errorf("restored screen = %q, want %q", normalize(string(got)), want)
+	}
+
+	// And the terminal is really on the main screen rather than showing the right thing on the wrong
+	// one. A later ?1049l, which any program quitting will send, must therefore change nothing.
+	if err := dst.Write([]byte("\x1b[?1049l")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	after, err := dst.Plain()
+	if err != nil {
+		t.Fatalf("Plain() error = %v", err)
+	}
+	if normalize(string(after)) != normalize(string(got)) {
+		t.Errorf("a later ?1049l changed the screen, so the client was still on the alternate one:\n"+
+			" before = %q\n after = %q", normalize(string(got)), normalize(string(after)))
+	}
+}
+
 func TestRestoreEmptyTerminalProducesNothingHarmful(t *testing.T) {
 	term := newTerminal(t, 24, 80)
 

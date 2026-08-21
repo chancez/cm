@@ -117,6 +117,42 @@ already captured describe the old width.
 - **The directory**, as OSC 7, emitted without the NUL sentinel libghostty appends to the
   stored value. Forwarding the NUL is not cosmetic: kitty writes it into its session file and
   then cannot parse its own state back. (zmx issue 222.)
+- **Which screen the content belongs to**, when it is the main screen: `?1049l` followed by a
+  clear, in front of everything else. See below.
+
+## A main-screen blob has to say so
+
+The formatter emits only modes that *differ* from libghostty's defaults, and the main screen is the
+default, so a main-screen blob carried no `?1049l` at all. The alternate-screen direction was
+already explicit, because `?1049h` appears in the mode preamble whenever the model is there, so only
+one of the two directions said where its content belonged.
+
+The consequence is that cm cannot see the client's terminal, and a repaint assumed the terminal was
+wherever the model was. A client whose terminal was on the alternate screen therefore had the
+repaint painted onto that screen, over a program's own display, while the real main screen
+underneath kept whatever was on it. The next `?1049l` any program sent popped the terminal back to
+that stale screen and discarded everything cm had painted. The symptom was quitting nvim and being
+left at a prompt with the whole nvim window still above it, which reads as cm failing to clear the
+screen: the screen it failed to leave is one cm never knew the client was on.
+
+Two details, both load-bearing:
+
+- **The clear comes after the switch, not before.** A client clears its terminal before writing the
+  blob, so that clear lands on whichever screen the terminal is on: the alternate one gets wiped,
+  the switch to main follows, and main still holds its stale contents. Measured exactly that way,
+  the restored screen came back with the stale line still on top. This mirrors the other direction
+  rather than adding anything, since `?1049h` is defined as save cursor, switch, *and* clear. That
+  `?1049l` does not clear is the asymmetry that produced the bug.
+- **It is unconditional, not gated on whether the session ever used the alternate screen.** "Did
+  this session use it" is the wrong question, because the state being corrected belongs to the
+  client: a terminal can be left on the alternate screen by a program that ran before cm was in the
+  path, and after a server restart the model does not remember either way.
+
+Safe in the common case, measured both ways rather than assumed. Against libghostty the contents are
+byte-identical with and without it, and in a real kitty all 60 lines of scrollback survive it with
+the visible screen unchanged. It is also prepended *after* the "nothing to restore" check rather
+than written into the buffer, since a client clears its terminal whenever the blob is non-empty, and
+a blob that is never empty would have a client wiping the window it attaches to.
 
 ## Replayed modes belong to the program, not to cm
 
@@ -148,12 +184,19 @@ that were not causes. Two mistakes are worth naming, since both look like eviden
 - `cm list` showing `running(claude)` is the last command the shell reported via OSC 133, not a live
   process. It says nothing about whether that program is still there.
 
-Two rendering complaints *were* cm, and they are worth knowing so the paragraph above does not read as
-"rendering is never cm". Both are a different mechanism from mode replay: not what cm repeats to a
+Three rendering complaints *were* cm, and they are worth knowing so the paragraph above does not read
+as "rendering is never cm". Two are a different mechanism from mode replay: not what cm repeats to a
 client, but what cm *answers* a program. See "The answers cm does not take from its model" in
 `docs/architecture.md`.
 
-In each case the discriminator is the shape of the window rather than the program. Scrolling both halves
+The third is mode replay, and it is the exception to "that state describes the program". A blob for a
+session on the *main* screen said nothing about the screen at all, so a repaint could paint onto a
+client's alternate screen and leave a full-screen program's display behind after it quit. What
+distinguishes it from the false leads above is that the missing mode is one no program ever set:
+the question is not which modes the program turned on, but whether the blob describes the screen it
+belongs to. See "A main-screen blob has to say so" above.
+
+For those two the discriminator is the shape of the window rather than the program. Scrolling both halves
 of a split needed a **vertical** split, because a full-width scroll region never routes through margins
 at all. A window that keeps its old height needed a split to **close**, because a program that has
 stopped listening for resizes looks fine until one happens.
