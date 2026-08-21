@@ -44,6 +44,11 @@ type pendingRequest struct {
 	// tok names the client the question went to, so a reply arriving from a different client is not
 	// mistaken for the answer. Nil for a queued local reply.
 	tok *attachToken
+	// seq is the query itself, kept so a reply can be matched to the question rather than only to the
+	// client. The client answers questions cm never asked it too, because cm forwards the queries its own
+	// model handles to every client verbatim, and those answers arrive on the same path. See
+	// query.AnswersQuery. Empty for a queued local reply.
+	seq []byte
 	// data is the bytes to write to the pty: the reply, once known. Empty for a proxied entry until its
 	// answer arrives.
 	data []byte
@@ -100,6 +105,7 @@ func (s *Session) proxyQuery(seq []byte) {
 	s.requests = append(s.requests, &pendingRequest{
 		proxied: true,
 		tok:     tok,
+		seq:     append([]byte(nil), seq...),
 		asked:   s.now(),
 	})
 	s.mu.Unlock()
@@ -158,11 +164,20 @@ func (s *Session) queryTargetLocked() *attachToken {
 // make safe: a client whose terminal answered something on its own, or a client replaying a query out of
 // the log after reconnecting, produces bytes nobody asked for, and forwarding them is the duplicate answer
 // that printed a branch name into a prompt.
+//
+// The match is on the *question*, not only on the client, and that distinction is the reported
+// `gh pr create --web` and `wallfacer sync` corruption. cm forwards the queries its own model answers to
+// every client verbatim, so a client's terminal answers those too and its replies arrive here alongside the
+// one cm is waiting for. termenv, which both of those programs use, sends OSC 11 and then CSI 6n as a
+// sentinel: cm proxies the OSC 11 and answers the CSI 6n itself, and matching on the token alone accepted
+// the terminal's cursor report as the background colour. cm wrote it to the pty, released its own cursor
+// report queued behind it, and discarded the real colour reply as unsolicited, which printed
+// "^[[42;1R^[[42;1R" beside the prompt.
 func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 	s.mu.Lock()
 	var matched bool
 	for _, r := range s.requests {
-		if r.proxied && r.tok == tok && r.data == nil {
+		if r.proxied && r.tok == tok && r.data == nil && query.AnswersQuery(r.seq, data) {
 			r.data = append([]byte(nil), data...)
 			r.proxied = false
 			matched = true
