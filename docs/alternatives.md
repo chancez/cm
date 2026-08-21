@@ -245,7 +245,9 @@ because a comparison that lists only strengths is not useful.
 
 - **Kitty graphics do not survive a reattach.** They pass through as APC bytes while live, but
   libghostty's formatter does not re-emit them, so images are absent after reattaching. zmx has the
-  same gap for the same reason.
+  same gap for the same reason. Shared, but no longer a property of the approach: libghostty gained an
+  API for inspecting stored images, so this is a gap cm could close rather than one it is stuck with.
+  zellij closed it in 0.45.0 and still loses images across a reboot. See [ideas.md](ideas.md).
 - **Alternate-screen scrollback is not recoverable.** A full-screen program draws on the alternate
   screen and lines that scroll off there never entered scrollback. This is correct terminal behavior
   and the most confusing limitation in practice, because the symptom is output that looks truncated
