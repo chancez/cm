@@ -10,6 +10,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -190,19 +192,35 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 }
 
-// truncate shortens s to at most n characters, marking that it was cut.
+// truncate shortens s to at most n columns, marking that it was cut.
 //
 // For a table column only. The full value is in `cm info` and the JSON output, so nothing is lost by
 // abbreviating here.
+//
+// Counts runes rather than bytes, for two reasons. Cutting at a byte offset splits a multibyte rune, and
+// a title of accented characters came out as "ééé\xc3..." which a terminal paints as a replacement
+// character: the abbreviation marker says the tail was dropped, so producing visible corruption next to
+// it reads as cm mangling the title. And rune counting is what tabwriter itself does when it sizes a
+// column, so a byte count would disagree with the aligner and make the width budget below wrong for any
+// title that is not ASCII.
+//
+// Rune count is not display width: a CJK or emoji rune occupies two cells but counts as one here.
+// Deliberate, because tabwriter counts it as one too, and matching the aligner keeps the columns lined up.
+// Such a title overflows the budget by however many wide runes it holds, which costs alignment on that
+// row rather than correctness.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
 	if n <= 3 {
-		return s[:n]
+		return string(r[:n])
 	}
-	return s[:n-3] + "..."
+	return string(r[:n-3]) + "..."
 }
+
+// displayWidth is the width tabwriter will assign a cell, in the units it counts.
+func displayWidth(s string) int { return len([]rune(s)) }
 
 // firstWord returns the program name from a command line.
 //
@@ -365,12 +383,68 @@ func sessionCwdColumn(s *serverv1.Session) string {
 	return cwd
 }
 
+// tablePadding is the cell padding handed to tabwriter, named because the width budget below has to do
+// the same arithmetic the aligner does and a literal 2 in two places drifts.
+const tablePadding = 2
+
+// minTitleWidth is the narrowest the TITLE column is ever truncated to.
+//
+// Also the width the column had when it was fixed, which is deliberate: the dynamic budget only ever
+// widens. Shrinking below this on a narrow terminal was considered and rejected, because the row is
+// already too wide there for a reason TITLE cannot fix. CWD is last and unbounded, so an 80-column
+// terminal showing a deep path wraps whatever TITLE does, and the trade would be a title cut shorter than
+// today in exchange for a table that still does not fit.
+const minTitleWidth = 30
+
+// titleWidth returns the number of columns TITLE may occupy.
+//
+// termCols is the terminal's width, and 0 when output is not a terminal. reserved is what every other
+// column costs, including padding. The remainder goes to TITLE, because it is the one column whose value
+// is both frequently truncated and worth reading in full: a title is how a person recognizes which window
+// a session is, so "claude: reviewing the wid..." identifies nothing.
+//
+// A separate function so the arithmetic is testable without a terminal. Getting it wrong does not fail,
+// it wraps, and a wrapped row is the failure this is meant to avoid.
+func titleWidth(termCols, reserved int) int {
+	// Not a terminal: piped or redirected, where there is no width to fit and a value that changes with
+	// the caller's window would make the output unreproducible. The fixed width is what it has always been.
+	if termCols <= 0 {
+		return minTitleWidth
+	}
+	if budget := termCols - reserved; budget > minTitleWidth {
+		return budget
+	}
+	return minTitleWidth
+}
+
+// terminalWidth reports the width of w when it is a terminal, and 0 otherwise.
+//
+// Type-asserted rather than taking an *os.File, so the table printer keeps its io.Writer parameter and
+// tests can pass a buffer, which reports 0 and takes the fixed width.
+func terminalWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return cols
+}
+
 // printSessionsTable writes a session list as aligned columns for a human.
 //
 // Columns are assembled from a list rather than written as format strings per combination. With TAGS
 // and TITLE both optional, the branching version needed one Fprintf per combination and they had to
 // agree on column order, which is exactly the shape that lets a header and its rows drift apart.
 func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
+	return printSessionsTableWidth(w, sessions, terminalWidth(w))
+}
+
+// printSessionsTableWidth is printSessionsTable with the terminal width supplied, so a test can render
+// against a width without owning a terminal of that size.
+func printSessionsTableWidth(w io.Writer, sessions []*serverv1.Session, termCols int) error {
 	if len(sessions) == 0 {
 		return nil
 	}
@@ -407,6 +481,9 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 			return humanAge(time.Unix(s.CreatedAtUnix, 0))
 		}},
 	}
+	// titleIndex marks which column TITLE ended up at, so the sizing pass below can find it without
+	// matching on the header string. -1 when no session reported a title and the column is absent.
+	titleIndex := -1
 	if showTitle {
 		// A separate column rather than folded into STATE, because the two answer different
 		// questions: the title says what a window *is* and the state says whether it is safe to
@@ -415,10 +492,12 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 		//
 		// Before TAGS and CWD, since it is bounded in practice: a title is written to be read in a
 		// tab, so it is already short by construction.
+		//
+		// Rendered whole here. The width it is allowed is not known until every other column has been
+		// measured, so truncation happens in the sizing pass below rather than in this cell function.
+		titleIndex = len(columns)
 		columns = append(columns, column{"TITLE", func(s *serverv1.Session) string {
-			// Bounded anyway. Nothing stops a program emitting a paragraph as its title, and the
-			// full value is in `cm info` and the JSON output.
-			return truncate(s.Title, 30)
+			return s.Title
 		}})
 	}
 	if showTags {
@@ -432,18 +511,54 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 	// would line up on a normal terminal.
 	columns = append(columns, column{"CWD", sessionCwdColumn})
 
-	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	// Every cell is rendered before anything is written, because TITLE's width is the width left over
+	// once the others are measured, and what they cost is only knowable from their content: PID is 5
+	// digits or 6, and STATE is "running" or "running(blocked: needs approval)".
+	rows := make([][]string, 0, len(sessions))
+	for _, s := range sessions {
+		cells := make([]string, 0, len(columns))
+		for _, c := range columns {
+			cells = append(cells, c.cell(s))
+		}
+		rows = append(rows, cells)
+	}
+
+	if titleIndex >= 0 {
+		// What the other columns cost, measured the way tabwriter measures: a column is as wide as its
+		// widest cell, header included, plus the padding. The last column is not padded, since nothing
+		// follows it to be separated from, which the probe confirmed rather than assumed.
+		reserved := 0
+		for i, c := range columns {
+			if i == titleIndex {
+				continue
+			}
+			width := displayWidth(c.header)
+			for _, cells := range rows {
+				if n := displayWidth(cells[i]); n > width {
+					width = n
+				}
+			}
+			if i != len(columns)-1 {
+				width += tablePadding
+			}
+			reserved += width
+		}
+		// TITLE is padded too, since a column follows it. Counted against the budget rather than left
+		// out, or the title would be exactly two columns too wide and wrap the row it was sized to fit.
+		limit := titleWidth(termCols, reserved+tablePadding)
+		for _, cells := range rows {
+			cells[titleIndex] = truncate(cells[titleIndex], limit)
+		}
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 8, tablePadding, ' ', 0)
 	headers := make([]string, 0, len(columns))
 	for _, c := range columns {
 		headers = append(headers, c.header)
 	}
 	fmt.Fprintln(tw, strings.Join(headers, "\t"))
 
-	for _, s := range sessions {
-		cells := make([]string, 0, len(columns))
-		for _, c := range columns {
-			cells = append(cells, c.cell(s))
-		}
+	for _, cells := range rows {
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	return tw.Flush()

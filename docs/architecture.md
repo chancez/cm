@@ -549,6 +549,41 @@ user's, so rewriting `/home/user/x` against this machine's home would assert a r
 not exist, and both hosts putting users under `/home` is what makes it look right. The abbreviation is
 display-only for the reason `docs/config.md` gives, that `~` expands in a shell and nowhere else.
 
+### Sizing the TITLE column
+
+TITLE gets whatever width the other columns leave, rather than a fixed 30. A title is how a person
+recognizes which window a session is, and `claude: reviewing the wid...` identifies nothing. Measured on
+a 120-column terminal against two ordinary sessions: both titles were cut at 30 and both fit whole once
+the budget was dynamic, with the widest row at 119 columns.
+
+Three things make this more than `termCols - fixedCost`.
+
+**The budget is computed from rendered cells, not from column definitions.** What the other columns cost
+is only knowable from their content: PID is five digits or six, and STATE is `running` or
+`running(blocked: needs approval)`. So every cell is rendered into a slice first, the other columns are
+measured, and only then is TITLE truncated. That is also why the arithmetic has to match `tabwriter`
+exactly: a column is as wide as its widest cell including the header, plus padding, and the *last* column
+is not padded because nothing follows it. Both facts were probed rather than assumed, and both are
+mutation tested. Getting either wrong by two columns wraps every row.
+
+**Widths are counted in runes, because that is what `tabwriter` counts.** Counting bytes over-reserves for
+any non-ASCII cell and hands TITLE less width than the terminal had, which renders correctly and is
+therefore invisible. A path under a name with accents is the ordinary case. Truncation moved to runes at
+the same time and for a second reason: cutting at a byte offset split a multibyte rune, so a title of
+accented characters rendered as `ééé\xc3...`, putting visible corruption next to the marker that says the
+tail was dropped. Rune count is still not display width, since a CJK or emoji rune occupies two cells and
+counts as one, but matching the aligner is what keeps the columns lined up, and such a title costs
+alignment on its own row rather than correctness.
+
+**Not a terminal means the old fixed width.** Piped or redirected output must not vary with whoever's
+window ran the command, or `cm list > file` stops being reproducible and diffs noisily between two
+people's terminals.
+
+The floor is the old 30 and the column never shrinks below it. Shrinking on a narrow terminal was
+considered and rejected: CWD sits last and is unbounded, so an 80-column terminal showing a deep path
+wraps whatever TITLE does, and the trade would be a shorter title in exchange for a table that still
+does not fit.
+
 Whether a command is running comes from OSC 133, via `internal/osc.CommandTracker`. This is the one an
 emulator cannot work out for itself: cm owns the pty, so kitty only ever sees `cm attach` running and
 cannot tell a session sitting at a prompt from one in the middle of a build. It is what a close
