@@ -607,6 +607,10 @@ type OpenOptions struct {
 	Name string
 	// Rows and Cols size a newly created session.
 	Rows, Cols uint16
+	// XPixel and YPixel size a newly created session in pixels, zero when the client did not report
+	// them. Passed to the shim so a program that reads the pty's pixel dimensions before doing anything
+	// else, such as `kitten icat`, sees them in a session that has never been resized.
+	XPixel, YPixel uint16
 	// Command overrides the user's shell for a new session.
 	Command []string
 	// Dir is the working directory for a new session.
@@ -912,13 +916,14 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	return sess, nil
 }
 
-// spawnShim re-execs this binary as a shim and waits for its socket.
+// shimArgs builds the argv a shim is spawned with.
 //
-// Go cannot fork, so re-exec replaces the double-fork a C implementation would use. The
-// child is deliberately not waited on: it must outlive this server, so it is reparented to
-// init by letting this process release it. Setsid detaches it from the server's session so
-// a signal sent to the server's process group cannot reach it.
-func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPath string) (int, error) {
+// Separated from spawnShim so what is passed can be asserted without spawning a process. That matters
+// because the failure mode here is silent: a field that OpenOptions carries and this function forgets
+// produces a working session with one thing missing, which is how a client's pixel size reached the
+// server and never reached the pty. `kitten icat` then refused to draw anything, and the error it
+// printed named the terminal rather than cm.
+func (m *Manager) shimArgs(opts OpenOptions, logPath string) []string {
 	args := []string{
 		"--runtime-dir", m.dirs.Runtime,
 		"--state-dir", m.dirs.State,
@@ -926,6 +931,14 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPa
 		"--session", opts.Name,
 		"--rows", strconv.Itoa(int(opts.Rows)),
 		"--cols", strconv.Itoa(int(opts.Cols)),
+	}
+	// Only when known. A client that reported no pixel size must leave the pty's fields zero, since
+	// that is how a program tells that the terminal cannot report them.
+	if opts.XPixel > 0 && opts.YPixel > 0 {
+		args = append(args,
+			"--xpixel", strconv.Itoa(int(opts.XPixel)),
+			"--ypixel", strconv.Itoa(int(opts.YPixel)),
+		)
 	}
 	if logPath != "" {
 		args = append(args, "--persist-path", logPath)
@@ -946,6 +959,17 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPa
 		args = append(args, "--")
 		args = append(args, opts.Command...)
 	}
+	return args
+}
+
+// spawnShim re-execs this binary as a shim and waits for its socket.
+//
+// Go cannot fork, so re-exec replaces the double-fork a C implementation would use. The
+// child is deliberately not waited on: it must outlive this server, so it is reparented to
+// init by letting this process release it. Setsid detaches it from the server's session so
+// a signal sent to the server's process group cannot reach it.
+func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPath string) (int, error) {
+	args := m.shimArgs(opts, logPath)
 
 	cmd := exec.Command(m.selfExe, args...)
 	cmd.Env = append(os.Environ(), opts.Env...)

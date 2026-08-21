@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -402,5 +403,59 @@ func TestTrimNamePrefix(t *testing.T) {
 		if got := trimNamePrefix(tt.msg, tt.name); got != tt.want {
 			t.Errorf("trimNamePrefix(%q, %q) = %q, want %q", tt.msg, tt.name, got, tt.want)
 		}
+	}
+}
+
+// A client's pixel size has to reach the shim's argv, or the pty is created without it.
+//
+// This is the seam the bug lived at: Open carried x_pixel and y_pixel on the wire, Resize plumbed them
+// through correctly, and the create path dropped them between the request and the shim. The result was
+// a session whose pty reported zero pixels until something resized it, and `kitten icat` reads exactly
+// that field before transmitting, so it refused to draw and blamed the terminal.
+//
+// Asserted on the argv rather than end to end because spawning a shim needs a real pty, and the whole
+// defect was in what got passed.
+func TestShimArgsCarryPixelSize(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+
+	args := mgr.shimArgs(OpenOptions{
+		Name: "pixels",
+		Rows: 30, Cols: 100,
+		XPixel: 800, YPixel: 600,
+	}, "")
+
+	want := []string{
+		"--runtime-dir", mgr.dirs.Runtime,
+		"--state-dir", mgr.dirs.State,
+		"shim",
+		"--session", "pixels",
+		"--rows", "30",
+		"--cols", "100",
+		"--xpixel", "800",
+		"--ypixel", "600",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("shimArgs() = %v, want %v", args, want)
+	}
+}
+
+// A client that cannot report pixels must not have any invented for it. Zero is the value a program
+// reads as "this terminal does not know", so passing a made-up size would be worse than passing none:
+// it would have the program compute cell dimensions from a window that does not exist.
+func TestShimArgsOmitUnknownPixelSize(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+
+	args := mgr.shimArgs(OpenOptions{Name: "nopixels", Rows: 24, Cols: 80}, "")
+
+	want := []string{
+		"--runtime-dir", mgr.dirs.Runtime,
+		"--state-dir", mgr.dirs.State,
+		"shim",
+		"--session", "nopixels",
+		"--rows", "24",
+		"--cols", "80",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("shimArgs() = %v, want %v", args, want)
 	}
 }
