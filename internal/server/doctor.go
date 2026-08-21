@@ -252,10 +252,36 @@ func sessionFromSocket(path string) string {
 }
 
 // probeShimState asks a shim about itself, reporting whether it answered.
+//
+// Retries a failed dial, which matters because --clean acts on the answer by *removing* the socket:
+// reporting a live shim as stale and then unlinking its socket orphans it, leaving a real shell
+// running with a pty on a path nothing can name. A refusal is not evidence of absence, since a unix
+// listener refuses once its accept queue fills, with the same errno a socket nobody serves produces.
+// A busy listener recovers within about 11ms of returning to its accept loop, so retrying separates
+// the two where a single dial cannot.
 func probeShimState(ctx context.Context, socket string) (*shimv1.StateResponse, bool) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
+	deadline := time.Now().Add(socketRefusalGrace)
+	for {
+		st, ok := tryShimState(ctx, socket)
+		if ok {
+			return st, true
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return nil, false
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// tryShimState is one attempt at asking a shim about itself.
+func tryShimState(ctx context.Context, socket string) (*shimv1.StateResponse, bool) {
 	conn, cl, err := dialShim(socket)
 	if err != nil {
 		return nil, false

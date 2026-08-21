@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/chancez/cm/internal/cmlog"
@@ -238,18 +240,81 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // the former justifies declaring a session dead.
 func probeShim(ctx context.Context, socket string) (alive bool, err error) {
 	d := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := d.DialContext(ctx, "unix", socket)
-	if err != nil {
-		// ENOENT or ECONNREFUSED mean nothing is there. A timeout means unknown, so
-		// report it as possibly alive to avoid discarding a busy shim.
+	deadline := time.Now().Add(socketRefusalGrace)
+	for {
+		conn, err := d.DialContext(ctx, "unix", socket)
+		if err == nil {
+			conn.Close()
+			return true, nil
+		}
+
+		// A path that does not exist is the one answer worth acting on immediately, and it is the
+		// common case for a shim that exited cleanly, since it unlinks its own socket.
+		if socketAbsent(err) {
+			return false, err
+		}
+		// A timeout means the shim exists but is slow, which is not something retrying improves.
+		// Reported as possibly alive so a busy shim is not discarded.
 		if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return true, err
 		}
-		return false, err
+		// Anything else is a refusal, which a live shim with a full backlog and a stale socket file
+		// both produce. Retry: the live one drains its queue and answers, the stale one never will.
+		if time.Now().After(deadline) {
+			// Out of patience, and nothing has answered in probeRetryWindow. Treated as not
+			// listening, which is what lets a genuinely stale socket be cleaned up rather than
+			// keeping a dead session alive forever.
+			return false, err
+		}
+		select {
+		case <-ctx.Done():
+			// Cancelled rather than answered, so say nothing definite. Reported as possibly alive,
+			// since the caller's fallback for that is to leave the session alone.
+			return true, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	conn.Close()
-	return true, nil
 }
+
+// socketAbsent reports whether a dial error proves nothing is serving the path.
+//
+// Built from measurement on both platforms, because the comment this replaces asserted the opposite
+// as fact and was wrong in the destructive direction. The cases, with the errno each actually gives:
+//
+//	                          darwin        linux
+//	missing path              ENOENT        ENOENT        conclusive
+//	plain file, not a socket   ENOTSOCK      ECONNREFUSED  differs
+//	stale socket, no listener  ECONNREFUSED  ECONNREFUSED  ambiguous
+//	live listener, queue full   ECONNREFUSED  EAGAIN        ambiguous
+//
+// Only a missing path is conclusive on both, so that is all this reports. ENOTSOCK is checked because
+// darwin gives it and it is unambiguous there, but it must not be relied on: Linux answers
+// ECONNREFUSED for a plain file, indistinguishable from a stale socket, and treating that as absence
+// on darwin only would make the two platforms disagree about a destructive decision.
+//
+// The bottom two rows are the crux. A unix listener refuses connections once its accept queue fills:
+// on darwin with the same ECONNREFUSED a dead socket gives, on Linux with EAGAIN. Measured on darwin,
+// a listener with a 50ms handler under 64 concurrent dials refused 185160 of 302124 dials while
+// accepting throughout; the queue fills at 128 connections there and 4097 on Linux.
+//
+// So neither a refusal nor EAGAIN is evidence of absence, and this returns false for both. Separating
+// them has to be behavioral: a live listener resumes answering once it returns to accepting, measured
+// at about 11ms, while a socket whose process is gone refuses for as long as anyone asks. That retry
+// belongs to the caller, since only it knows what a wrong answer costs.
+func socketAbsent(err error) bool {
+	// errors.Is rather than string matching, since a dial error arrives wrapped in *net.OpError.
+	// ENOTDIR covers a parent that is gone or is not a directory, which is as conclusive as ENOENT.
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// socketRefusalGrace is how long a path must refuse connections without pause before the refusal is
+// believed to mean nothing is listening.
+//
+// Sized from measurement rather than picked: a live listener whose accept queue was deliberately
+// filled became dialable again after about 11ms once it resumed accepting, so this is an order of
+// magnitude above that. Small enough that a genuinely stale socket does not delay a create
+// noticeably, which is the case it trades against, and both directions have a test.
+const socketRefusalGrace = 250 * time.Millisecond
 
 // adopt connects to an existing shim and starts consuming from fromSeq.
 //
@@ -931,14 +996,38 @@ const shimReleaseTimeout = 5 * time.Second
 // -- the shim removes such a file itself when it binds.
 func waitForSocketFree(ctx context.Context, socket string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	// Tracks how long the path has been refusing connections without interruption. A stale socket
+	// refuses forever, a busy listener recovers within a few milliseconds, and the errno is identical,
+	// so elapsed refusal is the only thing that separates them.
+	refusingSince := time.Time{}
+
 	for {
 		conn, err := net.Dial("unix", socket)
-		if err != nil {
-			// Nothing is listening, so the path is free. Any dial failure means that, including the
-			// common case of the file not existing at all.
+		switch {
+		case err == nil:
+			conn.Close()
+			refusingSince = time.Time{}
+
+		case socketAbsent(err):
+			// Conclusive: nothing can be listening on a path that does not exist or is not a socket.
 			return nil
+
+		default:
+			// A refusal, which a live shim with a full accept queue and a socket left behind by a
+			// crashed one both produce. Returning here is what the bug was: it let a replacement shim
+			// try to bind a path a live shim still held, which fails with an error naming the socket
+			// rather than the cause. Surfaced as TestWaitForSocketFreeWaitsForALiveListenerToClose
+			// failing under a parallel `go test ./...`.
+			//
+			// Waiting forever is not right either, since a stale socket must not stall every create
+			// for the whole timeout. So a sustained refusal is taken as absence.
+			if refusingSince.IsZero() {
+				refusingSince = time.Now()
+			}
+			if time.Since(refusingSince) >= socketRefusalGrace {
+				return nil
+			}
 		}
-		conn.Close()
 
 		if time.Now().After(deadline) {
 			// Reported rather than spawning anyway, because spawning would fail with a socket error that

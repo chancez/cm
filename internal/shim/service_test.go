@@ -355,6 +355,110 @@ func TestListenRefusesWhenAlreadyServed(t *testing.T) {
 	}
 }
 
+// A live shim whose accept queue was momentarily full must not have its socket taken.
+//
+// The worst version of this bug, because the damage is unrecoverable. Listen unlinks a socket it
+// believes is stale, and it used to believe that on the strength of a single refused dial. But a unix
+// listener refuses connections once its accept queue is full, with the same errno a socket nobody
+// serves produces, so a shim that was simply busy had its socket removed: the shell keeps running,
+// holding a pty, on a path nothing can name again. `cm doctor` cannot even find it, since it
+// enumerates sockets.
+//
+// The busy state is constructed rather than waited for, so the refusal happens every run where under
+// real load it happens rarely and looks like a flake. The queue is then allowed to drain, because
+// that is what separates this case from a stale socket: a listener that is alive resumes answering,
+// and one whose process has gone never does. Only Accept dequeues, so the drain has to accept rather
+// than merely close the held connections, which was worth learning the hard way in the server's
+// equivalent test.
+func TestListenDoesNotStealTheSocketOfABusyShim(t *testing.T) {
+	socket := filepath.Join(shortTempDir(t), "s.sock")
+
+	l, err := Listen(socket)
+	if err != nil {
+		t.Fatalf("first Listen() error = %v", err)
+	}
+	defer l.Close()
+
+	// Fill the accept queue so the listener refuses, without yet calling Accept. Bounded well above
+	// any real backlog so a failure to fill is reported rather than looping.
+	var held []net.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	// The bound clears Linux's accept queue as well as darwin's, measured at 4097 and 128
+	// respectively: 1024 was enough on one platform and silently not on the other.
+	const limit = 8192
+	for i := 0; i < limit; i++ {
+		c, derr := net.Dial("unix", socket)
+		if derr != nil {
+			break
+		}
+		held = append(held, c)
+	}
+	if len(held) == 0 {
+		t.Fatal("the listener refused the first dial, so it was never accepting")
+	}
+	if _, derr := net.Dial("unix", socket); derr == nil {
+		t.Fatalf("dialed %s after %d connections without a refusal, so the queue never filled; "+
+			"this test proves nothing", socket, len(held))
+	}
+
+	// Start accepting shortly, as a busy shim returning to its loop would. Well inside the grace, so
+	// a correct Listen retries, finds the shim answering, and refuses to touch its socket.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		for {
+			c, aerr := l.Accept()
+			if aerr != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	if _, err := Listen(socket); err == nil {
+		t.Error("Listen() = nil error while a live shim held the socket, want refusal: " +
+			"reclaiming it orphans that shim and its shell")
+	}
+
+	// And the socket still belongs to the original listener, which is the damage being prevented.
+	if _, err := os.Stat(socket); err != nil {
+		t.Errorf("Stat(%s) = %v after a failed Listen, want the live shim's socket left in place",
+			socket, err)
+	}
+}
+
+// A socket left behind by a shim killed with SIGKILL must still be reclaimable, or the session name
+// becomes permanently unusable.
+//
+// The control for the test above, and the case that decides the tradeoff: a sustained refusal is
+// treated as a stale socket rather than a busy shim. Distinct from TestListenReclaimsStaleSocket,
+// which closes the listener normally and so unlinks the file, exercising the ENOENT path instead of
+// this one.
+func TestListenReclaimsASocketLeftByAKilledShim(t *testing.T) {
+	socket := filepath.Join(shortTempDir(t), "s.sock")
+
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	if ul, ok := ln.(*net.UnixListener); ok {
+		// Without this the file is unlinked on close and this is not the case being tested. A shim
+		// killed with SIGKILL runs no cleanup, so its socket file survives.
+		ul.SetUnlinkOnClose(false)
+	}
+	ln.Close()
+
+	l, err := Listen(socket)
+	if err != nil {
+		t.Fatalf("Listen() over a socket left by a killed shim = %v, want reclamation: the session "+
+			"name would otherwise be unusable until someone removed the file by hand", err)
+	}
+	l.Close()
+}
+
 // A shim that died without cleaning up leaves a socket behind. Reusing the name must work,
 // or the session name would be permanently unusable.
 func TestListenReclaimsStaleSocket(t *testing.T) {

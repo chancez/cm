@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"sync"
@@ -194,6 +195,64 @@ func int32s(pids []int) []int32 {
 	return out
 }
 
+// socketRefusalGrace is how long a socket must refuse connections without pause before Listen
+// believes nothing is serving it.
+//
+// A single refusal is not evidence: a unix listener refuses once its accept queue fills, with the
+// same errno a socket nobody serves produces. Measured in this tree, a live listener whose queue was
+// deliberately filled became dialable again about 11ms after it resumed accepting, so this is an
+// order of magnitude above that. The mirror of the server's own constant of the same name, kept
+// separate because these are different processes and neither should import the other.
+const socketRefusalGrace = 250 * time.Millisecond
+
+// checkSocketUnserved returns an error unless nothing is serving the path.
+//
+// Retries a refusal rather than trusting it, and the reason is the worst failure in this file. A
+// refusal is what a live shim gives while its accept queue is full, and it is also what a socket left
+// behind by a dead one gives, so a single dial cannot tell them apart. Treating the first refusal as
+// "nothing there" let Listen unlink the socket of a shim that was merely busy, which orphans it with
+// no way back: the shell keeps running, holding a pty, on a path nothing can name, where not even
+// `cm doctor` can find it since that enumerates sockets.
+//
+// A sustained refusal is reclaimed rather than reported, which needs justifying because reclaiming
+// wrongly is the unrecoverable direction. Two things make it the right call here.
+//
+// A socket that refuses without pause for the whole grace is not a busy listener. A full accept queue
+// drains as soon as the process returns to accepting, measured at about 11ms, so a quarter of a second
+// of unbroken refusal means nothing is accepting at all. That is what a shim killed with SIGKILL
+// leaves behind, along with anything left by a reboot, and refusing to reclaim it would make the
+// session name permanently unusable.
+//
+// The ambiguous case is also already handled upstream. A shim is spawned by the server, and the
+// server calls waitForSocketFree first, which polls with the same distinction and fails the create if
+// the path is still held. So a shim reaching this point has been preceded by a check with a longer
+// timeout, and the single-refusal misread that motivated all of this cannot survive both.
+func checkSocketUnserved(socketPath string) error {
+	deadline := time.Now().Add(socketRefusalGrace)
+	for {
+		conn, err := net.Dial("unix", socketPath)
+		if err == nil {
+			conn.Close()
+			return fmt.Errorf("%s is already served by a live shim", socketPath)
+		}
+		// A path that does not exist is conclusive: nothing can be serving it, so it is safe to
+		// reclaim. This is the common case, since a shim unlinks its own socket on the way out.
+		//
+		// Deliberately only this, matching the server's socketAbsent. ENOTSOCK is not portable
+		// enough to act on: darwin gives it for a plain file while Linux gives ECONNREFUSED, which
+		// is indistinguishable from a stale socket, so relying on it would make the platforms
+		// disagree about whether to unlink.
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			// Refused throughout, so nothing is accepting: a stale socket rather than a busy shim.
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // Listen creates the shim's socket.
 //
 // The socket is bound before the caller reports readiness so there is no window where the
@@ -206,12 +265,11 @@ func Listen(socketPath string) (net.Listener, error) {
 	if err := paths.CheckSocketPath(socketPath); err != nil {
 		return nil, err
 	}
-	if conn, err := net.Dial("unix", socketPath); err == nil {
-		conn.Close()
-		return nil, fmt.Errorf("%s is already served by a live shim", socketPath)
+	if err := checkSocketUnserved(socketPath); err != nil {
+		return nil, err
 	}
-	// Any dial failure means nothing is listening, so the path is safe to reuse.
-	// ENOENT is the common case and removing it is harmless.
+	// Nothing answers, so the path is safe to reuse. ENOENT is the common case and removing
+	// it is harmless.
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("removing stale socket %s: %w", socketPath, err)
 	}

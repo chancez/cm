@@ -223,6 +223,16 @@ Three places, by kind:
 - **Unix socket paths are capped at 104 bytes** on darwin, and the failure is a bare `EINVAL`.
   `t.TempDir()` embeds the test name and blows past it; the e2e harness uses `os.MkdirTemp("", "cme2e")`
   for exactly this reason. `paths.MaxSocketPathLen` holds the limit.
+- **`ECONNREFUSED` from a socket does not mean nothing is listening.** A unix listener stops accepting
+  once its queue fills, and says so with the same error a socket nobody serves gives: measured at
+  185160 refusals out of 302124 dials against a listener that was accepting throughout. Three places
+  assumed otherwise, and the costly one marked a busy shim's session dead on server startup, stranding
+  a live shell. **Only `ENOENT` is conclusive**, and only on both platforms, which is the part that
+  bit twice: darwin reports a plain file as `ENOTSOCK` while Linux reports `ECONNREFUSED`, and a full
+  queue is `ECONNREFUSED` on darwin but `EAGAIN` on Linux. Separating a busy listener from a dead one
+  has to be behavioral, since the live one resumes answering within about 11ms while a stale socket
+  never does; `socketRefusalGrace` is that wait. Linux also queues 4097 connections against darwin's
+  128, so a test that fills a backlog needs a bound above both or it silently proves nothing there.
 - **A leaked shim holds a pty**, macOS caps them at 511 system-wide, and exhaustion surfaces as
   `device not configured` in whatever test runs next. Always stop sessions before the server.
 - **`cp` over a running binary gets later invocations SIGKILLed on macOS** -- the cached code signature
