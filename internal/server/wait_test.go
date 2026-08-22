@@ -19,9 +19,7 @@ func waitFixture(t *testing.T, name, script string) (*Service, *Session) {
 
 	rec := startShimFor(t, shimConfigFor(name, script))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -166,9 +164,10 @@ func TestWaitTimeoutReportsCurrentState(t *testing.T) {
 func TestWaitOnEndedSessionFailsFastForUnreachableStates(t *testing.T) {
 	mgr, st, _ := newTestManager(t, nil)
 	ctx := context.Background()
-	if err := st.Create(ctx, store.Session{Name: "gone", State: store.StateExited}); err != nil {
+	if err := st.Create(ctx, store.Session{ID: "gone", State: store.StateExited}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	nameSession(t, st, "gone")
 	svc := NewService(mgr)
 
 	if _, err := svc.Wait(ctx, &serverv1.WaitRequest{

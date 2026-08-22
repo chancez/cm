@@ -76,7 +76,7 @@ func NewService(m *Manager) *Service { return &Service{mgr: m} }
 // rather than the session, and Attach reads them directly.
 func openOptionsFrom(open *serverv1.Open) OpenOptions {
 	return OpenOptions{
-		Name:          open.Session,
+		Ref:           open.Session,
 		Rows:          uint16(open.Rows),
 		Cols:          uint16(open.Cols),
 		XPixel:        uint16(open.XPixel),
@@ -125,11 +125,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// After Open rather than before, because a session created by this call has no row to update
 	// until then.
 	if len(open.ClientEnv) > 0 {
-		if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Env: open.ClientEnv}); err != nil {
+		if err := s.mgr.store.Apply(ctx, sess.id, store.Update{Env: open.ClientEnv}); err != nil {
 			// Advisory: the session works, but `get-env` will hand out stale values, which is
 			// otherwise mysterious.
 			s.mgr.log.Warn("recording client environment failed",
-				"session", sess.name, "error", err)
+				"session", sess.id, "error", err)
 		}
 	}
 
@@ -193,9 +193,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Opened{
 					Opened: &serverv1.Opened{
-						Session: sess.name,
-						Created: created,
-						NextSeq: sess.LastSeq(),
+						Session:   sess.Label(),
+						SessionId: sess.id,
+						Created:   created,
+						NextSeq:   sess.LastSeq(),
 					},
 				},
 			}); err != nil {
@@ -220,15 +221,15 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// one from a different server, and neither is an error worth failing an attach over. Nothing is
 	// frozen in that case, which is correct, because there is no parent whose bookkeeping could be
 	// wrong.
-	if open.InsideSession != "" && open.InsideSession != sess.name {
+	if open.InsideSession != "" && open.InsideSession != sess.id {
 		if parent, live := s.mgr.Get(open.InsideSession); live {
-			parent.beginHosting(sess.name)
-			defer parent.endHosting(sess.name)
+			parent.beginHosting(sess.id)
+			defer parent.endHosting(sess.id)
 		}
 	}
 
 	s.mgr.log.Info("client attached",
-		"session", sess.name, "created", created, "resuming", open.ResumeFromSeq != nil,
+		"session", sess.id, "created", created, "resuming", open.ResumeFromSeq != nil,
 		"read_only", open.ReadOnly,
 		"inside", open.InsideSession, "restore_bytes", len(att.restore))
 	reader := att.reader
@@ -261,10 +262,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	if err := srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Opened{
 			Opened: &serverv1.Opened{
-				Session: sess.name,
-				Created: created,
-				Restore: restore,
-				NextSeq: startSeq,
+				Session:   sess.Label(),
+				SessionId: sess.id,
+				Created:   created,
+				Restore:   restore,
+				NextSeq:   startSeq,
 			},
 		},
 	}); err != nil {
@@ -393,9 +395,9 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				},
 			})
 			if upgrade {
-				s.mgr.log.Info("client asked to upgrade", "session", sess.name)
+				s.mgr.log.Info("client asked to upgrade", "session", sess.id)
 			} else {
-				s.mgr.log.Info("client detached on request", "session", sess.name)
+				s.mgr.log.Info("client detached on request", "session", sess.id)
 			}
 			return nil
 
@@ -454,14 +456,14 @@ func (s *Service) sizeForAttach(
 		// output stream, so a resize can reach a shim whose pty is already released while this session
 		// still looks alive.
 		if ended, _ := sess.Ended(); !ended && !isSessionOver(err) {
-			return fmt.Errorf("sizing session %s: %w", sess.name, err)
+			return fmt.Errorf("sizing session %s: %w", sess.id, err)
 		}
-		s.mgr.log.Info("skipped sizing a session that ended while attaching", "session", sess.name)
+		s.mgr.log.Info("skipped sizing a session that ended while attaching", "session", sess.id)
 	}
 
 	ir, ic := int(rows), int(cols)
-	if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
-		s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+	if err := s.mgr.store.Apply(ctx, sess.id, store.Update{Rows: &ir, Cols: &ic}); err != nil {
+		s.mgr.log.Warn("recording session size failed", "session", sess.id, "error", err)
 	}
 	return nil
 }
@@ -498,7 +500,7 @@ func (s *Service) recvLoop(
 					// An interactive client that asked for the acknowledgement and lost its connection
 					// before it arrived, unlike the case above where not waiting was the intent.
 					s.mgr.log.Warn("acknowledging a detach failed",
-						"session", sess.name, "error", err)
+						"session", sess.id, "error", err)
 				}
 			}
 			close(detached)
@@ -553,13 +555,13 @@ func (s *Service) recvLoop(
 							continue
 						}
 						if err := sess.Write(ctx, part.Data); err != nil {
-							return fmt.Errorf("writing to session %s: %w", sess.name, err)
+							return fmt.Errorf("writing to session %s: %w", sess.id, err)
 						}
 					}
 					continue
 				}
 				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
-					return fmt.Errorf("writing to session %s: %w", sess.name, err)
+					return fmt.Errorf("writing to session %s: %w", sess.id, err)
 				}
 				continue
 			}
@@ -572,18 +574,18 @@ func (s *Service) recvLoop(
 			if rows, cols, x, y, resize := sess.claimLeadership(tok); resize {
 				if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
 					s.mgr.log.Warn("resizing on leadership change failed",
-						"session", sess.name, "error", err)
+						"session", sess.id, "error", err)
 				} else {
 					ir, ic := int(rows), int(cols)
-					if err := s.mgr.store.Apply(ctx, sess.name,
+					if err := s.mgr.store.Apply(ctx, sess.id,
 						store.Update{Rows: &ir, Cols: &ic}); err != nil {
 						s.mgr.log.Warn("recording session size failed",
-							"session", sess.name, "error", err)
+							"session", sess.id, "error", err)
 					}
 				}
 			}
 			if err := sess.Write(ctx, req.GetInput().Data); err != nil {
-				return fmt.Errorf("writing to session %s: %w", sess.name, err)
+				return fmt.Errorf("writing to session %s: %w", sess.id, err)
 			}
 
 		case req.GetResize() != nil:
@@ -600,11 +602,11 @@ func (s *Service) recvLoop(
 				continue
 			}
 			if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
-				return fmt.Errorf("resizing session %s: %w", sess.name, err)
+				return fmt.Errorf("resizing session %s: %w", sess.id, err)
 			}
 			ir, ic := int(rows), int(cols)
-			if err := s.mgr.store.Apply(ctx, sess.name, store.Update{Rows: &ir, Cols: &ic}); err != nil {
-				s.mgr.log.Warn("recording session size failed", "session", sess.name, "error", err)
+			if err := s.mgr.store.Apply(ctx, sess.id, store.Update{Rows: &ir, Cols: &ic}); err != nil {
+				s.mgr.log.Warn("recording session size failed", "session", sess.id, "error", err)
 			}
 		}
 	}
@@ -618,7 +620,13 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 		return nil, err
 	}
 
-	records, err := s.mgr.List(ctx, req.Prefix)
+	records, err := s.mgr.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// One query for every session's names rather than one per row, since this is the most frequently
+	// run command there is.
+	namesByID, err := s.mgr.NamesByID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -631,10 +639,20 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 		if !selector.Match(rec.Tags) {
 			continue
 		}
+		names := namesByID[rec.ID]
+		// A prefix now asks "is this session named something starting with this", which a session can
+		// answer several times over or not at all. Matched in Go rather than in SQL: names live in
+		// their own table and session counts are in the tens, and doing it here deleted the LIKE
+		// escaping the query used to need, where a prefix containing % matched everything.
+		if req.Prefix != "" && !anyHasPrefix(names, req.Prefix) {
+			continue
+		}
 		item := &serverv1.Session{
-			Name:          rec.Name,
+			Name:          Label(rec.ID, names),
+			Id:            rec.ID,
+			Names:         names,
 			ShellPid:      int32(rec.ShellPID),
-			Clients:       uint32(s.mgr.Clients(rec.Name)),
+			Clients:       uint32(s.mgr.Clients(rec.ID)),
 			Cwd:           rec.Cwd,
 			CwdIsLocal:    true,
 			Title:         rec.Title,
@@ -647,7 +665,7 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			Tags: rec.Tags,
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
-		if sess, live := s.mgr.Get(rec.Name); live {
+		if sess, live := s.mgr.Get(rec.ID); live {
 			// Including its outcome. A session records that it ended before the manager writes it
 			// back, so a caller polling for a short-lived command would otherwise see it as running
 			// and then briefly as dead, since an unwritten record still says running while the shim
@@ -758,8 +776,14 @@ func sessionState(st store.State) serverv1.SessionState {
 
 func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
-	for _, name := range req.Sessions {
-		surviving, err := s.mgr.Kill(ctx, name, req.Force, req.Signal)
+	for _, ref := range req.Sessions {
+		name := ref
+		id, err := s.mgr.Resolve(ctx, ref)
+		if err != nil {
+			resp.Errors[name] = trimNamePrefix(err.Error(), name)
+			continue
+		}
+		surviving, err := s.mgr.Kill(ctx, id, req.Force, req.Signal)
 		if err != nil {
 			// The map is already keyed by name, so a message that repeats it reads as
 			// `nosuch: "nosuch": session not found`. Strip the redundant prefix.
@@ -796,11 +820,16 @@ func (s *Service) Detach(
 		Errors:   make(map[string]string),
 	}
 	for _, name := range req.Sessions {
-		sess, live := s.mgr.Get(name)
+		id, err := s.mgr.Resolve(context.Background(), name)
+		if err != nil {
+			resp.Errors[name] = trimNamePrefix(err.Error(), name)
+			continue
+		}
+		sess, live := s.mgr.Get(id)
 		if !live {
 			// Distinguished from a name that does not exist at all, which is worth an error: asking to
 			// detach something never created is a mistake, while asking to detach an idle session is not.
-			if _, err := s.mgr.store.Get(context.Background(), name); err != nil {
+			if _, err := s.mgr.store.Get(context.Background(), id); err != nil {
 				resp.Errors[name] = trimNamePrefix(err.Error(), name)
 				continue
 			}
@@ -829,12 +858,12 @@ func (s *Service) UpgradeClients(
 ) (*serverv1.UpgradeClientsResponse, error) {
 	names := req.Sessions
 	if len(names) == 0 {
-		records, err := s.mgr.List(ctx, "")
+		records, err := s.mgr.List(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("listing sessions to upgrade: %w", err)
 		}
 		for _, rec := range records {
-			names = append(names, rec.Name)
+			names = append(names, paths.FormatSessionID(rec.ID))
 		}
 	}
 
@@ -847,9 +876,14 @@ func (s *Service) UpgradeClients(
 	// be installed: a client re-execs the binary on disk, and the server was started from that same path.
 	current := s.mgr.Version()
 	for _, name := range names {
-		sess, live := s.mgr.Get(name)
+		id, err := s.mgr.Resolve(ctx, name)
+		if err != nil {
+			resp.Errors[name] = trimNamePrefix(err.Error(), name)
+			continue
+		}
+		sess, live := s.mgr.Get(id)
 		if !live {
-			if _, err := s.mgr.store.Get(ctx, name); err != nil {
+			if _, err := s.mgr.store.Get(ctx, id); err != nil {
 				resp.Errors[name] = trimNamePrefix(err.Error(), name)
 				continue
 			}
@@ -873,7 +907,11 @@ func (s *Service) UpgradeClients(
 }
 
 func (s *Service) Send(ctx context.Context, req *serverv1.SendRequest) (*serverv1.SendResponse, error) {
-	sess, ok := s.mgr.Get(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess, ok := s.mgr.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("%q: %w", req.Session, store.ErrNotFound)
 	}
@@ -998,8 +1036,8 @@ func writeInputThenEnter(ctx context.Context, sess *Session, data, enter []byte)
 //
 // Checked via Ended rather than by looking for a nil terminal, so the decision does not depend on a field
 // another goroutine owns, and so a session built without an emulator still takes the same path it always did.
-func (s *Service) readableSession(name string) *Session {
-	sess, live := s.mgr.Get(name)
+func (s *Service) readableSession(id string) *Session {
+	sess, live := s.mgr.Get(id)
 	if !live {
 		return nil
 	}
@@ -1010,12 +1048,16 @@ func (s *Service) readableSession(name string) *Session {
 }
 
 func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error) {
-	sess := s.readableSession(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess := s.readableSession(id)
 	if sess == nil {
 		// A session that has ended has no terminal model, whether or not it has left the registry yet. If it
 		// was persisting, its output is still on disk and can be replayed, which is what makes reading a
 		// finished command's output possible at all.
-		data, err := s.mgr.HistoryFromDisk(ctx, req.Session, req.Format)
+		data, err := s.mgr.HistoryFromDisk(ctx, id, req.Format)
 		if err != nil {
 			return nil, err
 		}
@@ -1049,7 +1091,11 @@ func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv
 		return nil, errors.New("since_commands and last_output cannot both be set")
 	}
 
-	sess := s.readableSession(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess := s.readableSession(id)
 	if sess == nil {
 		if req.SinceCommands > 0 || req.LastOutput {
 			// Command boundaries live in memory alongside the session, so a session that has ended has
@@ -1062,7 +1108,7 @@ func (s *Service) Read(ctx context.Context, req *serverv1.ReadRequest) (*serverv
 		}
 		// A finished session is the common case here, not an edge one: `cm run` waits for its command, so
 		// the session has already ended by the time anything reads its output.
-		data, err := s.mgr.ReadFromDisk(ctx, req.Session, int(req.Lines), req.Unwrap, req.Raw)
+		data, err := s.mgr.ReadFromDisk(ctx, id, int(req.Lines), req.Unwrap, req.Raw)
 		if err != nil {
 			return nil, err
 		}
@@ -1136,7 +1182,11 @@ func (s *Service) readFromCommand(
 }
 
 func (s *Service) GetEnv(ctx context.Context, req *serverv1.GetEnvRequest) (*serverv1.GetEnvResponse, error) {
-	rec, err := s.mgr.store.Get(ctx, req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.mgr.store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1199,4 +1249,17 @@ func isSessionOver(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), shim.ErrSessionOver.Error())
+}
+
+// anyHasPrefix reports whether any name starts with prefix.
+//
+// A session with no names matches nothing, which is the honest answer: `cm ls --prefix kitty.` is asking
+// about names, and a session that has none is not one of them.
+func anyHasPrefix(names []string, prefix string) bool {
+	for _, name := range names {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

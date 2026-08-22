@@ -100,7 +100,7 @@ func TestPruneShimLogsKeepsRecordedSession(t *testing.T) {
 	writeLog(t, dirs.ShimLog("recorded"),
 		shimStarted(now.Add(-30*24*time.Hour)), shimExited(now.Add(-29*24*time.Hour)))
 	if err := st.Create(context.Background(), store.Session{
-		Name:      "recorded",
+		ID:        "recorded",
 		State:     store.StateExited,
 		CreatedAt: now.Add(-30 * 24 * time.Hour),
 		UpdatedAt: now.Add(-29 * 24 * time.Hour),

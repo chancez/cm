@@ -174,9 +174,15 @@ func Start(cfg Config) (*Session, error) {
 	cmd.Dir = cfg.Dir
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 	cmd.Env = append(os.Environ(), cfg.Env...)
-	// The shell learns its session name the same way it learns anything else about its
+	// The shell learns which session it is in the same way it learns anything else about its
 	// environment. Programs use its presence to detect that they are inside cm.
-	cmd.Env = append(cmd.Env, paths.SessionEnv()+"="+cfg.Session)
+	//
+	// The session's ID, as a reference with the sigil, so `cm read $CM_SESSION` works. A name would be
+	// the friendlier value and would be wrong: names are bindings, so the one this session was created
+	// under can be pointed at a different session while this shell runs, and every script in here that
+	// had captured it would then be reading somewhere else. An ID cannot be reassigned, which is the
+	// only property that makes a variable captured once at shell startup safe to keep using.
+	cmd.Env = append(cmd.Env, paths.SessionEnv()+"="+paths.FormatSessionID(cfg.Session))
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		// Setsid plus Setctty makes the pty the child's controlling terminal, which is
 		// what gives it job control and delivers SIGWINCH on resize. Ctty is an index

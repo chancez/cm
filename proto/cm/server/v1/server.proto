@@ -588,9 +588,18 @@ message Metadata {
 }
 
 message Opened {
-  // Resolved session name, which the client needs when it asked the server to allocate
-  // one.
+  // What to call this session when talking to a person: the name it was attached by, or "@" plus its ID
+  // when it has no name. What a client prints in "detached from ...".
+  //
+  // Not what to hold on to. A name is a binding and can be pointed elsewhere while this client is
+  // attached, so anything that comes back to this session later must use session_id.
   string session = 1;
+  // The session's identity, which is what a client should use for every later call about it.
+  //
+  // Needed even when the client supplied a name: `cm run` polls for its session to finish, and polling
+  // by name would find a different session if the name moved, or none at all when there was no name to
+  // begin with.
+  string session_id = 5;
   // Whether this call created the session.
   bool created = 2;
   // Bytes to write to the terminal before streaming output: either serialized screen
@@ -738,7 +747,27 @@ enum SessionState {
 }
 
 message Session {
+  // What to call this session when talking to a person: one of its names, or "@" plus its ID when it
+  // has none.
+  //
+  // Kept as field 1 under its old name because that is what every caller displays, and it still answers
+  // the same question. What changed is that it is no longer an identity: use id to refer to this
+  // session, since a name can be pointed at a different one at any time.
   string name = 1;
+
+  // The session's identity: allocated when it is created, never reused, and never changed.
+  //
+  // Anything holding on to a session across calls should hold this. A name is a binding, so the name a
+  // listing showed a moment ago may now resolve elsewhere, while an ID either finds the same session or
+  // finds nothing.
+  string id = 22;
+
+  // Every name bound to this session, oldest first.
+  //
+  // Repeated because a session can have several, which is what makes a terminal window's automatic name
+  // and a name a person chose able to coexist on one session. Empty for a session nothing names, which
+  // is normal: `cm attach` with no name and `cm run -d` both produce one.
+  repeated string names = 23;
   int32 shell_pid = 2;
   // Number of attached clients.
   uint32 clients = 3;

@@ -30,7 +30,7 @@ func TestConcurrentCreates(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if err := st.Create(ctx, Session{Name: fmt.Sprintf("s%d", i)}); err != nil {
+			if err := st.Create(ctx, Session{ID: fmt.Sprintf("s%d", i)}); err != nil {
 				errs <- fmt.Errorf("Create(s%d): %w", i, err)
 			}
 		}(i)
@@ -41,7 +41,7 @@ func TestConcurrentCreates(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 
-	got, err := st.List(ctx, "")
+	got, err := st.List(ctx)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
@@ -50,12 +50,12 @@ func TestConcurrentCreates(t *testing.T) {
 	}
 }
 
-// Two creates of the same name: exactly one wins.
+// Two creates of the same ID: exactly one wins.
 //
 // The name is the identity of a session, and it is what a socket path is built from. Two sessions sharing one
 // would mean two shims on one socket, so this has to be decided by the database rather than by a check-then-act
 // in the caller, which is a race by construction.
-func TestConcurrentCreatesOfTheSameNameConflict(t *testing.T) {
+func TestConcurrentCreatesOfTheSameIDConflict(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
@@ -68,7 +68,7 @@ func TestConcurrentCreatesOfTheSameNameConflict(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := st.Create(ctx, Session{Name: "contested"}); err == nil {
+			if err := st.Create(ctx, Session{ID: "contested"}); err == nil {
 				mu.Lock()
 				succeeded++
 				mu.Unlock()
@@ -78,7 +78,7 @@ func TestConcurrentCreatesOfTheSameNameConflict(t *testing.T) {
 	wg.Wait()
 
 	if succeeded != 1 {
-		t.Errorf("%d creates of the same name succeeded, want exactly 1", succeeded)
+		t.Errorf("%d creates of the same ID succeeded, want exactly 1", succeeded)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 
 	// Something to read.
 	for i := range 10 {
-		if err := st.Create(ctx, Session{Name: fmt.Sprintf("base%d", i)}); err != nil {
+		if err := st.Create(ctx, Session{ID: fmt.Sprintf("base%d", i)}); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
 	}
@@ -106,7 +106,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 		// Writers, as a session being created or finishing.
 		go func(i int) {
 			defer wg.Done()
-			if err := st.Create(ctx, Session{Name: fmt.Sprintf("new%d", i)}); err != nil {
+			if err := st.Create(ctx, Session{ID: fmt.Sprintf("new%d", i)}); err != nil {
 				errs <- fmt.Errorf("Create: %w", err)
 			}
 		}(i)
@@ -124,7 +124,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 		// Readers, as `cm list` and completion.
 		go func() {
 			defer wg.Done()
-			if _, err := st.List(ctx, ""); err != nil {
+			if _, err := st.List(ctx); err != nil {
 				errs <- fmt.Errorf("List: %w", err)
 			}
 		}()
@@ -152,7 +152,7 @@ func TestConcurrentDeletesAreIdempotent(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
-	if err := st.Create(ctx, Session{Name: "doomed"}); err != nil {
+	if err := st.Create(ctx, Session{ID: "doomed"}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -179,49 +179,5 @@ func TestConcurrentDeletesAreIdempotent(t *testing.T) {
 	// And a delete of a name that never existed is equally fine, which is the property the manager relies on.
 	if err := st.Delete(ctx, "never-existed"); err != nil {
 		t.Errorf("Delete() of an unknown name error = %v, want nil", err)
-	}
-}
-
-// Concurrent name allocation never hands out the same name twice.
-//
-// NextName reads the highest existing number and adds one, which is a check-then-act unless the database
-// serializes it. Two windows opening at once is exactly how this is reached, and a duplicate name means two
-// shims on one socket path.
-func TestConcurrentNextNameIsUnique(t *testing.T) {
-	st := openTestStore(t)
-	ctx := context.Background()
-
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		names = map[string]int{}
-	)
-	for range concurrentOps {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			name, err := st.NextName(ctx, "s")
-			if err != nil {
-				return
-			}
-			// Claimed immediately, as the manager does: allocation only means anything if the name is then
-			// taken, and this is where a duplicate would show up.
-			if err := st.Create(ctx, Session{Name: name}); err != nil {
-				return
-			}
-			mu.Lock()
-			names[name]++
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-
-	for name, n := range names {
-		if n > 1 {
-			t.Errorf("name %q was allocated and claimed %d times, want 1", name, n)
-		}
-	}
-	if len(names) == 0 {
-		t.Error("no names were allocated, so this test asserted nothing")
 	}
 }

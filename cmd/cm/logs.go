@@ -135,7 +135,14 @@ what the shell printed.`,
 			if err != nil {
 				return err
 			}
-			return runLogs(cmd.Context(), dirs.ShimLog(args[0]), f)
+			// The log is named after the session's ID, so a name has to be resolved first. Read from
+			// the database rather than from the server, since the reason to read a shim log is usually
+			// that something is wrong.
+			id, err := sessionLogStem(cmd.Context(), dirs, args[0])
+			if err != nil {
+				return err
+			}
+			return runLogs(cmd.Context(), dirs.ShimLog(id), f)
 		},
 	}
 	f.bind(cmd)

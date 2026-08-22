@@ -2249,9 +2249,18 @@ func (x *Metadata) GetReportedDetail() string {
 
 type Opened struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Resolved session name, which the client needs when it asked the server to allocate
-	// one.
+	// What to call this session when talking to a person: the name it was attached by, or "@" plus its ID
+	// when it has no name. What a client prints in "detached from ...".
+	//
+	// Not what to hold on to. A name is a binding and can be pointed elsewhere while this client is
+	// attached, so anything that comes back to this session later must use session_id.
 	Session string `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	// The session's identity, which is what a client should use for every later call about it.
+	//
+	// Needed even when the client supplied a name: `cm run` polls for its session to finish, and polling
+	// by name would find a different session if the name moved, or none at all when there was no name to
+	// begin with.
+	SessionId string `protobuf:"bytes,5,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Whether this call created the session.
 	Created bool `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
 	// Bytes to write to the terminal before streaming output: either serialized screen
@@ -2297,6 +2306,13 @@ func (*Opened) Descriptor() ([]byte, []int) {
 func (x *Opened) GetSession() string {
 	if x != nil {
 		return x.Session
+	}
+	return ""
+}
+
+func (x *Opened) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
 	}
 	return ""
 }
@@ -3010,9 +3026,27 @@ func (x *ListResponse) GetSessions() []*Session {
 }
 
 type Session struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Name     string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	ShellPid int32                  `protobuf:"varint,2,opt,name=shell_pid,json=shellPid,proto3" json:"shell_pid,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What to call this session when talking to a person: one of its names, or "@" plus its ID when it
+	// has none.
+	//
+	// Kept as field 1 under its old name because that is what every caller displays, and it still answers
+	// the same question. What changed is that it is no longer an identity: use id to refer to this
+	// session, since a name can be pointed at a different one at any time.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The session's identity: allocated when it is created, never reused, and never changed.
+	//
+	// Anything holding on to a session across calls should hold this. A name is a binding, so the name a
+	// listing showed a moment ago may now resolve elsewhere, while an ID either finds the same session or
+	// finds nothing.
+	Id string `protobuf:"bytes,22,opt,name=id,proto3" json:"id,omitempty"`
+	// Every name bound to this session, oldest first.
+	//
+	// Repeated because a session can have several, which is what makes a terminal window's automatic name
+	// and a name a person chose able to coexist on one session. Empty for a session nothing names, which
+	// is normal: `cm attach` with no name and `cm run -d` both produce one.
+	Names    []string `protobuf:"bytes,23,rep,name=names,proto3" json:"names,omitempty"`
+	ShellPid int32    `protobuf:"varint,2,opt,name=shell_pid,json=shellPid,proto3" json:"shell_pid,omitempty"`
 	// Number of attached clients.
 	Clients uint32 `protobuf:"varint,3,opt,name=clients,proto3" json:"clients,omitempty"`
 	// Working directory, as reported by the shell via OSC 7. May be empty if the shell
@@ -3129,6 +3163,20 @@ func (x *Session) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *Session) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Session) GetNames() []string {
+	if x != nil {
+		return x.Names
+	}
+	return nil
 }
 
 func (x *Session) GetShellPid() int32 {
@@ -3973,9 +4021,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x10command_finished\x18\n" +
 	" \x01(\bR\x0fcommandFinished\x12%\n" +
 	"\x0ereported_state\x18\x06 \x01(\tR\rreportedState\x12'\n" +
-	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\"q\n" +
+	"\x0freported_detail\x18\a \x01(\tR\x0ereportedDetail\"\x90\x01\n" +
 	"\x06Opened\x12\x18\n" +
-	"\asession\x18\x01 \x01(\tR\asession\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\x12\x18\n" +
 	"\arestore\x18\x03 \x01(\fR\arestore\x12\x19\n" +
 	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"@\n" +
@@ -4038,9 +4088,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\x9e\x06\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc4\x06\n" +
 	"\aSession\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
+	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
+	"\x05names\x18\x17 \x03(\tR\x05names\x12\x1b\n" +
 	"\tshell_pid\x18\x02 \x01(\x05R\bshellPid\x12\x18\n" +
 	"\aclients\x18\x03 \x01(\rR\aclients\x12\x10\n" +
 	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12 \n" +

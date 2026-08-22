@@ -54,7 +54,7 @@ func TestReconcileMarksMissingShimDead(t *testing.T) {
 
 	// A record pointing at a socket that was never created.
 	if err := st.Create(ctx, store.Session{
-		Name:       "ghost",
+		ID:         "ghost",
 		ShimSocket: dirs.ShimSocket("ghost"),
 		LogPath:    dirs.SessionLog("ghost"),
 		State:      store.StateRunning,
@@ -87,9 +87,7 @@ func TestReconcileAdoptsLiveShim(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("adopted", "echo ADOPTED; sleep 5"))
 	rec.LogPath = "/unused"
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
@@ -125,7 +123,7 @@ func TestReconcileSkipsNonRunningRecords(t *testing.T) {
 	ctx := context.Background()
 
 	if err := st.Create(ctx, store.Session{
-		Name:       "finished",
+		ID:         "finished",
 		ShimSocket: dirs.ShimSocket("finished"),
 		LogPath:    dirs.SessionLog("finished"),
 		State:      store.StateExited,
@@ -156,7 +154,7 @@ func TestOpenReplacesStaleRecord(t *testing.T) {
 	ctx := context.Background()
 
 	if err := st.Create(ctx, store.Session{
-		Name:       "reused",
+		ID:         "reused",
 		ShimSocket: dirs.ShimSocket("reused"),
 		LogPath:    dirs.SessionLog("reused"),
 		State:      store.StateDead,
@@ -164,10 +162,14 @@ func TestOpenReplacesStaleRecord(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
+	// The name has to be bound for this to be the case under test at all: an unbound name would send
+	// Open down the create path, which allocates a new identity and leaves the stale record alone.
+	nameSession(t, st, "reused")
+
 	// Spawning a real shim requires the cm binary, so only the record-replacement half is
 	// asserted here; end-to-end creation is covered by the CLI tests.
 	mgr.selfExe = "/nonexistent/cm"
-	_, _, err := mgr.Open(ctx, OpenOptions{Name: "reused", Rows: 24, Cols: 80})
+	_, _, err := mgr.Open(ctx, OpenOptions{Ref: "reused", Rows: 24, Cols: 80})
 	if err == nil {
 		t.Fatal("Open() with a bogus shim binary succeeded, want failure")
 	}
@@ -187,14 +189,12 @@ func TestOpenReturnsExistingLiveSession(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("shared", "sleep 5"))
 	rec.LogPath = "/unused"
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	first, created, err := mgr.Open(ctx, OpenOptions{Name: "shared"})
+	first, created, err := mgr.Open(ctx, OpenOptions{Ref: "shared"})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestOpenReturnsExistingLiveSession(t *testing.T) {
 		t.Error("created = true, want false for an existing session")
 	}
 
-	second, created, err := mgr.Open(ctx, OpenOptions{Name: "shared"})
+	second, created, err := mgr.Open(ctx, OpenOptions{Ref: "shared"})
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)
 	}
@@ -213,25 +213,28 @@ func TestOpenReturnsExistingLiveSession(t *testing.T) {
 
 func TestOpenRejectsInvalidName(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
-	if _, _, err := mgr.Open(context.Background(), OpenOptions{Name: "../evil"}); err == nil {
+	if _, _, err := mgr.Open(context.Background(), OpenOptions{Ref: "../evil"}); err == nil {
 		t.Error("Open() with a traversal name = nil error, want rejection")
 	}
 }
 
-// An empty name asks the server to allocate one, which is how a terminal emulator gets a
-// per-window session without inventing names.
-func TestOpenAllocatesNameWhenEmpty(t *testing.T) {
+// An empty reference asks for a session with no name at all, which is what `cm attach` with no
+// argument and `cm run -d` both do. It must allocate an identity rather than refusing.
+//
+// This used to allocate a name like s17 as well. It no longer does, and the ID is what a caller gets
+// back: an implicit name was only ever a stand-in for an identity.
+func TestOpenWithNoReferenceAllocatesAnIdentity(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
 	mgr.selfExe = "/nonexistent/cm"
 
-	// Creation fails without a real binary, but the allocation happens first and is what is
-	// being checked: the error must not be about a missing name.
+	// Creation fails without a real binary, but the allocation happens first and is what is being
+	// checked: the error must name a session that was allocated rather than an empty one.
 	_, _, err := mgr.Open(context.Background(), OpenOptions{Rows: 24, Cols: 80})
 	if err == nil {
 		t.Fatal("Open() succeeded with a bogus shim binary, want failure")
 	}
-	if strings.Contains(err.Error(), "session name is empty") {
-		t.Errorf("Open() error = %v, want a name to have been allocated", err)
+	if strings.Contains(err.Error(), "is empty") {
+		t.Errorf("Open() error = %v, want an identity to have been allocated", err)
 	}
 }
 
@@ -242,7 +245,7 @@ func TestKillWithoutForceKeepsUnreachableRecord(t *testing.T) {
 	ctx := context.Background()
 
 	if err := st.Create(ctx, store.Session{
-		Name:       "unreachable",
+		ID:         "unreachable",
 		ShimSocket: dirs.ShimSocket("unreachable"),
 		LogPath:    dirs.SessionLog("unreachable"),
 		State:      store.StateRunning,
@@ -282,9 +285,7 @@ func TestCloseLeavesShimRunningAndPersistsResumePoint(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("persisted", "echo SOMETHING; sleep 5"))
 	rec.LogPath = "/unused"
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -371,9 +372,7 @@ func TestListReportsLiveSequence(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("listed", "echo LISTED; sleep 5"))
 	rec.LogPath = "/unused"
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -397,7 +396,7 @@ func TestListReportsLiveSequence(t *testing.T) {
 	var sessions []store.Session
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		sessions, err = mgr.List(ctx, "")
+		sessions, err = mgr.List(ctx)
 		if err != nil {
 			t.Fatalf("List() error = %v", err)
 		}
@@ -452,7 +451,9 @@ func TestShimArgsCarryPixelSize(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
 
 	args := mgr.shimArgs(OpenOptions{
-		Name: "pixels",
+		// The identity, not the reference a client asked by: the shim's socket and log are named
+		// after the ID, and a reference never reaches it.
+		id:   "pixels",
 		Rows: 30, Cols: 100,
 		XPixel: 800, YPixel: 600,
 	}, "")
@@ -478,7 +479,7 @@ func TestShimArgsCarryPixelSize(t *testing.T) {
 func TestShimArgsOmitUnknownPixelSize(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
 
-	args := mgr.shimArgs(OpenOptions{Name: "nopixels", Rows: 24, Cols: 80}, "")
+	args := mgr.shimArgs(OpenOptions{id: "nopixels", Rows: 24, Cols: 80}, "")
 
 	want := []string{
 		"--runtime-dir", mgr.dirs.Runtime,
@@ -490,5 +491,35 @@ func TestShimArgsOmitUnknownPixelSize(t *testing.T) {
 	}
 	if !slices.Equal(args, want) {
 		t.Errorf("shimArgs() = %v, want %v", args, want)
+	}
+}
+
+// recordSession stores a session and binds its ID as a name as well.
+//
+// What a test means by "a session called x" needs both rows now. Before names were bindings the record
+// carried the name, so a bare Create was the whole fixture; a test that skips the bind gets a session
+// nothing names, and anything that then opens x creates a second session rather than finding this one.
+// Binding the ID as the name keeps the fixtures reading as they did, and is legal because names and IDs
+// are separate namespaces: the same string can be both.
+func recordSession(t *testing.T, st *store.Store, rec store.Session) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	nameSession(t, st, rec.ID)
+}
+
+// nameSession binds a session's ID as a name for it, so a fixture can refer to it the way a user would.
+//
+// Separate from recordSession because plenty of fixtures create a record and never go through the
+// resolve layer, and those genuinely need no name: a session with none is an ordinary session rather
+// than a broken fixture.
+func nameSession(t *testing.T, st *store.Store, id string) {
+	t.Helper()
+	if err := st.Bind(context.Background(), store.Binding{
+		Name: id, SessionID: id, OnKill: store.KillTarget,
+	}); err != nil {
+		t.Fatalf("Bind() error = %v", err)
 	}
 }

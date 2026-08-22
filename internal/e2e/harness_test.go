@@ -512,11 +512,14 @@ func (e *env) sessionDetail(t *testing.T, name string) sessionJSON {
 
 // sessionJSON is the subset of `cm list --json` these tests read.
 type sessionJSON struct {
-	Name     string `json:"name"`
-	State    string `json:"state"`
-	ShellPID int    `json:"shell_pid"`
-	Clients  int    `json:"clients"`
-	ExitCode int    `json:"exit_code"`
+	Name string `json:"name"`
+	// ID is the session's identity, which is what its shim socket and its logs are named after.
+	ID       string   `json:"id"`
+	Names    []string `json:"names"`
+	State    string   `json:"state"`
+	ShellPID int      `json:"shell_pid"`
+	Clients  int      `json:"clients"`
+	ExitCode int      `json:"exit_code"`
 	// Busy and Command are what the shell reported via OSC 133.
 	Busy    bool   `json:"busy"`
 	Command string `json:"command"`
@@ -579,6 +582,19 @@ func (e *env) session(name string) (sessionJSON, bool) {
 		}
 	}
 	return sessionJSON{}, false
+}
+
+// sessionID returns a named session's identity, which is what its logs and socket are named after.
+func (e *env) sessionID(name string) string {
+	e.t.Helper()
+	s, ok := e.session(name)
+	if !ok {
+		e.t.Fatalf("no session named %q in the listing", name)
+	}
+	if s.ID == "" {
+		e.t.Fatalf("session %q reported no ID", name)
+	}
+	return s.ID
 }
 
 // waitServerGone blocks until no server is listening.
@@ -764,13 +780,13 @@ func (e *env) ageAllRecords(d time.Duration) {
 	}
 	defer st.Close()
 
-	sessions, err := st.List(context.Background(), "")
+	sessions, err := st.List(context.Background())
 	if err != nil {
 		e.t.Fatalf("List() error = %v", err)
 	}
 	for _, rec := range sessions {
-		if err := st.SetUpdatedAt(context.Background(), rec.Name, rec.UpdatedAt.Add(-d)); err != nil {
-			e.t.Fatalf("SetUpdatedAt(%s) error = %v", rec.Name, err)
+		if err := st.SetUpdatedAt(context.Background(), rec.ID, rec.UpdatedAt.Add(-d)); err != nil {
+			e.t.Fatalf("SetUpdatedAt(%s) error = %v", rec.ID, err)
 		}
 	}
 }
@@ -782,7 +798,16 @@ func (e *env) ageAllRecords(d time.Duration) {
 // spawning a shim and recording it, or a deleted state directory, leaves behind.
 //
 // Requires no server to be running, since sqlite is opened directly.
-func (e *env) deleteSessionRecord(name string) {
+// deleteSessionRecord removes a named session's record and its name, and returns the ID it removed.
+//
+// Both rows, because the state being simulated is a record removed behind the server's back: a name left
+// pointing at nothing is not a state anything produces, and leaving one would test a recovery path
+// rather than the orphan it means to.
+//
+// The ID is returned because it is the only thing left identifying the session afterwards. A shim socket
+// is named after the ID, and with the record gone there is nothing to look a name up in, so that is what
+// a report about it can say.
+func (e *env) deleteSessionRecord(name string) string {
 	e.t.Helper()
 
 	dirs := paths.Dirs{Runtime: e.runtime, State: e.state}
@@ -792,9 +817,18 @@ func (e *env) deleteSessionRecord(name string) {
 	}
 	defer st.Close()
 
-	if err := st.Delete(context.Background(), name); err != nil {
-		e.t.Fatalf("Delete(%s) error = %v", name, err)
+	ctx := context.Background()
+	binding, err := st.Binding(ctx, name)
+	if err != nil {
+		e.t.Fatalf("Binding(%s) error = %v", name, err)
 	}
+	if err := st.Delete(ctx, binding.SessionID); err != nil {
+		e.t.Fatalf("Delete(%s) error = %v", binding.SessionID, err)
+	}
+	if _, err := st.Unbind(ctx, name); err != nil {
+		e.t.Fatalf("Unbind(%s) error = %v", name, err)
+	}
+	return binding.SessionID
 }
 
 // waitFor polls until cond holds, failing with describe if it never does.

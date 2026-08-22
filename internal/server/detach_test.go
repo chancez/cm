@@ -22,9 +22,7 @@ func TestEvictedClientLeavesAndSessionSurvives(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("evictown", "sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

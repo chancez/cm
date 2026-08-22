@@ -104,7 +104,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			}
 
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
-				name, created, err := startRun(ctx, cl, runOptions{
+				id, created, err := startRun(ctx, cl, runOptions{
 					session: session,
 					dir:     dir,
 					command: args,
@@ -122,6 +122,13 @@ owns the process and reaps it, so nothing is inferred from output.`,
 				//
 				// Sent through the same path as `cm send --follow`, which already solves the ordering and the
 				// stop condition, rather than reimplementing either here.
+				// Every RPC takes a reference rather than a bare identity, so an ID has to carry the
+				// sigil: passed bare it would be looked up as a name and find nothing.
+				ref := session
+				if ref == "" {
+					ref = paths.FormatSessionID(id)
+				}
+
 				if !created {
 					cfg, cerr := g.config()
 					if cerr != nil {
@@ -132,19 +139,22 @@ owns the process and reaps it, so nothing is inferred from output.`,
 						defer closeLog.Close()
 					}
 					return runInExistingSession(
-						cmd.Context(), dirs, name, args, detach, timeout, quiet, raw,
+						cmd.Context(), dirs, ref, args, detach, timeout, quiet, raw,
 						match, matchRaw, logger)
 				}
 
 				if detach {
+					// The reference rather than the ID, so a caller doing `s=$(cm run -d ...)` gets
+					// back the name it chose when it chose one, and something it can pass straight to
+					// another command either way.
 					if asJSON {
-						return writeJSON(os.Stdout, map[string]string{"session": name})
+						return writeJSON(os.Stdout, map[string]string{"session": ref, "id": id})
 					}
-					_, err := fmt.Println(name)
+					_, err := fmt.Println(ref)
 					return err
 				}
 
-				return waitForRun(ctx, cl, name, timeout, asJSON, quiet)
+				return waitForRun(ctx, cl, id, ref, timeout, asJSON, quiet)
 			})
 		},
 	}
@@ -202,7 +212,7 @@ type runOptions struct {
 // command's output.
 func startRun(
 	ctx context.Context, cl serverv1.ServerClient, opts runOptions,
-) (name string, created bool, err error) {
+) (id string, created bool, err error) {
 	stream, err := cl.Attach(ctx)
 	if err != nil {
 		return "", false, err
@@ -260,14 +270,18 @@ func startRun(
 	_ = stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
-	return opened.Session, opened.Created, nil
+	// The ID rather than the name. Polling by name would find nothing at all for a `cm run` that named
+	// no session, and could find a *different* session if the name were pointed elsewhere while the
+	// command ran.
+	return opened.SessionId, opened.Created, nil
 }
 
 // waitForRun blocks until the command finishes, then exits with its status.
 func waitForRun(
 	ctx context.Context,
 	cl serverv1.ServerClient,
-	name string,
+	id string,
+	ref string,
 	timeout time.Duration,
 	asJSON bool,
 	quiet bool,
@@ -279,13 +293,15 @@ func waitForRun(
 	}
 
 	for {
-		resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: name})
+		// Unfiltered: a prefix filters on names, and this session is identified by its ID, which it has
+		// whether or not anything names it. Session counts are in the tens.
+		resp, err := cl.List(ctx, &serverv1.ListRequest{})
 		if err != nil {
 			return err
 		}
 
 		for _, s := range resp.Sessions {
-			if s.Name != name {
+			if s.Id != id {
 				continue
 			}
 			state := stateName(s)
@@ -306,14 +322,15 @@ func waitForRun(
 			// Skipped in JSON mode, where mixing free-form output into a structured document would break the
 			// parser that asked for JSON.
 			if !quiet && !asJSON {
-				if err := printRunOutput(ctx, cl, name); err != nil {
+				if err := printRunOutput(ctx, cl, ref); err != nil {
 					return err
 				}
 			}
 
 			if asJSON {
 				if err := writeJSON(os.Stdout, map[string]any{
-					"session":   name,
+					"session":   ref,
+					"id":        id,
 					"state":     state,
 					"exit_code": s.ExitCode,
 				}); err != nil {
@@ -323,7 +340,7 @@ func waitForRun(
 			if state == "dead" {
 				// The shim vanished, so there is no status to report. Distinguished from an exit
 				// because "the command failed" and "cm lost track of it" are different problems.
-				return fmt.Errorf("session %s ended unexpectedly", name)
+				return fmt.Errorf("session %s ended unexpectedly", ref)
 			}
 			if s.ExitCode != 0 {
 				// The command's status is this command's status, so `cm run -- false` fails the way
@@ -336,7 +353,7 @@ func waitForRun(
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("timed out waiting for %s; it is still running", name)
+				return fmt.Errorf("timed out waiting for %s; it is still running", ref)
 			}
 			return ctx.Err()
 		case <-time.After(runPollInterval):
@@ -353,16 +370,16 @@ func waitForRun(
 // Unwrapped, so a path or a stack frame the terminal broke to fit 80 columns comes back as one line. The width
 // is cm's own choice here -- `cm run` opens the session at 24x80 -- so rejoining is undoing something cm did
 // rather than something the program meant.
-func printRunOutput(ctx context.Context, cl serverv1.ServerClient, name string) error {
+func printRunOutput(ctx context.Context, cl serverv1.ServerClient, ref string) error {
 	resp, err := cl.Read(ctx, &serverv1.ReadRequest{
-		Session: name,
+		Session: ref,
 		Lines:   0,
 		Unwrap:  true,
 	})
 	if err != nil {
 		// Not fatal. The command's status is the point of this command, and failing to show its output should
 		// not turn a successful run into a failure. Reported so the absence is not silent.
-		fmt.Fprintf(os.Stderr, "warning: could not read %s output: %v\n", name, err)
+		fmt.Fprintf(os.Stderr, "warning: could not read %s output: %v\n", ref, err)
 		return nil
 	}
 	if len(resp.Data) == 0 {

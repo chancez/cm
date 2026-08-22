@@ -228,7 +228,9 @@ func (m *Manager) checkShellIntegration() []Finding {
 		if sess.Reported().State != "" {
 			continue
 		}
-		quiet = append(quiet, sess.name)
+		// By label, so a reader is told the name they use rather than an ID they have never seen. A
+		// session with no name still reports its ID, which is what they would have to type.
+		quiet = append(quiet, sess.Label())
 	}
 
 	if len(quiet) == 0 {
@@ -258,7 +260,7 @@ const backlogThreshold = 20
 // persisted session. Either way `cm list` fills with every command ever run and the sessions being worked on
 // are lost in it.
 func (m *Manager) checkSessionBacklog(ctx context.Context) []Finding {
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return nil
 	}

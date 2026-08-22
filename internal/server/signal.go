@@ -31,11 +31,15 @@ func (s *Service) Signal(
 		return nil, fmt.Errorf("a signal number is required, got %d", req.Signal)
 	}
 
-	sess, ok := s.mgr.Get(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess, ok := s.mgr.Get(id)
 	if !ok {
 		// Distinguishes a session that has ended from one that never existed, since the caller's next
 		// move differs: one is finished business, the other is a wrong name.
-		if _, err := s.mgr.store.Get(ctx, req.Session); err == nil {
+		if _, err := s.mgr.store.Get(ctx, id); err == nil {
 			return nil, fmt.Errorf("session %s has ended, so there is nothing to signal", req.Session)
 		}
 		return nil, fmt.Errorf("session %s not found", req.Session)

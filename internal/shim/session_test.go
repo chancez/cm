@@ -282,8 +282,11 @@ func TestSessionWriteAfterExitFails(t *testing.T) {
 	}
 }
 
-// The session name must reach the shell's environment: it is how programs inside a
-// session detect they are in one, and how the kitty integration identifies windows.
+// The session's identity must reach the shell's environment: it is how programs inside a session detect
+// they are in one, and how anything running in there refers to the session it is in.
+//
+// Exported with the ID sigil, so the value is a reference `cm read $CM_SESSION` accepts. Without it the
+// bare ID would be read as a name, and there is no session of that name.
 func TestSessionExportsSessionEnv(t *testing.T) {
 	s, err := Start(Config{
 		Session: "mysession",
@@ -298,8 +301,8 @@ func TestSessionExportsSessionEnv(t *testing.T) {
 	defer r.Close()
 
 	got := readUntil(t, r, "env=")
-	if !strings.Contains(got, "env=mysession") {
-		t.Errorf("output = %q, want it to contain %q", got, "env=mysession")
+	if !strings.Contains(got, "env=@mysession") {
+		t.Errorf("output = %q, want it to contain %q", got, "env=@mysession")
 	}
 }
 

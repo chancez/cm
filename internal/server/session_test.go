@@ -253,7 +253,7 @@ func startShimFor(t *testing.T, cfg shim.Config) store.Session {
 	// The shim binds before spawning the shell, so a connectable socket means it is ready.
 	waitSocket(t, socket)
 
-	return store.Session{Name: cfg.Session, ShimSocket: socket, Rows: int(cfg.Rows), Cols: int(cfg.Cols)}
+	return store.Session{ID: cfg.Session, ShimSocket: socket, Rows: int(cfg.Rows), Cols: int(cfg.Cols)}
 }
 
 func waitSocket(t *testing.T, socket string) {

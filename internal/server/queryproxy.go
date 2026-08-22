@@ -121,7 +121,7 @@ func (s *Session) proxyQuery(seq []byte) {
 	case ch <- append([]byte(nil), seq...):
 	default:
 		s.log.Debug("dropping a proxied query, the client's queue is full",
-			"session", s.name, "bytes", len(seq))
+			"session", s.label, "bytes", len(seq))
 	}
 }
 
@@ -212,7 +212,7 @@ func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 	if matched == 0 {
 		s.mu.Unlock()
 		s.log.Debug("discarding an unsolicited reply from a client",
-			"session", s.name, "bytes", len(data))
+			"session", s.label, "bytes", len(data))
 		return
 	}
 	ready := s.takeReadyLocked()
@@ -222,7 +222,7 @@ func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 		// Worth a line: this is the shape of the reported bug, and it is otherwise invisible because the
 		// dropped bytes are exactly the ones that used to appear beside the prompt.
 		s.log.Debug("dropped replies answering nothing cm asked",
-			"session", s.name, "count", unmatched)
+			"session", s.label, "count", unmatched)
 	}
 	s.writeReplies(ready)
 }
@@ -299,7 +299,7 @@ func (s *Session) sweepRequests() {
 
 	if expired > 0 {
 		s.log.Debug("expired proxied terminal queries with no reply",
-			"session", s.name, "count", expired)
+			"session", s.label, "count", expired)
 	}
 	s.writeReplies(ready)
 }
@@ -311,7 +311,7 @@ func (s *Session) writeReplies(replies [][]byte) {
 			// A program that queried the terminal is now waiting for an answer it will never get, so this
 			// explains an otherwise inexplicable hang.
 			s.log.Warn("delivering terminal response to the pty failed",
-				"session", s.name, "bytes", len(data), "error", err)
+				"session", s.label, "bytes", len(data), "error", err)
 			return
 		}
 	}

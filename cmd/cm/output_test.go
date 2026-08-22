@@ -62,7 +62,10 @@ func TestSessionJSONKeys(t *testing.T) {
 	}
 
 	want := []string{
-		"name", "state", "shell_pid", "clients", "exit_code", "title",
+		// name is what to show a person; id is the identity, and names is every name bound to the
+		// session, since a session can have several or none.
+		"name", "id", "names",
+		"state", "shell_pid", "clients", "exit_code", "title",
 		"cwd", "cwd_uri", "cwd_is_local", "created_at", "created_at_unix",
 		"busy", "command",
 		// The last command's own outcome, distinct from exit_code above, which is the session's.

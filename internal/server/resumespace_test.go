@@ -91,9 +91,7 @@ func TestAdoptedSessionServesAResumingClient(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("adopted",
 		"printf '\\033]133;A\\007$ one\\r\\n\\033]133;A\\007$ two\\r\\n'; printf 'MARK\\n'; sleep 5"))
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

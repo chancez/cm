@@ -126,7 +126,7 @@ func (m *Manager) checkDirPerms() []Finding {
 // Reported for finished sessions too, not just live ones, since reading a finished command's output is the
 // whole point of keeping its record.
 func (m *Manager) checkMissingLogs(ctx context.Context) []Finding {
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return nil
 	}
@@ -141,7 +141,7 @@ func (m *Manager) checkMissingLogs(ctx context.Context) []Finding {
 		if _, err := os.Stat(rec.LogPath); !errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		missing = append(missing, fmt.Sprintf("%s (%s)", rec.Name, rec.LogPath))
+		missing = append(missing, fmt.Sprintf("%s (%s)", rec.ID, rec.LogPath))
 	}
 	if len(missing) == 0 {
 		return nil

@@ -37,11 +37,15 @@ func (s *Service) Wait(ctx context.Context, req *serverv1.WaitRequest) (*serverv
 		return nil, errors.New("match_raw only applies with match")
 	}
 
-	sess, live := s.mgr.Get(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess, live := s.mgr.Get(id)
 	if !live {
 		// Not running. An exited session already satisfies a wait for EXITED, which matters because a
 		// caller racing a short command should not be told its session does not exist.
-		rec, err := s.mgr.store.Get(ctx, req.Session)
+		rec, err := s.mgr.store.Get(ctx, id)
 		if err != nil {
 			return nil, err
 		}

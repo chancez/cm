@@ -124,15 +124,18 @@ func TestDoctorFindsAndCleansAnOrphan(t *testing.T) {
 	// the row, and let the next command start a server that has never heard of the session.
 	e.mustRun("server", "stop")
 	e.waitServerGone()
-	e.deleteSessionRecord("orphan")
+	orphanID := e.deleteSessionRecord("orphan")
 
 	got, code := e.doctor()
 	orphans := got.ofKind("orphan-shim")
 	if len(orphans) != 1 {
 		t.Fatalf("doctor = %+v, want one orphan-shim", got.Findings)
 	}
-	if orphans[0].Session != "orphan" {
-		t.Errorf("orphan session = %q, want %q", orphans[0].Session, "orphan")
+	// Reported by ID rather than by the name it was created with, and that is the only thing it can be:
+	// a shim socket is named after the session's ID, and the record that knew its names is what was
+	// removed. A finding that guessed a name here would be inventing one.
+	if orphans[0].Session != orphanID {
+		t.Errorf("orphan session = %q, want %q", orphans[0].Session, orphanID)
 	}
 	// The pids are what let a reader confirm what is being reported before acting on it.
 	if orphans[0].ShimPID == 0 {

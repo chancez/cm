@@ -32,12 +32,10 @@ func endedButRegistered(t *testing.T, name, output string) *Service {
 	writeSavedLog(t, logPath, output)
 
 	rec := startShimFor(t, shimConfigFor(name, "sleep 5"))
-	rec.Name = name
+	rec.ID = name
 	rec.LogPath = logPath
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

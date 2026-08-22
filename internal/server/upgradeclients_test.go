@@ -25,9 +25,7 @@ func upgradableSession(
 	rec := startShimFor(t, shimConfigFor(name, "sleep 30"))
 	rec.LogPath = "/unused"
 	rec.State = store.StateRunning
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

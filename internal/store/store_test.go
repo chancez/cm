@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -25,11 +24,14 @@ func openTestStore(t *testing.T) *Store {
 
 // sampleSession returns a fully populated record, so round-trip tests compare whole values
 // rather than a handful of fields.
-func sampleSession(name string) Session {
+//
+// Takes an ID rather than a name: a record has no name, and the paths derive from the ID, which is what
+// a session created after the flip gets.
+func sampleSession(id string) Session {
 	return Session{
-		Name:       name,
-		ShimSocket: "/run/cm/shim-" + name + ".sock",
-		LogPath:    "/state/cm/logs/" + name + ".log",
+		ID:         id,
+		ShimSocket: "/run/cm/shim-" + id + ".sock",
+		LogPath:    "/state/cm/logs/" + id + ".log",
 		ShimPID:    4242,
 		ShellPID:   4243,
 		LastSeq:    9000,
@@ -78,8 +80,10 @@ func TestGetMissingReturnsNotFound(t *testing.T) {
 	}
 }
 
-// A duplicate name must be refused, or two shims could believe they own one session.
-func TestCreateRejectsDuplicateName(t *testing.T) {
+// A duplicate ID must be refused, or two shims could believe they own one session. Unreachable in
+// practice, since NewID checks, and worth pinning anyway: the primary key is what makes that check a
+// convenience rather than the guarantee.
+func TestCreateRejectsDuplicateID(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
@@ -249,76 +253,27 @@ func TestListOrdersByCreation(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	for i, name := range []string{"third", "first", "second"} {
-		sess := sampleSession(name)
-		// Distinct creation times, deliberately not in name order.
+	for i, id := range []string{"third", "first", "second"} {
+		sess := sampleSession(id)
+		// Distinct creation times, deliberately not in ID order.
 		sess.CreatedAt = time.UnixMilli(int64(1_700_000_000_000 + (2-i)*1000))
 		if err := s.Create(ctx, sess); err != nil {
-			t.Fatalf("Create(%s) error = %v", name, err)
+			t.Fatalf("Create(%s) error = %v", id, err)
 		}
 	}
 
-	got, err := s.List(ctx, "")
+	got, err := s.List(ctx)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
 
-	var names []string
+	var ids []string
 	for _, sess := range got {
-		names = append(names, sess.Name)
+		ids = append(ids, sess.ID)
 	}
 	want := []string{"second", "first", "third"}
-	if len(names) != len(want) {
-		t.Fatalf("List() returned %v, want %v", names, want)
-	}
-	for i := range want {
-		if names[i] != want[i] {
-			t.Errorf("List() = %v, want %v", names, want)
-			break
-		}
-	}
-}
-
-func TestListFiltersByPrefix(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	for _, name := range []string{"kitty.1", "kitty.2", "work"} {
-		if err := s.Create(ctx, sampleSession(name)); err != nil {
-			t.Fatalf("Create(%s) error = %v", name, err)
-		}
-	}
-
-	got, err := s.List(ctx, "kitty.")
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("List(kitty.) returned %d sessions, want 2", len(got))
-	}
-}
-
-// A prefix containing LIKE wildcards must match literally, or "100%" would match anything.
-func TestListEscapesLikeWildcards(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	for _, name := range []string{"a_b", "axb", "a-b"} {
-		if err := s.Create(ctx, sampleSession(name)); err != nil {
-			t.Fatalf("Create(%s) error = %v", name, err)
-		}
-	}
-
-	got, err := s.List(ctx, "a_")
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(got) != 1 || got[0].Name != "a_b" {
-		var names []string
-		for _, sess := range got {
-			names = append(names, sess.Name)
-		}
-		t.Errorf("List(\"a_\") = %v, want exactly [a_b]: '_' must not act as a wildcard", names)
+	if !reflect.DeepEqual(ids, want) {
+		t.Errorf("List() = %v, want %v", ids, want)
 	}
 }
 
@@ -341,71 +296,6 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-// Names must never be reused, including after deletion, or a client holding an old name
-// could reattach to an unrelated session.
-func TestNextNameNeverReuses(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	first, err := s.NextName(ctx, "kitty.")
-	if err != nil {
-		t.Fatalf("NextName() error = %v", err)
-	}
-	if first != "kitty.1" {
-		t.Errorf("first NextName() = %q, want %q", first, "kitty.1")
-	}
-
-	if err := s.Create(ctx, sampleSession(first)); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if err := s.Delete(ctx, first); err != nil {
-		t.Fatalf("Delete() error = %v", err)
-	}
-
-	second, err := s.NextName(ctx, "kitty.")
-	if err != nil {
-		t.Fatalf("second NextName() error = %v", err)
-	}
-	if second == first {
-		t.Errorf("NextName() reused %q after deletion", second)
-	}
-	if second != "kitty.2" {
-		t.Errorf("second NextName() = %q, want %q", second, "kitty.2")
-	}
-}
-
-func TestNextNameIsUniqueUnderConcurrency(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	const n = 50
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		names = make(map[string]int)
-	)
-	for range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			name, err := s.NextName(ctx, "s")
-			if err != nil {
-				t.Errorf("NextName() error = %v", err)
-				return
-			}
-			mu.Lock()
-			names[name]++
-			mu.Unlock()
-		}()
-	}
-	wg.Wait()
-
-	if len(names) != n {
-		t.Errorf("got %d distinct names from %d calls, want %d; duplicates: %v",
-			len(names), n, n, duplicates(names))
-	}
-}
-
 func duplicates(counts map[string]int) []string {
 	var out []string
 	for name, c := range counts {
@@ -416,27 +306,6 @@ func duplicates(counts map[string]int) []string {
 	return out
 }
 
-// Separate prefixes must not share a counter, so implicit and named sessions number
-// independently.
-func TestNextNameCountersAreIndependent(t *testing.T) {
-	s := openTestStore(t)
-	ctx := context.Background()
-
-	a, err := s.NextName(ctx, "kitty.")
-	if err != nil {
-		t.Fatalf("NextName() error = %v", err)
-	}
-	b, err := s.NextName(ctx, "tmp.")
-	if err != nil {
-		t.Fatalf("NextName() error = %v", err)
-	}
-	if a != "kitty.1" || b != "tmp.1" {
-		t.Errorf("got (%q, %q), want (kitty.1, tmp.1)", a, b)
-	}
-}
-
-// Reopening must preserve records and not re-run migrations destructively, which is the
-// whole point of persisting to disk.
 func TestReopenPreservesSessions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cm.db")
@@ -450,9 +319,16 @@ func TestReopenPreservesSessions(t *testing.T) {
 	if err := s1.Create(ctx, want); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	// Allocate a name so the counter's persistence is covered too.
-	if _, err := s1.NextName(ctx, "kitty."); err != nil {
-		t.Fatalf("NextName() error = %v", err)
+	// Bind a name too, so what survives a restart covers both tables. A session whose names were
+	// lost on restart would come back unreachable by every name a terminal emulator has recorded.
+	binding := Binding{
+		Name:      "kitty.164",
+		SessionID: want.ID,
+		OnKill:    KillTarget,
+		CreatedAt: time.UnixMilli(1_700_000_000_000),
+	}
+	if err := s1.Bind(ctx, binding); err != nil {
+		t.Fatalf("Bind() error = %v", err)
 	}
 	s1.Close()
 
@@ -471,13 +347,12 @@ func TestReopenPreservesSessions(t *testing.T) {
 		t.Errorf("after reopen Get() = %+v\nwant %+v", got, want)
 	}
 
-	next, err := s2.NextName(ctx, "kitty.")
+	gotBinding, err := s2.Binding(ctx, "kitty.164")
 	if err != nil {
-		t.Fatalf("NextName() after reopen error = %v", err)
+		t.Fatalf("Binding() after reopen error = %v", err)
 	}
-	if next != "kitty.2" {
-		t.Errorf("NextName() after reopen = %q, want %q: the counter must survive restart",
-			next, "kitty.2")
+	if !reflect.DeepEqual(gotBinding, binding) {
+		t.Errorf("after reopen Binding() = %+v\nwant %+v", gotBinding, binding)
 	}
 }
 
@@ -501,10 +376,14 @@ func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	// Two back rather than one: the newest migration adds client_seq, and the one before it drops
-	// `owned`, which the row inserted below sets. Stopping one short would apply the drop and then
-	// insert into a column that no longer exists.
-	prior := migrations[:len(migrations)-2]
+	// Everything up to the migration that drops `owned`, since the row inserted below sets that
+	// column and applying the drop first would insert into a column that no longer exists.
+	//
+	// Located by content rather than by counting back from the end, which is what this did and what
+	// broke: appending any later migration moved the stop point past the drop, and the failure
+	// surfaced as "table sessions has no column named owned" from the insert, which reads as the new
+	// migration being broken rather than as this constant being stale.
+	prior := migrations[:indexOfMigration(t, "DROP COLUMN owned")]
 	for i, m := range prior {
 		if _, err := old.ExecContext(ctx, m); err != nil {
 			t.Fatalf("applying migration %d: %v", i+1, err)
@@ -530,12 +409,13 @@ func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
 	}
 	defer s.Close()
 
-	got, err := s.Get(ctx, "old")
+	// Readable by the ID the migration backfilled, which is "mig" plus the old rowid.
+	got, err := s.Get(ctx, "mig00001")
 	if err != nil {
 		t.Fatalf("Get() after the upgrade error = %v", err)
 	}
 	want := Session{
-		Name:       "old",
+		ID:         "mig00001",
 		ShimSocket: "/run/cm/shim-old.sock",
 		State:      StateRunning,
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
@@ -545,11 +425,58 @@ func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
 		t.Errorf("after upgrading from the previous schema Get() = %+v\nwant %+v", got, want)
 	}
 
+	// And its name still resolves to it, owning it as it did before names became bindings. Without
+	// this the sessions survive the upgrade while every name a terminal emulator recorded stops
+	// finding them, which is the same outcome as losing them.
+	gotBinding, err := s.Binding(ctx, "old")
+	if err != nil {
+		t.Fatalf("Binding() after the upgrade error = %v", err)
+	}
+	wantBinding := Binding{
+		Name:      "old",
+		SessionID: "mig00001",
+		OnKill:    KillTarget,
+		CreatedAt: time.UnixMilli(1_700_000_000_000),
+	}
+	if !reflect.DeepEqual(gotBinding, wantBinding) {
+		t.Errorf("after the upgrade Binding() = %+v\nwant %+v", gotBinding, wantBinding)
+	}
+
+	// The shim socket is untouched, and that is the property the rebuild was designed around: paths
+	// are recorded rather than derived, so a live session carried across the upgrade is still
+	// reachable at the socket its shim is actually listening on. Deriving it from the new ID would
+	// have pointed the server at shim-mig00001.sock and stranded the shell.
+	if got.ShimSocket != "/run/cm/shim-old.sock" {
+		t.Errorf("ShimSocket = %q, want it unchanged by the upgrade", got.ShimSocket)
+	}
+
 	// And the upgraded database still works for writes, not just reads: a migration that left the
 	// table in a state INSERT rejects would otherwise pass the assertion above.
 	if err := s.Create(ctx, sampleSession("fresh")); err != nil {
 		t.Errorf("Create() on an upgraded database error = %v", err)
 	}
+}
+
+// indexOfMigration returns the position of the one migration containing needle.
+//
+// Fails rather than returning a sentinel when it is missing or ambiguous: a test that silently pinned
+// itself to the wrong schema version would keep passing while covering nothing.
+func indexOfMigration(t *testing.T, needle string) int {
+	t.Helper()
+	found := -1
+	for i, m := range migrations {
+		if !strings.Contains(m, needle) {
+			continue
+		}
+		if found >= 0 {
+			t.Fatalf("%q appears in migrations %d and %d", needle, found+1, i+1)
+		}
+		found = i
+	}
+	if found < 0 {
+		t.Fatalf("no migration contains %q", needle)
+	}
+	return found
 }
 
 // Migrating an already-current database must be a no-op, so a server restart is cheap and

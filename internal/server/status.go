@@ -46,7 +46,7 @@ func (s *Service) Status(
 
 	// Counts from the store rather than the registry, so finished sessions are included: the registry holds
 	// only what this server is proxying, and a record left by an earlier one still shows in `cm list`.
-	records, err := s.mgr.store.List(ctx, "")
+	records, err := s.mgr.store.List(ctx)
 	if err != nil {
 		return nil, err
 	}

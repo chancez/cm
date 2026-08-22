@@ -48,7 +48,11 @@ func (s *Service) Report(ctx context.Context, req *serverv1.ReportRequest) (*ser
 		return nil, errors.New("a state is required")
 	}
 
-	sess, ok := s.mgr.Get(req.Session)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess, ok := s.mgr.Get(id)
 	if !ok {
 		return nil, fmt.Errorf("session %s is not running", req.Session)
 	}

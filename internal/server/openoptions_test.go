@@ -36,7 +36,7 @@ func TestOpenOptionsFromCopiesEveryField(t *testing.T) {
 
 	got := openOptionsFrom(open)
 	want := OpenOptions{
-		Name:          "sess",
+		Ref:           "sess",
 		Rows:          30,
 		Cols:          100,
 		XPixel:        800,
@@ -60,7 +60,7 @@ func TestOpenOptionsFromCopiesEveryField(t *testing.T) {
 // does not exist. `cm attach --no-attach` is the real case, having no terminal to ask.
 func TestOpenOptionsFromLeavesUnknownPixelSizeZero(t *testing.T) {
 	got := openOptionsFrom(&serverv1.Open{Session: "sess", Rows: 24, Cols: 80})
-	want := OpenOptions{Name: "sess", Rows: 24, Cols: 80}
+	want := OpenOptions{Ref: "sess", Rows: 24, Cols: 80}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("openOptionsFrom() = %+v, want %+v", got, want)
 	}

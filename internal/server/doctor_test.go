@@ -55,7 +55,7 @@ func startShimInRuntimeDir(t *testing.T, dirs paths.Dirs, name, script string) s
 	waitSocket(t, socket)
 
 	return store.Session{
-		Name: name, ShimSocket: socket, State: store.StateRunning,
+		ID: name, ShimSocket: socket, State: store.StateRunning,
 		Rows: 24, Cols: 80,
 	}
 }
@@ -103,9 +103,7 @@ func TestDiagnoseFindsNothingWhenHealthy(t *testing.T) {
 	ctx := context.Background()
 
 	rec := startShimInRuntimeDir(t, dirs, "healthy", "sleep 5")
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -129,9 +127,7 @@ func TestDiagnoseFindsAnOrphanedShim(t *testing.T) {
 	ctx := context.Background()
 
 	rec := startShimInRuntimeDir(t, dirs, "orphaned", "sleep 5")
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	// The record goes away while the shim keeps running, which is what a crash between spawning and
 	// recording, or a deleted state directory, leaves behind.
 	if err := st.Delete(ctx, "orphaned"); err != nil {
@@ -330,7 +326,7 @@ func TestDiagnoseReportsARecordWithNoShim(t *testing.T) {
 	ctx := context.Background()
 
 	if err := st.Create(ctx, store.Session{
-		Name:       "vanished",
+		ID:         "vanished",
 		ShimSocket: "/nonexistent/shim-vanished.sock",
 		State:      store.StateRunning,
 	}); err != nil {

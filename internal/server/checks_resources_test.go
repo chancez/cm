@@ -237,7 +237,7 @@ func TestCheckPtyPressureIsQuietOnAHealthySystem(t *testing.T) {
 func mustCreateRecord(t *testing.T, st *store.Store, name, logPath string) {
 	t.Helper()
 	if err := st.Create(context.Background(), store.Session{
-		Name: name, LogPath: logPath, State: store.StateExited,
+		ID: name, LogPath: logPath, State: store.StateExited,
 	}); err != nil {
 		t.Fatalf("Create(%q) error = %v", name, err)
 	}

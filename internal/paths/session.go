@@ -36,16 +36,17 @@ func CheckSocketPath(path string) error {
 // ErrEmptySessionName is returned for an empty name.
 var ErrEmptySessionName = errors.New("session name is empty")
 
-// ValidateSessionName reports whether a name is safe to use as a session identifier.
+// ValidateSessionName reports whether a name may be bound to a session.
 //
-// Names become filenames, for both the shim socket and the output log, so this is a
-// path traversal boundary and not merely a style check. Without it, a name containing
-// a separator could place a socket outside the runtime directory, and stale-socket
-// cleanup could unlink an arbitrary file.
+// Names no longer become filenames: a session's shim socket and output log are named after its ID, so
+// the path traversal boundary this used to be is now ValidateSessionID's. What remains is still worth
+// enforcing. A name is printed by `cm list`, so a name carrying an escape sequence could repaint or
+// retitle the terminal of whoever ran it, which is the same argument tag keys and values are checked
+// under. It also has to stay usable unquoted in a shell, since every command takes one.
 //
 // The allowed set is letters, digits, '-', '_', and '.', with '.' forbidden as the
-// first character. That rejects "." and ".." without special-casing them, and keeps
-// names usable unquoted in a shell.
+// first character. That rejects "." and ".." without special-casing them, and it excludes '@', which
+// is what makes an ID reference impossible to confuse with a name. See IDSigil.
 func ValidateSessionName(name string) error {
 	if name == "" {
 		return ErrEmptySessionName
@@ -67,6 +68,66 @@ func ValidateSessionName(name string) error {
 			r == '-', r == '_', r == '.':
 		default:
 			return fmt.Errorf("session name %q contains disallowed character %q", name, r)
+		}
+	}
+	return nil
+}
+
+// IDSigil marks a reference as a session ID rather than a name.
+//
+// '@' is not in the set ValidateSessionName allows, so a reference starting with it is unambiguously an
+// ID and no name can ever be taken for one. That is a proof rather than a convention, and it is the
+// reason the sigil exists: without it `cm attach 7` would become ambiguous the moment somebody bound
+// the name 7, and the ambiguity would resolve differently depending on which sessions happened to
+// exist.
+const IDSigil = "@"
+
+// MaxSessionIDLen bounds an ID, for the same socket-path reason MaxSessionNameLen bounds a name.
+//
+// Generated IDs are 8 characters. The limit is well above that so the ones the ID migration backfilled
+// still pass, and so a longer format later is not a validation change.
+const MaxSessionIDLen = 32
+
+// ErrEmptySessionID is returned for an empty ID.
+var ErrEmptySessionID = errors.New("session ID is empty")
+
+// SessionRef splits a reference typed by a user into a value and what kind of thing it names.
+//
+// One place rather than a strings.TrimPrefix at every call site, because a command that forgot to strip
+// the sigil would look up a name of "@a7k2m9x4", find nothing, and create a session under that name
+// instead of attaching to the one the user asked for.
+func SessionRef(ref string) (value string, isID bool) {
+	if rest, found := strings.CutPrefix(ref, IDSigil); found {
+		return rest, true
+	}
+	return ref, false
+}
+
+// FormatSessionID renders an ID the way a user types it back.
+func FormatSessionID(id string) string { return IDSigil + id }
+
+// ValidateSessionID reports whether an ID is safe to use in a path.
+//
+// This is the path traversal boundary that ValidateSessionName used to be: an ID names both the shim
+// socket and the output log, so an ID containing a separator could place a socket outside the runtime
+// directory, and stale-socket cleanup could then unlink an arbitrary file. IDs are generated rather
+// than supplied, so this should never fire on anything cm produced, and it is checked anyway because
+// the value arrives from a database file and from a command line, neither of which this process wrote.
+//
+// Lowercase letters and digits only, which is stricter than the name rules: the generator draws from a
+// subset of exactly that, and every future format has room inside it.
+func ValidateSessionID(id string) error {
+	if id == "" {
+		return ErrEmptySessionID
+	}
+	if len(id) > MaxSessionIDLen {
+		return fmt.Errorf("session ID %q is %d bytes, limit is %d", id, len(id), MaxSessionIDLen)
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		default:
+			return fmt.Errorf("session ID %q contains disallowed character %q", id, r)
 		}
 	}
 	return nil

@@ -45,13 +45,13 @@ func TestInheritForRestoreCarriesDirectory(t *testing.T) {
 	mgr.SetPersistPolicy(testPolicy())
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved/directory",
 		Command: "/bin/zsh",
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	if got.Dir != "/saved/directory" {
 		t.Errorf("Dir = %q, want the saved directory", got.Dir)
 	}
@@ -70,14 +70,14 @@ func TestInheritForRestoreDoesNotOverrideCaller(t *testing.T) {
 	mgr.SetPersistPolicy(testPolicy())
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved/directory",
 		Command: "/bin/zsh",
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{
-		Name:    "revived",
+		Ref:     "revived",
 		Dir:     "/explicit",
 		Command: []string{"/bin/bash"},
 	}, rec)
@@ -97,12 +97,12 @@ func TestInheritForRestoreDoesNotRerunByDefault(t *testing.T) {
 	mgr.SetPersistPolicy(testPolicy()) // OnRestore is RestoreShell
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Command: "make install",
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	if len(got.Command) != 0 {
 		t.Errorf("Command = %v, want nothing re-run under the default policy", got.Command)
 	}
@@ -117,13 +117,13 @@ func TestInheritForRestoreHonorsExplicitCommandRequest(t *testing.T) {
 	mgr.SetPersistPolicy(policy)
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Command: "make watch",
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{
-		Name:      "revived",
+		Ref:       "revived",
 		OnRestore: RestoreCommand,
 	}, rec)
 
@@ -162,11 +162,11 @@ func TestInheritForRestoreAllowlist(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := store.Session{
-				Name:    "revived",
+				ID:      "revived",
 				LogPath: dirs.SessionLog("revived"),
 				Command: tt.command,
 			}
-			got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+			got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 			rerun := len(got.Command) > 0 && got.Command[0] != holdCommand
 			if rerun != tt.want {
 				t.Errorf("re-ran = %v, want %v (command %v)", rerun, tt.want, got.Command)
@@ -184,12 +184,12 @@ func TestInheritForRestoreNoneRunsAHold(t *testing.T) {
 	mgr.SetPersistPolicy(policy)
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Command: "make install",
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	if len(got.Command) != 1 || got.Command[0] != holdCommand {
 		t.Errorf("Command = %v, want the holding command %q", got.Command, holdCommand)
 	}
@@ -201,13 +201,13 @@ func TestInheritForRestoreDisabledWhenNoPolicy(t *testing.T) {
 	// No SetPersistPolicy call.
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved",
 		Command: "nvim x",
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	if got.restoreFrom != "" || got.Persist || got.Dir != "" || len(got.Command) != 0 {
 		t.Errorf("options were modified with persistence disabled: %+v", got)
 	}
@@ -219,7 +219,7 @@ func TestInheritForRestoreWithoutLogPath(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
 	mgr.SetPersistPolicy(testPolicy())
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "plain"}, store.Session{Name: "plain", Cwd: "/x"})
+	got := mgr.inheritForRestore(OpenOptions{Ref: "plain"}, store.Session{ID: "plain", Cwd: "/x"})
 	if got.restoreFrom != "" || got.Persist {
 		t.Errorf("options claim a restore with no saved log: %+v", got)
 	}
@@ -352,7 +352,7 @@ func TestOpenRevivesDeadPersistedSession(t *testing.T) {
 
 	// A record as a reboot would leave it: marked dead, with a log and a directory.
 	if err := st.Create(ctx, store.Session{
-		Name:       "revive",
+		ID:         "revive",
 		ShimSocket: dirs.ShimSocket("revive"),
 		LogPath:    logPath,
 		Cwd:        "/tmp",
@@ -364,7 +364,7 @@ func TestOpenRevivesDeadPersistedSession(t *testing.T) {
 	// Spawning a shim needs the real binary, so this asserts what happens up to that point: the
 	// options must carry the restore, and the stale record must be replaced.
 	mgr.selfExe = "/nonexistent/cm"
-	if _, _, err := mgr.Open(ctx, OpenOptions{Name: "revive", Rows: 24, Cols: 80}); err == nil {
+	if _, _, err := mgr.Open(ctx, OpenOptions{Ref: "revive", Rows: 24, Cols: 80}); err == nil {
 		t.Fatal("Open() succeeded with a bogus shim binary, want failure")
 	}
 
@@ -422,7 +422,7 @@ func TestExpireDeadSessions(t *testing.T) {
 
 	// Old and dead: should go.
 	if err := st.Create(ctx, store.Session{
-		Name:    "old",
+		ID:      "old",
 		LogPath: logPath,
 		State:   store.StateDead,
 	}); err != nil {
@@ -430,14 +430,14 @@ func TestExpireDeadSessions(t *testing.T) {
 	}
 	// Recently dead: should stay, since it is still worth reviving.
 	if err := st.Create(ctx, store.Session{
-		Name:  "recent",
+		ID:    "recent",
 		State: store.StateExited,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	// Running: never expired regardless of age.
 	if err := st.Create(ctx, store.Session{
-		Name:  "alive",
+		ID:    "alive",
 		State: store.StateRunning,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -480,9 +480,7 @@ func TestExpireSkipsLiveSessions(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("live", "sleep 5"))
 	rec.State = store.StateDead // deliberately wrong, as a lagging record would be
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 
 	sess, err := mgr.adopt(ctx, rec, 0, 0)
 	if err != nil {
@@ -506,7 +504,7 @@ func TestExpireDoesNothingWithoutPolicy(t *testing.T) {
 	mgr, st, _ := newTestManager(t, nil)
 	ctx := context.Background()
 
-	if err := st.Create(ctx, store.Session{Name: "ancient", State: store.StateDead}); err != nil {
+	if err := st.Create(ctx, store.Session{ID: "ancient", State: store.StateDead}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	ageRecord(t, st, "ancient", time.Now().Add(-10000*time.Hour))
@@ -539,7 +537,7 @@ func TestExpireRemovesRecordEvenIfLogRemovalFails(t *testing.T) {
 	}
 
 	if err := st.Create(ctx, store.Session{
-		Name:    "stubborn",
+		ID:      "stubborn",
 		LogPath: dir,
 		State:   store.StateDead,
 	}); err != nil {
@@ -585,7 +583,7 @@ func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
 	logPath := dirs.SessionLog("saved")
 	writeSavedLog(t, logPath, "saved content\r\n")
 	if err := st.Create(ctx, store.Session{
-		Name:             "saved",
+		ID:               "saved",
 		LogPath:          logPath,
 		State:            store.StateExited,
 		PersistRequested: true,
@@ -598,7 +596,7 @@ func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
 	capturedLog := dirs.SessionLog("ran")
 	writeSavedLog(t, capturedLog, "captured output\r\n")
 	if err := st.Create(ctx, store.Session{
-		Name:    "ran",
+		ID:      "ran",
 		LogPath: capturedLog,
 		State:   store.StateExited,
 	}); err != nil {
@@ -607,7 +605,7 @@ func TestExpireForgetsUnpersistedSessionsSooner(t *testing.T) {
 
 	// Not asked for, but only just ended: kept, or `cm run` could not read its exit status back.
 	if err := st.Create(ctx, store.Session{
-		Name:  "justran",
+		ID:    "justran",
 		State: store.StateExited,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -648,7 +646,7 @@ func TestExpireUnsetForgetIntervalFallsBackToExpireAfter(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now()
-	if err := st.Create(ctx, store.Session{Name: "ran", State: store.StateExited}); err != nil {
+	if err := st.Create(ctx, store.Session{ID: "ran", State: store.StateExited}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	// Older than any plausible forget interval, but well inside ExpireAfter.

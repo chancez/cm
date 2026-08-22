@@ -227,7 +227,7 @@ func (m *Manager) persistsSession(name string, requested bool) bool {
 // busy shim that misses a probe is still holding a live shell, and discarding its record
 // would orphan it permanently with no way to reach it again.
 func (m *Manager) Reconcile(ctx context.Context) error {
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return fmt.Errorf("loading sessions: %w", err)
 	}
@@ -241,10 +241,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if err != nil && !alive {
 			// Unreachable in a way that says nothing is listening.
 			m.log.Info("session shim is gone, marking dead",
-				"session", rec.Name, "socket", rec.ShimSocket, "error", err)
+				"session", rec.ID, "socket", rec.ShimSocket, "error", err)
 			state := store.StateDead
-			if applyErr := m.store.Apply(ctx, rec.Name, store.Update{State: &state}); applyErr != nil {
-				return fmt.Errorf("marking %s dead: %w", rec.Name, applyErr)
+			if applyErr := m.store.Apply(ctx, rec.ID, store.Update{State: &state}); applyErr != nil {
+				return fmt.Errorf("marking %s dead: %w", rec.ID, applyErr)
 			}
 			continue
 		}
@@ -255,12 +255,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			// The shim answered a moment ago, so this is worth reporting but not fatal:
 			// the remaining sessions should still come back.
 			m.log.Warn("adopting session failed",
-				"session", rec.Name, "from_seq", rec.LastSeq, "error", err)
+				"session", rec.ID, "from_seq", rec.LastSeq, "error", err)
 			continue
 		}
-		m.log.Info("adopted session", "session", rec.Name, "from_seq", rec.LastSeq)
+		m.log.Info("adopted session", "session", rec.ID, "from_seq", rec.LastSeq)
 		m.mu.Lock()
-		m.sessions[rec.Name] = sess
+		m.sessions[rec.ID] = sess
 		m.mu.Unlock()
 	}
 	return nil
@@ -374,7 +374,7 @@ func (m *Manager) adopt(
 			// A screen that could not be rebuilt is worth reporting, but the session works without
 			// it: only restore and history are affected, which is where this started.
 			m.log.Warn("rebuilding the screen for an adopted session failed",
-				"session", rec.Name, "error", err)
+				"session", rec.ID, "error", err)
 		}
 	}
 	// A record written before client_seq existed has zero there, which is indistinguishable from a
@@ -391,7 +391,13 @@ func (m *Manager) adopt(
 		}
 		return nil, err
 	}
-	sess.log = m.log.With("session", rec.Name)
+	sess.log = m.log.With("session", rec.ID)
+	// Labelled from the store, so a session adopted after a server restart is described by the name a
+	// person knows it by rather than by its ID. Without this every message about an adopted session, and
+	// every doctor finding, names something the user never typed.
+	if names, err := m.Names(ctx, rec.ID); err == nil && len(names) > 0 {
+		sess.setLabel(names[0])
+	}
 	sess.SetResizePolicy(m.resizePolicy)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
@@ -493,11 +499,11 @@ func (m *Manager) persistMetadata(sess *Session) {
 			if meta.Cwd.IsLocal && meta.Cwd.Path != "" {
 				upd.Cwd = &meta.Cwd.Path
 			}
-			if err := m.store.Apply(ctx, sess.name, upd); err != nil {
+			if err := m.store.Apply(ctx, sess.id, upd); err != nil {
 				// Advisory, so the session continues. Logged because a `list` showing a stale
 				// directory is otherwise unexplainable.
 				m.log.Warn("recording session metadata failed",
-					"session", sess.name, "error", err)
+					"session", sess.id, "error", err)
 			}
 			cancel()
 		case <-sess.Done():
@@ -514,8 +520,8 @@ func (m *Manager) watch(sess *Session) {
 	// as-is so the next server adopts it.
 	if sess.Releasing() {
 		m.mu.Lock()
-		if m.sessions[sess.name] == sess {
-			delete(m.sessions, sess.name)
+		if m.sessions[sess.id] == sess {
+			delete(m.sessions, sess.id)
 		}
 		m.mu.Unlock()
 		return
@@ -571,19 +577,20 @@ func (m *Manager) watch(sess *Session) {
 		!sess.record.PersistRequested && sess.record.LogPath == "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := m.store.Delete(ctx, sess.name); err != nil {
+		if err := m.store.Delete(ctx, sess.id); err != nil {
 			// Not fatal: the record simply expires on the usual schedule instead, which is the behavior
 			// this replaces.
 			m.log.Warn("forgetting an exited interactive session failed",
-				"session", sess.name, "error", err)
+				"session", sess.id, "error", err)
 		} else {
+			m.releaseNames(ctx, sess.id)
 			m.log.Info("forgot exited interactive session",
-				"session", sess.name, "exit_code", code)
+				"session", sess.id, "exit_code", code)
 		}
 
 		m.mu.Lock()
-		if m.sessions[sess.name] == sess {
-			delete(m.sessions, sess.name)
+		if m.sessions[sess.id] == sess {
+			delete(m.sessions, sess.id)
 		}
 		m.mu.Unlock()
 		return
@@ -592,7 +599,7 @@ func (m *Manager) watch(sess *Session) {
 	seq, clientSeq := sess.resumePoints()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := m.store.Apply(ctx, sess.name, store.Update{
+	if err := m.store.Apply(ctx, sess.id, store.Update{
 		State:     &state,
 		ExitCode:  &code,
 		LastSeq:   &seq,
@@ -609,25 +616,29 @@ func (m *Manager) watch(sess *Session) {
 		// tries to adopt a shim that is gone.
 		if errors.Is(err, store.ErrNotFound) {
 			m.log.Debug("session record was already removed when its outcome was recorded",
-				"session", sess.name, "state", state)
+				"session", sess.id, "state", state)
 		} else {
 			m.log.Error("recording session outcome failed",
-				"session", sess.name, "state", state, "error", err)
+				"session", sess.id, "state", state, "error", err)
 		}
 	}
-	m.log.Info("session ended", "session", sess.name, "state", state, "exit_code", code)
+	m.log.Info("session ended", "session", sess.id, "state", state, "exit_code", code)
 
 	m.mu.Lock()
-	if m.sessions[sess.name] == sess {
-		delete(m.sessions, sess.name)
+	if m.sessions[sess.id] == sess {
+		delete(m.sessions, sess.id)
 	}
 	m.mu.Unlock()
 }
 
 // OpenOptions describes an attach request that may need to create the session.
 type OpenOptions struct {
-	// Name of the session. Empty asks the server to allocate one.
-	Name string
+	// Ref is what the caller asked for: a name, an "@id" reference, or empty for a session with no
+	// name at all. Resolving it is Open's first job.
+	//
+	// Empty used to mean "allocate a name like s17". It now means what it says: a session identified
+	// only by its ID, since an implicit name was never anything but a stand-in for an identity.
+	Ref string
 	// Rows and Cols size a newly created session.
 	Rows, Cols uint16
 	// XPixel and YPixel size a newly created session in pixels, zero when the client did not report
@@ -661,79 +672,184 @@ type OpenOptions struct {
 	// restoreFrom is a saved log to replay before the session starts producing output. Set
 	// internally when reviving a dead session, never by a caller.
 	restoreFrom string
+	// id is the identity allocated for a session being created. Set by Open, never by a caller.
+	id string
+	// name is Ref once it is known to be a name rather than an ID reference, so it can be bound to the
+	// new session and matched against the persistence patterns. Empty for a session with no name.
+	name string
 	// ClientEnv holds terminal-related variables from the attaching client, recorded so a shell
 	// in the session can refresh them later.
 	ClientEnv map[string]string
 }
 
-// Open returns the named session, creating it if necessary, and reports whether it created
-// it.
+// Open returns the session a reference names, creating one when a name holds nothing yet.
+//
+// This is where a name being a binding rather than an identity pays for itself. Attaching, creating,
+// and reviving are all the same operation now: resolve the name, and if it resolves to nothing usable,
+// allocate an identity and point the name at it. What used to be three code paths keyed on whether a
+// record existed and what state it was in is one path with one decision in it.
+//
+// An "@id" reference resolves to exactly that session or fails. It deliberately does not create: a
+// reference to an identity that is gone is a stale reference, and inventing a session for it is how a
+// client silently ends up somewhere it did not ask to be.
 func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, error) {
-	if opts.Name == "" {
-		name, err := m.store.NextName(ctx, implicitPrefix)
+	if opts.Ref == "" {
+		// No name asked for, so none is bound. The session is reachable by ID, which is what makes
+		// this safe: a session with no names is still addressable rather than stranded.
+		return m.createWithID(ctx, opts)
+	}
+
+	value, isID := paths.SessionRef(opts.Ref)
+	if isID {
+		if err := paths.ValidateSessionID(value); err != nil {
+			return nil, false, err
+		}
+		sess, err := m.openByID(ctx, value)
+		return sess, false, err
+	}
+
+	if err := paths.ValidateSessionName(value); err != nil {
+		return nil, false, err
+	}
+	opts.name = value
+
+	binding, err := m.store.Binding(ctx, value)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// A name nothing holds: allocate an identity and point the name at it. The name owns the
+		// session it was created with, so killing by that name kills the session, which is what
+		// `cm kill work` has always meant.
+		sess, created, err := m.createWithID(ctx, opts)
 		if err != nil {
 			return nil, false, err
 		}
-		opts.Name = name
-	}
-	if err := paths.ValidateSessionName(opts.Name); err != nil {
+		sess.setLabel(value)
+		if err := m.store.Bind(ctx, store.Binding{
+			Name:      value,
+			SessionID: sess.id,
+			OnKill:    store.KillTarget,
+		}); err != nil {
+			return nil, false, fmt.Errorf("binding %s to %s: %w", value, sess.id, err)
+		}
+		m.log.Info("bound a new name", "name", value, "session", sess.id)
+		return sess, created, nil
+	case err != nil:
 		return nil, false, err
 	}
 
+	// The name resolves. Live in this server's registry is the common case, and by far the cheapest.
 	m.mu.Lock()
-	if sess, ok := m.sessions[opts.Name]; ok {
-		m.mu.Unlock()
+	sess, ok := m.sessions[binding.SessionID]
+	m.mu.Unlock()
+	if ok {
+		sess.setLabel(value)
 		return sess, false, nil
 	}
-	m.mu.Unlock()
 
-	// A record can exist without a live session: the shell exited, a previous server marked it
-	// dead, or the machine rebooted. The shell cannot be resumed either way, but its content can,
-	// so the record is examined before being replaced.
-	if rec, err := m.store.Get(ctx, opts.Name); err == nil {
-		if rec.State == store.StateRunning {
-			// Recorded as running but not in our registry, which happens if Reconcile
-			// could not adopt it. Try once more before giving up.
-			if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
-				sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
-				if err == nil {
-					m.mu.Lock()
-					m.sessions[opts.Name] = sess
-					m.mu.Unlock()
-					return sess, false, nil
-				}
-			}
-		}
-
-		// Carry forward what a restore needs, since the record is about to be deleted.
-		opts = m.inheritForRestore(opts, rec)
-
-		// Say that the old incarnation is being discarded, and what was lost with it.
-		//
-		// This is destructive and was silent: attaching to a name whose shell had exited started a fresh
-		// shell under it, and the exit status and pid that were the only evidence the previous run
-		// happened went with the deleted row. A caller reattaching to what it thought was its session got
-		// a new one and no indication of the substitution.
-		//
-		// Logged rather than refused, because refusing would break the case this path exists for: a
-		// terminal emulator restoring a saved window attaches by name and must get a working session
-		// whether or not the previous one is still alive. What it should not do is pretend nothing was
-		// there.
-		if rec.State != store.StateRunning {
-			restoring := opts.restoreFrom != ""
-			m.log.Info("replacing an ended session with a new shell under the same name",
-				"session", opts.Name, "previous_state", rec.State,
-				"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
-				"content_restored", restoring)
-		}
-
-		if err := m.store.Delete(ctx, opts.Name); err != nil {
-			return nil, false, fmt.Errorf("replacing stale record for %s: %w", opts.Name, err)
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
+	rec, err := m.store.Get(ctx, binding.SessionID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, false, err
 	}
+	if err == nil && rec.State == store.StateRunning {
+		// Recorded as running but not in our registry, which happens if Reconcile could not adopt it.
+		// Try once more before giving up: only ENOENT is conclusive, and a shim that was merely busy is
+		// still holding a live shell.
+		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
+			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+			if err == nil {
+				sess.setLabel(value)
+				m.mu.Lock()
+				m.sessions[rec.ID] = sess
+				m.mu.Unlock()
+				return sess, false, nil
+			}
+		}
+	}
 
+	// Nothing to attach to, so the name moves to a new session that inherits the old one's content.
+	//
+	// A fresh identity rather than reusing the old one, which is the invariant that makes an ID worth
+	// having: an ID names one shell for as long as it exists and never comes to mean a different one.
+	// The name is what carries continuity across the replacement, which is exactly what a binding is
+	// for. Before IDs this was a name being quietly reused, and the previous incarnation's exit status
+	// and pid went with the deleted row.
+	if err == nil {
+		opts = m.inheritForRestore(opts, rec)
+		m.log.Info("replacing an ended session with a new shell under the same name",
+			"name", value, "previous_session", rec.ID, "previous_state", rec.State,
+			"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
+			"content_restored", opts.restoreFrom != "")
+		if err := m.store.Delete(ctx, rec.ID); err != nil {
+			return nil, false, fmt.Errorf("replacing stale record for %s: %w", rec.ID, err)
+		}
+	} else {
+		// A name pointing at a record that is not there at all. Reachable if a record was removed
+		// without its names, which nothing does deliberately, so it is worth a line rather than a
+		// silent recovery.
+		m.log.Warn("name pointed at a session with no record; creating a new one",
+			"name", value, "missing_session", binding.SessionID)
+	}
+
+	sess, created, err := m.createWithID(ctx, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	sess.setLabel(value)
+	// Rebound rather than left alone: the name has to follow the content to the new identity, or the
+	// window that attached by it comes back to nothing next time. OnKill is carried over so a borrowed
+	// name stays borrowed across a revival.
+	if err := m.store.Bind(ctx, store.Binding{
+		Name:      value,
+		SessionID: sess.id,
+		OnKill:    binding.OnKill,
+	}); err != nil {
+		return nil, false, fmt.Errorf("rebinding %s to %s: %w", value, sess.id, err)
+	}
+	return sess, created, nil
+}
+
+// openByID returns a live session by identity, and refuses to invent one.
+func (m *Manager) openByID(ctx context.Context, id string) (*Session, error) {
+	m.mu.Lock()
+	sess, ok := m.sessions[id]
+	m.mu.Unlock()
+	if ok {
+		return sess, nil
+	}
+
+	rec, err := m.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if rec.State == store.StateRunning {
+		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
+			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+			if err != nil {
+				return nil, err
+			}
+			m.mu.Lock()
+			m.sessions[rec.ID] = sess
+			m.mu.Unlock()
+			return sess, nil
+		}
+	}
+
+	// Deliberately not revived under this ID, and not revived under a new one either. Reviving in place
+	// would make an ID mean a second shell, and reviving elsewhere would return a session whose ID is
+	// not the one that was asked for, which is worse than failing: a caller that recorded an ID would
+	// be handed a different session without being told.
+	return nil, fmt.Errorf(
+		"session %s is %s; attach by one of its names to start a new shell with its content",
+		paths.FormatSessionID(id), rec.State)
+}
+
+// createWithID allocates an identity and creates the session under it.
+func (m *Manager) createWithID(ctx context.Context, opts OpenOptions) (*Session, bool, error) {
+	id, err := m.store.NewID(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	opts.id = id
 	sess, err := m.create(ctx, opts)
 	if err != nil {
 		return nil, false, err
@@ -824,7 +940,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		opts.Rows, opts.Cols = 24, 80
 	}
 
-	socket := m.dirs.ShimSocket(opts.Name)
+	socket := m.dirs.ShimSocket(opts.id)
 	if err := paths.CheckSocketPath(socket); err != nil {
 		return nil, err
 	}
@@ -845,20 +961,23 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	// Waiting here rather than loosening the shim's socket check, which refuses to unlink a socket that
 	// something answers on for a good reason: removing a live shim's socket orphans it with no way back.
 	if err := waitForSocketFree(ctx, socket, shimReleaseTimeout); err != nil {
-		return nil, fmt.Errorf("waiting for the previous shim for %s to exit: %w", opts.Name, err)
+		return nil, fmt.Errorf("waiting for the previous shim for %s to exit: %w", opts.id, err)
 	}
 
 	// Either reason produces a log; only the first makes the session long-lived.
-	requested := m.persistsSession(opts.Name, opts.Persist)
+	// Matched against the name rather than the ID, since a pattern like "kitty.*" is about what a
+	// session is called. A session with no name is only persisted when it is asked for explicitly,
+	// which is the honest reading: there is nothing for a pattern to match.
+	requested := m.persistsSession(opts.name, opts.Persist)
 	persisting := requested || opts.CaptureOutput
 
 	logPath := ""
 	if persisting {
-		logPath = m.dirs.SessionLog(opts.Name)
+		logPath = m.dirs.SessionLog(opts.id)
 	}
 
 	rec := store.Session{
-		Name:       opts.Name,
+		ID:         opts.id,
 		ShimSocket: socket,
 		LogPath:    logPath,
 		State:      store.StateRunning,
@@ -879,17 +998,17 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 
 	pid, err := m.spawnShim(ctx, opts, socket, logPath)
 	if err != nil {
-		_ = m.store.Delete(ctx, opts.Name)
+		_ = m.store.Delete(ctx, opts.id)
 		return nil, err
 	}
 	rec.ShimPID = pid
-	if err := m.store.Apply(ctx, opts.Name, store.Update{ShimPID: &pid}); err != nil {
+	if err := m.store.Apply(ctx, opts.id, store.Update{ShimPID: &pid}); err != nil {
 		return nil, err
 	}
 
 	sess, err := m.adopt(ctx, rec, 0, 0)
 	if err != nil {
-		_ = m.store.Delete(ctx, opts.Name)
+		_ = m.store.Delete(ctx, opts.id)
 		return nil, err
 	}
 
@@ -911,30 +1030,33 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 			// Not fatal, but the user asked for their content back and did not get it, so this is
 			// exactly the kind of silent degradation the log exists for.
 			m.log.Warn("replaying persisted session failed",
-				"session", opts.Name, "path", opts.restoreFrom, "error", rerr)
+				"session", opts.id, "path", opts.restoreFrom, "error", rerr)
 		case len(blob) > 0:
 			sess.setRestored(blob)
 			m.log.Info("restored session from disk",
-				"session", opts.Name, "restore_bytes", len(blob))
+				"session", opts.id, "restore_bytes", len(blob))
 		}
 	}
 
 	// Record the shell's pid for reporting, best effort: the session works without it.
 	if st, err := sess.State(ctx); err == nil {
 		shellPID := int(st.ShellPid)
-		if err := m.store.Apply(ctx, opts.Name, store.Update{ShellPID: &shellPID}); err != nil {
-			m.log.Warn("recording shell pid failed", "session", opts.Name, "error", err)
+		if err := m.store.Apply(ctx, opts.id, store.Update{ShellPID: &shellPID}); err != nil {
+			m.log.Warn("recording shell pid failed", "session", opts.id, "error", err)
 		}
 	} else {
-		m.log.Warn("reading shim state failed", "session", opts.Name, "error", err)
+		m.log.Warn("reading shim state failed", "session", opts.id, "error", err)
 	}
 
+	// Logged with the name as well as the ID, and this is the line that ties the two together: every
+	// other line about this session carries only the ID, which is stable, so a reader looking for
+	// "what was work" needs one place that says.
 	m.log.Info("created session",
-		"session", opts.Name, "shim_pid", pid, "persisting", persisting,
+		"session", opts.id, "name", opts.name, "shim_pid", pid, "persisting", persisting,
 		"rows", opts.Rows, "cols", opts.Cols)
 
 	m.mu.Lock()
-	m.sessions[opts.Name] = sess
+	m.sessions[opts.id] = sess
 	m.mu.Unlock()
 	return sess, nil
 }
@@ -951,7 +1073,7 @@ func (m *Manager) shimArgs(opts OpenOptions, logPath string) []string {
 		"--runtime-dir", m.dirs.Runtime,
 		"--state-dir", m.dirs.State,
 		"shim",
-		"--session", opts.Name,
+		"--session", opts.id,
 		"--rows", strconv.Itoa(int(opts.Rows)),
 		"--cols", strconv.Itoa(int(opts.Cols)),
 	}
@@ -1002,7 +1124,7 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPa
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 
 	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("spawning shim for %s: %w", opts.Name, err)
+		return 0, fmt.Errorf("spawning shim for %s: %w", opts.id, err)
 	}
 	pid := cmd.Process.Pid
 
@@ -1011,7 +1133,7 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPa
 	go func() { _ = cmd.Wait() }()
 
 	if err := waitForShim(ctx, socket); err != nil {
-		return pid, fmt.Errorf("shim for %s did not become ready: %w", opts.Name, err)
+		return pid, fmt.Errorf("shim for %s did not become ready: %w", opts.id, err)
 	}
 	return pid, nil
 }
@@ -1100,23 +1222,23 @@ func waitForSocketFree(ctx context.Context, socket string, timeout time.Duration
 }
 
 // Get returns a live session by name.
-func (m *Manager) Get(name string) (*Session, bool) {
+func (m *Manager) Get(id string) (*Session, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	sess, ok := m.sessions[name]
+	sess, ok := m.sessions[id]
 	return sess, ok
 }
 
 // List returns session records, with live details filled in from the registry.
-func (m *Manager) List(ctx context.Context, prefix string) ([]store.Session, error) {
-	records, err := m.store.List(ctx, prefix)
+func (m *Manager) List(ctx context.Context) ([]store.Session, error) {
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range records {
-		if sess, ok := m.sessions[records[i].Name]; ok {
+		if sess, ok := m.sessions[records[i].ID]; ok {
 			records[i].LastSeq, records[i].ClientSeq = sess.resumePoints()
 		}
 	}
@@ -1132,9 +1254,9 @@ func (m *Manager) List(ctx context.Context, prefix string) ([]store.Session, err
 // avoided is worse: applying set and remove as separate writes, which would leave a session
 // half-retagged if the second failed.
 func (m *Manager) SetTags(
-	ctx context.Context, name string, set map[string]string, remove []string, replace bool,
+	ctx context.Context, id string, set map[string]string, remove []string, replace bool,
 ) (map[string]string, error) {
-	rec, err := m.store.Get(ctx, name)
+	rec, err := m.store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1156,10 +1278,10 @@ func (m *Manager) SetTags(
 		delete(next, k)
 	}
 
-	if err := m.store.Apply(ctx, name, store.Update{Tags: next}); err != nil {
+	if err := m.store.Apply(ctx, id, store.Update{Tags: next}); err != nil {
 		return nil, err
 	}
-	m.log.Info("tagged session", "session", name, "tags", tags.Format(next))
+	m.log.Info("tagged session", "session", id, "tags", tags.Format(next))
 
 	if len(next) == 0 {
 		// Reported the way the store reads it back, so a caller sees the same thing whether it
@@ -1170,9 +1292,9 @@ func (m *Manager) SetTags(
 }
 
 // Clients reports how many clients are attached to a session.
-func (m *Manager) Clients(name string) int64 {
+func (m *Manager) Clients(id string) int64 {
 	m.mu.Lock()
-	sess, ok := m.sessions[name]
+	sess, ok := m.sessions[id]
 	m.mu.Unlock()
 	if !ok {
 		return 0
@@ -1186,10 +1308,10 @@ func (m *Manager) Clients(name string) int64 {
 // busy rather than dead, and forgetting it would orphan a live shell. force exists for the
 // case where the user knows better.
 func (m *Manager) Kill(
-	ctx context.Context, name string, force bool, sig int32,
+	ctx context.Context, id string, force bool, sig int32,
 ) (surviving []int32, err error) {
 	m.mu.Lock()
-	sess, live := m.sessions[name]
+	sess, live := m.sessions[id]
 	m.mu.Unlock()
 
 	// Logged because this function used to log nothing at all, and it deletes the session record.
@@ -1198,7 +1320,7 @@ func (m *Manager) Kill(
 	// was left afterwards was the shim's "shim exiting" with exit_code=-1, which names neither the signal
 	// nor who sent it, so after losing real work there was nothing to read. The shim logs its side too;
 	// this is the side that knows a *request* arrived and what asked for it.
-	m.log.Info("killing session", "session", name, "force", force, "signal", sig, "live", live)
+	m.log.Info("killing session", "session", id, "force", force, "signal", sig, "live", live)
 
 	if live {
 		// A session whose shell has already exited is not a failure to stop, whatever the RPC says.
@@ -1223,7 +1345,7 @@ func (m *Manager) Kill(
 			// enough to fail a run in three. The resize path above already checks both for the same reason.
 			ended, _ := sess.Ended()
 			if !ended && !isSessionOver(err) && !isTransportClosed(err) {
-				return nil, fmt.Errorf("stopping %s: %w", name, err)
+				return nil, fmt.Errorf("stopping %s: %w", id, err)
 			}
 		}
 		surviving = left
@@ -1234,10 +1356,11 @@ func (m *Manager) Kill(
 		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
 		}
-		return surviving, m.store.Delete(ctx, name)
+		m.releaseNames(ctx, id)
+		return surviving, m.store.Delete(ctx, id)
 	}
 
-	rec, err := m.store.Get(ctx, name)
+	rec, err := m.store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1260,22 +1383,24 @@ func (m *Manager) Kill(
 			// shutting down, so the probe succeeds and the request loses the race, and cleanup reported
 			// "stopping d14: ttrpc: closed" about one run in three.
 			if err != nil && !force && !isSessionOver(err) && !isTransportClosed(err) {
-				return nil, fmt.Errorf("stopping %s: %w", name, err)
+				return nil, fmt.Errorf("stopping %s: %w", id, err)
 			}
 			if resp != nil {
 				surviving = resp.SurvivingPids
 			}
-			return surviving, m.store.Delete(ctx, name)
+			m.releaseNames(ctx, id)
+			return surviving, m.store.Delete(ctx, id)
 		}
 		if !force {
-			return nil, fmt.Errorf("cannot reach shim for %s: %w", name, dialErr)
+			return nil, fmt.Errorf("cannot reach shim for %s: %w", id, dialErr)
 		}
 	}
 
 	if rec.State == store.StateRunning && !force {
-		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", name)
+		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", id)
 	}
-	return nil, m.store.Delete(ctx, name)
+	m.releaseNames(ctx, id)
+	return nil, m.store.Delete(ctx, id)
 }
 
 // ExpireDeadSessions removes dead sessions older than the configured age, along with their logs.
@@ -1291,7 +1416,7 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		return 0, nil
 	}
 
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("listing sessions to expire: %w", err)
 	}
@@ -1311,7 +1436,7 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		// A live session in the registry is never expired, whatever the record says: the record can
 		// lag, and deleting a session someone is attached to would be worse than keeping a stale
 		// row.
-		if _, live := m.Get(rec.Name); live {
+		if _, live := m.Get(rec.ID); live {
 			continue
 		}
 		// UpdatedAt rather than CreatedAt: what matters is how long ago the session stopped being
@@ -1333,14 +1458,15 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 			// can never be cleaned up.
 			if err := os.Remove(rec.LogPath); err != nil && !os.IsNotExist(err) {
 				m.log.Warn("removing expired session log failed",
-					"session", rec.Name, "path", rec.LogPath, "error", err)
+					"session", rec.ID, "path", rec.LogPath, "error", err)
 			}
 		}
-		if err := m.store.Delete(ctx, rec.Name); err != nil {
-			return removed, fmt.Errorf("expiring session %s: %w", rec.Name, err)
+		m.releaseNames(ctx, rec.ID)
+		if err := m.store.Delete(ctx, rec.ID); err != nil {
+			return removed, fmt.Errorf("expiring session %s: %w", rec.ID, err)
 		}
 		removed++
-		m.log.Info("expired dead session", "session", rec.Name, "age", now.Sub(rec.UpdatedAt))
+		m.log.Info("expired dead session", "session", rec.ID, "age", now.Sub(rec.UpdatedAt))
 	}
 	return removed, nil
 }
@@ -1510,12 +1636,12 @@ func (m *Manager) Close() error {
 		// stored alongside the shim one because they count the same output differently and the adopting
 		// server needs both: one to resubscribe with, one to number its client log from.
 		seq, clientSeq := sess.resumePoints()
-		if err := m.store.Apply(ctx, sess.name,
+		if err := m.store.Apply(ctx, sess.id,
 			store.Update{LastSeq: &seq, ClientSeq: &clientSeq}); err != nil {
 			// Losing this means the next server resubscribes from an older position and replays
 			// output the client already saw, so it is worth knowing about.
 			m.log.Error("recording resume point failed",
-				"session", sess.name, "seq", seq, "error", err)
+				"session", sess.id, "seq", seq, "error", err)
 		}
 		sess.Close()
 	}

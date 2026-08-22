@@ -27,7 +27,14 @@ import (
 //
 // Fields are only ever added, never renamed or removed, so a script that reads one keeps working.
 type sessionJSON struct {
+	// Name is what to call the session when talking to a person: one of its names, or "@" plus its ID
+	// when nothing names it. Kept as "name" because that is what scripts already read.
 	Name string `json:"name"`
+	// ID is the session's identity, and what a script should record if it will come back later. A name
+	// can be pointed at a different session; an ID cannot.
+	ID string `json:"id"`
+	// Names is every name bound to this session, oldest first, and empty for one nothing names.
+	Names []string `json:"names"`
 	// State is "running", "exited", or "dead". Prefer it over exit_code alone: a dead session's
 	// outcome is unknown rather than zero.
 	State string `json:"state"`
@@ -169,6 +176,8 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 
 	return sessionJSON{
 		Name:                s.Name,
+		ID:                  s.Id,
+		Names:               s.Names,
 		State:               stateName(s),
 		ShellPID:            s.ShellPid,
 		Clients:             int32(s.Clients),

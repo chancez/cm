@@ -89,14 +89,17 @@ func TestLogLayout(t *testing.T) {
 	e.enableLogging()
 
 	e.mustRun("run", "--session", "lay", "-d", "--", "/bin/sh", "-c", "echo output; sleep 30")
+	// Both kinds of log are named after the session's ID rather than its name, since a name is a
+	// binding and can be pointed at another session while the file it named goes on being appended to.
+	id := e.sessionID("lay")
 	e.waitFor("the shim to log", 15*time.Second, func() bool {
-		return e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "lay.log")) != ""
+		return e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", id+".log")) != ""
 	})
 
 	// Diagnostics, each in its own directory.
 	for _, rel := range []string{
 		filepath.Join("logs", "server", "server.log"),
-		filepath.Join("logs", "shim", "lay.log"),
+		filepath.Join("logs", "shim", id+".log"),
 	} {
 		if e.readFileOrEmpty(filepath.Join(e.state, rel)) == "" {
 			t.Errorf("%s is missing or empty", rel)
@@ -104,10 +107,10 @@ func TestLogLayout(t *testing.T) {
 	}
 
 	// Session output, directly in logs/ and not in a diagnostic directory.
-	if e.readFileOrEmpty(filepath.Join(e.state, "logs", "lay.log")) == "" {
+	if e.readFileOrEmpty(filepath.Join(e.state, "logs", id+".log")) == "" {
 		t.Error("the session's output log is missing from logs/")
 	}
-	if e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "shim-lay.log")) != "" {
+	if e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "shim-"+id+".log")) != "" {
 		t.Error("a shim log kept its old prefixed name, so the layout is inconsistent")
 	}
 }
@@ -122,14 +125,15 @@ func TestLogsClearPerSubcommand(t *testing.T) {
 	e.enableLogging()
 
 	e.mustRun("run", "--session", "sel", "-d", "--", "/bin/sh", "-c", "sleep 30")
+	id := e.sessionID("sel")
 	e.waitFor("both logs to have content", 15*time.Second, func() bool {
 		return e.readFileOrEmpty(filepath.Join(e.state, "logs", "server", "server.log")) != "" &&
-			e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "sel.log")) != ""
+			e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", id+".log")) != ""
 	})
 
 	e.mustRun("logs", "shim", "sel", "--clear")
 
-	if body := e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "sel.log")); body != "" {
+	if body := e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", id+".log")); body != "" {
 		t.Errorf("the shim log was not cleared: %q", body)
 	}
 	// The server's is untouched, which is the point of clearing one at a time.

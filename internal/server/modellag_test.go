@@ -32,7 +32,7 @@ func TestAttachStreamsFromTheModelNotTheLog(t *testing.T) {
 	)
 
 	sess := &Session{
-		name:        "modellag",
+		id:          "modellag",
 		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
 		term:        &fakeTerminal{restore: []byte("SCREEN")},
 		clientSizes: make(map[*attachToken]*clientSize),

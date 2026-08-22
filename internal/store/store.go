@@ -27,6 +27,14 @@ var ErrNotFound = errors.New("session not found")
 // Store holds the sqlite connection.
 type Store struct {
 	db *sql.DB
+
+	// IDSource overrides how session IDs are drawn, so a test can make them predictable and compare
+	// whole records. Nil means the real generator.
+	//
+	// A field rather than an environment variable on purpose: an env var a released binary honors is
+	// one a stale export can use to make it lie, which is what the cm_testhooks build tag exists to
+	// prevent. Nothing outside a test can reach this field.
+	IDSource func() (string, error)
 }
 
 // Open opens or creates the database at path and applies migrations.
@@ -83,7 +91,15 @@ const (
 
 // Session is a persisted session record.
 type Session struct {
-	Name string
+	// ID is the session's identity: allocated when it is created, never reused, never chosen by a
+	// caller, and never changed for the life of the session.
+	//
+	// Names are not identities and are not here. A name is a binding onto an ID, so a session has zero
+	// or more of them and any of them can be pointed somewhere else without the session noticing. That
+	// split is what makes rename, several names for one session, and moving a window from one session
+	// to another all the same operation, and it is why nothing in this package has to move a socket or
+	// migrate a row to rename something.
+	ID string
 	// ShimSocket is where the server reaches this session's shim. Recorded rather than
 	// derived so a socket layout change cannot orphan existing sessions.
 	ShimSocket string
@@ -336,5 +352,79 @@ var migrations = []string{
 	// literal text. It presented as a corrupted TUI that a forced repaint fixed.
 	`
 	ALTER TABLE sessions ADD COLUMN client_seq INTEGER NOT NULL DEFAULT 0;
+	`,
+
+	// Make the ID the identity and a name nothing but a binding onto one.
+	//
+	// The previous schema keyed sessions on their name, which made a name an identity: it was the
+	// primary key, the variable part of the shim socket path, and the value shells had already exported
+	// as CM_SESSION. That is why a session could not be renamed, why it could not have a second name,
+	// and why pointing a terminal window at a different session had no expressible form. All three are
+	// the same missing indirection, and this migration adds it.
+	//
+	// A rebuild rather than an ALTER because sqlite cannot change a primary key. Nothing on disk moves:
+	// shim_socket and log_path are recorded rather than derived, which is exactly the property they were
+	// given so a layout change could not orphan existing sessions, so sessions carried across keep the
+	// paths they were created with and only new ones derive theirs from an ID.
+	//
+	// Backfilled IDs are "mig" plus the old rowid, and cannot collide with a generated one: 'i' is not
+	// in the generation alphabet, so no generated ID can begin "mig". They are also recognizable in a
+	// log as having predated IDs, which a random string would not be.
+	//
+	// Every existing name becomes a binding that owns its session, since it was created with it. The
+	// bindings table is recreated rather than converted because no command can write one yet, so there
+	// is nothing to carry over, and its column is renamed to session_id now that it holds an ID rather
+	// than another name.
+	//
+	// The counters table goes with the name. It existed to allocate implicit names like s17, and an
+	// implicit name was only ever a stand-in for an identity, which is what an ID now is.
+	`
+	CREATE TABLE sessions_by_id (
+		id          TEXT PRIMARY KEY,
+		shim_socket TEXT NOT NULL,
+		log_path    TEXT NOT NULL,
+		shim_pid    INTEGER NOT NULL DEFAULT 0,
+		shell_pid   INTEGER NOT NULL DEFAULT 0,
+		last_seq    INTEGER NOT NULL DEFAULT 0,
+		client_seq  INTEGER NOT NULL DEFAULT 0,
+		state       TEXT NOT NULL,
+		exit_code   INTEGER NOT NULL DEFAULT 0,
+		command     TEXT NOT NULL DEFAULT '',
+		cwd         TEXT NOT NULL DEFAULT '',
+		title       TEXT NOT NULL DEFAULT '',
+		rows        INTEGER NOT NULL DEFAULT 0,
+		cols        INTEGER NOT NULL DEFAULT 0,
+		env         TEXT NOT NULL DEFAULT '',
+		persist_requested INTEGER NOT NULL DEFAULT 0,
+		tags        TEXT NOT NULL DEFAULT '',
+		created_at  INTEGER NOT NULL,
+		updated_at  INTEGER NOT NULL
+	) STRICT;
+
+	INSERT INTO sessions_by_id (id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
+		client_seq, state, exit_code, command, cwd, title, rows, cols, env, persist_requested,
+		tags, created_at, updated_at)
+	SELECT 'mig' || printf('%05d', rowid), shim_socket, log_path, shim_pid, shell_pid, last_seq,
+		client_seq, state, exit_code, command, cwd, title, rows, cols, env, persist_requested,
+		tags, created_at, updated_at
+	FROM sessions;
+
+	CREATE TABLE names (
+		name       TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		on_kill    TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	) STRICT;
+
+	INSERT INTO names (name, session_id, on_kill, created_at)
+	SELECT name, 'mig' || printf('%05d', rowid), 'target', created_at FROM sessions;
+
+	DROP TABLE sessions;
+	DROP TABLE counters;
+	ALTER TABLE sessions_by_id RENAME TO sessions;
+	ALTER TABLE names RENAME TO bindings;
+
+	CREATE INDEX sessions_state ON sessions(state);
+	CREATE INDEX bindings_session ON bindings(session_id);
 	`,
 }

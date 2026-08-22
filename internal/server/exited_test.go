@@ -34,9 +34,7 @@ func attachToEndedSession(t *testing.T, exitCode int) []*serverv1.AttachResponse
 
 	rec := startShimFor(t, shimConfigFor("ended", "sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -139,7 +137,7 @@ func TestSizingFailureIsFatalOnlyWhenTheSessionLives(t *testing.T) {
 		{name: "live session reports the failure", endOnResize: false, wantSizeErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr, _, _ := newTestManager(t, nil)
+			mgr, st, _ := newTestManager(t, nil)
 			ctx := context.Background()
 
 			fake := &resizeFailShim{}
@@ -148,7 +146,7 @@ func TestSizingFailureIsFatalOnlyWhenTheSessionLives(t *testing.T) {
 			// Built directly rather than through the manager, so the fake shim is what the session
 			// talks to. 24x80 here against 40x100 below, so the resize actually runs.
 			sess, err := newSession(store.Session{
-				Name: "size-race", ShimSocket: socket, Rows: 24, Cols: 80,
+				ID: "size-race", ShimSocket: socket, Rows: 24, Cols: 80,
 			}, nil, 0, 0)
 			if err != nil {
 				t.Fatalf("newSession() error = %v", err)
@@ -156,8 +154,11 @@ func TestSizingFailureIsFatalOnlyWhenTheSessionLives(t *testing.T) {
 			t.Cleanup(sess.Close)
 			// Registered by hand rather than via Open, which would dial the real shim binary.
 			mgr.mu.Lock()
-			mgr.sessions[sess.name] = sess
+			mgr.sessions[sess.id] = sess
 			mgr.mu.Unlock()
+			// The name the Open below asks for has to resolve to it, or the attach takes the create
+			// path and waits on a shim that was never spawned.
+			nameSession(t, st, sess.id)
 
 			if tc.endOnResize {
 				fake.onResize = func() {
@@ -307,9 +308,7 @@ func TestDetachIsAcknowledged(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("ackdetach", "sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -361,9 +360,7 @@ func TestDetachWithNoAckIsNotAcknowledged(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("noack", "sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

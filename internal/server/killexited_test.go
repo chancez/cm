@@ -29,9 +29,7 @@ func TestKillSucceedsWhenTheShimIsAlreadyGone(t *testing.T) {
 
 	// A session that ends immediately, so the shim is on its way out from the start.
 	rec := startShimInRuntimeDir(t, dirs, "quick", "exit 0")
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

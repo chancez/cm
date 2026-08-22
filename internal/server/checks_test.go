@@ -135,9 +135,7 @@ func TestCheckShellIntegration(t *testing.T) {
 	ctx := context.Background()
 
 	rec := startShimInRuntimeDir(t, dirs, "quiet", "sleep 5")
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -170,9 +168,7 @@ func TestCheckShellIntegrationAcceptsAReport(t *testing.T) {
 	ctx := context.Background()
 
 	rec := startShimInRuntimeDir(t, dirs, "reported", "sleep 5")
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -198,7 +194,7 @@ func TestCheckSessionBacklog(t *testing.T) {
 	// A few finished records are normal and must not be reported.
 	for i := range 3 {
 		if err := st.Create(ctx, store.Session{
-			Name: "few" + strconv.Itoa(i), State: store.StateExited,
+			ID: "few" + strconv.Itoa(i), State: store.StateExited,
 		}); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
@@ -209,7 +205,7 @@ func TestCheckSessionBacklog(t *testing.T) {
 
 	for i := range backlogThreshold {
 		if err := st.Create(ctx, store.Session{
-			Name: "many" + strconv.Itoa(i), State: store.StateExited,
+			ID: "many" + strconv.Itoa(i), State: store.StateExited,
 		}); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}

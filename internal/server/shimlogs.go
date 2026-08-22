@@ -56,13 +56,13 @@ func (m *Manager) PruneShimLogs(ctx context.Context, now time.Time) (int, error)
 		return 0, nil
 	}
 
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("listing sessions to prune shim logs: %w", err)
 	}
 	recorded := make(map[string]struct{}, len(records))
 	for _, rec := range records {
-		recorded[rec.Name] = struct{}{}
+		recorded[rec.ID] = struct{}{}
 	}
 
 	dir := m.dirs.ShimLogDir()

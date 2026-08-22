@@ -27,7 +27,7 @@ import (
 func newNestedTestSession(t *testing.T, term Terminal) *Session {
 	t.Helper()
 	sess := &Session{
-		name:        "parent",
+		id:          "parent",
 		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
 		term:        term,
 		clientSizes: make(map[*attachToken]*clientSize),

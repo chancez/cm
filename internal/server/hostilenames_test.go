@@ -126,7 +126,7 @@ func TestOpenRejectsEveryHostileName(t *testing.T) {
 			continue
 		}
 		t.Run(nameForTest(name), func(t *testing.T) {
-			_, _, err := mgr.Open(ctx, OpenOptions{Name: name, Rows: 24, Cols: 80})
+			_, _, err := mgr.Open(ctx, OpenOptions{Ref: name, Rows: 24, Cols: 80})
 			if err == nil {
 				t.Fatalf("Open(%q) error = nil, want the name refused before it becomes a filename", name)
 			}

@@ -153,9 +153,7 @@ func TestReadOnlyClientCannotSendInput(t *testing.T) {
 	// `cat` echoes whatever it receives, so any input that got through would come back as output.
 	rec := startShimFor(t, shimConfigFor("ro-input", "echo READY; cat"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -204,9 +202,7 @@ func TestReadOnlyClientCannotResize(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("ro-resize", "echo READY; sleep 5"))
 	rec.State = "running"
 	rec.Rows, rec.Cols = 24, 80
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -248,9 +244,7 @@ func TestReadOnlyClientReceivesOutput(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("ro-output", "echo WATCHED_OUTPUT; sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	if err := mgr.Reconcile(ctx); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}

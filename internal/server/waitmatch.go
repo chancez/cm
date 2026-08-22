@@ -93,7 +93,7 @@ func (s *Service) matchOn(
 		// matcher doing a substring scan means a session flooding megabytes. Logged so it is not silent.
 		if chunk.Gap {
 			s.mgr.log.Warn("output was dropped while waiting for a match, so the pattern may have been missed",
-				"session", sess.name, "pattern", pattern)
+				"session", sess.label, "pattern", pattern)
 		}
 
 		if matcher.feed(chunk.Data) {

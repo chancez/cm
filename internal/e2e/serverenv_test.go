@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chancez/cm/internal/paths"
 )
 
 // A session must not inherit the server's environment, and the values that matter most are the ones a
@@ -48,8 +50,13 @@ func TestSessionDoesNotInheritTheServersClientValues(t *testing.T) {
 	// The control, and it is load-bearing: without it an unwritten or empty dump passes every assertion
 	// below while proving nothing. CM_SESSION is set by the shim for the session it serves, so its
 	// presence means this really is the session's environment.
+	//
+	// Matched on the sigil rather than on `probe`, because the value is the session's ID reference and not
+	// the name it was created under. Waiting for the name waited the full fifteen seconds and reported the
+	// session as never having written its environment, which reads as a broken session rather than a
+	// control looking for the wrong string.
 	e.waitFor("the session to write its environment", 15*time.Second, func() bool {
-		return strings.Contains(e.readFileOrEmpty(dump), "CM_SESSION=probe")
+		return strings.Contains(e.readFileOrEmpty(dump), "CM_SESSION="+paths.IDSigil)
 	})
 	body := e.readFileOrEmpty(dump)
 

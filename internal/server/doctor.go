@@ -57,13 +57,13 @@ const (
 // alternative, scanning the process table for anything that looks like a shim, can be fooled and could kill
 // something that is not cm's, which is a worse failure than missing an orphan.
 func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding, error) {
-	records, err := m.store.List(ctx, "")
+	records, err := m.store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
 	known := make(map[string]store.Session, len(records))
 	for _, rec := range records {
-		known[rec.Name] = rec
+		known[rec.ID] = rec
 	}
 
 	sockets, err := m.shimSockets()
@@ -78,33 +78,33 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	shimVersions := make(map[string]string, len(sockets))
 
 	for _, sock := range sockets {
-		name := sessionFromSocket(sock)
-		seen[name] = true
+		id := sessionIDFromSocket(sock)
+		seen[id] = true
 
 		st, alive := probeShimState(ctx, sock)
 		if alive {
 			// Recorded even when empty. A shim too old to report a version is itself skew of at least
 			// that much, and the check below says so rather than treating it as agreement.
-			shimVersions[name] = st.Version
+			shimVersions[id] = st.Version
 		}
 		switch {
 		case !alive:
 			// Nothing answers. Either a shim died without unlinking, or one is mid-startup; the caller is
 			// told which is likelier by whether a record exists.
 			detail := "socket file with nothing listening, left by a shim that died"
-			if _, ok := known[name]; ok {
+			if _, ok := known[id]; ok {
 				detail = "socket file with nothing listening, though a session record exists"
 			}
 			findings = append(findings, Finding{
-				Kind: FindingStaleSocket, Session: name, Socket: sock,
+				Kind: FindingStaleSocket, Session: id, Socket: sock,
 				Detail: detail, Fixable: true,
 			})
 
-		case known[name].Name == "":
+		case known[id].ID == "":
 			// A shim is running and serving a session nothing knows about. This is the one that costs
 			// resources: it holds a pty and a shell that no client can ever reach.
 			f := Finding{
-				Kind: FindingOrphanShim, Session: name, Socket: sock,
+				Kind: FindingOrphanShim, Session: id, Socket: sock,
 				ShimPID: int(st.ShimPid), ShellPID: int(st.ShellPid),
 				Detail:  "shim is running with no session record, so nothing can reattach to it",
 				Fixable: true,
@@ -119,11 +119,11 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// The reverse: a record promising a shim that is not there. Not fixable here, since Reconcile already
 	// marks these dead on startup and expiry removes them on its own schedule; reporting is enough.
 	for _, rec := range records {
-		if rec.State != store.StateRunning || seen[rec.Name] {
+		if rec.State != store.StateRunning || seen[rec.ID] {
 			continue
 		}
 		findings = append(findings, Finding{
-			Kind: FindingMissingShim, Session: rec.Name, Socket: rec.ShimSocket,
+			Kind: FindingMissingShim, Session: rec.ID, Socket: rec.ShimSocket,
 			Detail: "recorded as running but has no socket, so its shim is gone",
 		})
 	}
@@ -286,11 +286,12 @@ func (m *Manager) shimSockets() ([]string, error) {
 	return out, nil
 }
 
-// sessionFromSocket recovers a session name from its socket path.
+// sessionIDFromSocket recovers a session ID from its socket path.
 //
 // Derived from the path rather than by asking the shim, so a socket nothing answers on still reports which
-// session it belonged to.
-func sessionFromSocket(path string) string {
+// session it belonged to. An ID rather than a name because that is what the path holds: a name is a
+// binding in the database, and this has to work when the database is the thing that is wrong.
+func sessionIDFromSocket(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimPrefix(base, shimSocketPrefix)
 	return strings.TrimSuffix(base, shimSocketSuffix)

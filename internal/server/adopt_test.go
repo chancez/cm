@@ -29,9 +29,7 @@ func TestAdoptRebuildsScreenFromShimHistory(t *testing.T) {
 	// Output produced before this server existed, which is what a restart leaves behind.
 	rec := startShimFor(t, shimConfigFor("adopted", "echo BEFORE_RESTART; sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 
 	// Wait for the shell's output to reach the shim, or there would be no history to replay and the
 	// test would pass without exercising anything.
@@ -43,7 +41,7 @@ func TestAdoptRebuildsScreenFromShimHistory(t *testing.T) {
 	// pump deliver the output itself, and the test would pass without the code under test running.
 	next := shimNextSeq(t, rec.ShimSocket)
 	rec.LastSeq = next
-	if err := st.Apply(ctx, rec.Name, store.Update{LastSeq: &next}); err != nil {
+	if err := st.Apply(ctx, rec.ID, store.Update{LastSeq: &next}); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -74,9 +72,7 @@ func TestAdoptDoesNotDuplicateAtTheResumeBoundary(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("nodup", "echo UNIQUE_LINE; sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	waitForShimOutput(t, rec.ShimSocket, "UNIQUE_LINE")
 
 	// Resume from partway through the output rather than from 0 or from the end. This is what makes
@@ -88,7 +84,7 @@ func TestAdoptDoesNotDuplicateAtTheResumeBoundary(t *testing.T) {
 	if half == 0 {
 		t.Fatalf("shim reported only %d bytes, too few to split at a boundary", next)
 	}
-	if err := st.Apply(ctx, rec.Name, store.Update{LastSeq: &half}); err != nil {
+	if err := st.Apply(ctx, rec.ID, store.Update{LastSeq: &half}); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -154,16 +150,14 @@ func TestAdoptDoesNotReplayHistoryToClients(t *testing.T) {
 
 	rec := startShimFor(t, shimConfigFor("noreplay", "echo OLD_OUTPUT; sleep 5"))
 	rec.State = "running"
-	if err := st.Create(ctx, rec); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
+	recordSession(t, st, rec)
 	waitForShimOutput(t, rec.ShimSocket, "OLD_OUTPUT")
 
 	// A previous server that had already consumed this output records how far it got. Read the shim's
 	// own count rather than guessing a byte offset.
 	next := shimNextSeq(t, rec.ShimSocket)
 	rec.LastSeq = next
-	if err := st.Apply(ctx, rec.Name, store.Update{LastSeq: &next}); err != nil {
+	if err := st.Apply(ctx, rec.ID, store.Update{LastSeq: &next}); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 

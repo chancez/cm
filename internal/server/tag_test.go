@@ -18,12 +18,15 @@ import (
 func tagTestSession(t *testing.T, st *store.Store, name string, sessionTags map[string]string) {
 	t.Helper()
 	if err := st.Create(context.Background(), store.Session{
-		Name:  name,
+		ID:    name,
 		State: store.StateRunning,
 		Tags:  sessionTags,
 	}); err != nil {
 		t.Fatalf("Create(%s) error = %v", name, err)
 	}
+	// Named as well as recorded: these tests reach their session through the resolve layer, and a
+	// listing shows a session with no names by its ID.
+	nameSession(t, st, name)
 }
 
 func TestSetTagsMergesByDefault(t *testing.T) {
@@ -226,11 +229,13 @@ func TestTagWorksOnAnExitedSession(t *testing.T) {
 	ctx := context.Background()
 
 	if err := st.Create(ctx, store.Session{
-		Name:  "finished",
+		ID:    "finished",
 		State: store.StateExited,
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	// An exited session keeps its names, which is what makes tagging one by name possible at all.
+	nameSession(t, st, "finished")
 
 	resp, err := svc.Tag(ctx, &serverv1.TagRequest{
 		Session: "finished",
@@ -309,12 +314,12 @@ func TestInheritForRestoreCarriesTags(t *testing.T) {
 	mgr.SetPersistPolicy(testPolicy())
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Tags:    map[string]string{"project": "cm", "role": "reviewer"},
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	want := map[string]string{"project": "cm", "role": "reviewer"}
 	if !reflect.DeepEqual(got.Tags, want) {
 		t.Errorf("Tags = %v, want the recorded tags %v", got.Tags, want)
@@ -332,11 +337,11 @@ func TestInheritForRestoreCarriesTagsWithoutPersistence(t *testing.T) {
 	// No persist policy at all, which is what an install with no config gets.
 
 	rec := store.Session{
-		Name: "revived",
+		ID:   "revived",
 		Tags: map[string]string{"project": "cm"},
 	}
 
-	got := mgr.inheritForRestore(OpenOptions{Name: "revived"}, rec)
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 	want := map[string]string{"project": "cm"}
 	if !reflect.DeepEqual(got.Tags, want) {
 		t.Errorf("Tags = %v, want %v even with persistence off", got.Tags, want)
@@ -356,13 +361,13 @@ func TestInheritForRestoreMergesTags(t *testing.T) {
 	mgr.SetPersistPolicy(testPolicy())
 
 	rec := store.Session{
-		Name:    "revived",
+		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Tags:    map[string]string{"project": "cm", "role": "reviewer"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{
-		Name: "revived",
+		Ref:  "revived",
 		Tags: map[string]string{"role": "builder", "fresh": "1"},
 	}, rec)
 

@@ -10,14 +10,14 @@ import (
 	"time"
 )
 
-const sessionColumns = `name, shim_socket, log_path, shim_pid, shell_pid, last_seq,
+const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq`
 
 // Create inserts a session record.
 //
-// It fails if the name is taken, including by an exited session, since the record of why a
-// session ended is worth keeping until it is explicitly removed.
+// It fails if the ID is taken, which is a bug rather than a condition to handle: IDs come from NewID
+// and are never reused, so a conflict means two sessions were built on one identity.
 func (s *Store) Create(ctx context.Context, sess Session) error {
 	now := time.Now()
 	if sess.CreatedAt.IsZero() {
@@ -31,42 +31,40 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.Name, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
+		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 	)
 	if err != nil {
-		return fmt.Errorf("creating session %s: %w", sess.Name, err)
+		return fmt.Errorf("creating session %s: %w", sess.ID, err)
 	}
 	return nil
 }
 
-// Get returns one session by name.
-func (s *Store) Get(ctx context.Context, name string) (Session, error) {
+// Get returns one session by ID.
+func (s *Store) Get(ctx context.Context, id string) (Session, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE name = ?`, name)
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Session{}, fmt.Errorf("%q: %w", name, ErrNotFound)
+		return Session{}, fmt.Errorf("%q: %w", id, ErrNotFound)
 	}
 	return sess, err
 }
 
-// List returns sessions whose names start with prefix, oldest first so output is stable.
-func (s *Store) List(ctx context.Context, prefix string) ([]Session, error) {
-	query := `SELECT ` + sessionColumns + ` FROM sessions`
-	var args []any
-	if prefix != "" {
-		// Escape LIKE wildcards so a name containing % or _ is matched literally.
-		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix)
-		query += ` WHERE name LIKE ? ESCAPE '\'`
-		args = append(args, esc+"%")
-	}
-	query += ` ORDER BY created_at, name`
+// List returns every session, oldest first so output is stable between calls.
+//
+// No prefix filter, unlike the version keyed on names. Filtering by name prefix now means "has a name
+// starting with this", which is a question about bindings rather than about sessions, and the caller
+// that asks it already holds the whole list: session counts are in the tens, which is the same reason
+// tags live in a JSON column rather than a side table. Doing it in Go also deletes the LIKE escaping
+// this used to need, and with it the chance of a prefix containing % matching everything.
+func (s *Store) List(ctx context.Context) ([]Session, error) {
+	query := `SELECT ` + sessionColumns + ` FROM sessions ORDER BY created_at, id`
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
 	}
@@ -85,9 +83,13 @@ func (s *Store) List(ctx context.Context, prefix string) ([]Session, error) {
 
 // Delete removes a session record. Removing a session that is already gone is not an
 // error, since the caller's intent is satisfied either way.
-func (s *Store) Delete(ctx context.Context, name string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE name = ?`, name); err != nil {
-		return fmt.Errorf("deleting session %s: %w", name, err)
+//
+// Names bound to it are not removed here. Deciding what a name means once its session is gone is the
+// manager's call, not the store's: an exited session's names have to survive so attaching by one
+// revives its content, while a session that has been reaped for good takes its names with it.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("deleting session %s: %w", id, err)
 	}
 	return nil
 }
@@ -120,7 +122,7 @@ type Update struct {
 }
 
 // Apply writes the update, returning ErrNotFound if the session is gone.
-func (s *Store) Apply(ctx context.Context, name string, u Update) error {
+func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	var (
 		sets []string
 		args []any
@@ -171,51 +173,22 @@ func (s *Store) Apply(ctx context.Context, name string, u Update) error {
 	}
 
 	add("updated_at", time.Now().UnixMilli())
-	args = append(args, name)
+	args = append(args, id)
 
 	// Column names come from this function's own literals, never from input.
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET `+strings.Join(sets, ", ")+` WHERE name = ?`, args...)
+		`UPDATE sessions SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
 	if err != nil {
-		return fmt.Errorf("updating session %s: %w", name, err)
+		return fmt.Errorf("updating session %s: %w", id, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("updating session %s: %w", name, err)
+		return fmt.Errorf("updating session %s: %w", id, err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%q: %w", name, ErrNotFound)
+		return fmt.Errorf("%q: %w", id, ErrNotFound)
 	}
 	return nil
-}
-
-// NextName allocates a unique session name with the given prefix.
-//
-// The counter only ever increases and names are never reused, even after a session is
-// deleted. Reuse would let a client that recorded a name reattach to an unrelated session
-// later, which is the hazard the kitty integration's counter file exists to avoid.
-//
-// The read and write happen in one transaction so two concurrent callers cannot receive
-// the same name.
-func (s *Store) NextName(ctx context.Context, prefix string) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", fmt.Errorf("allocating name: %w", err)
-	}
-	defer tx.Rollback()
-
-	var n int64
-	err = tx.QueryRowContext(ctx,
-		`INSERT INTO counters (name, value) VALUES (?, 1)
-		 ON CONFLICT(name) DO UPDATE SET value = value + 1
-		 RETURNING value`, prefix).Scan(&n)
-	if err != nil {
-		return "", fmt.Errorf("allocating name for prefix %q: %w", prefix, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("allocating name: %w", err)
-	}
-	return fmt.Sprintf("%s%d", prefix, n), nil
 }
 
 // encodeStringMap renders a map column for storage. An empty map is stored as an empty string
@@ -265,7 +238,7 @@ func scanSession(sc scanner) (Session, error) {
 		tagsJSON  string
 	)
 	err := sc.Scan(
-		&sess.Name, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
+		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq,
@@ -288,18 +261,18 @@ func scanSession(sc scanner) (Session, error) {
 //
 // Exists for tests, which need to age a record to exercise expiry without waiting. Kept on the store
 // rather than reaching into sqlite from a test, so the column name lives in one place.
-func (s *Store) SetUpdatedAt(ctx context.Context, name string, when time.Time) error {
+func (s *Store) SetUpdatedAt(ctx context.Context, id string, when time.Time) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET updated_at = ? WHERE name = ?`, when.UnixMilli(), name)
+		`UPDATE sessions SET updated_at = ? WHERE id = ?`, when.UnixMilli(), id)
 	if err != nil {
-		return fmt.Errorf("setting updated_at for %s: %w", name, err)
+		return fmt.Errorf("setting updated_at for %s: %w", id, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("%q: %w", name, ErrNotFound)
+		return fmt.Errorf("%q: %w", id, ErrNotFound)
 	}
 	return nil
 }

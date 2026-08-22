@@ -19,6 +19,7 @@ import (
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/transport"
@@ -41,7 +42,13 @@ const DefaultRecentBytes = 1 << 20 // 1 MiB
 // Session is one live session as the server sees it: a connection to its shim, the
 // terminal state derived from its output, and the set of attached clients.
 type Session struct {
-	name   string
+	// id is the session's identity, and the key it is registered under. Fixed for its whole life.
+	id string
+	// label is what to call this session when talking to a person: a name bound to it, or its ID with
+	// the sigil so the value can be typed straight back. Display only, and deliberately not identity:
+	// a name can be pointed at another session at any time, so anything that looks a session up has to
+	// use id or it will find the wrong one.
+	label  string
 	record store.Session
 
 	// conn and shim reach the session's shim. The server is the shim's only client.
@@ -409,7 +416,9 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 	pumpCtx, stopPump := context.WithCancel(context.Background())
 
 	s := &Session{
-		name:     rec.Name,
+		id: rec.ID,
+		// Until a caller knows a name for it, which only the manager does.
+		label:    paths.FormatSessionID(rec.ID),
 		record:   rec,
 		conn:     conn,
 		shim:     shim,
@@ -449,7 +458,7 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 	if err != nil {
 		stopPump()
 		conn.Close()
-		return nil, fmt.Errorf("subscribing to shim for %s: %w", rec.Name, err)
+		return nil, fmt.Errorf("subscribing to shim for %s: %w", rec.ID, err)
 	}
 
 	go s.pump(sub)
@@ -629,7 +638,7 @@ func (s *Session) graphicsRestore() []byte {
 		out = append(out, r.Bytes...)
 	}
 	s.log.Debug("re-sending graphics images on attach",
-		"session", s.name, "images", len(rt), "bytes", len(out))
+		"session", s.label, "images", len(rt), "bytes", len(out))
 	return out
 }
 
@@ -670,7 +679,7 @@ func (s *Session) handleGraphics(segs []graphics.Segment) []byte {
 			// Logged rather than silent, because an image that does not appear is otherwise inexplicable,
 			// and swallowed advisory failures are what cm's diagnostic logs are for.
 			s.log.Info("declined a graphics transfer",
-				"session", s.name, "medium", string(seg.Cmd.Medium), "error", err)
+				"session", s.label, "medium", string(seg.Cmd.Medium), "error", err)
 			continue
 		}
 
@@ -718,7 +727,7 @@ func (s *Session) feedTerminal(data []byte, modelEnd uint64) {
 		// session over it would be worse: live output still works. Give up on restores instead
 		// by discarding the model.
 		s.log.Error("terminal model failed, screen restore disabled for this session",
-			"session", s.name, "error", err)
+			"session", s.label, "error", err)
 		s.mu.Lock()
 		s.term = nil
 		s.mu.Unlock()
@@ -1059,7 +1068,7 @@ func (s *Session) SinceCommands(n int) (seq uint64, available int, err error) {
 		return 0, 0, ErrNoCommandBoundaries
 	}
 	return 0, available, fmt.Errorf(
-		"only %d command(s) are known for session %s", available, s.name)
+		"only %d command(s) are known for session %s", available, s.label)
 }
 
 // LastOutput returns the position where the most recent command's own output begins.
@@ -2176,7 +2185,7 @@ func (s *Session) reportSize(rows, cols uint16) {
 	report, err := term.SizeReport(rows, cols)
 	if err != nil {
 		s.log.Warn("reading the in-band resize mode failed, so no size report was sent",
-			"session", s.name, "error", err)
+			"session", s.label, "error", err)
 		return
 	}
 	if len(report) == 0 {
@@ -2266,4 +2275,27 @@ func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) (survivin
 // State queries the shim directly, which is the authority on whether a session is alive.
 func (s *Session) State(ctx context.Context) (*shimv1.StateResponse, error) {
 	return s.shim.State(ctx, &shimv1.StateRequest{})
+}
+
+// setLabel records a name to call this session by in messages and logs.
+//
+// Last one wins, which is right for a session with several names: whichever the caller most recently
+// reached it by is the one they are thinking in.
+func (s *Session) setLabel(name string) {
+	if name == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.label = name
+}
+
+// ID returns the session's identity.
+func (s *Session) ID() string { return s.id }
+
+// Label returns what to call this session when talking to a person.
+func (s *Session) Label() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.label
 }

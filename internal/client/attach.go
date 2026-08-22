@@ -188,8 +188,16 @@ type SessionMetadata struct {
 
 // Result describes how an attachment ended.
 type Result struct {
-	// Session is the resolved name, which matters when the server allocated it.
+	// Session is what to call the session when talking to the user: the name it was attached by, or its
+	// ID with the sigil when it has no name. What "detached from ..." prints.
 	Session string
+	// SessionID is the session's identity, and what any later call about this session should use.
+	//
+	// Distinct from Session because a name is a binding: it can be pointed at a different session while
+	// this client is attached, so reconnecting by name could land somewhere else. Reconnecting by ID
+	// either finds the same session or fails, and failing is the right outcome for a client whose
+	// session is gone.
+	SessionID string
 	// Detached is true when the user detached rather than the session ending.
 	Detached bool
 	// Upgrade is true when the server asked this client to come back on a newer build rather than
@@ -439,7 +447,13 @@ func runSession(
 
 	rows, cols := tty.Size()
 	xpixel, ypixel := tty.PixelSize()
-	open := opts.Open(result.Session)
+	// By ID once one is known, which is every reconnect: this is a *re*connection to one particular
+	// session, not a fresh request for whatever a name points at now.
+	ref := result.Session
+	if result.SessionID != "" {
+		ref = paths.FormatSessionID(result.SessionID)
+	}
+	open := opts.Open(ref)
 	open.Rows = uint32(rows)
 	open.Cols = uint32(cols)
 	open.XPixel = uint32(xpixel)
@@ -461,6 +475,7 @@ func runSession(
 		return outcomeDone, errors.New("server did not open the session")
 	}
 	result.Session = opened.Session
+	result.SessionID = opened.SessionId
 	// Signalled here, after Opened and before anything else is read, so a caller ordering work after the
 	// attachment cannot race the first output.
 	if opts.OnAttached != nil {

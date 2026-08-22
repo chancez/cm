@@ -38,7 +38,11 @@ func (s *Service) Tag(ctx context.Context, req *serverv1.TagRequest) (*serverv1.
 		}
 	}
 
-	result, err := s.mgr.SetTags(ctx, req.Session, req.Set, req.Remove, req.Replace)
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.mgr.SetTags(ctx, id, req.Set, req.Remove, req.Replace)
 	if err != nil {
 		return nil, err
 	}
