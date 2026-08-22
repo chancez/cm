@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 )
 
@@ -153,13 +154,20 @@ func BenchmarkPumpPerChunkScans(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			var cmds osc.CommandTracker
 			var reports osc.ReportTracker
+			var gfx graphics.Scanner
 			boundaries := osc.NewBoundaryTracker(0)
 			b.SetBytes(int64(len(tc.data)))
 			b.ResetTimer()
 			for range b.N {
 				cmds.Feed(tc.data)
 				reports.Feed(tc.data)
-				data := osc.RewritePromptRedraw(tc.data)
+				// The graphics scan, in the position the pump runs it: after the trackers and ahead of
+				// the prompt rewrite, since a rewrite inside an image payload would corrupt it.
+				data := tc.data
+				if segs := gfx.Scan(tc.data); segs != nil {
+					data = joinSegments(segs)
+				}
+				data = osc.RewritePromptRedraw(data)
 				boundaries.Feed(data)
 			}
 		})
@@ -181,6 +189,7 @@ func BenchmarkImageTransmission(b *testing.B) {
 
 	var cmds osc.CommandTracker
 	var reports osc.ReportTracker
+	var gfx graphics.Scanner
 	boundaries := osc.NewBoundaryTracker(0)
 	b.SetBytes(int64(transmission))
 	b.ResetTimer()
@@ -188,8 +197,28 @@ func BenchmarkImageTransmission(b *testing.B) {
 		for _, c := range chunks {
 			cmds.Feed(c)
 			reports.Feed(c)
-			data := osc.RewritePromptRedraw(c)
+			data := c
+			if segs := gfx.Scan(c); segs != nil {
+				data = joinSegments(segs)
+			}
+			data = osc.RewritePromptRedraw(data)
 			boundaries.Feed(data)
 		}
 	}
+}
+
+// joinSegments rebuilds a chunk from segments, standing in for what handleGraphics does.
+//
+// The benchmark measures the scan rather than the handling, so commands are re-emitted as they arrived
+// instead of being resolved: reading a transfer file would measure the filesystem.
+func joinSegments(segs []graphics.Segment) []byte {
+	var out []byte
+	for _, seg := range segs {
+		if seg.Graphics {
+			out = append(out, seg.Cmd.Raw...)
+			continue
+		}
+		out = append(out, seg.Data...)
+	}
+	return out
 }

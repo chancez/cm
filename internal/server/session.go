@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -163,6 +164,21 @@ type Session struct {
 	// metadata that every chunk of output touches.
 	boundariesMu sync.Mutex
 	boundaries   *osc.BoundaryTracker
+
+	// gfxScan pulls kitty graphics commands out of the output stream.
+	//
+	// Outside mu for the same reason as commands and reports: only the pump feeds it. Unlike those two
+	// it *removes* bytes from what clients see, which the two sequence-number spaces already allow,
+	// since the prompt rewrite beside it lengthens the stream. What must not happen is the shim's
+	// numbering being computed from the shortened bytes, and it is not: lastSeq comes from out.Data.
+	gfxScan graphics.Scanner
+	// gfxStore keeps the payloads those commands carried, so images can be re-sent on attach.
+	//
+	// Its own lock inside, because an attaching client reads it while the pump writes. Separate from
+	// libghostty's image storage on purpose: that holds decoded pixels for rendering, this holds the
+	// compressed bytes a program sent, and rebuilding a transmission from decoded pixels was measured
+	// at 90x the inbound size.
+	gfxStore *graphics.Store
 
 	// log records what this session does. Never nil.
 	log *slog.Logger
@@ -405,7 +421,12 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 		//
 		// clientSeq rather than fromSeq: boundaries are recorded from the rewritten bytes, which is what
 		// the log numbers, so a boundary stored in the shim's numbering would be off by the rewrite.
-		boundaries:  newBoundaryTrackerAt(clientSeq),
+		boundaries: newBoundaryTrackerAt(clientSeq),
+		// Not positioned like the boundary tracker above, because an image is addressed by the id the
+		// program chose rather than by a position in the stream. A session adopted after a restart
+		// therefore starts with no images and regains them as the program transmits, which is the same
+		// bound the model has on its own storage.
+		gfxStore:    graphics.NewStore(0),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
 		evicts:      make(map[*attachToken]chan struct{}),
@@ -511,10 +532,25 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// the pty and overtake it. See noteQueries and queueOrWriteReply.
 		s.noteQueries(out.Data)
 
+		// Kitty graphics is taken out of the stream and re-emitted by cm, which is the one protocol cm
+		// consumes rather than forwards. The reason is that a transmission may name a *file* and the
+		// file is consumed once, so forwarding one lets the program and the real terminal race for it:
+		// the reported "EBADF ... No such file or directory" on exactly the probes that name a path.
+		// See docs/architecture.md on what cm presents itself as.
+		//
+		// Ahead of the prompt rewrite because a graphics payload is arbitrary base64 that may contain
+		// the bytes the rewrite matches on, and rewriting inside a payload would corrupt the image.
+		// After noteQueries for the opposite reason: a graphics command is not a query cm proxies, and
+		// the query scan must see the same bytes the model will.
+		gfxData := out.Data
+		if segs := s.gfxScan.Scan(out.Data); segs != nil {
+			gfxData = s.handleGraphics(segs)
+		}
+
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
-		data := osc.RewritePromptRedraw(out.Data)
+		data := osc.RewritePromptRedraw(gfxData)
 
 		// Command boundaries come from the rewritten bytes, not the originals.
 		//
@@ -547,8 +583,102 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		s.lastSeq = out.Seq + uint64(len(out.Data))
 		s.mu.Unlock()
 
-		s.feedTerminal(out.Data, s.recent.Next())
+		// The model is fed gfxData rather than out.Data, which is a change from feeding the shell's
+		// original bytes and is required rather than incidental: a graphics command cm removed from the
+		// client stream must also be removed from what the model sees, or the model would store an image
+		// from a command naming a file it cannot read, and its idea of the screen would disagree with
+		// every client's. The inlined replacement cm produced is in gfxData, so both see the same thing.
+		//
+		// The prompt rewrite is still not applied here, which is the existing asymmetry this preserves:
+		// the model gets the markers as the shell wrote them, and only clients see redraw=0.
+		s.feedTerminal(gfxData, s.recent.Next())
 	}
+}
+
+// graphicsRestore builds the commands that re-send this session's images to an attaching client.
+//
+// Empty when nothing has been transmitted, which is the common case and costs one map read.
+//
+// Sent to every attaching client rather than tracked per client. zellij keeps per-client state so it can
+// skip re-sending to a client that already has an image, which is worth it there because it re-emits
+// every frame; cm sends only on attach, so the bookkeeping would cost more than the bytes it saves. The
+// consequence is that a second client attaching to a session receives the images again, which is correct
+// rather than merely acceptable: it has never seen them.
+func (s *Session) graphicsRestore() []byte {
+	// Nil for a Session built field by field rather than through newSession, which several tests do to
+	// hold an exact intermediate state. Treated as "no images" rather than fixed up, for the same reason
+	// the evicts map is created lazily on attach: a panic here would surface a long way from the missing
+	// line that caused it.
+	if s.gfxStore == nil {
+		return nil
+	}
+	rt := s.gfxStore.Retransmissions()
+	if len(rt) == 0 {
+		return nil
+	}
+	var out []byte
+	for _, r := range rt {
+		out = append(out, r.Bytes...)
+	}
+	s.log.Debug("re-sending graphics images on attach",
+		"session", s.name, "images", len(rt), "bytes", len(out))
+	return out
+}
+
+// handleGraphics consumes the graphics commands found in a chunk and returns the bytes to forward.
+//
+// Each command is resolved and re-emitted rather than passed through. A transmission naming a file is
+// read here and rebuilt carrying its data, so the terminal receives something it can satisfy without
+// racing cm for a single-use file. A payload is kept so the image can be re-sent on a later attach.
+//
+// A command cm cannot resolve is dropped rather than forwarded, and that is deliberate: forwarding it
+// would put the program and the terminal back in the race this exists to remove, and the program has a
+// fallback for a declined medium. `kitten icat` negotiates stream and exits 0 when a medium is refused,
+// measured against a control of the same kitty with no cm.
+// Segments are walked in order rather than emitting the ordinary bytes and then the commands, and the
+// difference is a corruption rather than a nicety: a chunk of "text cmd text" rebuilt the wrong way puts
+// the command after all of the text. Observed in a sandbox as a refused command's payload printed on the
+// prompt line, with the probe beside it arriving payload-free and kitty answering
+// "ENODATA: Insufficient image data: 0 < 3".
+func (s *Session) handleGraphics(segs []graphics.Segment) []byte {
+	out := make([]byte, 0, 256)
+
+	// Same reason as graphicsRestore: a Session built field by field has no store, and dropping the
+	// bookkeeping is better than panicking on the output path, where the failure would end the session.
+	store := s.gfxStore
+
+	for _, seg := range segs {
+		if !seg.Graphics {
+			out = append(out, seg.Data...)
+			continue
+		}
+
+		resolved, err := graphics.ReadTransfer(seg.Cmd)
+		if err != nil {
+			// Dropped, and the whole command goes with it. Emitting any part of it is what produced the
+			// leak above, and forwarding all of it would put the program and the terminal back in the
+			// race for a single-use file.
+			//
+			// Logged rather than silent, because an image that does not appear is otherwise inexplicable,
+			// and swallowed advisory failures are what cm's diagnostic logs are for.
+			s.log.Info("declined a graphics transfer",
+				"session", s.name, "medium", string(seg.Cmd.Medium), "error", err)
+			continue
+		}
+
+		if store != nil {
+			if resolved.IsTransmission() {
+				store.Add(resolved)
+			} else if id, byNumber, ok := resolved.Key(); ok {
+				// A command that places or otherwise uses an image counts as touching it, so eviction
+				// does not drop what is currently on screen.
+				store.Touch(id, byNumber)
+			}
+		}
+
+		out = append(out, resolved.Raw...)
+	}
+	return out
 }
 
 // feedTerminal advances the terminal model, recording how far into the log it has consumed.
@@ -1490,7 +1620,20 @@ func (s *Session) attach(resumeFrom *uint64, tok *attachToken) (attachment, erro
 		if err != nil {
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
-		restore = b
+
+		// Images are re-transmitted ahead of the screen, and the order is the whole of it: the restored
+		// screen may contain placements referring to images by id, and a placement whose image the
+		// terminal has never seen draws nothing. Sending the images first means the ids resolve.
+		//
+		// The payloads are the ones the program sent, replayed verbatim, so this costs what the original
+		// transmission cost. Rebuilding them from libghostty's storage instead would mean re-encoding
+		// decoded pixels, measured at 90x the inbound size, 11815084 bytes against 217378 for one
+		// screenshot.
+		//
+		// Every command is forced to q=2 by the store, so a re-transmission generates no response. That
+		// is what keeps this off the reply path: an image cm sends asks the terminal nothing, so nothing
+		// comes back to be mistaken for an answer to a question cm never asked.
+		restore = append(s.graphicsRestore(), b...)
 
 		// State is replayed, so streaming starts where the replayed screen ends rather than repeating
 		// history the snapshot already covers.
