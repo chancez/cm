@@ -172,6 +172,19 @@ clean pass. Four traps from it, worth knowing even if you read nothing else:
 - **Drive the pty directly** with `printf 'A\033[6nB'` rather than running vim or another real
   program, which confounds the test and can stop exercising it silently.
 
+**Before fixing a query, reply, or escape-sequence routing bug, read "What cm is, from a program's point
+of view" in `docs/architecture.md`.** This is the largest family of bugs in the repo by commit count, and
+a run of them turned out to share a single cause that is not in the code any of them were fixed in: cm
+does not hold a consistent position on what it presents itself as to the program inside a session. zmx is
+transparent, zellij is the terminal, tmux is a known quantity that programs special-case; cm is currently
+none of the three, and the symptoms only appear from outside, in what a program experiences.
+
+The practical rule: when a fix is another branch in the reply routing, stop and check whether the bug is a
+symptom of that. Several plausible local fixes for one such bug were each wrong in an instructive way,
+including one that would have stopped `kitten icat` displaying images at all while appearing to fix the
+reported symptom. The doc records the measurements and why each was rejected, so that reasoning does not
+have to be re-derived.
+
 ## Go conventions
 
 - `new("string")` / `new(5)` rather than a `ptr()` helper or a temp variable plus `&`.

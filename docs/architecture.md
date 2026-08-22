@@ -823,6 +823,92 @@ reply queue. Keeping both would send two reports per resize and the model's woul
 turn. So the division is that the model decides *whether* a report is owed, since it tracks the mode the
 program set, and the server decides *when* one is sent.
 
+## What cm is, from a program's point of view
+
+This section exists because a long run of bugs turned out to share one cause, and the cause is not in any
+of the code those bugs were fixed in. Anyone about to fix another escape-sequence routing bug should read
+this first and check whether the bug is a symptom of what is described here.
+
+A program inside a session negotiates with what it believes is a terminal. It asks questions, reads
+answers, and enables features only when something answers. So every multiplexer has to answer one
+question, and answer it *consistently*: **what am I, to the program inside me?** There are three coherent
+answers, and each of cm's neighbours picks one and holds it.
+
+- **Transparent.** Classify nothing, forward every byte in both directions, never generate a reply. zmx
+  does this: it does not wire libghostty's write-pty callback, so it produces no replies and has no
+  routing decisions to get wrong. The cost is that features needing a reply do not work, and reattach
+  cannot restore what it never modelled.
+- **Be the terminal.** Consume a protocol entirely and re-originate it per client. zellij does this for
+  kitty graphics: an interceptor pulls APC out of the stream before its parser
+  (`zellij-server/src/panes/kitty_graphics/interceptor.rs`), it reads any transfer file itself, stores
+  decoded pixels, and synthesizes fresh commands for each attached client. The program never talks to the
+  real terminal at all, so there is no round trip to misroute.
+- **Be a known quantity.** Advertise what you are, answer what you can, and refuse the rest clearly enough
+  that programs adapt. tmux does this. It answers DA1, DA2, and XTVERSION from its own state, proxies only
+  OSC 4 and OSC 52, and **drops a reply that matches no outstanding request** unconditionally
+  (`input_request_reply` in `input.c` ends `if (found == NULL) return;`). Programs then special-case it:
+  `kitten icat` checks for a tmux socket and stops probing, setting file and memory transfer to
+  unsupported without asking (`kittens/icat/main.go:305-308`).
+
+cm currently occupies none of these positions, and that is the finding. It forwards graphics APC verbatim,
+which is transparent. It routes client input through a reply classifier, which is not. It delivers an
+unmatched non-reply to the pty, which is neither zellij nor tmux. And it holds a full terminal model that
+it does not use for graphics, so it pays zellij's cost without getting zellij's benefit.
+
+Each of those choices was locally correct when it was made, which is exactly why the position drifted:
+every one of them was a bug fix with a test. The consequence is only visible from outside, in what a
+program experiences.
+
+### The measured case that showed it
+
+`kitten icat` in a cm session, against a control of the same kitty with no cm. Both under a sandbox, with
+the command driven into the session so it ran on the real pty.
+
+| | negotiated medium | result |
+| --- | --- | --- |
+| bare kitty | `memory` (`t=s`) | clean |
+| inside cm | `stream` | exit 0, plus visible garbage |
+
+icat sends three capability probes, each an APC naming a transfer medium: `t=d` with inline data, `t=t`
+with a temp-file path, `t=s` with a shared-memory name. Under cm the inline probe answers `OK` and the two
+naming a *file* answer `EBADF ... No such file or directory`. cm forwards those answers to the pty, where
+a shell sitting at a prompt has `echo` and `echoctl` on, so the tty echoes them back as caret notation. The
+proof they are echoes rather than passthrough is the encoding: a capture held 6 literal `^[` sequences
+against 466 real `0x1b` bytes. They then land on the *next* prompt line, and are read as input. Observed
+consequences: a typed command silently mangled, and `zsh: 3 not found` from the shell executing a fragment
+of a graphics error message.
+
+Three fixes were considered and rejected, and the reasons are the useful part:
+
+- **Answer `EBADF` deliberately so icat falls back.** Pointless: icat already falls back on its own, which
+  the control shows by it negotiating `stream` and exiting 0.
+- **Drop a response while the shell is at a prompt**, using the OSC 133 `Running` flag cm already tracks.
+  Rejected as brittle. It depends on shell integration, so a shell that reports nothing would have every
+  response dropped, which is the case `cm doctor` already names `no-shell-integration`.
+- **Drop an unmatched reply, as tmux does.** This is the one that looked right and is the most instructive
+  failure. It cannot be applied to graphics, because `direct` transmission is *mandatory* in icat
+  (`kittens/icat/main.go:290`): without the `i=1;OK` answer it hard-fails with "This terminal does not
+  support the graphics protocol", so dropping unmatched APC would stop images working entirely rather than
+  merely silencing an echo. tmux escapes this only because icat recognizes tmux and never asks.
+
+### What follows from it
+
+The routing is not repairable in isolation, because the defect is the absence of a position rather than a
+wrong branch. Two of the three answers above are open to cm.
+
+Being the terminal for graphics is the one that resolves it rather than patching it, and it is already
+scoped in [ideas.md](ideas.md) under kitty graphics across a reattach: intercept APC, read the transfer
+file, keep the pixels, re-emit per client. That removes the round trip whose replies are the problem, fixes
+the file-medium failure, and is the same work restore-on-reattach needs, since the pinned libghostty now
+exposes an image-inspection API.
+
+Being a known quantity is cheaper and weaker. cm could answer XTVERSION as itself, and already emits
+OSC 25453. But adaptation is hardcoded per multiplexer in the programs that do it, so it only pays off if
+those programs learn about cm, which zmx faces too.
+
+What should *not* happen is another local fix to the reply path for a graphics symptom. That is the pattern
+this section is here to interrupt.
+
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an

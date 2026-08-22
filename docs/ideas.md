@@ -74,6 +74,14 @@ survives reattach but not a reboot. cm persists content across a reboot, so cm w
 zellij never answered, and the pixel-size measurement above is what decides whether the answer can be
 "yes" rather than "content only, minus images".
 
+This has since become more than a restore feature, and that is the argument for doing it rather than
+deferring it again. Intercepting graphics is also what would resolve the position cm currently has no
+answer for, described under "What cm is, from a program's point of view" in
+[architecture.md](architecture.md): forwarding a graphics query to a real terminal and routing the reply
+back is what produces the reply-echo and file-transfer failures observed with `kitten icat`, and
+consuming the protocol removes that round trip entirely. So the same work fixes a live bug and a
+documented gap.
+
 **`cm doctor` checks as incidents arise.** The standing rule is that a debugging session that cost real
 time should leave a check behind. The obvious candidate -- a session that reports neither OSC 133 nor its own
 state, so `--wait idle` hangs -- is already covered by `no-shell-integration`, which checks both. What is not
