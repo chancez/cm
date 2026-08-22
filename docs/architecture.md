@@ -896,11 +896,10 @@ Three fixes were considered and rejected, and the reasons are the useful part:
 The routing is not repairable in isolation, because the defect is the absence of a position rather than a
 wrong branch. Two of the three answers above are open to cm.
 
-Being the terminal for graphics is the one that resolves it rather than patching it, and it is already
-scoped in [ideas.md](ideas.md) under kitty graphics across a reattach: intercept APC, read the transfer
-file, keep the pixels, re-emit per client. That removes the round trip whose replies are the problem, fixes
-the file-medium failure, and is the same work restore-on-reattach needs, since the pinned libghostty now
-exposes an image-inspection API.
+Being the terminal for graphics is the one that resolves it rather than patching it. It removes the round
+trip whose replies are the problem, fixes the file-medium failure, and is the same work
+restore-on-reattach needs. That is the option that was taken; see the next section for what it became,
+including the one part of it that keeping the pixels turned out *not* to solve.
 
 Being a known quantity is cheaper and weaker. cm could answer XTVERSION as itself, and already emits
 OSC 25453. But adaptation is hardcoded per multiplexer in the programs that do it, so it only pays off if
@@ -908,6 +907,90 @@ those programs learn about cm, which zmx faces too.
 
 What should *not* happen is another local fix to the reply path for a graphics symptom. That is the pattern
 this section is here to interrupt.
+
+Being the terminal for graphics has since been built, and the section below is what it turned into. The
+prediction above held: intercepting the protocol is what fixed the file-medium failure and the reply echo,
+and it is also what restore-on-reattach needed.
+
+## Kitty graphics: cm consumes the protocol, and its queries have two answerers
+
+cm does not forward the kitty graphics protocol. It parses the commands out of the output stream
+(`internal/graphics`), resolves them, and re-emits them. That is the one protocol cm consumes rather than
+relays, and it is a deliberate exception to the rule above that the stream is forwarded verbatim.
+
+The reason is that a transmission may name a *file* rather than carry its data, and the file is consumed
+once. Kitty opens the path, reads it, and unlinks it: `kitty/graphics.c` deletes any path containing
+`tty-graphics-protocol` after a successful read and `shm_unlink`s a shared memory name. So forwarding such
+a command means the program's terminal and cm's own reader race for a single-use file, and the loser gets
+`EBADF ... No such file or directory`. Measured against a control of the same kitty with no cm in between:
+`kitten icat` sends three capability probes, and exactly the two that name something on the filesystem
+failed while the inline one answered `OK`.
+
+Reading the file in cm and rebuilding the command with its bytes inline means one reader. Three details of
+that are load-bearing and each was found by a failure rather than by design:
+
+- **An inlined payload is bounded by the geometry**, not by the container or by `S=`. A terminal derives
+  the expected byte count from `s*v*(f/8)` for a raw pixel format and rejects anything longer:
+  `graphics.c:731` computes exactly that and allocates it plus ten bytes. `S=` describes the *container*,
+  which differs, because a shared memory object is rounded up to a page: a 3 byte image arrives inside
+  4096, and trusting `S=` hands the terminal thousands of bytes of padding. That surfaced as
+  `EFBIG: Too much data`.
+- **Shared memory is read, not declined.** Declining it looked like a safe fallback and was a downgrade:
+  bare kitty negotiates `memory` with icat, and a cm that refused that medium got `files`. Reading it needs
+  `shm_open` on darwin, where the name is not a filesystem path at all, and a darwin shm descriptor does
+  not support `read(2)` -- it fails `ENXIO`, which surfaces as "device not configured" and reads like a
+  missing device rather than the wrong syscall.
+- **Re-emission is forced to `q=2`.** An image cm sends generates no response, so nothing arrives on the
+  input path answering a question cm never asked. That is what keeps the restore path out of the reply
+  routing entirely.
+
+### The part that is not understood, so do not repeat the attempt
+
+A graphics query has **two** answerers, and the interaction between them is unresolved.
+
+cm's terminal model answers these on its own. Verified directly: feeding
+`ESC _ G a=q,f=24,s=1,v=1,S=3,i=1;MTIz ESC \` to the model produces `ESC _ G i=1;OK ESC \` on the
+`WritePty` callback, which `internal/vt/adapter.go` wires, so it reaches the pty in production. The
+attached terminal also answers, because cm forwards the query. One probe therefore still comes back
+`ENODATA: Insufficient image data: 0 < 3`.
+
+The obvious fix is to suppress the model's graphics replies in `DenyModes`, alongside the margin and
+size-report cases above, on the reasoning that the real terminal is what draws the image so its answer is
+the true one. **That was tried and made things worse**, and the numbers are the reason it is recorded here
+rather than left for someone to rediscover:
+
+    before   =3;OK =2;OK =1;ENODATA   -> negotiates memory, exit 0
+    after    =3;OK =1;OK              -> "does not support the graphics protocol", exit 1
+
+Suppressing the model's replies made a probe's answer *disappear* rather than deduplicating anything, so
+the model's answer was not redundant: for at least one probe it was the only one arriving. icat's detection
+loop quits on a DA1 sentinel, so a missing answer becomes "unsupported", and `direct` transmission is
+mandatory (`kittens/icat/main.go:290`), which turns one absent reply into a hard failure.
+
+Nine unit tests passed for that change, including a round trip through the real emulator, because they
+assert what `DenyModes` produces and cannot see what the *other* answerer does. Only the
+kitty-versus-control comparison caught it. So the next attempt needs a capture of what the terminal replies
+and what the model replies, side by side, rather than a theory about which is redundant.
+
+The remaining symptom is **not** cosmetic, and an earlier version of this section said it was, which is the
+kind of false claim in a doc that costs someone real time. What was measured then was whether `icat`
+succeeded: it negotiates the same medium as the control, exits 0, and displays images, all of which is
+true. What was not measured was the terminal afterwards. Driving another command shows it:
+
+    CHANCEZ-M-2YPG% =3;Oo NEXTLINE=2;OK=1;ENODATA:Insufficient image data: 0 < 3
+    zsh: 3 not found
+
+`echo NEXTLINE` was typed and arrived as `=3;Oo NEXTLINE`, so the response text is rendered into the grid,
+it consumes typed characters, and zsh executes the `3` out of `=3;` as a command. Zero real escape bytes are
+in what kitty displays, so these are printable characters on the prompt line rather than an invisible
+sequence. That is the same failure as the reply echo this whole change set began with: bytes reaching the
+pty while a shell sits at a prompt, where the tty echoes them and the line editor reads them as input.
+
+So the interaction above is a live defect. What it also shows is that the two-answerer diagnosis was right
+and only the fix was too broad: dropping *every* model graphics reply removed one that was the only answer
+arriving, which is why `i=2` disappeared. The narrower rule is to drop a reply only for a command cm
+**forwarded** to the terminal, and keep it for one cm **consumed**, since for a consumed command the model
+is the sole answerer. `handleGraphics` already knows which of the two it did to each command.
 
 ## Terminal state
 

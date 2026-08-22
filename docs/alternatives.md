@@ -243,11 +243,12 @@ history. The one place the build *did* matter was optimization mode, where a mis
 Worth stating because they are properties of the approach rather than of any one implementation, and
 because a comparison that lists only strengths is not useful.
 
-- **Kitty graphics do not survive a reattach.** They pass through as APC bytes while live, but
-  libghostty's formatter does not re-emit them, so images are absent after reattaching. zmx has the
-  same gap for the same reason. Shared, but no longer a property of the approach: libghostty gained an
-  API for inspecting stored images, so this is a gap cm could close rather than one it is stuck with.
-  zellij closed it in 0.45.0 and still loses images across a reboot. See [ideas.md](ideas.md).
+- **Kitty graphics survive a reattach in cm, and this is no longer a shared limitation.** zmx still has
+  the gap: libghostty's formatter does not re-emit images, so anything relying on it alone loses them.
+  cm keeps the compressed bytes a program transmitted and replays them on attach, which is a different
+  source from the emulator's own storage and the only one that avoids re-encoding decoded pixels at 90x
+  the inbound size. zellij reached the same place in 0.45.0 by consuming the protocol too, and still
+  loses images across a reboot. See [architecture.md](architecture.md).
 - **Alternate-screen scrollback is not recoverable.** A full-screen program draws on the alternate
   screen and lines that scroll off there never entered scrollback. This is correct terminal behavior
   and the most confusing limitation in practice, because the symptom is output that looks truncated

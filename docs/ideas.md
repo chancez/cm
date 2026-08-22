@@ -31,7 +31,25 @@ Note the resumption-mark entry below covers the same gap from the other side: it
 lines, but "what changed on the screen" is answerable for a full-screen program where a command boundary is
 not.
 
-**Kitty graphics across a reattach.** Images pass through as APC bytes while a client is watching and
+**Kitty graphics across a reattach.** Done, and not the way this entry expected, which is why the rest of
+it is kept: the plan here was to re-emit from libghostty's image storage, and that turned out to be the
+wrong source. See "Kitty graphics" in [architecture.md](architecture.md) for what was built and for the one
+part still not understood.
+
+What changed the design was a measurement. libghostty stores what a payload *decodes to* and discards the
+payload, so rebuilding a transmission from it means re-encoding raw pixels: 90x the inbound size for the
+captured 1712x1294 screenshot, 11815084 bytes against 217378. cm keeps the compressed bytes the program
+sent instead, in its own store, and replays them verbatim. libghostty's storage is for rendering; cm's is
+for re-transmission, and neither replaces the other.
+
+Two things this entry got wrong, recorded because both were load-bearing. Storage was described as
+something to enable, and it is on by default at 10000000 bytes, so cm had been retaining images since it
+first linked the library without using them. And the hard part was never the re-emission: it was that a
+transmission can name a single-use *file*, which cannot be forwarded at all.
+
+Everything below is the original entry, left as written.
+
+Images pass through as APC bytes while a client is watching and
 are absent after reattaching, because libghostty's formatter does not re-emit them. `alternatives.md`
 lists this under shared limitations, alongside zmx, as a property of the approach.
 
