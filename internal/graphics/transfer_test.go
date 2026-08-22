@@ -5,14 +5,27 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // transferCommand builds a command naming a path, the way icat's probes do.
-func transferCommand(t *testing.T, medium Medium, path string) Command {
+//
+// size is the S= key, which icat always sends and which matters for shared memory: an shm object is
+// rounded up to a page, so without it a 3 byte payload is read back as 4096 bytes of mostly padding.
+// Zero omits the key, for the cases that are about the path rather than the length.
+// The geometry is deliberately absent rather than a fixed s=1,v=1: an inlined payload is now bounded by
+// what the geometry implies, so a hardcoded 1x1 would truncate every test's data to three bytes. Two of
+// them failed exactly that way when the bound landed, which is the check working rather than a nuisance.
+// Tests that care about geometry state it themselves.
+func transferCommand(t *testing.T, medium Medium, path string, size int) Command {
 	t.Helper()
-	raw := "\x1b_Ga=q,f=24,t=" + string(medium) + ",s=1,v=1,i=1;" +
+	control := "a=q,t=" + string(medium) + ",i=1"
+	if size > 0 {
+		control += ",S=" + strconv.Itoa(size)
+	}
+	raw := "\x1b_G" + control + ";" +
 		base64.StdEncoding.EncodeToString([]byte(path)) + "\x1b\\"
 	return mustParse(t, raw)
 }
@@ -40,7 +53,7 @@ func TestReadTransferInlinesAFile(t *testing.T) {
 	want := []byte{1, 2, 3, 4, 5}
 	path := writeTransferFile(t, want)
 
-	got, err := ReadTransfer(transferCommand(t, MediumTempFile, path))
+	got, err := ReadTransfer(transferCommand(t, MediumTempFile, path, 0))
 	if err != nil {
 		t.Fatalf("ReadTransfer() error = %v", err)
 	}
@@ -70,7 +83,7 @@ func TestReadTransferInlinesAFile(t *testing.T) {
 func TestReadTransferDeletesATempFile(t *testing.T) {
 	path := writeTransferFile(t, []byte("data"))
 
-	if _, err := ReadTransfer(transferCommand(t, MediumTempFile, path)); err != nil {
+	if _, err := ReadTransfer(transferCommand(t, MediumTempFile, path, 0)); err != nil {
 		t.Fatalf("ReadTransfer() error = %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -87,7 +100,7 @@ func TestReadTransferKeepsANamedFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := ReadTransfer(transferCommand(t, MediumFile, path)); err != nil {
+	if _, err := ReadTransfer(transferCommand(t, MediumFile, path, 0)); err != nil {
 		t.Fatalf("ReadTransfer() error = %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -118,7 +131,7 @@ func TestReadTransferRefusesPathsOutsideTemp(t *testing.T) {
 		{"traversal out of temp", filepath.Join(os.TempDir(), "..", "..", "etc", "passwd")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ReadTransfer(transferCommand(t, MediumFile, tc.path))
+			_, err := ReadTransfer(transferCommand(t, MediumFile, tc.path, 0))
 			if !errors.Is(err, ErrTransferRefused) {
 				t.Errorf("ReadTransfer(%q) error = %v, want ErrTransferRefused", tc.path, err)
 			}
@@ -126,13 +139,44 @@ func TestReadTransferRefusesPathsOutsideTemp(t *testing.T) {
 	}
 }
 
-// Shared memory is declined rather than half-implemented: reading it needs shm_open, and guessing a
-// filesystem path would read an unrelated file. icat falls back when a medium is declined, which is what
-// makes refusing safe.
-func TestReadTransferDeclinesSharedMemory(t *testing.T) {
-	_, err := ReadTransfer(mustParse(t, probeSharedMem))
+// Shared memory round-trips, which is the medium kitty prefers.
+//
+// Declining it was measured to be a downgrade rather than a safe fallback: bare kitty negotiates `memory`
+// with icat, and a cm that refused it got `files`, so cm made a working setup worse. That is why this is
+// implemented rather than refused, and it is the case a path-based reader gets wrong on darwin, where the
+// name lives in a namespace reachable only through shm_open.
+func TestReadTransferReadsSharedMemory(t *testing.T) {
+	want := []byte{9, 8, 7}
+	name := writeShmObject(t, want)
+
+	got, err := ReadTransfer(transferCommand(t, MediumSharedMemory, name, len(want)))
+	if err != nil {
+		t.Fatalf("ReadTransfer() error = %v", err)
+	}
+	if got.Medium != MediumDirect {
+		t.Errorf("Medium = %q, want %q", got.Medium, MediumDirect)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(got.Payload))
+	if err != nil {
+		t.Fatalf("payload is not base64: %v", err)
+	}
+	if string(decoded) != string(want) {
+		t.Errorf("payload decoded to %v, want %v", decoded, want)
+	}
+
+	// Consumed, so cm unlinks it: leaving one behind accumulates an object per image, since the program
+	// hands the name over and never looks again.
+	if _, err := ReadTransfer(transferCommand(t, MediumSharedMemory, name, len(want))); err == nil {
+		t.Error("the shared memory object survived being read, so it was not unlinked")
+	}
+}
+
+// A shared memory name is refused when nothing has that name, rather than crashing or reading something
+// else.
+func TestReadTransferRefusesAMissingShmObject(t *testing.T) {
+	_, err := ReadTransfer(transferCommand(t, MediumSharedMemory, "cm-test-does-not-exist", 0))
 	if !errors.Is(err, ErrTransferRefused) {
-		t.Errorf("ReadTransfer() error = %v, want ErrTransferRefused for shared memory", err)
+		t.Errorf("ReadTransfer() error = %v, want ErrTransferRefused", err)
 	}
 }
 
@@ -140,7 +184,7 @@ func TestReadTransferDeclinesSharedMemory(t *testing.T) {
 // by the time anything else looks: icat deletes them when detection finishes.
 func TestReadTransferRefusesAMissingFile(t *testing.T) {
 	path := filepath.Join(os.TempDir(), "kitty-tty-graphics-protocol-does-not-exist")
-	_, err := ReadTransfer(transferCommand(t, MediumTempFile, path))
+	_, err := ReadTransfer(transferCommand(t, MediumTempFile, path, 0))
 	if !errors.Is(err, ErrTransferRefused) {
 		t.Errorf("ReadTransfer() error = %v, want ErrTransferRefused", err)
 	}
@@ -152,7 +196,7 @@ func TestReadTransferRefusesNonRegularFiles(t *testing.T) {
 	dir := t.TempDir()
 	// A directory is the portable stand-in; a fifo needs syscall support the test does not need to
 	// assume, and both take the same branch.
-	_, err := ReadTransfer(transferCommand(t, MediumFile, dir))
+	_, err := ReadTransfer(transferCommand(t, MediumFile, dir, 0))
 	if !errors.Is(err, ErrTransferRefused) {
 		t.Errorf("ReadTransfer(directory) error = %v, want ErrTransferRefused", err)
 	}
@@ -172,7 +216,7 @@ func TestReadTransferRefusesAnOversizedFile(t *testing.T) {
 	}
 	f.Close()
 
-	_, err = ReadTransfer(transferCommand(t, MediumTempFile, f.Name()))
+	_, err = ReadTransfer(transferCommand(t, MediumTempFile, f.Name(), 0))
 	if !errors.Is(err, ErrTransferRefused) {
 		t.Errorf("ReadTransfer() error = %v, want ErrTransferRefused for an oversized file", err)
 	}
@@ -197,3 +241,89 @@ func TestWithoutKeysKeepsEverythingElse(t *testing.T) {
 		t.Errorf("withoutKeys() = %q, want %q", got, want)
 	}
 }
+
+// An inlined transfer must carry exactly the bytes the geometry implies, not the whole container.
+//
+// This is the bug the sandbox surfaced as "EFBIG: Too much data" from a real kitty. A terminal derives
+// the expected byte count from the geometry rather than from S=: kitty computes s*v*(f/8) and allocates
+// that plus ten bytes, so a payload beyond it is rejected outright. A shared memory object is rounded up
+// to a page, so a 3 byte image arrives inside 4096, and trusting S= or the container's length hands over
+// thousands of bytes of padding the program never sent. Measured before the fix as [1 2 3 0 0 0 0 0 0 0 0].
+//
+// zellij avoids this on its own output path by building a transmit control from scratch and emitting no
+// S= at all, deriving everything from the geometry it holds. cm cannot do quite that, since it forwards a
+// program's own command rather than re-originating it, so it bounds the read instead.
+func TestReadTransferBoundsPayloadByGeometry(t *testing.T) {
+	// Three bytes of image, in a container that is larger. The geometry says 1x1 RGB, so 3 bytes.
+	image := []byte{1, 2, 3}
+	padded := append(append([]byte{}, image...), make([]byte, 200)...)
+
+	for _, tc := range []struct {
+		name   string
+		medium Medium
+		// declared is the S= value, describing the container rather than the image, which is what a real
+		// client sends for shared memory.
+		declared int
+	}{
+		{"tempfile with a container-sized S", MediumTempFile, len(padded)},
+		{"tempfile with no S", MediumTempFile, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTransferFile(t, padded)
+			cmd := mustParse(t, "\x1b_Ga=T,f=24,s=1,v=1,t="+string(tc.medium)+
+				",i=1"+optS(tc.declared)+";"+
+				base64Encode([]byte(path))+"\x1b\\")
+
+			got, err := ReadTransfer(cmd)
+			if err != nil {
+				t.Fatalf("ReadTransfer() error = %v", err)
+			}
+			decoded, err := base64Decode(string(got.Payload))
+			if err != nil {
+				t.Fatalf("payload is not base64: %v", err)
+			}
+			if string(decoded) != string(image) {
+				t.Errorf("payload = %v, want %v: the geometry implies %d bytes, so anything longer is "+
+					"container padding a terminal rejects with EFBIG",
+					decoded, image, cmd.ExpectedBytes())
+			}
+		})
+	}
+}
+
+// A PNG payload has no derivable size, so the container's length stands: a compressed image's decoded
+// size is not a function of its geometry, and bounding it by s*v*(f/8) would truncate it.
+func TestReadTransferDoesNotBoundPNGByGeometry(t *testing.T) {
+	data := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 100)...)
+	path := writeTransferFile(t, data)
+
+	cmd := mustParse(t, "\x1b_Ga=T,f=100,s=1712,v=1294,t=t,i=1;"+
+		base64Encode([]byte(path))+"\x1b\\")
+	if want := cmd.ExpectedBytes(); want != 0 {
+		t.Fatalf("ExpectedBytes() = %d for PNG, want 0: its decoded size is not derivable", want)
+	}
+
+	got, err := ReadTransfer(cmd)
+	if err != nil {
+		t.Fatalf("ReadTransfer() error = %v", err)
+	}
+	decoded, err := base64Decode(string(got.Payload))
+	if err != nil {
+		t.Fatalf("payload is not base64: %v", err)
+	}
+	if len(decoded) != len(data) {
+		t.Errorf("payload is %d bytes, want all %d: a PNG must not be bounded by geometry",
+			len(decoded), len(data))
+	}
+}
+
+func optS(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return ",S=" + strconv.Itoa(n)
+}
+
+func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+func base64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }

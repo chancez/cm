@@ -97,6 +97,23 @@ type Command struct {
 	ImageNumber uint32
 	// PlacementID is the p= key.
 	PlacementID uint32
+	// Width, Height, and Format are the s=, v=, and f= keys: the image's geometry.
+	//
+	// Needed because a terminal derives the expected byte count from these rather than from S= for a raw
+	// pixel format. kitty computes s*v*(f/8) and rejects a payload larger than that plus a small margin,
+	// so an inlined transfer whose bytes came from a page-rounded container is refused with
+	// "EFBIG: Too much data". Zero when absent.
+	Width, Height uint32
+	Format        uint32
+	// DataSize is the S= key: how many bytes of the named container hold the image.
+	//
+	// Load-bearing for shared memory rather than informational. An shm object is rounded up to a page,
+	// so a 3 byte payload arrives in a 4096 byte object, and reading the whole container hands the
+	// terminal 4093 bytes of zero padding it never sent. icat states the real length here for exactly
+	// that reason, and its capability probes are visible doing it: "S=3", "S=87", "S=18".
+	//
+	// Zero when absent, meaning "the whole container".
+	DataSize uint32
 	// Quiet is the q= key: 1 suppresses success responses, 2 suppresses all of them.
 	//
 	// Load-bearing for re-emission. cm re-sends stored images with q=2 so the client's terminal
@@ -112,6 +129,33 @@ type Command struct {
 	Payload []byte
 	// Raw is the whole command including introducer and terminator, so forwarding is byte-exact.
 	Raw []byte
+}
+
+// ExpectedBytes reports how many bytes of image data the geometry implies, or zero when it cannot say.
+//
+// This is what a terminal actually checks a raw payload against. kitty computes s*v*(f/8) for RGB and
+// RGBA and allocates that plus ten bytes, so a payload beyond it is rejected outright rather than
+// truncated. A container read whole gives more than this whenever the container is larger than the
+// image, which is always true of shared memory: an object is rounded up to a page, so three bytes of
+// image arrive inside 4096.
+//
+// Zero for PNG and for anything without geometry, where the payload's own length is the only truth and
+// S= is a hint about the container rather than the image.
+func (c Command) ExpectedBytes() int {
+	switch c.Format {
+	case 24:
+		// RGB, three bytes per pixel.
+	case 32:
+		// RGBA, four bytes per pixel.
+	default:
+		// 100 is PNG, whose decoded size is not derivable from the geometry, and an absent f= defaults
+		// to RGBA in the protocol but is not worth guessing for a bound.
+		return 0
+	}
+	if c.Width == 0 || c.Height == 0 {
+		return 0
+	}
+	return int(c.Width) * int(c.Height) * int(c.Format/8)
 }
 
 // IsTransmission reports whether this command carries or names image data to store.
@@ -206,6 +250,14 @@ func ParseFrom(p []byte, searched int) (cmd Command, n int, ok bool) {
 			cmd.ImageNumber = parseUint32(v)
 		case "p":
 			cmd.PlacementID = parseUint32(v)
+		case "s":
+			cmd.Width = parseUint32(v)
+		case "v":
+			cmd.Height = parseUint32(v)
+		case "f":
+			cmd.Format = parseUint32(v)
+		case "S":
+			cmd.DataSize = parseUint32(v)
 		case "q":
 			cmd.Quiet = uint8(parseUint32(v))
 		case "m":

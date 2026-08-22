@@ -117,7 +117,7 @@ func TestScanReassemblesAcrossManyChunks(t *testing.T) {
 func TestScanHoldsTrailingFragments(t *testing.T) {
 	for _, frag := range []string{"\x1b", "\x1b_", "\x1b_G", "\x1b_Ga=T,i=1;AAA"} {
 		var s Scanner
-		cmds, rest := scanParts(&s, []byte("text" + frag))
+		cmds, rest := scanParts(&s, []byte("text"+frag))
 
 		if len(cmds) != 0 {
 			t.Errorf("fragment %q: found %d commands, want 0", frag, len(cmds))

@@ -46,21 +46,24 @@ func ReadTransfer(cmd Command) (Command, error) {
 	}
 	path := string(decoded)
 
+	// Shared memory is read through its own opener, because it is not a filesystem path on darwin: the
+	// name lives in a namespace reached only by shm_open. Declining it instead was measured to be a real
+	// downgrade rather than a safe fallback, which is why this exists: bare kitty negotiates `memory`
+	// with icat, and a cm that refused it got `files`, so cm was making a working setup worse.
+	var f *os.File
 	if cmd.Medium == MediumSharedMemory {
-		// POSIX shared memory is not a filesystem path on darwin, and reading it needs shm_open rather
-		// than open. Refused rather than half-implemented: a wrong guess at the path would read an
-		// unrelated file, and answering "unsupported" makes icat fall back to a medium that works, which
-		// is what it does when a terminal declines any medium.
-		return cmd, fmt.Errorf("%w: shared memory transfers are not read by cm", ErrTransferRefused)
-	}
-
-	if err := allowTransferPath(path); err != nil {
-		return cmd, err
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return cmd, fmt.Errorf("%w: %w", ErrTransferRefused, err)
+		var err error
+		if f, err = openShm(path); err != nil {
+			return cmd, err
+		}
+	} else {
+		if err := allowTransferPath(path); err != nil {
+			return cmd, err
+		}
+		var err error
+		if f, err = os.Open(path); err != nil {
+			return cmd, fmt.Errorf("%w: %w", ErrTransferRefused, err)
+		}
 	}
 	defer f.Close()
 
@@ -68,34 +71,71 @@ func ReadTransfer(cmd Command) (Command, error) {
 	if err != nil {
 		return cmd, fmt.Errorf("%w: %w", ErrTransferRefused, err)
 	}
-	if !info.Mode().IsRegular() {
-		// A fifo would block, a directory cannot be read, and a device is not an image. Kitty opens with
-		// O_NONBLOCK for the fifo case specifically; refusing is simpler and cm has a fallback the
-		// terminal does not.
+	// The regular-file check applies to filesystem transfers only. A fifo would block a read forever,
+	// which on the output pump stalls the whole session rather than one image, and a directory or device
+	// is not an image at all. Kitty opens with O_NONBLOCK for the fifo case; refusing is simpler and cm
+	// has a fallback the terminal does not.
+	//
+	// Skipped for shared memory because the object is not a regular file on every platform, and it cannot
+	// be a fifo or a directory: the name reached shm_open, so whatever it named is shared memory.
+	if cmd.Medium != MediumSharedMemory && !info.Mode().IsRegular() {
 		return cmd, fmt.Errorf("%w: %s is not a regular file", ErrTransferRefused, path)
 	}
-	if info.Size() > MaxTransferBytes {
-		return cmd, fmt.Errorf("%w: %s is %d bytes, over the %d limit",
-			ErrTransferRefused, path, info.Size(), MaxTransferBytes)
-	}
-
-	data := make([]byte, info.Size())
-	if _, err := readFull(f, data); err != nil {
-		return cmd, fmt.Errorf("%w: reading %s: %w", ErrTransferRefused, path, err)
-	}
-
-	// A temp file is cm's to delete now that it has been consumed, matching what the terminal would have
-	// done. Leaving it would accumulate one file per image in the user's temp directory, since the
-	// program hands the path over and never looks at it again.
+	// How much of the container is actually the image. Getting this wrong is not a rounding error: the
+	// terminal rejects a payload larger than the geometry implies, with "EFBIG: Too much data".
 	//
-	// Guarded by the same name check kitty uses rather than deleting anything named: a t=f transfer can
-	// name a file the user cares about, and only t=t promises the terminal may remove it.
-	if cmd.Medium == MediumTempFile && isTempTransferPath(path) {
-		if err := os.Remove(path); err != nil {
-			// Not fatal. The image was read, so the transmission succeeds; a leftover file is untidy
-			// rather than broken.
-			_ = err
+	// Three sources, narrowest first, and the order matters. The geometry is authoritative for a raw
+	// pixel format because that is what the terminal itself computes from, s*v*(f/8) in kitty. S= is next,
+	// but it describes the *container* rather than the image, which is why it cannot be trusted alone: a
+	// shared memory object is rounded up to a page, so a 3 byte image sits in 4096 bytes and an S= naming
+	// the object's length hands over 4093 bytes of padding. Measured as a payload of [1 2 3 0 0 0 0 0 0 0 0]
+	// against 3 bytes expected. The container's own size is the fallback, for PNG, where nothing else
+	// knows the answer.
+	size := info.Size()
+	if cmd.DataSize > 0 && int64(cmd.DataSize) < size {
+		size = int64(cmd.DataSize)
+	}
+	if want := cmd.ExpectedBytes(); want > 0 && int64(want) < size {
+		size = int64(want)
+	}
+	if size > MaxTransferBytes {
+		return cmd, fmt.Errorf("%w: %s is %d bytes, over the %d limit",
+			ErrTransferRefused, path, size, MaxTransferBytes)
+	}
+
+	// Shared memory is read through its own path, because a descriptor from shm_open on darwin does not
+	// support read(2): it fails with ENXIO, surfacing as "device not configured", which reads like a
+	// missing device rather than the wrong syscall. Linux exposes these as files and reads them normally.
+	var data []byte
+	if cmd.Medium == MediumSharedMemory {
+		if size == 0 {
+			return cmd, fmt.Errorf("%w: %s is empty", ErrTransferRefused, path)
 		}
+		if data, err = readShm(f, int(size)); err != nil {
+			return cmd, err
+		}
+	} else {
+		data = make([]byte, size)
+		if _, err := readFull(f, data); err != nil {
+			return cmd, fmt.Errorf("%w: reading %s: %w", ErrTransferRefused, path, err)
+		}
+	}
+
+	// Consumed, so cm removes it, matching what the terminal would have done. Leaving one behind
+	// accumulates an object per image, since the program hands the name over and never looks at it again.
+	//
+	// Neither failure is fatal: the image has been read by this point, so the transmission succeeds and a
+	// leftover object is untidy rather than broken.
+	//
+	// A t=f transfer is deliberately not removed. It can name a file the user cares about, and only t=t
+	// and t=s promise the terminal may destroy what they name; kitty draws the same line, and additionally
+	// requires its own naming convention before deleting a temp file, which is what isTempTransferPath
+	// matches.
+	switch {
+	case cmd.Medium == MediumTempFile && isTempTransferPath(path):
+		_ = os.Remove(path)
+	case cmd.Medium == MediumSharedMemory:
+		_ = unlinkShm(path)
 	}
 
 	// Rebuilt as a direct transmission carrying the bytes, since the file is now gone or at least
