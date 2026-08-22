@@ -47,3 +47,7 @@ AGENTS.local.md
 # Go build stamp vcs.modified=true, so every release binary reported its version with a "-dirty"
 # suffix while the checkout was in fact clean. Caught by reading the version off a published artifact.
 .zig-cache/
+
+# Compiled test binaries, which `go test -c` and any profiling run leave behind.
+# One was committed by accident at 4.2 MB, which is what this line prevents.
+*.test
