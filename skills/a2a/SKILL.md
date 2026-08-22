@@ -39,14 +39,22 @@ are noise starts ignoring the one that matters.
 ## Find the other agent
 
 ```bash
-cm ls --json | jq -r --arg root "$(git rev-parse --show-toplevel)" \
+repo=$(dirname "$(git rev-parse --git-common-dir --path-format=absolute)")
+cm ls --json | jq -r --arg root "$repo" \
   '[.[] | select(.cwd | startswith($root)) | {name, title, cwd, reported_state}]'
 ```
 
-`--show-toplevel` from a worktree returns that worktree, not the main checkout, so widen it when
-worktrees live outside the repo. Use `git rev-parse --git-common-dir` to test whether two paths are
-worktrees of the *same* repository: it resolves to one shared `.git` for every worktree, which is the
-only reliable way to tell a sibling worktree from an unrelated checkout with a similar name.
+**Use `--git-common-dir`, not `--show-toplevel`.** This is the one command here that is easy to get
+wrong, and it fails silently. `--show-toplevel` returns the *current* worktree, so run from a worktree
+it matches only your own session and the roster comes back empty. Empty then reads as "no other agents
+are working on this repo", which is wrong precisely when a2a is needed. `--git-common-dir` resolves to
+the one shared `.git` every worktree of a repository points at, so it identifies the repository rather
+than the checkout. Verified: from `.worktrees/a2a-skill`, the `--show-toplevel` form returned `[]` while
+this one returned all four sessions.
+
+It follows that this only finds worktrees nested inside the repository. If yours live elsewhere, match
+on the shared `.git` path itself by running `git rev-parse --git-common-dir` in each candidate cwd, which
+is the only reliable way to tell a sibling worktree from an unrelated checkout with a similar name.
 
 Read the roster before sending:
 
@@ -61,6 +69,13 @@ and say that you did rather than reporting a message sent.
 
 Do not send to a session whose title suggests it is the user's shell rather than an agent. A message
 typed into a shell prompt runs as a command.
+
+**Sending is not a test.** A message costs the receiver a turn and its tokens, and it arrives in whatever
+that agent was doing, so a message sent to try out the mechanism interrupts real work with something
+nobody asked for. Do not send one to check that sending works, and do not send one because a task
+mentioned agent messaging. Send only when you have a finding a specific agent needs. To exercise the
+mechanism itself, use two agents in a cm sandbox: see the `cm-sandbox` skill in this repo, which is also
+what keeps a test off the server holding the user's sessions.
 
 ## Send
 
@@ -88,6 +103,15 @@ arrives as several reads and a full-screen program treats the burst as a paste. 
 a paste is pasted content rather than the key that submits, so the message sits in the agent's input box
 unsent, looking delivered. cm writes `--enter`'s carriage return separately, after a pause, for exactly
 this reason. This is the failure that wastes the most time, because `cm send` reports success.
+
+Measured both ways against two agents in a sandbox. A 2353-byte message, three pty reads, sent with
+`--enter` submitted and arrived whole. The same message sent with a trailing newline in the text
+instead showed up in the receiving agent's input box as `[Pasted text #2][Pasted text #3 +1 lines]` and
+was never delivered, while `cm send` exited 0. If you find a message stuck that way, send `cm send
+<session> --key enter` on its own: that submitted the pasted text without duplicating it.
+
+This needs cm with the split-write fix. `cm send --help` describing `--enter` as written separately
+after a pause is how you tell.
 
 Newlines are also a hazard in the other direction: a session at a shell prompt runs each line as a
 command. One line, always.
