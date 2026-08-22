@@ -30,6 +30,8 @@ func AnswersQuery(query, reply []byte) bool {
 		return isDCS(reply)
 	case isCSI(query):
 		return csiAnswers(query, reply)
+	case isAPC(query):
+		return apcAnswers(query, reply)
 	}
 	return false
 }
@@ -37,6 +39,49 @@ func AnswersQuery(query, reply []byte) bool {
 func isOSC(p []byte) bool { return len(p) >= 2 && p[0] == 0x1b && p[1] == ']' }
 func isDCS(p []byte) bool { return len(p) >= 2 && p[0] == 0x1b && p[1] == 'P' }
 func isCSI(p []byte) bool { return len(p) >= 2 && p[0] == 0x1b && p[1] == '[' }
+func isAPC(p []byte) bool { return len(p) >= 3 && p[0] == 0x1b && p[1] == '_' && p[2] == 'G' }
+
+// apcAnswers matches a kitty graphics response to the query it answers, by image id.
+//
+// The id carries the correspondence, and it has to be checked rather than accepting any graphics
+// response: `kitten icat` asks three questions at once, one per transfer medium, and they are told apart
+// only by i=. Accepting the first response for the first question would attribute an answer about shared
+// memory to a question about a temp file, and icat would then use a medium the terminal rejected.
+//
+// A response carries no a= key, so there is nothing else to match on. One that names no id matches
+// nothing, which leaves the request to expire rather than pairing it with a guess.
+func apcAnswers(query, reply []byte) bool {
+	if !isAPC(reply) {
+		return false
+	}
+	qid, ok := graphicsID(query)
+	if !ok {
+		return false
+	}
+	rid, ok := graphicsID(reply)
+	if !ok {
+		return false
+	}
+	return string(qid) == string(rid)
+}
+
+// graphicsID reads the i= key from a graphics command or response.
+func graphicsID(p []byte) (id []byte, ok bool) {
+	end, _, found := apcEnd(p)
+	if !found {
+		return nil, false
+	}
+	body := p[3:end]
+	if i := indexByte(body, ';'); i >= 0 {
+		body = body[:i]
+	}
+	for _, kv := range splitByte(body, ',') {
+		if len(kv) > 2 && kv[0] == 'i' && kv[1] == '=' {
+			return kv[2:], true
+		}
+	}
+	return nil, false
+}
 
 // oscAnswers matches an OSC reply to an OSC query by their numeric code.
 //

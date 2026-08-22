@@ -103,6 +103,16 @@ func IsTerminalOnlyRequest(p []byte) bool {
 // duplicate this design exists to remove. The overlap check is asserted by a test rather than left to
 // review.
 //   - XTGETTCAP (DCS + q ... ST): terminfo capabilities of the real terminal.
+//   - A kitty graphics query (APC G with a=q): whether an image can be transmitted and displayed. The
+//     thing that draws the image is the real terminal, so only it can answer, and cm's model saying yes
+//     promises rendering cm does not do.
+//
+// That last one was added after the model's answer was observed corrupting `kitten icat`. The model
+// answers a graphics query on its own, and cm forwards the query too, so both replied to one question.
+// Suppressing the model's reply alone made it worse rather than better, because the model also answers
+// the `CSI c` sentinel icat sends behind its probes and quits on: cm then supplied a complete
+// conversation of three OKs and a DA1 reply from its own model, and icat stopped listening before the
+// terminal's real answers arrived. Proxying is what puts one answer per question in the right order.
 func classifyTerminalOnly(p []byte) (n int, terminal bool) {
 	if len(p) < 2 || p[0] != 0x1b {
 		return 0, false
@@ -123,8 +133,76 @@ func classifyTerminalOnly(p []byte) (n int, terminal bool) {
 		return end, false
 	case '[':
 		return classifyCSITerminalOnly(p)
+	case '_':
+		return classifyGraphicsQuery(p)
 	}
 	return 0, false
+}
+
+// classifyGraphicsQuery recognizes a kitty graphics command that asks a question.
+//
+// Only a=q, which asks whether a transmission would work and is answered without storing anything.
+// Every other action is a statement rather than a question: a transmission, a placement, a delete. Those
+// pass through and may still produce a response, which is the program's business and not a reply cm is
+// waiting for.
+//
+// Deliberately narrow for the same reason the rest of this file is: an unrecognized sequence must not be
+// treated as a question needing a round trip, or it holds the reply queue until the timeout releases it.
+func classifyGraphicsQuery(p []byte) (n int, terminal bool) {
+	end, termLen, ok := apcEnd(p)
+	if !ok {
+		return 0, false
+	}
+	length := end + termLen
+	if len(p) < 3 || p[2] != 'G' {
+		// An APC that is not graphics. Consumed so the scan advances past it, but not a query.
+		return length, false
+	}
+
+	// The control section runs to the payload separator, and a=q may sit anywhere in it.
+	body := p[3:end]
+	if i := indexByte(body, ';'); i >= 0 {
+		body = body[:i]
+	}
+	for _, kv := range splitByte(body, ',') {
+		if len(kv) == 3 && kv[0] == 'a' && kv[1] == '=' && kv[2] == 'q' {
+			return length, true
+		}
+	}
+	return length, false
+}
+
+// apcEnd finds the end of an APC string, accepting either terminator.
+//
+// Both because programs use both: ST is specified and BEL is what several implementations send.
+func apcEnd(p []byte) (end, termLen int, ok bool) {
+	if len(p) < 2 || p[0] != 0x1b || p[1] != '_' {
+		return 0, 0, false
+	}
+	for i := 2; i < len(p); i++ {
+		switch p[i] {
+		case 0x07:
+			return i, 1, true
+		case 0x1b:
+			if i+1 < len(p) && p[i+1] == '\\' {
+				return i, 2, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// splitByte splits on a separator without allocating strings.
+func splitByte(p []byte, sep byte) [][]byte {
+	var out [][]byte
+	start := 0
+	for i := range p {
+		if p[i] == sep {
+			out = append(out, p[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, p[start:])
 }
 
 // classifyOSCQuery recognizes an OSC that asks for a value rather than setting one.

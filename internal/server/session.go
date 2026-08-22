@@ -526,12 +526,6 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// answers directly, so a query reaching several clients, or reaching one twice across a restart,
 		// cannot produce a second answer.
 		//
-		// Registered before the model is fed, which is the load-bearing ordering here. The model
-		// generates replies to answerable queries synchronously inside its Write, so a question later in
-		// this same chunk must already be outstanding by then or the reply would be written straight to
-		// the pty and overtake it. See noteQueries and queueOrWriteReply.
-		s.noteQueries(out.Data)
-
 		// Kitty graphics is taken out of the stream and re-emitted by cm, which is the one protocol cm
 		// consumes rather than forwards. The reason is that a transmission may name a *file* and the
 		// file is consumed once, so forwarding one lets the program and the real terminal race for it:
@@ -540,12 +534,26 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		//
 		// Ahead of the prompt rewrite because a graphics payload is arbitrary base64 that may contain
 		// the bytes the rewrite matches on, and rewriting inside a payload would corrupt the image.
-		// After noteQueries for the opposite reason: a graphics command is not a query cm proxies, and
-		// the query scan must see the same bytes the model will.
+		//
+		// Ahead of noteQueries too, and that ordering is load-bearing rather than incidental. cm rewrites
+		// a graphics query when it resolves a transfer, so the command the *terminal* is asked is not the
+		// one the program wrote. noteQueries has to register the rewritten form, or the reply arriving
+		// from the terminal is matched against a question nobody asked and discarded as unsolicited. This
+		// used to run after noteQueries, on the reasoning that a graphics command was not a proxied query
+		// at all, which stopped being true when a=q joined the terminal-only set.
 		gfxData := out.Data
 		if segs := s.gfxScan.Scan(out.Data); segs != nil {
 			gfxData = s.handleGraphics(segs)
 		}
+
+		// Registered before the model is fed, which is the load-bearing ordering here. The model
+		// generates replies to answerable queries synchronously inside its Write, so a question later in
+		// this same chunk must already be outstanding by then or the reply would be written straight to
+		// the pty and overtake it. See noteQueries and queueOrWriteReply.
+		//
+		// Fed the post-graphics bytes for the reason above: these are what reach the terminal, so these
+		// are the questions it will answer.
+		s.noteQueries(gfxData)
 
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to

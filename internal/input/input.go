@@ -182,9 +182,8 @@ func passthroughLen(p []byte) int {
 		return 0
 	}
 	switch p[1] {
-	case '_', '^':
-		// APC and PM. A kitty graphics response arrives here, and cm asked no graphics query, so this
-		// is the program's answer and not cm's to consume.
+	case '^':
+		// PM. Nothing in cm asks a question answered by one, so it belongs to the program.
 		return consumeString(p)
 	case '[':
 		// Mouse and focus reports. Every attached terminal is entitled to send its own, so these are
@@ -302,8 +301,27 @@ func classifyReply(p []byte) (n int, reply bool) {
 		}
 		return 0, false
 
+	case '_':
+		// APC. A kitty graphics response, which cm now proxies: internal/query classifies a=q as
+		// terminal-only, so cm suppresses its model's answer, forwards the question, and relays the
+		// terminal's reply in order.
+		//
+		// This deliberately changed. It used to be "not a reply", on the reasoning that cm asked no
+		// graphics query so a response was the program's own business to receive. That was true at the
+		// time and became false: cm's model was answering these all along, so a program got two answers
+		// to one question, and the visible result was response text on the prompt line with typed
+		// characters swallowed and a shell running "3" as a command.
+		//
+		// An unmatched one is still dropped by the proxy rather than forwarded, which is the behaviour
+		// that broke `kitten icat` when it was first tried in isolation. It is safe now only because the
+		// question is registered as outstanding before the terminal is asked, so a real answer matches.
+		if end := consumeString(p); end > 0 {
+			return end, true
+		}
+		return 0, false
+
 	default:
-		// APC, PM, SS3, and alt-modified keys. Not recognized as replies.
+		// PM, SS3, and alt-modified keys. Not recognized as replies.
 		return 2, false
 	}
 }

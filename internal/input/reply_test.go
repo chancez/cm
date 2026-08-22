@@ -285,11 +285,18 @@ func TestTerminalProbeBatchIsNotTyping(t *testing.T) {
 // fell through to the verbatim pty write. The tty then echoed it back in caret notation, which is the
 // "=1;OK" and "/62;52;c" garbage reported beside the prompt.
 //
-// The graphics response must stay a non-reply, and that is the load-bearing half. cm asks no graphics
-// query -- internal/query/query.go classifies no APC at all -- so routing the response to the query
-// proxy would match no outstanding request and hit the unmatched-reply discard, and `icat`, which did
-// ask, would never get its answer. Measured while designing this: recognizing APC in classifyReply
-// alone makes IsQueryReply return true for an APC-only chunk, which is exactly that discard path.
+// The graphics response is now a reply, and that half of this test *changed*. It was originally a
+// non-reply, on the reasoning that cm asked no graphics query, so routing a response to the proxy would
+// match nothing, hit the unmatched-reply discard, and leave `icat` without the answer it asked for. That
+// reasoning was correct about the code at the time and rested on a premise that turned out to be false:
+// cm's own model was answering these all along, so a program received two answers to one question. The
+// visible result was response text on the prompt line, typed characters swallowed, and a shell running
+// "3" out of "=3;" as a command.
+//
+// internal/query now classifies a=q as terminal-only, so the question is registered as outstanding
+// before the terminal is asked and a real answer matches it. The discard that made this dangerous in
+// isolation is what makes it correct here: an unsolicited response still goes nowhere, but a solicited
+// one is relayed in order.
 func TestSplitInputRoutesMixedChunks(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -300,7 +307,7 @@ func TestSplitInputRoutesMixedChunks(t *testing.T) {
 			name:  "graphics response then unsolicited DA1 reply",
 			input: "\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c",
 			want: []Part{
-				{Data: []byte("\x1b_Gi=1;OK\x1b\\")},
+				{Data: []byte("\x1b_Gi=1;OK\x1b\\"), Reply: true},
 				{Data: []byte("\x1b[?62;52;c"), Reply: true},
 			},
 		},
@@ -309,7 +316,7 @@ func TestSplitInputRoutesMixedChunks(t *testing.T) {
 			input: "\x1b[?62;52;c\x1b_Gi=1;OK\x1b\\",
 			want: []Part{
 				{Data: []byte("\x1b[?62;52;c"), Reply: true},
-				{Data: []byte("\x1b_Gi=1;OK\x1b\\")},
+				{Data: []byte("\x1b_Gi=1;OK\x1b\\"), Reply: true},
 			},
 		},
 		{
@@ -329,9 +336,9 @@ func TestSplitInputRoutesMixedChunks(t *testing.T) {
 			},
 		},
 		{
-			name:  "a graphics error response is still not a reply",
+			name:  "a graphics error response is a reply too",
 			input: "\x1b_Gi=3;EBADF:Bad file descriptor\x1b\\",
-			want:  []Part{{Data: []byte("\x1b_Gi=3;EBADF:Bad file descriptor\x1b\\")}},
+			want:  []Part{{Data: []byte("\x1b_Gi=3;EBADF:Bad file descriptor\x1b\\"), Reply: true}},
 		},
 
 		// Unrecognized or incomplete content forwards whole, which is the existing conservative rule:
