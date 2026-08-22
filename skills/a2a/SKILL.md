@@ -39,18 +39,26 @@ are noise starts ignoring the one that matters.
 ## Find the other agent
 
 ```bash
-repo=$(dirname "$(git rev-parse --git-common-dir --path-format=absolute)")
+repo=$(cd "$(dirname "$(git rev-parse --git-common-dir)")" && pwd)
 cm ls --json | jq -r --arg root "$repo" \
   '[.[] | select(.cwd | startswith($root)) | {name, title, cwd, reported_state}]'
 ```
 
-**Use `--git-common-dir`, not `--show-toplevel`.** This is the one command here that is easy to get
-wrong, and it fails silently. `--show-toplevel` returns the *current* worktree, so run from a worktree
-it matches only your own session and the roster comes back empty. Empty then reads as "no other agents
-are working on this repo", which is wrong precisely when a2a is needed. `--git-common-dir` resolves to
-the one shared `.git` every worktree of a repository points at, so it identifies the repository rather
-than the checkout. Verified: from `.worktrees/a2a-skill`, the `--show-toplevel` form returned `[]` while
-this one returned all four sessions.
+**Use `--git-common-dir`, not `--show-toplevel`, and resolve it with `cd`.** This is the one command
+here that is easy to get wrong, and both ways of getting it wrong fail the same silent way: an empty
+roster, which reads as "no other agents are working on this repo" exactly when a2a is needed.
+
+`--show-toplevel` returns the *current* worktree, so from a worktree it matches only your own session.
+`--git-common-dir` names the one shared `.git` every worktree of a repository points at, so it
+identifies the repository rather than the checkout. But it returns a path relative to the cwd, and
+`--path-format=absolute` does not reliably fix that: from the main checkout it still returns a bare
+`.git`, whose `dirname` is `.`, and `startswith(".")` matches nothing. Hence the `cd`, which resolves
+it from any of them.
+
+Verified from three locations, the main checkout and two worktrees: the `cd` form returns
+`/Users/chancez/projects/cm` and finds all 4 sessions in each. The `dirname --path-format=absolute`
+form returned `.` and found 0 from the main checkout, and `--show-toplevel` finds only itself from a
+worktree.
 
 It follows that this only finds worktrees nested inside the repository. If yours live elsewhere, match
 on the shared `.git` path itself by running `git rev-parse --git-common-dir` in each candidate cwd, which
