@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chancez/cm/internal/paths"
 )
@@ -65,6 +68,44 @@ func TestServerStartErrorIgnoresAnEmptyCapture(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), paths.Name+" server") {
 		t.Errorf("serverStartError() = %v, want it to name `%s server`", err, paths.Name)
+	}
+}
+
+// A start nobody notices must stay silent, so the ordinary first command in a shell prints nothing.
+func TestStartNoticeSaysNothingAboutAFastStart(t *testing.T) {
+	base := time.Unix(0, 0)
+	var buf bytes.Buffer
+	n := &startNotice{w: &buf, began: base}
+
+	n.waiting(base.Add(serverStartQuiet - time.Millisecond))
+	n.ready(base.Add(serverStartQuiet))
+
+	if buf.Len() > 0 {
+		t.Errorf("output = %q, want nothing for a start inside the quiet period", buf.String())
+	}
+}
+
+// A start that takes a while has to say so, keep saying so, and say when it ended.
+//
+// The whole transcript is asserted rather than a line at a time: what made this worth writing is a wait
+// that printed nothing for ten seconds and then failed, which reads as a hang, and the surrounding order
+// is what tells a reader the difference between waiting and stuck.
+func TestStartNoticeReportsAWaitAndItsEnd(t *testing.T) {
+	base := time.Unix(0, 0)
+	var buf bytes.Buffer
+	n := &startNotice{w: &buf, began: base}
+
+	n.waiting(base.Add(10 * time.Millisecond))                        // quiet
+	n.waiting(base.Add(serverStartQuiet))                             // first line
+	n.waiting(base.Add(serverStartQuiet + 100*time.Millisecond))      // too soon to repeat
+	n.waiting(base.Add(serverStartQuiet + serverStartNoticeInterval)) // reminder
+	n.ready(base.Add(3 * time.Second))
+
+	want := fmt.Sprintf("%[1]s: waiting for the server to start...\n"+
+		"%[1]s: still waiting for the server, 2.3s of %s\n"+
+		"%[1]s: server ready after 3s\n", paths.Name, serverStartTimeout)
+	if got := buf.String(); got != want {
+		t.Errorf("output =\n%q\nwant\n%q", got, want)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -399,15 +400,20 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 	// Release rather than wait: the server outlives this command by design.
 	go func() { _ = cmd.Wait() }()
 
-	deadline := time.Now().Add(serverStartTimeout)
+	began := time.Now()
+	notice := &startNotice{w: os.Stderr, began: began}
+	deadline := began.Add(serverStartTimeout)
 	for {
 		if conn, err := net.Dial("unix", dirs.ServerSocket()); err == nil {
 			conn.Close()
+			notice.ready(time.Now())
 			return nil
 		}
-		if time.Now().After(deadline) {
+		now := time.Now()
+		if now.After(deadline) {
 			return serverStartError(dirs)
 		}
+		notice.waiting(now)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -415,6 +421,70 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 		}
 	}
 }
+
+// serverStartQuiet is how long a start is given before it is mentioned at all.
+//
+// Above what a start costs, so the common case stays silent. Measured on this machine: `cm list` against a
+// running server takes 23ms, and the same command starting one takes 37ms, so the start itself is about
+// 13ms. This is twenty times that.
+//
+// Below what a person will sit through without wondering. The gap between the two is the whole point of
+// this: an upgrade that could not start its replacement printed nothing for ten seconds and then failed,
+// which reads as a hang rather than as a wait, and the failing case is the one where the old server has
+// already been stopped.
+const serverStartQuiet = 300 * time.Millisecond
+
+// serverStartNoticeInterval is how often to repeat that the wait is still going.
+//
+// Matched to nothing in the protocol; it is a pace a person reads as progress rather than as a stuck
+// terminal. Five lines at most, since serverStartTimeout bounds the whole wait at ten seconds.
+const serverStartNoticeInterval = 2 * time.Second
+
+// startNotice reports a server start that is taking long enough to wonder about.
+//
+// To stderr, so a script reading stdout is unaffected, and shaped like the client's outageState: quiet
+// for the common case, one line once it is worth mentioning, a periodic reminder after that, and a
+// closing line only if something was said. Announcing the end unconditionally would put a line in front
+// of every command that starts a server.
+//
+// The clock is passed in rather than read here so a test can drive the whole sequence without sleeping.
+type startNotice struct {
+	w     io.Writer
+	began time.Time
+	// said is whether anything has been printed yet, which is what makes the ready line conditional.
+	said bool
+	// last is when the reminder last fired.
+	last time.Time
+}
+
+// waiting reports that the server is not up yet, at most once per interval.
+func (n *startNotice) waiting(now time.Time) {
+	if !n.said {
+		if now.Sub(n.began) < serverStartQuiet {
+			return
+		}
+		fmt.Fprintf(n.w, "%s: waiting for the server to start...\n", paths.Name)
+		n.said, n.last = true, now
+		return
+	}
+	if now.Sub(n.last) < serverStartNoticeInterval {
+		return
+	}
+	fmt.Fprintf(n.w, "%s: still waiting for the server, %s of %s\n",
+		paths.Name, shortDuration(now.Sub(n.began)), serverStartTimeout)
+	n.last = now
+}
+
+// ready closes out a wait that was mentioned, and says nothing about one that was not.
+func (n *startNotice) ready(now time.Time) {
+	if !n.said {
+		return
+	}
+	fmt.Fprintf(n.w, "%s: server ready after %s\n", paths.Name, shortDuration(now.Sub(n.began)))
+}
+
+// shortDuration trims a duration to something a person reads, since the full nanoseconds are noise here.
+func shortDuration(d time.Duration) time.Duration { return d.Round(100 * time.Millisecond) }
 
 // expireInterval is how often dead sessions are swept while the server runs.
 //
