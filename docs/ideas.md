@@ -20,6 +20,41 @@ special-case an agent, a build tool, or a shell.
 These are missing rather than undecided. Each is small on its own; the reason none is done is that nothing
 has needed it yet.
 
+**Going back after a switch.** `cm switch work` moves this window to another session, and there is no
+convenient way back. It is expressible: the window's name still points at the original, so
+`cm switch kitty.164` returns. What is missing is discovering that name from inside the new session, since
+`CM_SESSION` there is the *new* session's ID and nothing reports the name the window was launched under.
+After a `cm rebind` it is worse, because no name points at the original at all and it appears in `cm list`
+only as an unnamed `@id`.
+
+The shape settled on, without being built: `--prev` returns to the session this window was on before its
+last move, and `--reset` to the first session this client attached to. On both verbs, since a rebind should
+be able to take the name back with it.
+
+Two values, not a stack, and that is the decision worth recording. A real pushd/popd history invites
+questions that have no obvious answers -- when entries expire, what happens when the session at one of them
+has died, what "back" means after a fourth hop -- and the two flags above need only "the previous one" and
+"the first one". `--prev` therefore toggles, which is what `cd -` does and what `tmux switch-client -l`
+does. A stack remains possible later and should be treated as its own feature rather than as an extension
+of this.
+
+Where the state lives is the part that looks obvious and is not. The client can hold it indefinitely, and is
+the natural keeper: it is the one process that survives every switch, since a switch reattaches in place
+rather than re-execing. But the command is typed *inside the session*, so it arrives at the server, which is
+a different process from the client entirely. So either the client reports the two values on each `Open` and
+the server answers from its copy, or the server forwards a directive ("go back one") and the client resolves
+it from memory.
+
+Reporting them is the better of the two. It reuses the switch path exactly, including the check that the
+target still exists before any window moves, which the forwarding version cannot do: a client that resolved
+the target itself and found it gone would land in its reconnect loop against a session that will never
+answer. It also makes the values visible, so `cm clients list` could show where a window came from, which
+addresses the discovery half of this even for someone who never types `--prev`.
+
+What it costs: two fields on `Open`, two more per attachment in the server, and an answer for a target that
+has since been killed. Refusing, and saying which of the two was asked for, is the honest one; falling back
+to something else is how a command stops being trustworthy.
+
 **Alternate-screen scrollback.** A full-screen program draws on the alternate screen, and lines that
 scroll off there are gone: `cm read --lines` cannot recover them, because they never entered scrollback.
 This is correct terminal behavior and also the single most confusing limitation in practice, because the
