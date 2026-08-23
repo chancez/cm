@@ -516,14 +516,48 @@ func runSession(
 		}
 	}()
 
-	// held buffers a partial detach sequence across reads, so a CSI-encoded detach split
-	// between two reads is still recognized rather than forwarded to the shell.
-	var held []byte
-
 	detachKey := opts.DetachKey
 	if detachKey.Name == "" {
 		// Zero value means the caller did not configure one.
 		detachKey, _ = ParseDetachKey(DefaultDetachKey)
+	}
+
+	// The gate buffers a partial detach sequence across reads, so a CSI-encoded detach split between
+	// two reads is still recognized rather than forwarded to the shell, and releases it after
+	// escapeGrace so a lone escape is not withheld forever.
+	gate := &inputGate{key: detachKey}
+	// A timer exists only while the gate is holding something. Nil channels block forever, which is
+	// what keeps this case out of the select the rest of the time.
+	var (
+		holdTimer *time.Timer
+		holdC     <-chan time.Time
+	)
+	stopHold := func() {
+		if holdTimer != nil {
+			holdTimer.Stop()
+			holdTimer = nil
+			holdC = nil
+		}
+	}
+	defer stopHold()
+
+	// sendInput delivers keystrokes and reports whether the loop should give up on this connection.
+	//
+	// A closure rather than repeated inline, because there are now two places that send input -- a
+	// read, and the grace expiring -- and the error path is the subtle half: bytes lost to a dropped
+	// connection have to be carried into the reconnect rather than dropped, or a keystroke vanishes
+	// exactly when the server restarts.
+	sendInput := func(buf []byte) (reconnect bool) {
+		if len(buf) == 0 || opts.ReadOnly {
+			return false
+		}
+		if err := stream.Send(&serverv1.AttachRequest{
+			Event: &serverv1.AttachRequest_Input{Input: &serverv1.Input{Data: buf}},
+		}); err != nil {
+			*pending = append(*pending, buf...)
+			return true
+		}
+		return false
 	}
 
 	for {
@@ -653,16 +687,14 @@ func runSession(
 				continue
 			}
 
-			buf := append(held, data...)
-			held = nil
-
-			if i := detachKey.Find(buf); i >= 0 {
+			buf, detach := gate.feed(data, time.Now())
+			if detach {
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.
-				if i > 0 && !opts.ReadOnly {
+				if len(buf) > 0 && !opts.ReadOnly {
 					_ = stream.Send(&serverv1.AttachRequest{
 						Event: &serverv1.AttachRequest_Input{
-							Input: &serverv1.Input{Data: buf[:i]},
+							Input: &serverv1.Input{Data: buf},
 						},
 					})
 				}
@@ -677,21 +709,27 @@ func runSession(
 				return outcomeDone, nil
 			}
 
-			// Hold back a possible partial detach sequence until the rest arrives.
-			if keep := detachKey.HoldBack(buf); keep > 0 && keep <= len(buf) {
-				held = append(held, buf[len(buf)-keep:]...)
-				buf = buf[:len(buf)-keep]
+			// Rearmed from the deadline the gate reports rather than restarted here, so a run of
+			// keystrokes each ending in a partial cannot postpone the release indefinitely: the
+			// deadline belongs to the first byte withheld.
+			stopHold()
+			if deadline, holding := gate.deadline(); holding {
+				holdTimer = time.NewTimer(time.Until(deadline))
+				holdC = holdTimer.C
 			}
 
-			if len(buf) > 0 && !opts.ReadOnly {
-				if err := stream.Send(&serverv1.AttachRequest{
-					Event: &serverv1.AttachRequest_Input{Input: &serverv1.Input{Data: buf}},
-				}); err != nil {
-					// The server went away mid-keystroke. Hold the bytes so they are not
-					// lost across the reconnect.
-					*pending = append(*pending, buf...)
-					return outcomeReconnect, nil
-				}
+			if sendInput(buf) {
+				// The server went away mid-keystroke. The bytes are held for the reconnect by
+				// sendInput itself.
+				return outcomeReconnect, nil
+			}
+
+		case <-holdC:
+			// The grace expired, so what looked like the start of a detach sequence was a keypress in
+			// its own right. Almost always a lone escape.
+			stopHold()
+			if sendInput(gate.flush()) {
+				return outcomeReconnect, nil
 			}
 
 		case err := <-inputErr:

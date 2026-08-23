@@ -219,6 +219,49 @@ The server-to-client `Detached` message stays, and is now only ever the server's
 `cm detach` needs it: without it an evicted client reads the clean close as the server going away
 and reconnects within a second, silently undoing the detach.
 
+### Recognizing the detach key, and why a lone escape is not held forever
+
+The detach key is matched by the client, before input is forwarded, and matching it is harder than
+comparing a byte. A terminal with the kitty keyboard protocol or xterm's modifyOtherKeys reports ctrl-\
+as a CSI sequence rather than as 0x1C, so the client watches for three encodings: the control byte,
+`ESC [ 92 ; 5 u`, and `ESC [ 27 ; 5 ; 92 ~`. zmx learned this from Claude Code, which enables
+modifyOtherKeys on startup and made its detach key stop working entirely.
+
+A sequence can also be split across two reads, so a partial one is withheld until the rest arrives
+rather than forwarded to the shell. That holdback had no bound, and every encoding begins with ESC, so a
+lone escape looked like a partial sequence and waited for a keystroke that might never come. **Pressing
+escape delivered nothing at all until the next key was pressed.** That is the keypress that leaves insert
+mode in zsh's vi mode, in vim, and in Claude Code, so the symptom was a mode indicator that did not
+change, and the next key then being read in the mode the user thought they had left.
+
+The bound is `escapeGrace`, 50ms, after which whatever is held is released as ordinary input. Two orders
+of magnitude above the gap it has to cover, since a terminal writes a whole key sequence in one write and
+the halves of a local split arrive microseconds apart, and below the point where a keypress feels late.
+It is the same number vim and neovim use for `ttimeoutlen`. tmux's `escape-time` defaults to 500ms and is
+the setting everyone turns down, which is the mistake worth not repeating: it is sized for a link far
+worse than this has to survive, and it makes escape feel broken.
+
+What it costs, stated plainly: a detach sequence whose halves arrive more than 50ms apart is no longer
+recognized, so its escape reaches the program and the remainder is typed at it. That needs a link that
+divides a 7-byte write across two frames 50ms apart.
+
+Two alternatives were rejected:
+
+- **Never hold a lone escape.** Zero latency, and it breaks the split case outright rather than only
+  when a link stalls. It also cannot be reasoned about from the outside: whether ctrl-\ works would
+  depend on how a terminal happened to divide a write.
+- **Forward the escape immediately and keep matching across the boundary**, detaching retroactively when
+  the rest arrives. This is strictly better on paper -- no latency, and the detach key always works --
+  but it delivers a stray escape to the program on every split, and escape means "cancel" to a great
+  deal of software. Losing a half-typed prompt in Claude Code because a detach split is a worse surprise
+  than 50ms, and an invisible one. It remains the upgrade path if a real link is ever measured stalling
+  past the grace, since it turns that failure into a stray escape rather than garbage on the command
+  line.
+
+The deadline is anchored to the first byte withheld rather than restarted by each read, so a stream that
+keeps ending in a partial cannot postpone the release indefinitely, which would be the unbounded wait
+again by another route.
+
 ## Nested sessions work
 
 zmx treats the presence of its session environment variable as a request to *switch* the
