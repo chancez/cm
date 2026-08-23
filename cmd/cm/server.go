@@ -185,6 +185,15 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	defer closeLog.Close()
 
+	// Warned rather than refused, and logged before anything else can fail: a setting this build does not
+	// know is the most likely reason a server that used to start no longer does, and it is invisible
+	// otherwise. Refusing is what this used to do, and `cm upgrade` turned it into an outage, since the
+	// old server is stopped first. See config.UnknownSettings.
+	if unknown := cfg.UnknownSettings(); len(unknown) > 0 {
+		logger.Warn("ignoring settings this build does not know",
+			"file", cfg.Path(), "settings", strings.Join(unknown, " "))
+	}
+
 	// Bind before opening the database so a second server exits immediately rather than
 	// touching shared state.
 	l, socketInode, err := server.Listen(dirs.ServerSocket())

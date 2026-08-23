@@ -7,8 +7,13 @@ The file is TOML, read from `$XDG_CONFIG_HOME/cm/cm.toml` if that is set, otherw
 config directory (`~/.config/cm/cm.toml` on Linux, `~/Library/Application Support/cm/cm.toml` on
 macOS). Override with `--config` or `$CM_CONFIG`. Run `cm config` to see which path is in use.
 
-An unknown key is an error rather than being ignored, so a misspelled setting is not mistaken for
-one that has no effect.
+An unknown key is ignored with a warning, and `cm config` lists it and exits non-zero. The split is
+deliberate. Refusing everywhere is what a misspelled setting deserves, but the server reads the same
+file, and `cm upgrade` stops the running server before starting the replacement: one key the new build
+did not know left no server at all, with every session's shell alive and every attached client waiting
+on a server that could never start. One file serves every build on a machine, so a key one build knows
+and another does not is ordinary. Anything holding a shell up therefore carries on, and the one command
+a person runs to ask why a setting does nothing is the one that fails.
 
 ## Example
 

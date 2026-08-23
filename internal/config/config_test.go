@@ -3,8 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -56,15 +56,25 @@ func TestLoadScrollbackZeroMeansUnlimited(t *testing.T) {
 	}
 }
 
-// A typo in a config file must be reported. Ignoring unknown keys makes a misspelled setting
-// indistinguishable from one that has no effect.
-func TestLoadRejectsUnknownKeys(t *testing.T) {
-	_, err := Load(writeConfig(t, "scrolback_lines = 100\n"))
-	if err == nil {
-		t.Fatal("Load() = nil error for an unknown key, want a report")
+// An unknown setting is recorded and the rest of the file still applies.
+//
+// Refusing is what it used to do, and `cm upgrade` made that an outage: the old server is stopped first,
+// so one setting the new build did not know left no server at all and every attached client hanging. The
+// caller decides now, and only `cm config` still fails. See UnknownSettings.
+//
+// The whole Config is asserted, because the load has to be otherwise indistinguishable from a clean one:
+// a version that dropped the known settings along with the unknown one would pass any check that only
+// looked at the report.
+func TestLoadRecordsUnknownSettings(t *testing.T) {
+	path := writeConfig(t, "detach_key = \"ctrl-o\"\nscrolback_lines = 100\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want an unknown setting to be recorded rather than refused", err)
 	}
-	if !strings.Contains(err.Error(), "scrolback_lines") {
-		t.Errorf("error = %q, want it to name the offending key", err)
+	want := &Config{path: path, unknown: []string{"scrolback_lines"}, DetachKey: "ctrl-o"}
+	if !reflect.DeepEqual(cfg, want) {
+		t.Errorf("Load() = %+v, want %+v", cfg, want)
 	}
 }
 

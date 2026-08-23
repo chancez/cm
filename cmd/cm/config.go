@@ -67,6 +67,9 @@ type configJSON struct {
 	// survives is worth being able to read back before finding out by needing it.
 	DatabaseBackupRetention string   `json:"database_backup_retention"`
 	EnvCapture              []string `json:"env_capture"`
+	// UnknownSettings are settings in the file this build does not know, which everything else ignores
+	// with a warning. Empty on a healthy install.
+	UnknownSettings []string `json:"unknown_settings"`
 }
 
 func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -153,10 +156,18 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Also "never" rather than "0s" when disabled, where zero means "keep every snapshot".
 		DatabaseBackupRetention: durationOrNever(dbBackupRetention),
 		EnvCapture:              cfg.EnvPatterns(),
+		UnknownSettings:         cfg.UnknownSettings(),
+	}
+	if out.UnknownSettings == nil {
+		// An empty array rather than null, so a script can iterate unconditionally.
+		out.UnknownSettings = []string{}
 	}
 
 	if asJSON {
-		return writeJSON(os.Stdout, out)
+		if err := writeJSON(os.Stdout, out); err != nil {
+			return err
+		}
+		return unknownSettingsError(out.UnknownSettings)
 	}
 
 	fmt.Fprintf(os.Stdout, "file                      %s", out.File)
@@ -183,7 +194,28 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "shim_log_retention        %s\n", out.ShimLogRetention)
 	fmt.Fprintf(os.Stdout, "database_backup_retention %s\n", out.DatabaseBackupRetention)
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))
-	return nil
+	if len(out.UnknownSettings) > 0 {
+		// In the report rather than on stderr, next to the values that are in effect, since the whole
+		// report is what a reader is scanning to find the setting that is not doing anything.
+		fmt.Fprintf(os.Stdout, "unknown settings          %s (ignored by this build: a typo, or a setting from another build)\n",
+			strings.Join(out.UnknownSettings, " "))
+	}
+	return unknownSettingsError(out.UnknownSettings)
+}
+
+// unknownSettingsError fails when the file names settings this build does not know.
+//
+// This is the one command that still fails on them. Everything that holds a shell up warns and carries
+// on, for the reason config.UnknownSettings gives, which leaves nothing to answer "why does my setting
+// do nothing" -- the question this command exists for.
+//
+// After the report rather than instead of it, since the rest of the output is what says which values are
+// actually in effect, and the report already names them. Hence reported: no second message.
+func unknownSettingsError(unknown []string) error {
+	if len(unknown) == 0 {
+		return nil
+	}
+	return &exitCodeError{code: 1, reported: true}
 }
 
 // durationOrNever renders a retention period, naming the disabled case rather than printing zero.

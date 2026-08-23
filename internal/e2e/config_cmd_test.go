@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,7 @@ type configResult struct {
 	DetachKey       string            `json:"detach_key"`
 	LogLevel        string            `json:"log_level"`
 	RestoreMode     string            `json:"restore_mode"`
+	UnknownSettings []string          `json:"unknown_settings"`
 }
 
 func (e *env) cmConfig() configResult {
@@ -108,6 +110,49 @@ func TestConfigReportsWhereDirectoriesCameFrom(t *testing.T) {
 		if src := got.Sources[key]; !strings.HasPrefix(src, "$CM_") {
 			t.Errorf("sources[%s] = %q, want the environment variable that set it", key, src)
 		}
+	}
+}
+
+// A setting this build does not know must not stop a server from starting.
+//
+// The outage it caused: `cm upgrade` stops the running server before starting the replacement, so a
+// config file naming a setting the new build lacks left no server at all, with 36 sessions holding live
+// shells and every attached client waiting on a server that could never come up. One file serves every
+// build on a machine, so a setting one branch knows and another does not is ordinary rather than exotic.
+//
+// A restart is what reads the file, since the server the harness started predates it, and it is the same
+// call `cm upgrade` makes.
+func TestServerStartsDespiteAnUnknownSetting(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	// A known setting beside the unknown one, because the rest of the file still has to apply.
+	e.writeConfig("detach_key = \"ctrl-o\"\nsetting_from_another_build = \"ctrl-]\"\n")
+
+	if r := e.run("server", "restart"); r.code != 0 {
+		t.Fatalf("`cm server restart` exit code = %d with an unknown setting, want 0\nstderr: %s",
+			r.code, r.stderr)
+	}
+	// Serving, rather than merely having started: the failure this guards against was a client hanging.
+	e.mustRun("list")
+
+	// And the setting next to it took effect, so tolerating one is not ignoring the file.
+	r := e.run("config", "--json")
+	var got configResult
+	if err := json.Unmarshal([]byte(r.stdout), &got); err != nil {
+		t.Fatalf("parsing config output %q: %v", r.stdout, err)
+	}
+	if got.DetachKey != "ctrl-o" {
+		t.Errorf("detach_key = %q, want ctrl-o: the known settings in the file still apply", got.DetachKey)
+	}
+	if !slices.Equal(got.UnknownSettings, []string{"setting_from_another_build"}) {
+		t.Errorf("unknown_settings = %v, want the one setting this build does not know",
+			got.UnknownSettings)
+	}
+	// `cm config` is the one command that still fails on it, since a person reading this report is asking
+	// why a setting does nothing and every other command has only warned.
+	if r.code == 0 {
+		t.Errorf("`cm config` exit code = 0 with an unknown setting, want non-zero\nstdout: %s", r.stdout)
 	}
 }
 

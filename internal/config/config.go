@@ -23,6 +23,11 @@ import (
 
 // Config is cm's configuration.
 type Config struct {
+	// path is where this was read from, and unknown holds the settings the file names that this build
+	// does not know. Both are read through accessors, so neither can be mistaken for a setting.
+	path    string
+	unknown []string
+
 	// RuntimeDir overrides where sockets live, and StateDir where the database and logs live.
 	//
 	// Non-circular, since the config file itself is found under the user's config directory rather than
@@ -189,10 +194,13 @@ const DefaultScrollbackLines = 2000
 
 // Load reads the configuration file, returning defaults when there is none.
 //
-// A missing file is not an error, since config is optional. A malformed one is: silently falling
-// back to defaults would leave a user wondering why their settings do nothing.
+// A missing file is not an error, since config is optional. A malformed one is: a file toml cannot
+// parse says nothing about what its settings were meant to be, so applying defaults over it would
+// ignore a file that plainly asks for something else.
+//
+// An unrecognized setting is neither, and is recorded for the caller to act on. See UnknownSettings.
 func Load(path string) (*Config, error) {
-	cfg := &Config{}
+	cfg := &Config{path: path}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -206,18 +214,33 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	// Report unknown keys rather than ignoring them. A typo in a config file is otherwise
-	// indistinguishable from the setting having no effect.
-	if undecoded := md.Undecoded(); len(undecoded) > 0 {
-		keys := make([]string, 0, len(undecoded))
-		for _, k := range undecoded {
-			keys = append(keys, k.String())
-		}
-		return nil, fmt.Errorf("%s: unknown settings: %v", path, keys)
+	for _, k := range md.Undecoded() {
+		cfg.unknown = append(cfg.unknown, k.String())
 	}
 
 	return cfg, nil
 }
+
+// Path is where the configuration was read from, or looked for when there is no file.
+//
+// Kept so a warning can name the file. The server loads its own config and has no other way to say
+// where the setting it is complaining about lives.
+func (c *Config) Path() string { return c.path }
+
+// UnknownSettings returns the settings the file names that this build does not know.
+//
+// Recorded rather than refused, which reverses what a typo argues for: a misspelled setting is
+// otherwise indistinguishable from one that has no effect, and that is still worth reporting.
+//
+// What decided it is the order of an upgrade. `cm upgrade` stops the running server before starting
+// the replacement, so one unknown setting stopped the new server from ever coming up, after the old
+// one was already gone. 36 live sessions kept their shells and every attached client hung, and no
+// amount of reconnecting could help: the only way out was editing the file. One config file serves
+// every build on a machine, so a setting one branch knows and another does not is ordinary.
+//
+// The split is therefore by who is reading. Anything holding a shell up warns and carries on;
+// `cm config` fails, because a person is reading that and a typo is the question it answers.
+func (c *Config) UnknownSettings() []string { return c.unknown }
 
 // DefaultPath returns where cm looks for its configuration.
 //
