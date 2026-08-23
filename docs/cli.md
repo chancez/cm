@@ -6,7 +6,7 @@ Notes on using cm from a script or a shell startup file. For the config file, se
 ## JSON output
 
 `list`, `info`, `kill`, `get-env`, `tag`, `wait`, `send`, `run`, `status`, `doctor`, `config`,
-`version`, `detach`, `clients`, `clients list`, and `clients current` accept `--json`.
+`version`, `detach`, `upgrade`, `clients`, `clients list`, and `clients current` accept `--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.
 Fields are only ever added, never renamed or removed, and a test asserts the exact key set.

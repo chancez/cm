@@ -18,10 +18,14 @@ import (
 
 // newClientsCommand groups the commands whose subject is a client rather than a session.
 //
-// Plural, and named for what it acts on rather than what it does. "upgrade" alone at the top level would
-// read as upgrading cm itself, which is the package manager's job; `cm clients upgrade` says what is being
-// upgraded. Plural rather than singular because every one of these acts on a set: a session can hold
-// several clients, and none of these commands takes one client as its subject.
+// Plural, and named for what it acts on rather than what it does, because this group only ever acts on
+// clients: naming it `cm upgrade` would have promised the whole installation and delivered one third of it.
+// The top-level `cm upgrade` exists for that promise and keeps it, by restarting the server and then
+// bringing the clients onto it, and this command remains the half of it worth having on its own -- a
+// keybinding upgrading the window it was pressed in has no business restarting the server.
+//
+// Plural rather than singular because every one of these acts on a set: a session can hold several clients,
+// and none of these commands takes one client as its subject.
 //
 // The listing is the reason this is a group rather than a single command. `cm list` is session-oriented and
 // stays that way -- one row per session is what a status line wants -- so a client-oriented view needs

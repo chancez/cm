@@ -87,37 +87,7 @@ you would not want is still worth avoiding.`,
 				return err
 			}
 
-			// Stop only if one is there. A restart with nothing running is a start, not an error.
-			if conn, cl, cerr := connectServer(cmd.Context(), dirs); cerr == nil {
-				_, serr := cl.Shutdown(cmd.Context(), &serverv1.ShutdownRequest{})
-				conn.Close()
-				// A closed connection is what a successful shutdown looks like from here, not a failure.
-				// Shutdown replies before the server has finished stopping because the reply travels over
-				// the connection that stopping closes, so a caller that loses that race sees the socket
-				// close instead of an answer. Reporting it made `cm server restart` exit 1 after a restart
-				// that worked, on CI runners slow enough to lose the race.
-				if serr != nil && !transport.IsClosed(serr) {
-					return fmt.Errorf("stopping the running server: %w", serr)
-				}
-				// Waited on so the start below is not racing the shutdown.
-				//
-				// Not strictly required, and the comment said it was until it was measured: without this a
-				// restart still succeeded 15 times out of 15, and still succeeded with shutdown slowed by
-				// 300ms on purpose. The reason is that a new server refuses to bind while something answers
-				// on the socket, and ensureServer retries for ten seconds, so a lost race is absorbed rather
-				// than reported.
-				//
-				// Kept because absorbing a race is not the same as not having one: the recovery costs a
-				// startup attempt and depends on a timeout being generous. Waiting is a few milliseconds and
-				// makes the ordering explicit.
-				if err := waitServerGone(cmd.Context(), dirs); err != nil {
-					return err
-				}
-			}
-
-			// ensureServer re-execs this binary, which reads the config itself, so nothing has to be
-			// passed through here.
-			if err := ensureServer(cmd.Context(), dirs); err != nil {
+			if err := restartServer(cmd.Context(), dirs); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stdout, "server restarted")
@@ -577,4 +547,41 @@ func serverStartError(dirs paths.Dirs) error {
 	// Nothing said, which is the case where the server is merely slow, or was killed before it could
 	// write. Naming the command that shows the rest is the only useful thing left to add.
 	return fmt.Errorf("%s; run `%s server` to see why", timeout, paths.Name)
+}
+
+// restartServer replaces a running server, leaving its sessions running.
+//
+// Shared with `cm upgrade` rather than duplicated, because the ordering below is the part that took
+// measuring and a second copy would drift from it.
+func restartServer(ctx context.Context, dirs paths.Dirs) error {
+	// Stop only if one is there. A restart with nothing running is a start, not an error.
+	if conn, cl, cerr := connectServer(ctx, dirs); cerr == nil {
+		_, serr := cl.Shutdown(ctx, &serverv1.ShutdownRequest{})
+		conn.Close()
+		// A closed connection is what a successful shutdown looks like from here, not a failure.
+		// Shutdown replies before the server has finished stopping because the reply travels over the
+		// connection that stopping closes, so a caller that loses that race sees the socket close instead
+		// of an answer. Reporting it made `cm server restart` exit 1 after a restart that worked, on CI
+		// runners slow enough to lose the race.
+		if serr != nil && !transport.IsClosed(serr) {
+			return fmt.Errorf("stopping the running server: %w", serr)
+		}
+		// Waited on so the start below is not racing the shutdown.
+		//
+		// Not strictly required, and the comment said it was until it was measured: without this a restart
+		// still succeeded 15 times out of 15, and still succeeded with shutdown slowed by 300ms on purpose.
+		// The reason is that a new server refuses to bind while something answers on the socket, and
+		// ensureServer retries for ten seconds, so a lost race is absorbed rather than reported.
+		//
+		// Kept because absorbing a race is not the same as not having one: the recovery costs a startup
+		// attempt and depends on a timeout being generous. Waiting is a few milliseconds and makes the
+		// ordering explicit.
+		if err := waitServerGone(ctx, dirs); err != nil {
+			return err
+		}
+	}
+
+	// ensureServer re-execs this binary, which reads the config itself, so nothing has to be passed
+	// through here.
+	return ensureServer(ctx, dirs)
 }

@@ -681,8 +681,18 @@ type killJSON struct {
 	Surviving map[string][]int32 `json:"surviving"`
 }
 
+// plural renders a count with its unit, choosing the form rather than hedging with "(s)".
+//
+// Only correct for units that pluralize with a trailing s, which is every one it is used for.
+func plural(n int, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
 // sortedKeys returns a map's keys in a stable order, so repeated output does not reshuffle.
-func sortedKeys(m map[string][]int32) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

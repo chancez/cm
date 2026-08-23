@@ -335,9 +335,36 @@ already reads.
 
 ## Upgrading, and what a rollback cannot undo
 
-The order is: install, restart the server, then `cm clients upgrade`. Shims stay on the build that spawned
-them until their sessions end, which is not a gap to close but a consequence of what each layer owns; the
-section below states why.
+`cm upgrade` is the whole of it: it restarts the server, waits for the clients to come back, and asks them
+to re-exec. Shims stay on the build that spawned them until their sessions end, which is not a gap to close
+but a consequence of what each layer owns; the section below states why, and the command reports the count
+rather than hiding it.
+
+Three details in that order are load-bearing.
+
+*The server goes first.* A client re-execs and reattaches, so upgrading clients first brings each one back
+on the old server and makes it reconnect again when that server restarts: two repaints per window instead of
+one. Server first also means the build a client compares itself against is already the new one.
+
+*Then it waits for the clients to reconnect,* and that wait is not padding. Restarting disconnects every
+client, each reconnects on its own 100ms retry, and asking in that gap finds nobody attached. The first
+version of the command did exactly that: it reported "no clients were attached" with a window plainly
+attached, and the client came back on the *old* binary. Only a real client showed it, since a listing cannot
+be missing a client that never existed.
+
+*And it says one thing when it worked.* One line naming the build everything is on, because that is the
+whole of a healthy run. A client that never reconnected is a window left on the old build, so that goes to
+stderr as a warning, the way a kill reports processes that survived it: loud enough to notice and off the
+stream a script reads. Kept shims are not mentioned at all, since a session predating the restart keeps its
+shim on every run where any session exists, which made the most repeated line the least actionable one. The
+count stays in `--json`, and `cm doctor` reports how many builds the running shims span, which is the form
+worth reading.
+
+The verb covers the server alone. A client is *asked* to come back and the server cannot observe whether it
+did, so clients appear as a count rather than as something claimed to have happened.
+
+The pieces remain separately usable: `cm server restart` for the server alone, and `cm clients upgrade` for
+one window from a keybinding, which has no business restarting a server.
 
 Two things bound how far an upgrade can skew. The shim protocol does not change, which is what lets a new
 server adopt a shim an old one spawned, and matters most for the layer that cannot be replaced. The server
