@@ -683,6 +683,24 @@ changed, or stopped changing, needs no knowledge of any program and is not cover
 between structuring a screen and interpreting one. See the resumption-mark entry above, which is on the
 allowed side of it.
 
+**Rolling an upgrade back to the previous binary.** Tempting because a running process keeps its
+executable's inode alive after the file is replaced, so the old bytes are still there. Nothing can name
+them on darwin, measured against a running server whose binary was replaced by rename the way
+`mise run install` does it: `/proc/PID/exe` does not exist, `/.vol/<dev>/<ino>` resolves an inode by number
+only while it is linked and returns `ENOENT` once the rename unlinks it, and `lsof` reports the path, which
+by then names the *new* binary. A backup taken from what lsof reports would copy the broken build while
+looking correct.
+
+Stashing a copy before the replacement would work and is not worth it. It would have to live in the
+installer or in a post-upgrade copy of about 23 MB, and it still could not be used in the case an upgrade is
+most likely to fail in: a new server that migrates the schema and then fails cannot be rolled back to,
+because an older build refuses a migrated database, and restoring the pre-migration snapshot is ruled out
+above for stranding every session created since.
+
+What is done instead is cheaper and covers the reason this came up. An unknown config setting is a warning
+rather than fatal, and `cm upgrade` reads the config before stopping anything, so the failure that produced
+this idea cannot recur.
+
 **Configuration per session in a file.** Sessions are created by whatever starts them, with flags. A file
 mapping session names to settings would move that decision away from the caller who has the context, and
 `--env`, `--dir`, and `--on-restore` already cover it. The one exception already exists, because it has to:
