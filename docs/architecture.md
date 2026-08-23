@@ -245,6 +245,17 @@ What it costs, stated plainly: a detach sequence whose halves arrive more than 5
 recognized, so its escape reaches the program and the remainder is typed at it. That needs a link that
 divides a 7-byte write across two frames 50ms apart.
 
+All of it was checked in a real terminal against a real session, with the previous build as the control,
+because the unit tests cannot see a keyboard:
+
+- A lone escape now arrives on its own. The control, built from the commit before this one, still showed
+  nothing a full second after the escape, and delivered `^[B` together the moment the next key was
+  pressed.
+- Ctrl-\ still detaches as the control byte, and `ESC [ 92 ; 5 u` written as one write still detaches,
+  leaving the session running with no clients.
+- Split with a 300ms pause, the cost above is what happens: `^[[92;5` reaches the program when the grace
+  expires, the late `u` follows it, and nothing detaches.
+
 Two alternatives were rejected:
 
 - **Never hold a lone escape.** Zero latency, and it breaks the split case outright rather than only
