@@ -70,6 +70,22 @@ reports how many builds the running shims span.`,
 			}
 			ctx := cmd.Context()
 
+			// Read the config before stopping anything, and fail here if it cannot be read.
+			//
+			// This command runs from the binary that is about to become the server, and the server it spawns
+			// reads the same file, so this is a faithful test of whether the replacement can get that far. It
+			// is worth one because of the order: the old server is stopped first, and if the new one cannot
+			// start there is nothing to go back to. Its binary was replaced in place, and on darwin the bytes
+			// the old process is still running cannot be named again, so recovery means fixing the file by
+			// hand while every client waits.
+			//
+			// An unknown setting is only a warning now, which is what caused this the first time. What is
+			// left is a file that does not parse, which is still fatal at startup and would still cost a
+			// running server.
+			if _, err := g.config(); err != nil {
+				return fmt.Errorf("not upgrading, since the replacement server could not start: %w", err)
+			}
+
 			// Read before restarting, since the point of reporting a version is the change, and the old
 			// one is only knowable from the server that is about to be replaced. A server that is not
 			// running is not an error: this then starts one, which is an upgrade from nothing.

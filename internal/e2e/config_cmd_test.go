@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // configResult is the JSON shape `cm config` prints.
@@ -266,5 +267,37 @@ func TestHarnessDoesNotReadTheDevelopersConfig(t *testing.T) {
 	// config rather than on the harness.
 	if !strings.HasPrefix(got.File, e.state) {
 		t.Errorf("config path %q is outside the test's state directory %q", got.File, e.state)
+	}
+}
+
+// A config the server cannot read must stop an upgrade before it stops the running server.
+//
+// The order is what makes this worth a check. `cm upgrade` shuts the old server down first, and its binary
+// has already been replaced in place, so a replacement that cannot start leaves nothing to go back to: on
+// darwin the bytes the old process is still executing cannot be named again, measured against a running
+// server. Failing first costs nothing, since the file is read either way.
+//
+// Malformed TOML rather than an unknown setting, because an unknown setting is only a warning now.
+func TestUpgradeRefusesRatherThanStrandingTheServer(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	// A session, so the thing at risk is present: its shim holds a pty and a shell.
+	e.mustRun("run", "--session", "held", "-d", "--", "/bin/sh", "-c", "sleep 30")
+	e.waitFor("the session to be running", 15*time.Second, func() bool {
+		s, ok := e.session("held")
+		return ok && s.State == "running"
+	})
+
+	e.writeConfig("this is not = valid toml [[[\n")
+
+	r := e.run("upgrade")
+	if r.code == 0 {
+		t.Errorf("`cm upgrade` exit code = 0 with a config the server cannot read, want non-zero\nstdout: %s",
+			r.stdout)
+	}
+	// The point of refusing: the server that was running is still running and still serving.
+	if s, ok := e.session("held"); !ok || s.State != "running" {
+		t.Errorf("session held = %+v after a refused upgrade, want it still running and listed", s)
 	}
 }
