@@ -20,6 +20,9 @@ type ServerService interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Bind(context.Context, *BindRequest) (*BindResponse, error)
+	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
+	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
 	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
@@ -128,6 +131,27 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Tag(ctx, &req)
 			},
+			"Bind": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req BindRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Bind(ctx, &req)
+			},
+			"Unbind": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req UnbindRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Unbind(ctx, &req)
+			},
+			"Switch": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req SwitchRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Switch(ctx, &req)
+			},
 			"Detach": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req DetachRequest
 				if err := unmarshal(&req); err != nil {
@@ -182,6 +206,9 @@ type ServerClient interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Bind(context.Context, *BindRequest) (*BindResponse, error)
+	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
+	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
 	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
@@ -315,6 +342,30 @@ func (c *serverClient) Signal(ctx context.Context, req *SignalRequest) (*SignalR
 func (c *serverClient) Tag(ctx context.Context, req *TagRequest) (*TagResponse, error) {
 	var resp TagResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Tag", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Bind(ctx context.Context, req *BindRequest) (*BindResponse, error) {
+	var resp BindResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Bind", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Unbind(ctx context.Context, req *UnbindRequest) (*UnbindResponse, error) {
+	var resp UnbindResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Unbind", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Switch(ctx context.Context, req *SwitchRequest) (*SwitchResponse, error) {
+	var resp SwitchResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Switch", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

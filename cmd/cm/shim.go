@@ -38,7 +38,7 @@ func newShimCommand(g *globals) *cobra.Command {
 		DisableSuggestions: true,
 		// Everything after the flags is the command to run, so args are not restricted.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := paths.ValidateSessionName(session); err != nil {
+			if err := paths.ValidateSessionID(session); err != nil {
 				return err
 			}
 			dirs, err := g.dirs()

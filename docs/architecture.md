@@ -157,8 +157,84 @@ A session is marked dead only on a definitive connection refusal, never on a tim
 shim that misses a probe is still holding a live shell, and discarding its record would orphan
 it permanently. zmx learned the same lesson.
 
-Names come from a monotonic counter and are never reused, even after deletion. Reuse would let
-a client holding an old name silently reattach to an unrelated session.
+## A session is an ID, and a name is a binding onto one
+
+A session's identity is an ID: allocated when it is created, never reused, never chosen by a caller, never
+changed. A name is a row in a separate table pointing at an ID. A session has zero names, one, or several,
+and any name can be moved to a different session without the session noticing.
+
+Before this, the name *was* the identity: the store's primary key, the variable part of the shim socket
+path, and the value shells had already exported as `CM_SESSION`. Three limitations followed from that one
+fact, and they turned out to be the same limitation. A session could not be renamed. It could not have a
+second name. And a terminal window could not be pointed at a different session, because the only handle
+the window had on its session was a name it could not move.
+
+What the split buys, and each of these is now one write to the bindings table:
+
+- Renaming is binding a new name and unbinding the old one. `cm bind`.
+- Several names for one session, so an emulator's automatic name and a name a person chose coexist.
+- `cm switch`, which points a terminal window at another session for as long as that client lives, and
+  `cm rebind`, which moves the window's name too so a restored window follows.
+
+Nothing moves on disk when a name changes, which is what makes it cheap. `shim_socket` and `log_path` are
+recorded in the row rather than derived, a property they were given so a socket layout change could not
+orphan existing sessions, and it pays off again here: renaming touches no file, and the sessions carried
+across the ID migration kept the paths they were created with.
+
+**Attaching, creating, and reviving are one rule.** Resolve the name; if it resolves to nothing usable,
+allocate an ID and point the name at it. `Manager.Open` used to branch on whether a record existed and
+what state it was in.
+
+**Reviving keeps the ID.** A session whose shell exited keeps its record so `cm list` can say why, and
+attaching to it starts a fresh shell with its content replayed, under the same ID and the same names.
+
+The first attempt allocated a *new* ID for the revived session, on the reasoning that an ID should name one
+shell and never a second. That was too strong, and it cost two things. It forced attach-by-ID to refuse
+outright on an exited session, since it could not return the ID it was asked for, which made an ID a handle
+that stopped working the moment a shell exited and left a session with no names impossible to revive by
+anything. And it leaked: a new ID means a new log path, so the old log was orphaned with its record
+deleted, and expiry only removes a log through the record that names it.
+
+What an ID actually has to promise is narrower: it is never handed to a session that is not the
+continuation of the one it named. A revive satisfies that -- same record, same content from the same log, a
+new shell -- and it is the same continuity attaching by name has always given. The hazard the stronger
+reading was aimed at is ID *reuse across unrelated sessions*, and random IDs rule that out on their own.
+
+**An `@id` reference never creates.** Reviving is not creating: it continues a record that is there. An ID
+that names no record at all is stale, and inventing a session for it is how a client silently ends up
+somewhere it did not ask to be, so that is an error. A *name* that resolves to nothing is different and
+does create, which is what makes `cm attach work` idempotent for a terminal emulator restoring a window.
+
+**IDs are random rather than counted.** Eight characters from a thirty-character alphabet with no vowels
+and none of the glyph pairs that get misread, so 30^8 is 6.6e11: at ten thousand sessions over a machine's
+lifetime the chance any two collide is about 1 in 13000, and a collision hits the primary key and is
+retried. A counter would have been shorter and was rejected because it would live in the database. Losing
+or replacing the state directory restarts it, and an ID recorded outside cm would then resolve to an
+unrelated session; two servers with separate state directories would hand out the same low numbers as well.
+That silent wrong-session resolution is the one failure an identity has to rule out, and a random ID that
+outlives its database fails to resolve instead, which is the correct outcome. It is the same reason names
+were never reused when names were identities.
+
+**The sigil is a proof rather than a convention.** `@` is not in the set `ValidateSessionName` allows, so
+an ID reference can never be mistaken for a name however anyone names a session. Without it, `cm attach 7`
+would become ambiguous the moment somebody bound the name `7`, and would resolve differently depending on
+which sessions happened to exist. `ValidateSessionID` is now the path traversal boundary that
+`ValidateSessionName` used to be, since an ID is what becomes a filename.
+
+**A name records what killing by it means, and this is not ownership coming back.** A borrowed name
+releases and leaves the session running; every other name kills. The distinction is needed because the
+caller doing the killing is usually a terminal emulator's window-close watcher, which fires for every
+window and cannot know whether that window is where a session lives or borrowed it from elsewhere, while
+whoever created the name does know. The difference from the `--own` flag below is what makes it safe: that
+was consulted when a *connection dropped*, which the server cannot tell apart from a terminal quitting,
+whereas this is only ever consulted on an explicit kill. The watcher still decides whether to kill at all,
+so the decision stays where the information is.
+
+**`CM_SESSION` is the ID with its sigil.** A name would be friendlier and would be wrong: the name a
+session was created under can be pointed elsewhere while its shell runs, and every script in there that
+captured the variable at startup would then be reading a different session. The client holds the ID too and
+reconnects by it, since a reconnect is a return to one particular session rather than a fresh request for
+whatever a name points at now.
 
 ## Ownership was removed, and why a server flag cannot express per-window lifetime
 
@@ -427,7 +503,10 @@ skew, and `cm clients upgrade` is how the client half converges without closing 
 
 Sessions created before an upgrade keep working, including their environment: a shell in one has already
 exported what that build put in its environment, and nothing rewrites it afterwards. A change to what cm
-exports therefore reaches new sessions only, which is a property to design around rather than a bug.
+exports therefore reaches new sessions only, which is a property to design around rather than a bug. The ID
+change is the worked example. A session predating it exported `CM_SESSION` as a name, and that name still
+resolves, because the migration turned every existing name into a binding; only sessions created afterwards
+see the `@id` form.
 
 **A schema change is one-way, so it is snapshotted first.** Migrations only move forward, and a database a
 newer build migrated cannot be read by an older one. Two things make that survivable.
@@ -508,11 +587,52 @@ process is still holding a raw terminal and has to put it back.
 
 The argv is rebuilt from the flags cobra parsed, not by editing the original. Editing means guessing
 which bare word is the session name, and `--dir /tmp` puts a bare word directly after a flag: the first
-implementation took `/tmp` for the session name. Two things are then forced. The resolved session name
-is always written out, because a client started with no name had one allocated by the server, and
-re-execing without it would allocate a *second* session and orphan the first with the user's shell in
-it. And only flags that were actually set are emitted, so a default that changed in the new build takes
-effect instead of being pinned to the old one's value.
+implementation took `/tmp` for the session name. Two things are then forced. A session reference is always
+written out, because a client started without one had an identity allocated by the server, and re-execing
+with nothing would allocate a *second* session and orphan the first with the user's shell in it. And only
+flags that were actually set are emitted, so a default that changed in the new build takes effect instead
+of being pinned to the old one's value.
+
+The reference written is the one that was *typed*, unchanged, and an ID only when nothing was. That was
+built the other way first -- always the ID, so that a name pointed elsewhere in the meantime could not send
+the replacement to a session other than the one on screen -- and the trade was wrong.
+
+A re-exec replaces the process image, so the new argv is what the kernel reports from then on: `ps` shows
+it, and so does a terminal emulator that saves a session file from the *foreground process* rather than
+from the command it launched. Writing the ID always therefore rewrote every window's recorded command into
+one that attaches by identity, and an ID never creates a session. A window restored after its session had
+gone then came back dead, where a name would have recreated it. Upgrading is casual and losing a session to
+a reboot is ordinary, so those two meet often, while a name being rebound under a live window is rare. What
+is given up is that such a window follows its name on the next upgrade rather than staying where it was,
+which is defensible on its own terms: the name means the other session now, and following a binding is what
+every other attach does.
+
+### A switch reattaches rather than re-execing
+
+`cm switch` reuses the loop above, not the exec below it. The server sends the same `Detached` event with a
+target on it, and the client goes back around its reconnect loop against that session instead of returning.
+
+Built as an exec first, by reusing the upgrade path wholesale, and that was the wrong half to reuse. An
+upgrade *has* to replace the process, because the point is to run a different binary. A switch runs the same
+binary against a different session, which is what a reconnect already is, so the exec bought nothing and
+cost three things:
+
+- The argv changed, since a re-exec is what the kernel records from then on. `ps` stopped showing what the
+  window was started with, and an emulator saving a session file from the foreground process recorded the
+  new one.
+- A bare switch's durability became an accident of that. Whether it survived a terminal restart depended on
+  which argv the emulator saved, rather than on whether a name had been bound, which is the distinction the
+  command is *for*.
+- Rebuilding an argv is a job with edge cases, and it already had one: a flag whose value is a bare word.
+  Switching had no need of any of it.
+
+Reattaching in place keeps the terminal, the process id, the input goroutine, and the argv. What changes is
+the session, which is the whole of the request. Two things are dropped on the way through, and both would be
+wrong to carry: the resume position, because it counts bytes in a stream the client is leaving, and any
+input typed just before the switch, because it was meant for the session being left and typing it into
+another shell would be worse than losing it.
+
+A switch overrides both, since attaching elsewhere is the entire request.
 
 A client already running the server's build is skipped, so running the command twice does not make every
 window repaint. A client that reported *no* version is asked anyway: the field exists because older
@@ -1163,12 +1283,15 @@ See `contrib/hooks/` for how to wire this to a program, including a Claude Code 
 `cm tag NAME key=value` labels a session, and `cm list --tag key=value` filters on it. Tags are also set
 at creation with `--tag` on `attach` and `run`, and they show in `cm list`, `cm info`, and the JSON output.
 
-They exist because a name groups a session one way and often cannot group it at all. A per-window session
-is named from a server counter, so it is called `s17` and `cm list --prefix` has nothing to match on. Even
-a deliberately named session belongs to several groupings at once -- a project, a worktree, the fan-out
-that created it -- while its name says one thing. And a name cannot change, since the store keys on it and
-the shim socket derives from it, so a session that turns out to be something else keeps a misleading name;
-a tag can be corrected. That makes tags a cheap partial answer to the rename gap below.
+They exist because a name groups a session one way and often cannot group it at all. A session created
+without one has no name to match, so `cm list --prefix` has nothing to filter it by, and it is reachable
+only as `@<id>`. Even a deliberately named session belongs to several groupings at once -- a project, a
+worktree, the fan-out that created it -- while its name says one thing.
+
+Names can now be changed, which they could not when this was written: a name is a binding, so `cm bind`
+corrects a misleading one. That removes the argument tags used to rest on most heavily and leaves the other
+two, which are the ones that were always load-bearing: a session with no name has nothing for `--prefix` to
+match, and one grouping per name is one too few.
 
 Four decisions are worth recording, because each had a defensible alternative.
 

@@ -83,7 +83,7 @@ selector matching nothing is an error rather than a silent success.`,
 				}
 			}
 			for _, name := range args {
-				if err := paths.ValidateSessionName(name); err != nil {
+				if err := paths.ValidateSessionRef(name); err != nil {
 					return err
 				}
 			}

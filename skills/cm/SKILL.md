@@ -21,7 +21,11 @@ The installed binary is the authority on its own syntax. `cm --help` lists the c
 
 ## Sessions and names
 
-A session has a name you choose or one cm allocates. Reusing a name reuses the session, which is what makes cm idempotent and safe to re-run.
+A session has a name you choose, or no name at all when you do not give one. Reusing a name reuses the session, which is what makes cm idempotent and safe to re-run.
+
+A name is a label rather than the session itself. Every session has an id, allocated once and never changed, and a name points at one, so a session can carry several names or none and a name can be moved to a different session. Any command that takes a session takes either: a name, or an id with an `@` in front of it.
+
+**Hold the id when you will come back to a session later.** `cm list --json` and `cm info --json` report it as `id`, and it is what `CM_SESSION` contains inside a session. A name is the friendlier thing to type and the wrong thing to store, because whoever owns that name can point it elsewhere while you are working; an id either finds the same session or finds nothing, which is the failure you want. A session with no name is only reachable by id, and `cm list` shows it that way in the NAME column.
 
 ```bash
 cm list --json                 # every session and its state
@@ -157,7 +161,7 @@ For a coding agent, that is exactly the interesting state: "I need your input" v
 
 ```bash
 cm report <name> --state blocked --detail "needs approval"
-cm report --state busy            # inside a session, name comes from CM_SESSION
+cm report --state busy            # inside a session, the session comes from CM_SESSION
 cm report --state clear           # withdraw, falling back to what cm derives
 ```
 
@@ -325,7 +329,7 @@ cm run --env 'CI=1' --dir /path/to/repo -- ./script
 
 `--env` applies only when the call creates the session; it is ignored when reusing one. `--dir` defaults to the caller's cwd.
 
-cm exports `CM_SESSION` into every session, so a program inside knows which session it is in without being told, which is what lets `cm report` take no argument there. It is also how an agent gives another one a return address: see the `a2a` skill for messaging an agent working the same repository in another worktree.
+cm exports `CM_SESSION` into every session, so a program inside knows which session it is in without being told, which is what lets `cm report` take no argument there. Its value is the session's id with an `@` in front, which every command accepts in place of a name. An id rather than a name deliberately: a name is a label that can be pointed at another session while your shell is running, so a variable captured at startup would go on referring to something that moved, while an id cannot be reassigned. It is also how an agent gives another one a return address: see the `a2a` skill for messaging an agent working the same repository in another worktree.
 
 ## Reading output: which command
 

@@ -63,7 +63,7 @@ func sessionTargets(
 		return nil, false, fmt.Errorf(
 			"session %q was named and --tag was given; use one or the other", args[0])
 	case named:
-		if err := paths.ValidateSessionName(args[0]); err != nil {
+		if err := paths.ValidateSessionRef(args[0]); err != nil {
 			return nil, false, err
 		}
 		return []string{args[0]}, false, nil

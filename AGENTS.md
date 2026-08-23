@@ -255,6 +255,13 @@ Three places, by kind:
   `Close` is racing is a real race even though the I/O calls are safe.
 - **Deleting the runtime dir under a running server does not stop it.** It keeps listening on an inode
   nothing can name, and every later command starts a second server.
+- **A name and a session reference are different things**, and validating one as the other rejects the
+  other. A session's identity is an ID, a name is a binding onto one, and every command takes either
+  spelled as `work` or `@a7k2m9x4`. `ValidateSessionName` rejects `@`, deliberately, which is what makes the
+  two namespaces impossible to confuse; call `ValidateSessionRef` on anything a user typed. Getting this
+  wrong made `cm switch` close the window instead of moving it, since a switch re-execs the client as
+  `cm attach @<id>`, and the entire test suite passed because nothing below the CLI had been given a
+  reference to validate. Only a real terminal showed it.
 - **Two sequence-number spaces exist** and mixing them corrupts output: the shim's numbering and the
   server's post-rewrite numbering differ in length. See `docs/architecture.md`.
 - **`os.MkdirAll(dir, 0700)` over an existing directory leaves its mode alone**, so pointing

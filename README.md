@@ -55,13 +55,29 @@ A session has a name you choose, or one cm allocates:
 
 ```sh
 cm attach work                  # named
-cm attach                       # cm picks a name and prints it
+cm attach                       # no name: cm prints the session's id
+cm attach @a7k2m9x4             # by id, which nothing can repoint
 cm attach --no-attach build     # create it without attaching
 cm attach notes --read-only     # watch without being able to type
 cm attach work --detach-key ctrl-]
 ```
 
 Reusing a name reuses the session, so a command that creates one is safe to re-run.
+
+A name is not the session, though. Every session has an id, allocated once and never changed, and a name is
+a label pointing at one, so a session can have several names or none. That is what makes `cm bind` able to
+rename a session and `cm switch` able to point this window at a different one, neither of which disturbs
+anything running:
+
+```sh
+cm bind notes work              # a second name for the same session
+cm switch work                  # show work in this window, until this client goes away
+cm rebind work                  # move this window's name too, so a restart follows
+cm unbind notes
+```
+
+Scripts should hold the id rather than a name, since a name can be moved: `cm list --json` reports it, and
+`CM_SESSION` inside a session is the id for the same reason.
 
 A session outlives the client attached to it, however that client goes away: detaching, closing
 the window, or the process being killed all leave the shell running. Ending one is `cm kill`.
@@ -109,7 +125,7 @@ Tags group sessions that a name cannot, including every session cm named for its
 
 ```sh
 cm run --tag project=cm --tag role=build -- make   # label at creation
-cm tag s17 project=cm                              # or afterwards
+cm tag build project=cm                            # or afterwards
 cm ls --tag project=cm                             # repeating --tag narrows
 ```
 

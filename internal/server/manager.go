@@ -684,14 +684,10 @@ type OpenOptions struct {
 
 // Open returns the session a reference names, creating one when a name holds nothing yet.
 //
-// This is where a name being a binding rather than an identity pays for itself. Attaching, creating,
-// and reviving are all the same operation now: resolve the name, and if it resolves to nothing usable,
+// This is where a name being a binding rather than an identity pays for itself. Attaching, creating, and
+// reviving are all the same operation now: resolve the reference, and if it resolves to nothing at all,
 // allocate an identity and point the name at it. What used to be three code paths keyed on whether a
 // record existed and what state it was in is one path with one decision in it.
-//
-// An "@id" reference resolves to exactly that session or fails. It deliberately does not create: a
-// reference to an identity that is gone is a stale reference, and inventing a session for it is how a
-// client silently ends up somewhere it did not ask to be.
 func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, error) {
 	if opts.Ref == "" {
 		// No name asked for, so none is bound. The session is reachable by ID, which is what makes
@@ -704,8 +700,11 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 		if err := paths.ValidateSessionID(value); err != nil {
 			return nil, false, err
 		}
-		sess, err := m.openByID(ctx, value)
-		return sess, false, err
+		// An ID that names no record at all is a stale reference, and openExisting reports it as such.
+		// Deliberately not created: an ID is allocated by cm rather than chosen, so a caller holding one
+		// cm has never issued is holding something from a database that is gone, and inventing a session
+		// for it would put them somewhere they did not ask to be.
+		return m.openExisting(ctx, opts, value)
 	}
 
 	if err := paths.ValidateSessionName(value); err != nil {
@@ -719,45 +718,65 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 		// A name nothing holds: allocate an identity and point the name at it. The name owns the
 		// session it was created with, so killing by that name kills the session, which is what
 		// `cm kill work` has always meant.
-		sess, created, err := m.createWithID(ctx, opts)
-		if err != nil {
-			return nil, false, err
-		}
-		sess.setLabel(value)
-		if err := m.store.Bind(ctx, store.Binding{
-			Name:      value,
-			SessionID: sess.id,
-			OnKill:    store.KillTarget,
-		}); err != nil {
-			return nil, false, fmt.Errorf("binding %s to %s: %w", value, sess.id, err)
-		}
-		m.log.Info("bound a new name", "name", value, "session", sess.id)
-		return sess, created, nil
+		return m.createAndBind(ctx, opts, store.KillTarget)
 	case err != nil:
 		return nil, false, err
 	}
 
-	// The name resolves. Live in this server's registry is the common case, and by far the cheapest.
+	sess, created, err := m.openExisting(ctx, opts, binding.SessionID)
+	if errors.Is(err, store.ErrNotFound) {
+		// A name pointing at a record that is not there at all. Nothing removes a record without its
+		// names, so this should not happen, and refusing would leave the name permanently unusable while
+		// looking like the session it named is merely missing. Healed by creating one and moving the name,
+		// and logged rather than done quietly, since the state itself is a bug somewhere.
+		m.log.Warn("name pointed at a session with no record; creating a new one",
+			"name", value, "missing_session", binding.SessionID)
+		return m.createAndBind(ctx, opts, binding.OnKill)
+	}
+	return sess, created, err
+}
+
+// openExisting returns the session with this ID, reviving it when its shell is gone.
+//
+// Reviving keeps the ID rather than allocating a new one, which is the point: an ID is the handle cm
+// hands out and it has to stay usable, so `cm attach @a7k2m9x4` works on a session whose shell exited for
+// the same reason attaching by name does. The alternative was tried first and it forced attach-by-ID to
+// refuse outright, since it would have had to return a session whose ID was not the one asked for.
+//
+// What an ID promises is that it is never handed to a session that is not the continuation of the one it
+// named. A revive satisfies that: same record, same content replayed from the same log, a new shell. The
+// stronger reading -- that an ID names one shell and never a second -- bought nothing and cost the ability
+// to attach by ID at all. It also leaked: a new ID meant a new log path, so the old log was orphaned with
+// its record deleted, and expiry removes a log through the record that names it.
+//
+// Returns ErrNotFound when no record exists, and does not create. The caller decides what that means,
+// because the two references differ: a name that resolves to nothing is healed by creating a session,
+// while an ID that resolves to nothing is stale.
+func (m *Manager) openExisting(
+	ctx context.Context, opts OpenOptions, id string,
+) (*Session, bool, error) {
+	// Live in this server's registry is the common case, and by far the cheapest.
 	m.mu.Lock()
-	sess, ok := m.sessions[binding.SessionID]
+	sess, ok := m.sessions[id]
 	m.mu.Unlock()
 	if ok {
-		sess.setLabel(value)
+		sess.setLabel(opts.name)
 		return sess, false, nil
 	}
 
-	rec, err := m.store.Get(ctx, binding.SessionID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	rec, err := m.store.Get(ctx, id)
+	if err != nil {
 		return nil, false, err
 	}
-	if err == nil && rec.State == store.StateRunning {
+
+	if rec.State == store.StateRunning {
 		// Recorded as running but not in our registry, which happens if Reconcile could not adopt it.
 		// Try once more before giving up: only ENOENT is conclusive, and a shim that was merely busy is
 		// still holding a live shell.
 		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
 			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
 			if err == nil {
-				sess.setLabel(value)
+				sess.setLabel(opts.name)
 				m.mu.Lock()
 				m.sessions[rec.ID] = sess
 				m.mu.Unlock()
@@ -766,81 +785,52 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 		}
 	}
 
-	// Nothing to attach to, so the name moves to a new session that inherits the old one's content.
+	// Nothing to attach to, so a new shell starts under this ID with the old one's content replayed.
 	//
-	// A fresh identity rather than reusing the old one, which is the invariant that makes an ID worth
-	// having: an ID names one shell for as long as it exists and never comes to mean a different one.
-	// The name is what carries continuity across the replacement, which is exactly what a binding is
-	// for. Before IDs this was a name being quietly reused, and the previous incarnation's exit status
-	// and pid went with the deleted row.
-	if err == nil {
-		opts = m.inheritForRestore(opts, rec)
-		m.log.Info("replacing an ended session with a new shell under the same name",
-			"name", value, "previous_session", rec.ID, "previous_state", rec.State,
-			"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
-			"content_restored", opts.restoreFrom != "")
-		if err := m.store.Delete(ctx, rec.ID); err != nil {
-			return nil, false, fmt.Errorf("replacing stale record for %s: %w", rec.ID, err)
-		}
-	} else {
-		// A name pointing at a record that is not there at all. Reachable if a record was removed
-		// without its names, which nothing does deliberately, so it is worth a line rather than a
-		// silent recovery.
-		m.log.Warn("name pointed at a session with no record; creating a new one",
-			"name", value, "missing_session", binding.SessionID)
+	// Destructive and once silent: attaching to a session whose shell had exited started a fresh shell
+	// under it, and the exit status and pid that were the only evidence the previous run happened went
+	// with the deleted row. Logged rather than refused, because refusing would break the case this path
+	// exists for: a terminal emulator restoring a saved window attaches by name and must get a working
+	// session whether or not the previous one is still alive. What it must not do is pretend nothing was
+	// there.
+	opts = m.inheritForRestore(opts, rec)
+	m.log.Info("replacing an ended session with a new shell",
+		"session", rec.ID, "name", opts.name, "previous_state", rec.State,
+		"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
+		"content_restored", opts.restoreFrom != "")
+	if err := m.store.Delete(ctx, rec.ID); err != nil {
+		return nil, false, fmt.Errorf("replacing stale record for %s: %w", rec.ID, err)
 	}
 
+	// The same ID, so the socket and the log keep their paths. The wait for the previous shim's socket
+	// in create is what makes that safe, and this is the case it was written for.
+	opts.id = rec.ID
+	sess, err = m.create(ctx, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	sess.setLabel(opts.name)
+	return sess, true, nil
+}
+
+// createAndBind allocates an identity, creates the session, and points a name at it.
+func (m *Manager) createAndBind(
+	ctx context.Context, opts OpenOptions, onKill store.KillAction,
+) (*Session, bool, error) {
 	sess, created, err := m.createWithID(ctx, opts)
 	if err != nil {
 		return nil, false, err
 	}
-	sess.setLabel(value)
-	// Rebound rather than left alone: the name has to follow the content to the new identity, or the
-	// window that attached by it comes back to nothing next time. OnKill is carried over so a borrowed
-	// name stays borrowed across a revival.
+	sess.setLabel(opts.name)
 	if err := m.store.Bind(ctx, store.Binding{
-		Name:      value,
+		Name:      opts.name,
 		SessionID: sess.id,
-		OnKill:    binding.OnKill,
+		OnKill:    onKill,
 	}); err != nil {
-		return nil, false, fmt.Errorf("rebinding %s to %s: %w", value, sess.id, err)
+		return nil, false, fmt.Errorf("binding %s to %s: %w", opts.name, sess.id, err)
 	}
+	m.log.Info("bound a new name", "name", opts.name, "session", sess.id, "on_kill", onKill)
 	return sess, created, nil
-}
-
-// openByID returns a live session by identity, and refuses to invent one.
-func (m *Manager) openByID(ctx context.Context, id string) (*Session, error) {
-	m.mu.Lock()
-	sess, ok := m.sessions[id]
-	m.mu.Unlock()
-	if ok {
-		return sess, nil
-	}
-
-	rec, err := m.store.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if rec.State == store.StateRunning {
-		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
-			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
-			if err != nil {
-				return nil, err
-			}
-			m.mu.Lock()
-			m.sessions[rec.ID] = sess
-			m.mu.Unlock()
-			return sess, nil
-		}
-	}
-
-	// Deliberately not revived under this ID, and not revived under a new one either. Reviving in place
-	// would make an ID mean a second shell, and reviving elsewhere would return a session whose ID is
-	// not the one that was asked for, which is worse than failing: a caller that recorded an ID would
-	// be handed a different session without being told.
-	return nil, fmt.Errorf(
-		"session %s is %s; attach by one of its names to start a new shell with its content",
-		paths.FormatSessionID(id), rec.State)
 }
 
 // createWithID allocates an identity and creates the session under it.
@@ -948,9 +938,9 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	// Wait for a previous shim on this socket to go before spawning one that has to bind it.
 	//
 	// A shim stays reachable briefly after its shell exits, deliberately: it is the only thing that knows
-	// the exit status, so it lingers for exitGrace to be asked. Recreating a session under the same name
-	// inside that window meant the new shim found the socket taken and died with "already served by a live
-	// shim", while waitForShim below dialed the *old* shim, got an answer, and reported the new one ready.
+	// the exit status, so it lingers for exitGrace to be asked. Reviving a session under the same ID inside
+	// that window meant the new shim found the socket taken and died with "already served by a live shim",
+	// while waitForShim below dialed the *old* shim, got an answer, and reported the new one ready.
 	// The record was then left reading the previous incarnation's exit status with shell_pid 0, and nothing
 	// was running.
 	//

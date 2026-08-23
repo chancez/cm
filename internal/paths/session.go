@@ -132,3 +132,20 @@ func ValidateSessionID(id string) error {
 	}
 	return nil
 }
+
+// ValidateSessionRef reports whether a reference could name a session, whichever kind it is.
+//
+// What every command that takes a session should check, rather than ValidateSessionName. The two are not
+// interchangeable and the difference is not cosmetic: an ID reference contains '@', which a name may not,
+// so validating one as a name rejects it. That is how `cm attach @a7k2m9x4` came to fail with "session
+// name contains disallowed character '@'" while every unit test passed, since nothing below the CLI had
+// been given a reference to validate.
+//
+// It is also what a client re-execs with after a switch, so getting this wrong closed the window instead
+// of moving it.
+func ValidateSessionRef(ref string) error {
+	if value, isID := SessionRef(ref); isID {
+		return ValidateSessionID(value)
+	}
+	return ValidateSessionName(ref)
+}

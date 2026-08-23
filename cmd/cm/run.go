@@ -80,7 +80,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if session != "" {
-				if err := paths.ValidateSessionName(session); err != nil {
+				if err := paths.ValidateSessionRef(session); err != nil {
 					return err
 				}
 			}

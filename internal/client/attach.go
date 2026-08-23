@@ -200,6 +200,12 @@ type Result struct {
 	SessionID string
 	// Detached is true when the user detached rather than the session ending.
 	Detached bool
+	// SwitchTo is the session reference the server asked this client to show instead, or empty.
+	//
+	// Always empty by the time Attach returns: a switch is handled inside the reconnect loop, so a caller
+	// never sees one in progress. It lives here because the loop needs it out of runSession, which reads
+	// the server's event, and because a test can then assert what was asked for.
+	SwitchTo string
 	// Upgrade is true when the server asked this client to come back on a newer build rather than
 	// exit. Detached is also set, since an upgrade is a detach that returns.
 	//
@@ -270,6 +276,10 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// keeps running, so a server that is slow to come back is a reason to wait, not a reason to discard
 	// a terminal someone is using. The cancel signal is ctx, which a closing window delivers, so
 	// nothing waits forever against the user's wishes.
+	// ref is what each attempt asks for. It starts as whatever the caller gave, so the first Open is the
+	// request the user made, and becomes an ID or a switch target as the loop learns better.
+	ref := opts.Session
+
 	var outage outageState
 	for {
 		conn, cl, err := dial(opts.SocketPath)
@@ -292,10 +302,29 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		// ordinary restart silent on both sides rather than announcing a recovery nobody was told about.
 		outage.end(log)
 
-		outcome, err := runSession(ctx, tty, cl, opts, &result, &resumeFrom, &pending, winch, input, inputErr)
+		outcome, err := runSession(
+			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, input, inputErr)
 		conn.Close()
 
 		switch outcome {
+		case outcomeSwitch:
+			// The same process, the same terminal, the same input goroutine: only the session changes.
+			// Nothing is restored or re-rawed, so the screen goes straight from one session to the other,
+			// and `ps` keeps showing the command this window was started with.
+			ref = result.SwitchTo
+			// The position belongs to the session being left, and two sessions do not share a numbering,
+			// so the new one is repainted from its own screen rather than resumed.
+			resumeFrom = nil
+			// Input typed before the switch was meant for the session being left. Replaying it into the
+			// target would type someone else's keystrokes into another shell, so it is dropped, which is
+			// what replacing the process would have done anyway.
+			pending = pending[:0]
+			// None of these describe the attachment any more: it did not end, it is not upgrading, and
+			// the target has been consumed. Cleared so a caller cannot see a half-finished switch, and so
+			// "detached from ..." is not printed for a window that is still on screen.
+			result.Detached, result.Upgrade, result.SwitchTo = false, false, ""
+			log.Debug("switching this client to another session", "session", ref)
+			continue
 		case outcomeDone:
 			// Carried out so a replacement process can resume exactly here rather than repainting. Set
 			// only for an upgrade: every other way of finishing is a client that is not coming back, and
@@ -305,6 +334,11 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			return result, err
 		case outcomeReconnect:
+			// By ID from here on, which is what makes a reconnect a return to one particular session
+			// rather than a fresh request for whatever a name points at now.
+			if result.SessionID != "" {
+				ref = paths.FormatSessionID(result.SessionID)
+			}
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
 			outage.report(log)
 			if waitErr := outage.sleep(ctx); waitErr != nil {
@@ -415,6 +449,14 @@ const (
 	outcomeDone outcome = iota
 	// outcomeReconnect means the connection dropped but the session may still exist.
 	outcomeReconnect
+	// outcomeSwitch means the server asked this client to show a different session.
+	//
+	// Its own outcome rather than a flavour of outcomeReconnect, because the two differ in everything
+	// except looping: a reconnect resumes the same session from a recorded position after waiting out an
+	// outage, while this attaches to another session immediately, from the top, with the position and any
+	// pending input discarded. Sharing the branch would have made a switch wait out a backoff and log an
+	// outage that never happened.
+	outcomeSwitch
 )
 
 // runSession runs one connection's worth of attachment.
@@ -423,6 +465,10 @@ func runSession(
 	tty *TTY,
 	cl serverv1.ServerClient,
 	opts Options,
+	// ref is the session this attempt asks for: what the caller typed on the first attach, the session's
+	// ID on a reconnect, and the target on a switch. Passed in rather than derived from result, so the
+	// loop that knows which of the three this is decides, and this function does not have to infer it.
+	ref string,
 	result *Result,
 	resumeFrom **uint64,
 	pending *[]byte,
@@ -447,12 +493,6 @@ func runSession(
 
 	rows, cols := tty.Size()
 	xpixel, ypixel := tty.PixelSize()
-	// By ID once one is known, which is every reconnect: this is a *re*connection to one particular
-	// session, not a fresh request for whatever a name points at now.
-	ref := result.Session
-	if result.SessionID != "" {
-		ref = paths.FormatSessionID(result.SessionID)
-	}
 	open := opts.Open(ref)
 	open.Rows = uint32(rows)
 	open.Cols = uint32(cols)
@@ -610,6 +650,14 @@ func runSession(
 				// owns the terminal and the argv this process was started with; reported here so the
 				// reconnect loop stops rather than treating the close as an outage.
 				result.Upgrade = d.Upgrade
+				result.SwitchTo = d.SwitchTo
+				if d.SwitchTo != "" {
+					// Handled by looping rather than by finishing. Replacing the process would work and
+					// buys nothing here: an upgrade has to exec because the point is to run a different
+					// binary, while a switch runs the same one against a different session, which this
+					// loop already knows how to do because it is what a reconnect is.
+					return outcomeSwitch, nil
+				}
 				return outcomeDone, nil
 			}
 			if q := msg.resp.GetQuery(); q != nil {

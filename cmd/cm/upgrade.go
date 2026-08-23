@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/paths"
 )
 
 // resumeFromFlag is the hidden flag one client uses to hand its position to its replacement.
@@ -66,6 +67,13 @@ func reexecForUpgrade(argv []string) error {
 // session and orphan the first with the user's shell still in it, which is the worst thing this feature
 // could do.
 func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string {
+	// The reference this process was invoked with, read the way attach reads it: only the arguments before
+	// "--" can be a session, so a command after the dash is not mistaken for one.
+	typed := ""
+	if n := cmd.ArgsLenAtDash(); n != 0 && len(args) > 0 {
+		typed = args[0]
+	}
+
 	argv0 := "cm"
 	if len(os.Args) > 0 {
 		// Kept as invoked so `ps` shows what the user launched. The kernel takes the path to execute from
@@ -74,8 +82,33 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 	}
 	argv := []string{argv0, cmd.Name()}
 
-	// The resolved name, always, and before any "--" so it is not read as part of the command.
-	if res.Session != "" {
+	// The session to come back to, before any "--" so it is not read as part of the command.
+	//
+	// Whatever the caller typed, unchanged, and the ID only when they typed nothing. An earlier version
+	// wrote the ID always, on the reasoning that a name pointed elsewhere in the meantime could send the
+	// replacement to a different session than the one on screen. That traded a rare hazard for a routine
+	// one, and made a visible mess of `ps` besides.
+	//
+	// The routine one: a re-exec replaces the process image, so this argv is what the kernel reports from
+	// then on. A terminal emulator saving a session file from the *foreground process* therefore records
+	// it, and an upgrade rewriting it to an ID turned every window's saved command into one that attaches
+	// by identity. An ID never creates a session, deliberately, so a window restored after its session was
+	// gone came back dead instead of fresh, where a name would have recreated it. Upgrading is something
+	// people do casually, and losing a session to a reboot is ordinary, so the two meet often.
+	//
+	// What is given up is that a window whose name is rebound while it is attached follows the name on its
+	// next upgrade rather than staying on the session it was showing. That is defensible on its own terms:
+	// the name now means the other session, and following a binding is what every other attach does.
+	//
+	switch {
+	case typed != "":
+		argv = append(argv, typed)
+	case res.SessionID != "":
+		// Nothing was typed, so the server allocated the identity and it has to be written out: coming
+		// back with no reference at all would allocate a *second* session and orphan this one with the
+		// user's shell in it.
+		argv = append(argv, paths.FormatSessionID(res.SessionID))
+	case res.Session != "":
 		argv = append(argv, res.Session)
 	}
 

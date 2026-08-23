@@ -110,6 +110,17 @@ func (s *stubService) Signal(context.Context, *serverv1.SignalRequest) (*serverv
 func (s *stubService) Tag(context.Context, *serverv1.TagRequest) (*serverv1.TagResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Switch(context.Context, *serverv1.SwitchRequest) (*serverv1.SwitchResponse, error) {
+	panic("unused")
+}
+func (s *stubService) Bind(context.Context, *serverv1.BindRequest) (*serverv1.BindResponse, error) {
+	panic("unused")
+}
+func (s *stubService) Unbind(
+	context.Context, *serverv1.UnbindRequest,
+) (*serverv1.UnbindResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Read(context.Context, *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
 	panic("unused")
 }

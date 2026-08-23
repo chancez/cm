@@ -483,6 +483,13 @@ func printSessionsTableWidth(w io.Writer, sessions []*serverv1.Session, termCols
 	}
 	columns := []column{
 		{"NAME", func(s *serverv1.Session) string { return s.Name }},
+		// Always shown, unlike TAGS and TITLE below, and it costs eight columns of width to do it.
+		//
+		// Worth that: an ID is how a session is referred to when it matters that the reference cannot
+		// be pointed elsewhere, and a named session's ID appears nowhere else, so leaving it out would
+		// make the identity undiscoverable from the one command people run to find sessions. A session
+		// with no names shows the same value in NAME, since that is what it is called.
+		{"ID", func(s *serverv1.Session) string { return paths.FormatSessionID(s.Id) }},
 		{"PID", func(s *serverv1.Session) string { return fmt.Sprint(s.ShellPid) }},
 		{"CLIENTS", func(s *serverv1.Session) string { return fmt.Sprint(s.Clients) }},
 		{"STATE", sessionStateColumn},
@@ -615,6 +622,10 @@ func sessionFields(s *serverv1.Session) []struct {
 		value string
 	}{
 		{"name", j.Name},
+		{"id", paths.FormatSessionID(j.ID)},
+		// Every name, space separated, since a session can have several and `cm info` is where a person
+		// goes to find out what a session is. Empty for one nothing names.
+		{"names", strings.Join(j.Names, " ")},
 		{"state", state},
 		{"pid", fmt.Sprint(j.ShellPID)},
 		{"clients", fmt.Sprint(j.Clients)},
@@ -688,6 +699,13 @@ type killJSON struct {
 	// A caller that treats any survivor as failure can check this; one that does not is unaffected,
 	// which is why it does not set the exit status.
 	Surviving map[string][]int32 `json:"surviving"`
+	// Unbound maps a name that was released to the session it had pointed at, for a name bound with
+	// --borrow.
+	//
+	// Separate from Killed because the two are different outcomes: the session named here is still
+	// running, and a teardown script that counted this as a kill would report work destroyed that is
+	// still there, while one that treated it as a failure would retry something that already succeeded.
+	Unbound map[string]string `json:"unbound"`
 }
 
 // plural renders a count with its unit, choosing the form rather than hedging with "(s)".
@@ -715,7 +733,15 @@ func sortedKeys[V any](m map[string]V) []string {
 // The error is returned even in JSON mode, so a script can check the exit status rather than having
 // to inspect the payload, while still getting the detail if it wants it.
 func reportKill(w io.Writer, resp *serverv1.KillResponse, asJSON bool) error {
-	out := killJSON{Killed: resp.Killed, Errors: resp.Errors, Surviving: map[string][]int32{}}
+	out := killJSON{
+		Killed:    resp.Killed,
+		Errors:    resp.Errors,
+		Surviving: map[string][]int32{},
+		Unbound:   resp.Unbound,
+	}
+	if out.Unbound == nil {
+		out.Unbound = map[string]string{}
+	}
 	if out.Killed == nil {
 		// An empty array rather than null, so a script can iterate unconditionally.
 		out.Killed = []string{}
@@ -734,6 +760,13 @@ func reportKill(w io.Writer, resp *serverv1.KillResponse, asJSON bool) error {
 	} else {
 		for _, name := range out.Killed {
 			fmt.Fprintf(w, "killed %s\n", name)
+		}
+		// Said in full rather than as "unbound x", because the surprising half is what did *not* happen:
+		// the caller asked to kill and the session is still running, which they have to know to decide
+		// whether that was what they wanted.
+		for _, name := range sortedKeys(out.Unbound) {
+			fmt.Fprintf(w, "released %s, which named %s; that session is still running\n",
+				name, paths.FormatSessionID(out.Unbound[name]))
 		}
 		// To stderr, and after the killed lines, so a script reading stdout for names is unaffected
 		// while a person sees the warning next to what it refers to.

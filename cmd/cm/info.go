@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -53,15 +54,24 @@ line, so a selector plus a field is a list of that field across the group:
 				if err != nil {
 					return err
 				}
-				// Indexed rather than scanned per name, so N sessions cost one pass instead of N.
-				byName := make(map[string]*serverv1.Session, len(resp.Sessions))
+				// Indexed rather than scanned per reference, so N sessions cost one pass instead of N.
+				//
+				// Every way a session can be referred to goes in: each of its names, and its ID with the
+				// sigil. Only the displayed name was indexed before, so a session was findable by
+				// whichever name a listing happened to show and by nothing else, which made `cm info
+				// @<id>` report a session that was right there as not found.
+				byRef := make(map[string]*serverv1.Session, len(resp.Sessions))
 				for _, s := range resp.Sessions {
-					byName[s.Name] = s
+					byRef[s.Name] = s
+					byRef[paths.FormatSessionID(s.Id)] = s
+					for _, name := range s.Names {
+						byRef[name] = s
+					}
 				}
 
 				found := make([]*serverv1.Session, 0, len(names))
 				for _, name := range names {
-					s, ok := byName[name]
+					s, ok := byRef[name]
 					if !ok {
 						// Only reachable for a named session: a selector's names came from this same
 						// server, though a session could still end in between.

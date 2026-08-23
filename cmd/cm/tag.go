@@ -57,7 +57,7 @@ session's screen to work out what is running.`,
 			if err != nil {
 				return err
 			}
-			if err := paths.ValidateSessionName(name); err != nil {
+			if err := paths.ValidateSessionRef(name); err != nil {
 				return err
 			}
 			set, err := tags.ParseAll(tagArgs)

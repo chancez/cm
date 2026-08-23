@@ -70,13 +70,16 @@ func TestUpgradeArgv(t *testing.T) {
 			// The case that matters: no name was typed, so the resolved one must appear.
 			name: "server-allocated name is made explicit",
 			argv: nil,
-			res:  client.Result{Session: "s7", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "s7", "--resume-from-seq=4242"},
+			res:  client.Result{Session: "s7", SessionID: "aaaa2222", ResumeFrom: &seq},
+			want: []string{"cm", "attach", "@aaaa2222", "--resume-from-seq=4242"},
 		},
 		{
+			// The case this exists for now: the ID is known and the name still wins, so `ps` keeps
+			// showing what was typed and a session file saved from the live process keeps a name, which
+			// recreates a session where an ID would refuse.
 			name: "a typed name is preserved",
 			argv: []string{"work"},
-			res:  client.Result{Session: "work", ResumeFrom: &seq},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{"cm", "attach", "work", "--resume-from-seq=4242"},
 		},
 		{
@@ -84,15 +87,15 @@ func TestUpgradeArgv(t *testing.T) {
 			// argv meant guessing which bare word was the session name, and /tmp here was taken for it.
 			name: "a flag value is not mistaken for the session name",
 			argv: []string{"--dir", "/tmp"},
-			res:  client.Result{Session: "s7", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "s7", "--dir=/tmp", "--resume-from-seq=4242"},
+			res:  client.Result{Session: "s7", SessionID: "aaaa2222", ResumeFrom: &seq},
+			want: []string{"cm", "attach", "@aaaa2222", "--dir=/tmp", "--resume-from-seq=4242"},
 		},
 		{
 			// Repeatable flags render as "[a,b]" through Value.String(), which would be passed on as one
 			// literal value with brackets in it.
 			name: "a repeatable flag becomes one argument each",
 			argv: []string{"work", "--env", "A=1", "--env", "B=2"},
-			res:  client.Result{Session: "work", ResumeFrom: &seq},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{
 				"cm", "attach", "work",
 				"--env=A=1", "--env=B=2",
@@ -104,7 +107,7 @@ func TestUpgradeArgv(t *testing.T) {
 			// takes effect instead of being pinned to the old one's value.
 			name: "unset flags are omitted",
 			argv: []string{"work", "--read-only"},
-			res:  client.Result{Session: "work", ResumeFrom: &seq},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{"cm", "attach", "work", "--read-only=true", "--resume-from-seq=4242"},
 		},
 		{
@@ -112,7 +115,7 @@ func TestUpgradeArgv(t *testing.T) {
 			// the opposite of resuming, so the flag is left off and the replacement repaints.
 			name: "no position means no flag",
 			argv: []string{"work"},
-			res:  client.Result{Session: "work"},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222"},
 			want: []string{"cm", "attach", "work"},
 		},
 		{
@@ -120,7 +123,7 @@ func TestUpgradeArgv(t *testing.T) {
 			// won would depend on parse order.
 			name: "a previous position is replaced rather than repeated",
 			argv: []string{"work", "--resume-from-seq=11"},
-			res:  client.Result{Session: "work", ResumeFrom: &seq},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{"cm", "attach", "work", "--resume-from-seq=4242"},
 		},
 		{
@@ -128,11 +131,18 @@ func TestUpgradeArgv(t *testing.T) {
 			// after the name rather than being read as one.
 			name: "a command after a dash is preserved",
 			argv: []string{"work", "--", "/bin/sh", "-l"},
-			res:  client.Result{Session: "work", ResumeFrom: &seq},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{
 				"cm", "attach", "work", "--resume-from-seq=4242",
 				"--", "/bin/sh", "-l",
 			},
+		},
+		{
+			// An ID typed by hand comes back as typed too, rather than being reformatted.
+			name: "a typed ID reference is kept",
+			argv: []string{"@aaaa2222"},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222"},
+			want: []string{"cm", "attach", "@aaaa2222"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

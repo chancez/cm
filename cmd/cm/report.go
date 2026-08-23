@@ -69,7 +69,7 @@ For a coding agent, wire this to whatever hook the agent already has for
 			if err != nil {
 				return err
 			}
-			if err := paths.ValidateSessionName(name); err != nil {
+			if err := paths.ValidateSessionRef(name); err != nil {
 				return err
 			}
 

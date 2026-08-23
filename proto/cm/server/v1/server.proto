@@ -74,6 +74,21 @@ service Server {
   // metadata would create the session if the name were wrong.
   rpc Tag(TagRequest) returns (TagResponse);
 
+  // Bind points a name at a session, and Unbind removes a name.
+  //
+  // Separate calls rather than flags on Attach because neither one attaches: naming a session that
+  // already exists has no terminal to wire up, and an attach that also bound would create a session when
+  // the name was wrong.
+  rpc Bind(BindRequest) returns (BindResponse);
+  rpc Unbind(UnbindRequest) returns (UnbindResponse);
+
+  // Switch points a session's client at a different session, in place.
+  //
+  // The client replaces itself rather than exiting, so the window it owns never resets. That is the same
+  // mechanism UpgradeClients uses, and a separate call because the two differ in what comes back: an
+  // upgrade returns to the same session on a newer build, this returns to a different session.
+  rpc Switch(SwitchRequest) returns (SwitchResponse);
+
   // Detach disconnects a session's clients, leaving the session running.
   //
   // The detach key covers the interactive case and cannot cover this one. A key is delivered to
@@ -556,6 +571,27 @@ message Detached {
   // worse outcome than upgrading but not a broken one, and it is the reason `cm client upgrade` reports
   // which clients it asked.
   bool upgrade = 1;
+
+  // Asks the client to come back attached to a different session, named by this reference.
+  //
+  // Set by Switch, which is how a terminal window is pointed at another session without closing it.
+  //
+  // Sent on the same event as upgrade because both are the server saying "stop reading this session", and
+  // a client acts on them differently. An upgrade replaces the process, since the point is to run a
+  // different binary. A switch does not: the client reattaches inside its own process, which keeps its
+  // terminal, its process id, and the command `ps` shows for it, and reuses the loop it already runs
+  // whenever a server restarts.
+  //
+  // It must not resume from its recorded position either way. That position counts bytes in the old
+  // session's stream, and a resume against a different session asks for a place its log does not have,
+  // which slices the front off whatever escape sequence lands at the boundary. Switching repaints from
+  // the new session's screen instead.
+  //
+  // A reference rather than an ID, because which one is meant depends on the switch. An ordinary switch
+  // sends an ID, so the client lands on exactly the session asked for. A switch that rebound this
+  // window's own name sends that name, which can still recreate the session if it has gone in the
+  // meantime, where an ID would only fail.
+  string switch_to = 2;
 }
 
 // Metadata reports what the shell has said about itself, so a client can act on it.
@@ -890,11 +926,97 @@ message KillResponse {
   // Empty is also what an older shim reports, so this cannot distinguish "nothing survived" from "the
   // shim does not check". That only ever costs a warning, which is why it needs no capability probe.
   map<string, SurvivingProcesses> surviving = 3;
+
+  // References that released a name instead of killing anything, with the session each one had pointed
+  // at.
+  //
+  // A name records what killing by it means, because the caller is usually a terminal emulator's
+  // window-close watcher: it fires for every window and cannot know whether that window is where a
+  // session lives or borrowed it from elsewhere. A borrowed name releases and the session keeps running,
+  // which is the session equivalent of detaching.
+  //
+  // Reported separately from killed rather than folded into it, since "your session is gone" and "this
+  // window let go of a session that is still running" are answers a caller must be able to tell apart.
+  map<string, string> unbound = 4;
 }
 
 // SurvivingProcesses lists pids that outlived a signal.
 message SurvivingProcesses {
   repeated int32 pids = 1;
+}
+
+message SwitchRequest {
+  // The session whose client should switch, as a name or an "@id". This is the window's current session,
+  // which a command running inside it reads from CM_SESSION.
+  string session = 1;
+  // The session to switch to, as a name or an "@id".
+  string target = 2;
+  // Point this session's name at the target as well, so the switch survives the terminal restarting.
+  //
+  // Without it the switch lasts as long as the client. A terminal emulator's launch command is fixed when
+  // the window is created and saved verbatim, so on restore the window re-runs that command and comes
+  // back to the session it originally made. Binding the name it uses is the only thing that changes where
+  // that lands.
+  //
+  // The name bound is the one this session is known by. A session with no name has nothing to bind, and
+  // the call says so rather than silently switching for this client only.
+  bool bind = 3;
+  // Switch every client of the session rather than only the one someone is using.
+  //
+  // Off by default: a switch is about one window, and the active client is the one that typed the command
+  // that asked for it, which is causally the right window. Several clients on one session are separate
+  // windows, and moving all of them because one asked is the opposite of the request.
+  bool all_clients = 4;
+}
+
+message SwitchResponse {
+  // How many clients were asked to switch. Zero when no active client could be named, which happens when
+  // nothing has been typed in the session since a client attached.
+  uint32 asked = 1;
+  // The session switched to, and the reference the clients were given.
+  string target_id = 2;
+  string switched_to = 3;
+  // The name that was rebound, empty when bind was not asked for.
+  string bound_name = 4;
+}
+
+message BindRequest {
+  // The name to bind. Not a reference: an ID cannot be bound to anything, since it is what names point at.
+  string name = 1;
+  // The session to point it at, as a name or an "@id" reference.
+  string session = 2;
+  // Allow repointing a name that already names something.
+  //
+  // Off by default because the two intents are far apart and only one of them is reversible by accident.
+  // Naming a session is ordinary; quietly taking a name off the session a terminal window is watching is
+  // how that window comes back somewhere its user did not put it.
+  bool move = 3;
+  // Whether killing by this name releases the name instead of killing the session.
+  //
+  // For a name pointed at a session that already existed, where the window using it is a borrower rather
+  // than its home. Off by default, because `cm kill <name>` killing the session is what it has always
+  // meant.
+  bool borrow = 4;
+}
+
+message BindResponse {
+  // The session the name now points at, so a caller sees what it got rather than what it asked for.
+  string session_id = 1;
+  // What the name pointed at before, empty when it pointed at nothing. A caller that passed move needs to
+  // be able to say what moved.
+  string previous_session_id = 2;
+}
+
+message UnbindRequest {
+  string name = 1;
+}
+
+message UnbindResponse {
+  // Whether a name was actually removed. False means nothing was bound, which is not an error: the
+  // caller wanted the name gone and it is.
+  bool removed = 1;
+  // The session it had pointed at, for a caller reporting what was released.
+  string session_id = 2;
 }
 
 message SendRequest {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -111,7 +112,19 @@ func sessionNames(ctx context.Context, g *globals, prefix string) ([]string, err
 		if s.Title != "" {
 			desc += ", " + s.Title
 		}
-		out = append(out, s.Name+"\t"+desc)
+		// Names, and an ID reference for a session that has none.
+		//
+		// Both, rather than one or the other: a name is what a person types, and a session with no name
+		// is otherwise impossible to complete at all, which is the case `cm attach` with no argument and
+		// `cm run -d` both produce. Not both for every session, which would double every candidate list
+		// with values nobody types when a name exists.
+		if len(s.Names) == 0 {
+			out = append(out, paths.FormatSessionID(s.Id)+"\t"+desc)
+			continue
+		}
+		for _, name := range s.Names {
+			out = append(out, name+"\t"+desc)
+		}
 	}
 	return out, nil
 }

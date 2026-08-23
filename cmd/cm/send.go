@@ -108,7 +108,7 @@ follower connects, which for a fast command can be all of it.`,
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			if err := paths.ValidateSessionName(name); err != nil {
+			if err := paths.ValidateSessionRef(name); err != nil {
 				return err
 			}
 			data := strings.Join(args[1:], " ")

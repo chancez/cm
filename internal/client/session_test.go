@@ -190,6 +190,15 @@ func (s *fakeStream) detached() {
 	})
 }
 
+// switchTo queues the server asking this client to show a different session.
+func (s *fakeStream) switchTo(ref string) {
+	s.push(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Detached{
+			Detached: &serverv1.Detached{Upgrade: true, SwitchTo: ref},
+		},
+	})
+}
+
 // fakeClient is a ServerClient that hands out a prepared stream.
 type fakeClient struct {
 	stream *fakeStream
@@ -243,6 +252,17 @@ func (c *fakeClient) Signal(context.Context, *serverv1.SignalRequest) (*serverv1
 	panic("unused")
 }
 func (c *fakeClient) Tag(context.Context, *serverv1.TagRequest) (*serverv1.TagResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) Switch(context.Context, *serverv1.SwitchRequest) (*serverv1.SwitchResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) Bind(context.Context, *serverv1.BindRequest) (*serverv1.BindResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) Unbind(
+	context.Context, *serverv1.UnbindRequest,
+) (*serverv1.UnbindResponse, error) {
 	panic("unused")
 }
 func (c *fakeClient) Read(context.Context, *serverv1.ReadRequest) (*serverv1.ReadResponse, error) {
@@ -393,9 +413,11 @@ func newPtyHarness(t *testing.T, rows, cols uint16) *harness {
 }
 
 // run calls runSession and returns its outcome.
+//
+// The reference is the harness's own session name, which is what Attach passes on a first attach.
 func (h *harness) run(ctx context.Context) (outcome, error) {
 	h.t.Helper()
-	return runSession(ctx, h.tty, h.client, h.opts, &h.result,
+	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, &h.result,
 		&h.resumeFrom, &h.pending, h.winch, h.input, h.inputErr)
 }
 

@@ -67,7 +67,7 @@ receives it and the window closes instead of detaching.`,
 			var session string
 			if n := cmd.ArgsLenAtDash(); n != 0 && len(args) > 0 {
 				session = args[0]
-				if err := paths.ValidateSessionName(session); err != nil {
+				if err := paths.ValidateSessionRef(session); err != nil {
 					return err
 				}
 			}

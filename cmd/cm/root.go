@@ -101,6 +101,10 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newReportCommand(g),
 		newTagCommand(g),
 		newUpgradeCommand(g),
+		newSwitchCommand(g),
+		newRebindCommand(g),
+		newBindCommand(g),
+		newUnbindCommand(g),
 		newSignalCommand(g),
 		newDoctorCommand(g),
 		newDetachCommand(g),
@@ -196,7 +200,7 @@ func sessionNameArg(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("expected exactly one session name, got %d", len(args))
 	}
-	return paths.ValidateSessionName(args[0])
+	return paths.ValidateSessionRef(args[0])
 }
 
 // config resolves and loads the configuration file.

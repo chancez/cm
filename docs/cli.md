@@ -3,10 +3,40 @@
 Notes on using cm from a script or a shell startup file. For the config file, see
 [config.md](config.md).
 
+## Naming a session, and referring to one
+
+Every command that takes a session takes a *reference*, which is either a name or an ID with an `@` in
+front of it. `@` cannot appear in a name, so the two can never be confused, whatever a session is called.
+
+```
+cm attach work            # by name
+cm attach @a7k2m9x4       # by identity
+```
+
+Which to use in a script is a real choice rather than a style question. A name is a binding and can be
+pointed at a different session at any time, by `cm bind` or by `cm switch`, so anything that records a
+session and comes back to it later should record the ID: `cm list --json` reports it as `id`, and a session
+answers to it for as long as it exists. `CM_SESSION` inside a session is the ID for exactly this reason, so
+`cm read $CM_SESSION` cannot end up reading somewhere else.
+
+A session may also have no name at all, which is what `cm attach` with no argument and `cm run -d` produce.
+`cm list` shows such a session by its ID reference in the NAME column, so whatever is printed can be pasted
+straight back into another command.
+
+`cm switch` moves this window's client to another session and leaves every name alone, so a restarted
+terminal returns to the session it always named. `cm rebind` moves the window's name as well, which is what
+makes it stick. `cm bind` and `cm unbind` manage names: between them they cover renaming a session, giving it a second
+name, and moving a name to another session. `cm bind --borrow` marks a name whose kill releases the name
+instead of killing the session, which is what a per-window name wants once its window is borrowing a
+session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
+teardown script should treat them apart: the session named there is still running.
+
 ## JSON output
 
-`list`, `info`, `kill`, `get-env`, `tag`, `wait`, `send`, `run`, `status`, `doctor`, `config`,
-`version`, `detach`, `upgrade`, `clients`, `clients list`, and `clients current` accept `--json`.
+`list`, `info`, `kill`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
+`doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`, and
+`clients current` accept
+`--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.
 Fields are only ever added, never renamed or removed, and a test asserts the exact key set.

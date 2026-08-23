@@ -111,7 +111,7 @@ fails rather than falling back.`,
 // inside. That is what makes a prompt hook work with no arguments.
 func resolveSession(args []string) (string, error) {
 	if len(args) == 1 {
-		if err := paths.ValidateSessionName(args[0]); err != nil {
+		if err := paths.ValidateSessionRef(args[0]); err != nil {
 			return "", err
 		}
 		return args[0], nil

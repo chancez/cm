@@ -66,7 +66,7 @@ its input is dropped, so it never types.`,
 			if err != nil {
 				return err
 			}
-			if err := paths.ValidateSessionName(name); err != nil {
+			if err := paths.ValidateSessionRef(name); err != nil {
 				return err
 			}
 			dirs, err := g.dirs()

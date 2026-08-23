@@ -108,13 +108,11 @@ downgrade the shim logs and nobody reads; and a session whose reported state has
 implausibly long, which usually means a reporter crashed between its start and end report and left the
 session permanently un-waitable.
 
-**Session rename.** A name is chosen when a session is created and cannot change, so a session that turns
-out to be something else keeps a misleading name for its lifetime. The store keys on the name and the shim
-socket is derived from it, so a rename is either a store migration plus a socket move, or a display name
-kept separate from the identity. The second is much cheaper and probably right.
-
-Less pressing now that tags exist, since a mislabelled session can be retagged without being renamed. What
-remains is only the display: `cm attach` and every other command still take the original name.
+**Session rename.** Done, and not the way this entry proposed. It described keeping a display name separate
+from the identity, which is the cheaper half of the right answer; what shipped went the other way and made
+the ID the identity, so a name is nothing *but* a display name. Renaming is `cm bind` plus `cm unbind`, a
+session can have several names, and `cm switch` points a terminal window at another session. See
+`docs/architecture.md`.
 
 ## Driving sessions programmatically
 

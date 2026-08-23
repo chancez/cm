@@ -389,14 +389,19 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			// The upgrade flag is read here rather than carried on the channel, which is a bare signal.
 			// It is set before the close for that reason, so by the time this wakes it is already there.
 			upgrade := sess.isUpgrading(att.token)
+			switchTo := sess.switchTarget(att.token)
 			_ = srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Detached{
-					Detached: &serverv1.Detached{Upgrade: upgrade},
+					Detached: &serverv1.Detached{Upgrade: upgrade, SwitchTo: switchTo},
 				},
 			})
-			if upgrade {
+			switch {
+			case switchTo != "":
+				s.mgr.log.Info("client asked to switch",
+					"session", sess.id, "switch_to", switchTo)
+			case upgrade:
 				s.mgr.log.Info("client asked to upgrade", "session", sess.id)
-			} else {
+			default:
 				s.mgr.log.Info("client detached on request", "session", sess.id)
 			}
 			return nil
@@ -778,12 +783,17 @@ func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
 	for _, ref := range req.Sessions {
 		name := ref
-		id, err := s.mgr.Resolve(ctx, ref)
-		if err != nil {
-			resp.Errors[name] = trimNamePrefix(err.Error(), name)
+		outcome, err := s.killRef(ctx, ref, req.Force, req.Signal)
+		if err == nil && outcome.unboundFrom != "" {
+			// The name was a borrower, so it let go and the session runs on. Reported apart from
+			// killed, since a caller has to be able to tell that from its session being gone.
+			if resp.Unbound == nil {
+				resp.Unbound = make(map[string]string)
+			}
+			resp.Unbound[name] = outcome.unboundFrom
 			continue
 		}
-		surviving, err := s.mgr.Kill(ctx, id, req.Force, req.Signal)
+		surviving := outcome.surviving
 		if err != nil {
 			// The map is already keyed by name, so a message that repeats it reads as
 			// `nosuch: "nosuch": session not found`. Strip the redundant prefix.

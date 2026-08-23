@@ -205,6 +205,14 @@ type Session struct {
 	// reader wakes as soon as the channel closes, so a flag set afterwards would sometimes arrive too
 	// late and the client would exit instead of coming back.
 	upgrading map[*attachToken]bool
+	// switching maps an eviction to the session reference the client should come back attached to, for
+	// the evictions that are switches rather than upgrades.
+	//
+	// A reference rather than an ID because the caller decides which is right: an ordinary switch sends an
+	// ID so the client lands on exactly that session, while a switch that rebound this window's name sends
+	// the name, which can recreate the session if it has gone in the meantime where an ID would only
+	// fail.
+	switching map[*attachToken]string
 	// queries holds each attachment's channel for questions cm needs that client to answer: the
 	// background colour, the clipboard, the window's pixel size. Keyed like evicts, and removed by detach.
 	//
@@ -1946,7 +1954,7 @@ func (s *Session) setRestored(blob []byte) {
 // Idempotent. A second call while the first eviction is still in flight finds the channel already
 // closed and skips it, so a retry cannot panic on a double close.
 func (s *Session) EvictClients() int {
-	asked, _ := s.evictClients(false, "", false)
+	asked, _ := s.evictClients(false, "", false, "")
 	return asked
 }
 
@@ -1965,7 +1973,17 @@ func (s *Session) EvictClients() int {
 // activeOnly upgrades just the client someone is using, leaving every other window attached to the same
 // session alone. Zero asked when no active client can be named, rather than upgrading all of them.
 func (s *Session) UpgradeClients(force bool, current string, activeOnly bool) (asked, alreadyCurrent int) {
-	return s.evictClients(true, map[bool]string{true: "", false: current}[force], activeOnly)
+	return s.evictClients(true, map[bool]string{true: "", false: current}[force], activeOnly, "")
+}
+
+// SwitchClients asks clients to come back attached to another session, named by ref.
+//
+// The same in-place replacement an upgrade uses, which is what keeps the window from resetting: the
+// client execs over itself without restoring the terminal, so the screen goes straight from one session
+// to the other. Zero asked when activeOnly is set and no client can be named as the active one.
+func (s *Session) SwitchClients(ref string, activeOnly bool) (asked int) {
+	asked, _ = s.evictClients(true, "", activeOnly, ref)
+	return asked
 }
 
 // evictClients closes each client's eviction channel, optionally marking the request as an upgrade.
@@ -1979,7 +1997,9 @@ func (s *Session) UpgradeClients(force bool, current string, activeOnly bool) (a
 // activeOnly restricts the eviction to the client someone is using. With no active client to name,
 // nothing is asked and nothing is skipped: the caller asked for one specific window and cm does not know
 // which it is, so acting on all of them would be the opposite of the request.
-func (s *Session) evictClients(upgrade bool, skipVersion string, activeOnly bool) (asked, skipped int) {
+func (s *Session) evictClients(
+	upgrade bool, skipVersion string, activeOnly bool, switchTo string,
+) (asked, skipped int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2021,6 +2041,15 @@ func (s *Session) evictClients(upgrade bool, skipVersion string, activeOnly bool
 				}
 				s.upgrading[tok] = true
 			}
+			// Recorded before the close for the same reason as the upgrade flag: closing the channel is
+			// what wakes the loop that reads this, so setting it afterwards would race that loop and send
+			// a bare upgrade, which reattaches to the session the client is leaving.
+			if switchTo != "" {
+				if s.switching == nil {
+					s.switching = make(map[*attachToken]string, 1)
+				}
+				s.switching[tok] = switchTo
+			}
 			close(ch)
 			asked++
 		}
@@ -2038,6 +2067,13 @@ func (s *Session) isUpgrading(tok *attachToken) bool {
 	return s.upgrading[tok]
 }
 
+// switchTarget returns the session reference this attachment was asked to switch to, or empty.
+func (s *Session) switchTarget(tok *attachToken) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.switching[tok]
+}
+
 // detach releases a subscriber, reporting whether it was the last one.
 func (s *Session) detach(a attachment) (last bool) {
 	a.reader.Close()
@@ -2052,6 +2088,7 @@ func (s *Session) detach(a attachment) (last bool) {
 		// the session, and since tokens are pointers a later one could reuse the address and be treated
 		// as an upgrade it never asked for.
 		delete(s.upgrading, a.token)
+		delete(s.switching, a.token)
 		// Any question still outstanding with this client will never be answered now, so it is released
 		// rather than left to expire. Waiting for the timeout would hold every reply queued behind it for
 		// up to requestTimeout after the client that could have answered has gone.
