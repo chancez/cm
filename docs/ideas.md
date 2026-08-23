@@ -27,33 +27,50 @@ convenient way back. It is expressible: the window's name still points at the or
 After a `cm rebind` it is worse, because no name points at the original at all and it appears in `cm list`
 only as an unnamed `@id`.
 
-The shape settled on, without being built: `--prev` returns to the session this window was on before its
-last move, and `--reset` to the first session this client attached to. On both verbs, since a rebind should
-be able to take the name back with it.
+The shape: `--prev` returns to the session this window was on before its last move, and `--reset` to the
+first session this client attached to.
 
-Two values, not a stack, and that is the decision worth recording. A real pushd/popd history invites
-questions that have no obvious answers -- when entries expire, what happens when the session at one of them
-has died, what "back" means after a fourth hop -- and the two flags above need only "the previous one" and
-"the first one". `--prev` therefore toggles, which is what `cd -` does and what `tmux switch-client -l`
-does. A stack remains possible later and should be treated as its own feature rather than as an extension
-of this.
+**The client keeps the history, and the server keeps nothing.** This looks like it needs server-side state
+and does not. The client is the one process that survives every switch, now that a switch reattaches in
+place rather than re-execing, so it can hold the whole history in memory for as long as the window lives. It
+then attaches to a session out of that history exactly as it would to any other, and the server learns the
+target as the ordinary `Open` of the new attachment, indistinguishable from a fresh attach.
 
-Where the state lives is the part that looks obvious and is not. The client can hold it indefinitely, and is
-the natural keeper: it is the one process that survives every switch, since a switch reattaches in place
-rather than re-execing. But the command is typed *inside the session*, so it arrives at the server, which is
-a different process from the client entirely. So either the client reports the two values on each `Open` and
-the server answers from its copy, or the server forwards a directive ("go back one") and the client resolves
-it from memory.
+What the server does is relay the request, and only because the request and the knowledge are in different
+processes: `cm switch --prev` is a separate CLI process running inside the session, it can reach the server,
+and it has no channel to the client at all. So the server-to-client event that already carries a switch
+target grows a second shape it never looks inside -- "go back one" or "go back to the first" -- which it does
+not resolve, validate, or store. Calling that tracking would be wrong, and so would calling it forwarding a
+target: the server never knows where the client went.
 
-Reporting them is the better of the two. It reuses the switch path exactly, including the check that the
-target still exists before any window moves, which the forwarding version cannot do: a client that resolved
-the target itself and found it gone would land in its reconnect loop against a session that will never
-answer. It also makes the values visible, so `cm clients list` could show where a window came from, which
-addresses the discovery half of this even for someone who never types `--prev`.
+A design that removes even the relay: make it a *key* rather than a command. The client already intercepts
+one, the detach key, so a "go back" key needs no server involvement whatsoever, which is also how tmux does
+its last-session binding. It is not a replacement, because a key cannot be scripted or bound from a kitten
+and each operation needs one of its own, but it is the cheapest possible version and worth knowing about
+before building the plumbing.
 
-What it costs: two fields on `Open`, two more per attachment in the server, and an answer for a target that
-has since been killed. Refusing, and saying which of the two was asked for, is the honest one; falling back
-to something else is how a command stops being trustworthy.
+The alternative was for the client to report its history on each `Open` so the server could resolve it.
+Rejected: it duplicates state the client already owns, and the only thing it bought was checking the target
+exists before any window moves, which turned out to be a separate bug rather than an argument. See below.
+
+Since the client owns it, a list costs nothing more than two values, so `--prev` can be a real step
+backwards rather than a toggle. What that opens up is **skipping**: a candidate whose session has since been
+killed can be passed over for the next one, which is only possible with more than one candidate to try. The
+client is also the only place that can try cheaply, since it can attempt the attach and move on. Running out
+of candidates is an error naming what was asked for; falling back to something unrelated is how a command
+stops being trustworthy.
+
+A prerequisite, now fixed, was in the way of all of it: a client attaching to a session that does not exist
+retried silently forever, because an ID that resolves to nothing is refused rather than created. `cm attach
+@deadbeef` printed nothing and held the window. Skipping a dead candidate is impossible while a dead
+candidate hangs instead of failing, so the fail-fast fix is what makes this buildable at all.
+
+The one thing that does need the server: `cm rebind --prev` would have to write a binding, and only the
+server can, so it would need the target rather than a directive. Two ways out, and neither is decided.
+Back-navigation could be switch-only, with moving a name back left to an explicit `cm rebind` once the
+target is known; or the client could report its history purely so the server can offer it, which is also
+what a "came from" column in `cm clients list` would need, and that column answers the discovery half of
+this for someone who never types the flag.
 
 **Alternate-screen scrollback.** A full-screen program draws on the alternate screen, and lines that
 scroll off there are gone: `cm read --lines` cannot recover them, because they never entered scrollback.

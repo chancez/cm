@@ -115,3 +115,35 @@ func TestAttachByIDRevivesAndKeepsTheID(t *testing.T) {
 
 	e.mustRun("kill", "@"+after)
 }
+
+// A reference naming a session that does not exist must fail, promptly and out loud.
+//
+// It hung instead, silently: an ID that resolves to nothing is refused by the server rather than created,
+// unlike a name, so the client's reconnect loop retried forever against a session that would never appear.
+// `cm attach @deadbeef` printed nothing and held the window. Reachable only since a reference could name an
+// identity, because before that every reference either found a session or made one, which is why no existing
+// test covered it.
+//
+// Driven on a pty because the behavior under test is the attach loop, which a client without a terminal
+// never enters.
+func TestAttachByAnUnknownIDFailsRatherThanRetrying(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	// A session exists, so the server is up and this is about the reference rather than about reaching it.
+	e.mustRun("attach", "--no-attach", "real")
+
+	c := attachOnPty(t, e, "@deadbeef")
+	// Promptly: the point is that it does not sit in the retry loop. A client that reconnects every 100ms
+	// would still be running well past this.
+	c.waitExit(15 * time.Second)
+
+	if got := c.output(); !strings.Contains(got, "deadbeef") {
+		t.Errorf("client output = %q, want it to name the reference it could not find", got)
+	}
+
+	// And it created nothing on the way out, since an ID is issued rather than chosen.
+	if got := len(e.list()); got != 1 {
+		t.Errorf("%d sessions afterwards, want only the one created above", got)
+	}
+}

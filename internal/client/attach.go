@@ -334,6 +334,22 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			return result, err
 		case outcomeReconnect:
+			// A session that was never opened, refused for a reason of its own, is not something to retry.
+			//
+			// Retrying was silent and forever: `cm attach @deadbeef` printed nothing and sat in this loop,
+			// because an ID that resolves to nothing is refused by the server rather than created, unlike a
+			// name. A typo therefore hung a window with no message. Reachable only since references could
+			// name an identity; before that every reference either found a session or made one.
+			//
+			// Scoped by both conditions rather than one. Never-opened alone would break a first attach that
+			// raced a server restart, where the Open fails because the server is going away and the retry
+			// is what makes it work. A closed transport is that case, and it is the same distinction
+			// `cm server restart` and `cm kill` already draw on. Once a session has been opened, every
+			// failure is an outage and is waited out however long it takes, which is the behavior that
+			// keeps a window alive across a restart.
+			if result.SessionID == "" && err != nil && !transport.IsClosed(err) {
+				return result, err
+			}
 			// By ID from here on, which is what makes a reconnect a return to one particular session
 			// rather than a fresh request for whatever a name points at now.
 			if result.SessionID != "" {
