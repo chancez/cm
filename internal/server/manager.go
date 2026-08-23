@@ -65,6 +65,8 @@ type Manager struct {
 	// persistence is set to: a shim log is written for every session, and gating it on persist.enabled
 	// is the mistake that left a default install with no expiry at all.
 	shimLogRetention time.Duration
+	// dbBackupRetention is how long a snapshot taken before a schema migration is kept.
+	dbBackupRetention time.Duration
 	// resizePolicy is applied to every session created or adopted. Empty behaves as ResizeLeader.
 	resizePolicy ResizePolicy
 	// socketInode is the inode of the server socket as bound at startup, or zero when unknown.
@@ -156,6 +158,27 @@ func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }
 
 // SetShimLogRetention sets how long an exited shim's diagnostic log is kept. Zero disables pruning.
 func (m *Manager) SetShimLogRetention(d time.Duration) { m.shimLogRetention = d }
+
+// SetDatabaseBackupRetention sets how long a pre-migration snapshot of the database is kept.
+func (m *Manager) SetDatabaseBackupRetention(d time.Duration) { m.dbBackupRetention = d }
+
+// ExpireDatabaseBackups removes pre-migration snapshots past their retention, returning how many went.
+//
+// Swept on a schedule rather than deleted when a migration succeeds, because a snapshot exists for a
+// rollback and a rollback happens later or not at all. See store.ExpireBackups for why an age limit is the
+// right bound rather than merely a convenient one.
+//
+// Kept out of ExpireDeadSessions for the same reason PruneShimLogs is: that walks records and deletes rows,
+// while this walks files no record ever described.
+func (m *Manager) ExpireDatabaseBackups(now time.Time) (int, error) {
+	removed, err := store.ExpireBackups(m.dirs.Database(), m.dbBackupRetention, now)
+	for _, path := range removed {
+		// One line each rather than a count. There are at most a handful, and a snapshot disappearing is
+		// the kind of thing someone hunting for a way to roll back needs to find evidence of.
+		m.log.Info("removed a pre-migration database snapshot past its retention", "path", path)
+	}
+	return len(removed), err
+}
 
 // SetServerSocketInode records which socket this server is actually serving on.
 //

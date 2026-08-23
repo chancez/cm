@@ -62,8 +62,11 @@ type configJSON struct {
 	ForgetAfter     string `json:"forget_unpersisted_after"`
 	// ShimLogRetention is reported like the other retention settings, since "my setting does nothing" is
 	// the question this command exists to answer, and a value that cannot be read back cannot be checked.
-	ShimLogRetention string   `json:"shim_log_retention"`
-	EnvCapture       []string `json:"env_capture"`
+	ShimLogRetention string `json:"shim_log_retention"`
+	// DatabaseBackupRetention, for the same reason: a snapshot is what a rollback needs, so how long one
+	// survives is worth being able to read back before finding out by needing it.
+	DatabaseBackupRetention string   `json:"database_backup_retention"`
+	EnvCapture              []string `json:"env_capture"`
 }
 
 func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -112,6 +115,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	if err != nil {
 		return err
 	}
+	dbBackupRetention, err := cfg.KeepDatabaseBackupsFor()
+	if err != nil {
+		return err
+	}
 	shimLogRetention, err := cfg.KeepShimLogsFor()
 	if err != nil {
 		return err
@@ -143,14 +150,16 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Spelled "never" rather than "0s" when pruning is off, since zero here means "keep every shim log"
 		// rather than "prune immediately", and "0s" reads as the second.
 		ShimLogRetention: durationOrNever(shimLogRetention),
-		EnvCapture:       cfg.EnvPatterns(),
+		// Also "never" rather than "0s" when disabled, where zero means "keep every snapshot".
+		DatabaseBackupRetention: durationOrNever(dbBackupRetention),
+		EnvCapture:              cfg.EnvPatterns(),
 	}
 
 	if asJSON {
 		return writeJSON(os.Stdout, out)
 	}
 
-	fmt.Fprintf(os.Stdout, "file                     %s", out.File)
+	fmt.Fprintf(os.Stdout, "file                      %s", out.File)
 	if !out.FileExists {
 		// Said explicitly, because "my setting does nothing" is nearly always a file that is not where cm
 		// looks, and a path printed without this reads as confirmation that it was read.
@@ -158,21 +167,22 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	}
 	fmt.Fprintln(os.Stdout)
 
-	fmt.Fprintf(os.Stdout, "runtime_dir              %s (%s)\n", out.RuntimeDir, out.Sources["runtime_dir"])
-	fmt.Fprintf(os.Stdout, "state_dir                %s (%s)\n", out.StateDir, out.Sources["state_dir"])
-	fmt.Fprintf(os.Stdout, "scrollback_lines         %d\n", out.ScrollbackLines)
-	fmt.Fprintf(os.Stdout, "resize_policy            %s\n", out.ResizePolicy)
-	fmt.Fprintf(os.Stdout, "detach_key               %s\n", out.DetachKey)
+	fmt.Fprintf(os.Stdout, "runtime_dir               %s (%s)\n", out.RuntimeDir, out.Sources["runtime_dir"])
+	fmt.Fprintf(os.Stdout, "state_dir                 %s (%s)\n", out.StateDir, out.Sources["state_dir"])
+	fmt.Fprintf(os.Stdout, "scrollback_lines          %d\n", out.ScrollbackLines)
+	fmt.Fprintf(os.Stdout, "resize_policy             %s\n", out.ResizePolicy)
+	fmt.Fprintf(os.Stdout, "detach_key                %s\n", out.DetachKey)
 	if out.LogEnabled {
-		fmt.Fprintf(os.Stdout, "log_level                %s\n", out.LogLevel)
+		fmt.Fprintf(os.Stdout, "log_level                 %s\n", out.LogLevel)
 	} else {
-		fmt.Fprintln(os.Stdout, "log_level                off")
+		fmt.Fprintln(os.Stdout, "log_level                 off")
 	}
-	fmt.Fprintf(os.Stdout, "restore_mode             %s\n", out.RestoreMode)
-	fmt.Fprintf(os.Stdout, "expire_after             %s\n", out.ExpireAfter)
-	fmt.Fprintf(os.Stdout, "forget_unpersisted_after %s\n", out.ForgetAfter)
-	fmt.Fprintf(os.Stdout, "shim_log_retention       %s\n", out.ShimLogRetention)
-	fmt.Fprintf(os.Stdout, "env capture              %s\n", strings.Join(out.EnvCapture, " "))
+	fmt.Fprintf(os.Stdout, "restore_mode              %s\n", out.RestoreMode)
+	fmt.Fprintf(os.Stdout, "expire_after              %s\n", out.ExpireAfter)
+	fmt.Fprintf(os.Stdout, "forget_unpersisted_after  %s\n", out.ForgetAfter)
+	fmt.Fprintf(os.Stdout, "shim_log_retention        %s\n", out.ShimLogRetention)
+	fmt.Fprintf(os.Stdout, "database_backup_retention %s\n", out.DatabaseBackupRetention)
+	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))
 	return nil
 }
 

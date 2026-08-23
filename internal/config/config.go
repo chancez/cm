@@ -66,6 +66,10 @@ type Config struct {
 	// session whether or not its output persists.
 	ShimLogRetention string `toml:"shim_log_retention"`
 
+	// DatabaseBackupRetention is how long a snapshot taken before a schema migration is kept, as a Go
+	// duration. Empty means DefaultDatabaseBackupRetention, and "0" keeps them forever.
+	DatabaseBackupRetention string `toml:"database_backup_retention"`
+
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 }
@@ -136,6 +140,19 @@ const DefaultExpireAfter = 7 * 24 * time.Hour
 // opened, with the oldest thirteen days out. A week keeps roughly the last hundred on that machine and
 // bounds the directory at a few days' worth of windows instead of every window ever opened.
 const DefaultShimLogRetention = 7 * 24 * time.Hour
+
+// DefaultDatabaseBackupRetention is how long a pre-migration snapshot of the database is kept.
+//
+// A week, matching DefaultShimLogRetention and DefaultExpireAfter, and for a reason of its own rather than
+// for symmetry. A snapshot is the only way back to a build that predates a schema change, so it cannot be
+// deleted when the migration succeeds: that is when it starts being useful. What bounds it is that its
+// usefulness decays into a hazard. Every session created after it was taken is missing from it, and a
+// session missing from the database is one whose shim nothing can find again, so restoring an old snapshot
+// strands however many shells accumulated since. After a week of running the newer build, reinstalling it is
+// the only sane recovery and keeping the file only invites the other one.
+//
+// "0" keeps them forever, for someone who would rather hold the window open.
+const DefaultDatabaseBackupRetention = 7 * 24 * time.Hour
 
 // DefaultForgetUnpersistedAfter is how long an ended session that saved no output is kept.
 //
@@ -371,6 +388,24 @@ func (c *Config) ForgetUnpersistedAfter() (time.Duration, error) {
 // forever today. Someone who wants every shim log kept has to be able to say so.
 // Named for the question rather than after the field, since a method cannot share a struct field's name.
 // Logging() does the same for log_level.
+// KeepDatabaseBackupsFor is how long a pre-migration snapshot is kept.
+//
+// Named for the question rather than the field, as KeepShimLogsFor is.
+func (c *Config) KeepDatabaseBackupsFor() (time.Duration, error) {
+	if c.DatabaseBackupRetention == "" {
+		return DefaultDatabaseBackupRetention, nil
+	}
+	d, err := time.ParseDuration(c.DatabaseBackupRetention)
+	if err != nil {
+		return 0, fmt.Errorf("database_backup_retention: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf(
+			"database_backup_retention cannot be negative, got %q", c.DatabaseBackupRetention)
+	}
+	return d, nil
+}
+
 func (c *Config) KeepShimLogsFor() (time.Duration, error) {
 	if c.ShimLogRetention == "" {
 		return DefaultShimLogRetention, nil

@@ -281,6 +281,15 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	mgr.SetShimLogRetention(shimLogRetention)
 
+	// Set here rather than in the persist policy for the same reason: a snapshot is taken whenever the
+	// schema moves, whatever any session is configured to do.
+	dbBackupRetention, err := cfg.KeepDatabaseBackupsFor()
+	if err != nil {
+		l.Close()
+		return err
+	}
+	mgr.SetDatabaseBackupRetention(dbBackupRetention)
+
 	// Adopt sessions whose shims survived a previous server before accepting clients, so a
 	// client that reconnects immediately finds its session already present.
 	if err := mgr.Reconcile(ctx); err != nil {
@@ -308,6 +317,12 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		logger.Warn("pruning shim logs failed", "error", err)
 	}
 	go pruneShimLogsPeriodically(ctx, mgr, logger)
+	// Pre-migration snapshots go on the same sweep as the shim logs rather than getting a third ticker.
+	// Both walk files against a retention measured in days, and nothing is waiting on either. Startup
+	// matters here too, since the machine may have been off for the week that expired them.
+	if _, err := mgr.ExpireDatabaseBackups(time.Now()); err != nil {
+		logger.Warn("expiring database snapshots failed", "error", err)
+	}
 	// Notice if this server's own socket path stops referring to it, and say so in the log.
 	//
 	// Needed because such a server cannot be asked: its socket is unlinked, so no client can name it, and
@@ -465,6 +480,9 @@ func pruneShimLogsPeriodically(ctx context.Context, mgr *server.Manager, logger 
 		case <-t.C:
 			if _, err := mgr.PruneShimLogs(ctx, time.Now()); err != nil {
 				logger.Warn("pruning shim logs failed", "error", err)
+			}
+			if _, err := mgr.ExpireDatabaseBackups(time.Now()); err != nil {
+				logger.Warn("expiring database snapshots failed", "error", err)
 			}
 		}
 	}

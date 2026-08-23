@@ -436,3 +436,35 @@ func TestDefaultPathFallsBackToTheUserConfigDir(t *testing.T) {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
 }
+
+// Zero keeps every snapshot, the same asymmetry shim_log_retention has and for the same reason.
+//
+// What zero would destroy separates it from expire_after: here it holds a file that a rollback needs, so
+// "keep them all" has to be sayable, and only a negative duration is an error.
+func TestKeepDatabaseBackupsForValidation(t *testing.T) {
+	cfg := &Config{}
+	got, err := cfg.KeepDatabaseBackupsFor()
+	if err != nil || got != DefaultDatabaseBackupRetention {
+		t.Errorf("KeepDatabaseBackupsFor() = (%v, %v), want (%v, nil)",
+			got, err, DefaultDatabaseBackupRetention)
+	}
+
+	cfg = &Config{DatabaseBackupRetention: "0"}
+	got, err = cfg.KeepDatabaseBackupsFor()
+	if err != nil || got != 0 {
+		t.Errorf("KeepDatabaseBackupsFor(\"0\") = (%v, %v), want (0, nil)", got, err)
+	}
+
+	cfg = &Config{DatabaseBackupRetention: "720h"}
+	got, err = cfg.KeepDatabaseBackupsFor()
+	if err != nil || got != 720*time.Hour {
+		t.Errorf("KeepDatabaseBackupsFor(\"720h\") = (%v, %v), want (720h, nil)", got, err)
+	}
+
+	for _, spec := range []string{"-1h", "nonsense", "7"} {
+		cfg = &Config{DatabaseBackupRetention: spec}
+		if _, err := cfg.KeepDatabaseBackupsFor(); err == nil {
+			t.Errorf("KeepDatabaseBackupsFor(%q) = nil error, want a rejection", spec)
+		}
+	}
+}

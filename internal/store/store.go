@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver, so cgo stays confined to internal/vt
@@ -51,6 +52,15 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// fileExists reports whether a path is there, treating any error as absent.
+//
+// Only used to decide whether an error message can name a file, so a path that cannot be stat'd is the
+// same as one that is not there: the message drops the offer rather than promising something unreadable.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // Close releases the database.
@@ -123,6 +133,39 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
+// BackupPath names the snapshot taken before migrating a database off a given schema version.
+//
+// Derived from the database path rather than composed in paths, so the two cannot drift: whatever opens the
+// database can name its snapshots without being told where they live.
+func BackupPath(dbPath string, version int) string {
+	return fmt.Sprintf("%s.v%d.bak", dbPath, version)
+}
+
+// snapshot copies the database to a standalone file, for rolling back to a build that predates a migration.
+//
+// VACUUM INTO rather than copying the file. The database runs in WAL mode, so committed rows can still be
+// in the -wal file and a copy of cm.db alone can miss them: the snapshot would look fine and be missing the
+// most recent sessions. This writes one consistent file with no sidecars.
+//
+// Called before any migration runs, and deliberately not deleted when one succeeds. A migration that fails
+// is already safe, because each runs in a single transaction along with its user_version bump, so sqlite
+// rolls the whole thing back; measured against this driver, a failed multi-statement migration left neither
+// the new table nor the new version behind. The case that needs a snapshot is a migration that *succeeded*
+// and is being rolled back later, which is exactly when deleting it would have thrown away the only copy an
+// older build can read.
+func (s *Store) snapshot(ctx context.Context, dbPath string, version int) error {
+	out := BackupPath(dbPath, version)
+	// VACUUM INTO refuses an existing target. An older file for this same version describes the same
+	// starting point, so replacing it loses nothing.
+	if err := os.Remove(out); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing the previous snapshot %s: %w", out, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, out); err != nil {
+		return fmt.Errorf("snapshotting %s to %s: %w", dbPath, out, err)
+	}
+	return nil
+}
+
 // migrate brings the schema up to date.
 //
 // Migrations are append-only and tracked by user_version, which sqlite stores in the
@@ -136,20 +179,46 @@ func (s *Store) migrate(ctx context.Context, path string) error {
 
 	// A database from a newer cm, which happens when a build is rolled back. Refused here, where the
 	// cause is knowable, because the alternative is what it did before: migrate had nothing to apply, so
-	// Open succeeded and the first query failed with "no such column: name", which names a column rather
-	// than the version skew that removed it. That error points at the schema and says nothing about the
-	// binary being older than the file, which is the one fact needed to fix it.
+	// Open succeeded and the first query failed against a column the newer schema had removed. That error
+	// names a column and says nothing about the binary being older than the file, which is the one fact
+	// needed to fix it.
 	//
 	// Migrations only ever move forward, so there is nothing to undo. The way out is to put the newer
 	// build back; failing that, the sessions have to be stopped and the database removed, which is why
 	// the message says so rather than suggesting it as a first resort: removing it strands any shim still
 	// running, since the record is the only thing that can find one again.
 	if version > len(migrations) {
+		// The snapshot the newer build took on its way past this version, if it is still there. Naming it
+		// is the difference between an explanation and a way out: it is a database this build can read.
+		if backup := BackupPath(path, len(migrations)); fileExists(backup) {
+			return fmt.Errorf(
+				"%s is at schema version %d and this build knows %d: the database was written by a newer "+
+					"cm, and schema changes are not reversible. A snapshot from before that migration is "+
+					"at %s, which this build can read: stop every session, then move it over %s. Anything "+
+					"created since is not in it, and a session missing from it is left running with "+
+					"nothing able to find it, so prefer reinstalling the newer cm",
+				path, version, len(migrations), backup, path)
+		}
 		return fmt.Errorf(
 			"%s is at schema version %d and this build knows %d: the database was written by a newer cm, "+
 				"and schema changes are not reversible. Reinstall the newer build, or stop every session "+
 				"and remove the database to start fresh",
 			path, version, len(migrations))
+	}
+
+	// Snapshot before changing anything, because a schema change cannot be undone: the only way back to a
+	// build that predates one is a copy of the database as it was. Skipped at version 0, which is a fresh
+	// file with nothing in it worth keeping.
+	//
+	// A failure here stops the migration rather than proceeding without a snapshot. Carrying on would take
+	// the irreversible step precisely when the safety net could not be written, and what causes it -- a full
+	// or read-only state directory -- is something the user can fix and would rather be told about. Same
+	// reasoning as an unusable persist path failing at creation: silently not doing it is worse than
+	// refusing. See docs/persistence.md.
+	if version > 0 && version < len(migrations) {
+		if err := s.snapshot(ctx, path, version); err != nil {
+			return err
+		}
 	}
 
 	for i := version; i < len(migrations); i++ {

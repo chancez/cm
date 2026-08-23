@@ -29,6 +29,9 @@ log_level = "info"
 # How long an exited shim's diagnostic log is kept. "0" keeps every one.
 shim_log_retention = "168h"
 
+# How long a pre-migration snapshot of the database is kept, for rolling back.
+database_backup_retention = "168h"
+
 # Where sockets and state live. Absolute paths: "~" is not expanded.
 runtime_dir = "/tmp/cm"
 state_dir = "/home/user/.local/state/cm"
@@ -76,6 +79,7 @@ forget_unpersisted_after = "5m"
 | `detach_key` | `ctrl-<key>`, or `none` to disable | `ctrl-\` |
 | `log_level` | `debug`, `info`, `warn`, `error`, `off` | `info` |
 | `shim_log_retention` | Go duration; `0` keeps every log | `168h` (a week) |
+| `database_backup_retention` | Go duration; `0` keeps every snapshot | `168h` (a week) |
 | `runtime_dir` | path | see [Directories](#directories) |
 | `state_dir` | path | see [Directories](#directories) |
 
@@ -141,6 +145,27 @@ works for as long as the name is listed. Age comes from the log's newest entry, 
 modification time.
 
 `shim_log_retention = "0"` keeps every shim log.
+
+### database_backup_retention
+
+How long a snapshot of the database taken before a schema migration is kept.
+
+Schema changes are not reversible, so the snapshot is the only way back to a build that predates one. It is
+taken whenever the schema moves, which includes the server a client starts automatically, and deliberately
+*not* deleted when the migration succeeds: that is when it becomes useful rather than when it stops being.
+Nothing needs to guard a migration that failed, because each one runs in a single transaction with its
+version bump, so an interrupted upgrade leaves the database untouched.
+
+What bounds it is that a snapshot's usefulness decays into a hazard. Every session created after it was
+taken is missing from it, and a session missing from the database is one whose shim nothing can find again,
+so restoring an old snapshot strands however many shells accumulated since. A week in, reinstalling the
+newer build is the only sane recovery.
+
+The file sits beside the database as `cm.db.v<version>.bak` and costs tens of kilobytes: 28672 bytes for a
+snapshot of a database with one session, against a real install's 61440-byte database. Swept at startup and
+hourly, on the same pass as the shim logs.
+
+`database_backup_retention = "0"` keeps every snapshot.
 
 ## Directories
 
