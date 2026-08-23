@@ -573,3 +573,40 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		s.Close()
 	}
 }
+
+// A database written by a newer cm is refused, with the version skew named.
+//
+// This is the rollback case, and it used to open successfully: migrate had nothing to apply, so the first
+// query failed with "no such column: name". That error names a column rather than the reason it is missing,
+// and says nothing about the binary being older than the file, which is the only fact that explains it.
+func TestOpenRefusesADatabaseFromANewerBuild(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cm.db")
+	ctx := context.Background()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// One past what this build knows, which is what a newer build would have left.
+	if _, err := s.db.ExecContext(ctx,
+		fmt.Sprintf("PRAGMA user_version = %d", len(migrations)+1)); err != nil {
+		t.Fatalf("setting a future schema version: %v", err)
+	}
+	s.Close()
+
+	_, err = Open(ctx, path)
+	if err == nil {
+		t.Fatal("Open() on a database from a newer build = nil error, want a refusal")
+	}
+	// Both numbers, since "which is newer" is the question a reader has.
+	for _, want := range []string{
+		fmt.Sprint(len(migrations) + 1),
+		fmt.Sprint(len(migrations)),
+		"newer cm",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Open() error = %v, want it to mention %q", err, want)
+		}
+	}
+}

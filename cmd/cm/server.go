@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -385,6 +385,20 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 	// window, and its output would scribble over the session.
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 
+	// Except stderr, which goes to a file, because discarding it made every way a server can fail to
+	// start look identical. A server that cannot open its database exits with a message naming exactly
+	// what is wrong, and that message went to /dev/null, so the user was told "server did not become
+	// ready within 10s" and had to know to run `cm server` in the foreground to learn anything. The
+	// rollback case makes this concrete: an older build meeting a database a newer one migrated says so
+	// precisely, and said it where nobody could see.
+	//
+	// A file rather than a pipe. A pipe needs a reader for as long as the server lives, and this client
+	// exits in seconds, after which the server would take EPIPE on anything it wrote.
+	if errFile, ferr := os.Create(dirs.ServerStartErr()); ferr == nil {
+		defer errFile.Close()
+		cmd.Stderr = errFile
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting server: %w", err)
 	}
@@ -398,7 +412,7 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return errors.New("server did not become ready within " + serverStartTimeout.String())
+			return serverStartError(dirs)
 		}
 		select {
 		case <-ctx.Done():
@@ -523,4 +537,26 @@ func terminalFactory(cfg *config.Config) server.NewTerminalFunc {
 	return func(rows, cols uint16) (server.Terminal, error) {
 		return vt.NewSessionTerminal(rows, cols, scrollback)
 	}
+}
+
+// serverStartError explains a server that never came up, using whatever it said on its way out.
+//
+// The captured stderr rather than a bare timeout, because the two failures a user hits here are not
+// timeouts at all: a database from a newer build, and a runtime directory it cannot write. Both exit
+// immediately with a specific message, and reporting the deadline instead described the symptom while
+// discarding the cause.
+func serverStartError(dirs paths.Dirs) error {
+	timeout := "server did not become ready within " + serverStartTimeout.String()
+
+	out, err := os.ReadFile(dirs.ServerStartErr())
+	if err == nil {
+		if said := strings.TrimSpace(string(out)); said != "" {
+			// The whole of it. It is a handful of lines at most, and truncating the one thing that
+			// explains the failure to keep the error short would be the wrong trade.
+			return fmt.Errorf("%s: %s", timeout, said)
+		}
+	}
+	// Nothing said, which is the case where the server is merely slow, or was killed before it could
+	// write. Naming the command that shows the rest is the only useful thing left to add.
+	return fmt.Errorf("%s; run `%s server` to see why", timeout, paths.Name)
 }

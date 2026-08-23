@@ -46,7 +46,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	s := &Store{db: db}
-	if err := s.migrate(ctx); err != nil {
+	if err := s.migrate(ctx, path); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -128,10 +128,28 @@ type Session struct {
 // Migrations are append-only and tracked by user_version, which sqlite stores in the
 // database header. That avoids a separate bookkeeping table and cannot drift from the
 // file it describes.
-func (s *Store) migrate(ctx context.Context) error {
+func (s *Store) migrate(ctx context.Context, path string) error {
 	var version int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
+	}
+
+	// A database from a newer cm, which happens when a build is rolled back. Refused here, where the
+	// cause is knowable, because the alternative is what it did before: migrate had nothing to apply, so
+	// Open succeeded and the first query failed with "no such column: name", which names a column rather
+	// than the version skew that removed it. That error points at the schema and says nothing about the
+	// binary being older than the file, which is the one fact needed to fix it.
+	//
+	// Migrations only ever move forward, so there is nothing to undo. The way out is to put the newer
+	// build back; failing that, the sessions have to be stopped and the database removed, which is why
+	// the message says so rather than suggesting it as a first resort: removing it strands any shim still
+	// running, since the record is the only thing that can find one again.
+	if version > len(migrations) {
+		return fmt.Errorf(
+			"%s is at schema version %d and this build knows %d: the database was written by a newer cm, "+
+				"and schema changes are not reversible. Reinstall the newer build, or stop every session "+
+				"and remove the database to start fresh",
+			path, version, len(migrations))
 	}
 
 	for i := version; i < len(migrations); i++ {

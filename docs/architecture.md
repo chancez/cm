@@ -333,6 +333,37 @@ The condition is keyed on `NoRestore` rather than on whether `Output` is set: bo
 terminal", but `NoRestore` is the one that says a repaint is unwanted, and it is what the server
 already reads.
 
+## Upgrading, and what a rollback cannot undo
+
+The order is: install, restart the server, then `cm clients upgrade`. Shims stay on the build that spawned
+them until their sessions end, which is not a gap to close but a consequence of what each layer owns; the
+section below states why.
+
+Two things bound how far an upgrade can skew. The shim protocol does not change, which is what lets a new
+server adopt a shim an old one spawned, and matters most for the layer that cannot be replaced. The server
+protocol may change, and a client and server are expected to be upgraded together: `cm doctor` reports the
+skew, and `cm clients upgrade` is how the client half converges without closing a window.
+
+Sessions created before an upgrade keep working, including their environment. A shell in one has already
+exported `CM_SESSION` as whatever that build wrote, and a pre-ID session exported a name; the name still
+resolves, because the migration that introduced IDs turned every existing name into a binding. Only sessions
+created afterwards see the `@id` form.
+
+**A schema change is one-way.** Migrations only move forward, so a database a newer build migrated cannot
+be read by an older one. That used to fail late and confusingly: `migrate` had nothing to apply, `Open`
+succeeded, and the first query failed with "no such column: name", which names a column rather than the
+version skew that removed it. Opening now refuses when the recorded version is ahead of what the build
+knows, and says both numbers. The way out is to reinstall the newer build; removing the database is the
+fallback and is worse, because a record is the only thing that can find a running shim again, so deleting
+one strands the shell it holds.
+
+That failure also exposed something older and more general: a server started in the background had its
+stderr discarded, so *every* way it could fail to start read as `server did not become ready within 10s`.
+The reason was always available and always thrown away. The spawned server's stderr now goes to a file in
+the runtime directory and the timeout error quotes it, which turns "it did not come up" into whatever the
+server actually said. A file rather than a pipe: a pipe needs a reader for as long as the server lives, and
+the client that started it exits in seconds.
+
 ## Upgrading a client, and why only a client can be upgraded
 
 A restart replaces the server and nothing else, which left two thirds of an installation on whatever

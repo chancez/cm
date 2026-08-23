@@ -142,6 +142,19 @@ func (d Dirs) ShimSocket(session string) string {
 	return filepath.Join(d.Runtime, "shim-"+session+".sock")
 }
 
+// ServerStartErr is where a server spawned in the background has its stderr captured.
+//
+// In the runtime directory rather than alongside the logs, and for two reasons. It is about one attempt to
+// start rather than about a running server, so it belongs with the socket that attempt was racing for and
+// disappears with it. And logs/server is scanned by `cm doctor`, which would have to learn to ignore a file
+// that is not a diagnostic log.
+//
+// Nothing here rotates it: it is truncated by each start, and it holds a few lines at most, because a
+// server that gets far enough to serve logs to its log file instead.
+func (d Dirs) ServerStartErr() string {
+	return filepath.Join(d.Runtime, "server-start.err")
+}
+
 // Database is the sqlite file holding session metadata.
 func (d Dirs) Database() string {
 	return filepath.Join(d.State, Name+".db")
