@@ -386,16 +386,31 @@ func TestListReportsLiveSequence(t *testing.T) {
 	defer sess.detach(att)
 	readUntil(t, att.reader, "LISTED")
 
-	sessions, err := mgr.List(ctx, "")
-	if err != nil {
-		t.Fatalf("List() error = %v", err)
-	}
-	if len(sessions) != 1 {
-		t.Fatalf("List() returned %d sessions, want 1", len(sessions))
-	}
-	// The live value must win over the stored one, which was written before this output.
-	if sessions[0].LastSeq == 0 {
-		t.Error("LastSeq = 0, want the live session's position")
+	// Polled rather than asserted once, and the window is documented rather than hypothetical: the pump
+	// appends a chunk to the client log *before* it takes the lock to advance lastSeq, which is the order
+	// resumePoints explains and depends on. So reading output does not mean the position has caught up,
+	// and this failed with LastSeq = 0 while the bytes it counts had already been read -- reproduced by
+	// running two suites at once, which is enough to deschedule the pump inside that window.
+	//
+	// Waiting for the state the race lands in rather than racing it, and the assertion is unchanged: the
+	// live value still has to beat the zero the fixture stored.
+	var sessions []store.Session
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sessions, err = mgr.List(ctx, "")
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("List() returned %d sessions, want 1", len(sessions))
+		}
+		if sessions[0].LastSeq > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("LastSeq = 0, want the live session's position")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if n := mgr.Clients("listed"); n != 1 {
 		t.Errorf("Clients() = %d, want 1", n)
