@@ -1028,14 +1028,16 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		}
 	}
 
-	// Record the shell's pid for reporting, best effort: the session works without it.
-	if st, err := sess.State(ctx); err == nil {
-		shellPID := int(st.ShellPid)
-		if err := m.store.Apply(ctx, opts.id, store.Update{ShellPID: &shellPID}); err != nil {
-			m.log.Warn("recording shell pid failed", "session", opts.id, "error", err)
-		}
-	} else {
-		m.log.Warn("reading shim state failed", "session", opts.id, "error", err)
+	// Record the shell's pid for reporting. Inline first, so a listing run immediately after this shows
+	// it, and retried in the background when that fails.
+	//
+	// Retried rather than left alone, which is what it did: this is one RPC to a shim that has just
+	// started, nothing else ever writes the field, and `cm list` reads it straight from the record. So a
+	// single transient failure meant a healthy session reported pid 0 for the rest of its life. It
+	// surfaced as an e2e test waiting for a live pid and timing out with no other symptom, under two test
+	// suites running at once, which is the sort of load that makes one RPC to a starting process fail.
+	if !m.recordShellPID(ctx, sess) {
+		go m.retryShellPID(sess)
 	}
 
 	// Logged with the name as well as the ID, and this is the line that ties the two together: every
@@ -1049,6 +1051,62 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	m.sessions[opts.id] = sess
 	m.mu.Unlock()
 	return sess, nil
+}
+
+// shellPIDAttempts and shellPIDRetryDelay bound the retry above.
+//
+// Bounded rather than indefinite: a shim that cannot answer after this is not going to, and a goroutine
+// polling one forever would outlive every reason to care. Five seconds in total, which is generous against
+// what it is waiting for, since the shim answered a readiness dial before this ran.
+const (
+	shellPIDAttempts   = 10
+	shellPIDRetryDelay = 500 * time.Millisecond
+)
+
+// recordShellPID asks a session's shim for its shell's pid and stores it, reporting whether it landed.
+func (m *Manager) recordShellPID(ctx context.Context, sess *Session) bool {
+	st, err := sess.State(ctx)
+	if err != nil {
+		m.log.Warn("reading shim state failed", "session", sess.id, "error", err)
+		return false
+	}
+	if st.ShellPid <= 0 {
+		// A shim that reports no shell has nothing to record yet. Not an error: it answers before its
+		// shell is necessarily up.
+		return false
+	}
+	shellPID := int(st.ShellPid)
+	if err := m.store.Apply(ctx, sess.id, store.Update{ShellPID: &shellPID}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// The record is gone, so the session has been removed and there is nothing left to describe.
+			// Treated as done rather than retried, or the retry would run until it gave up on every
+			// short-lived session.
+			return true
+		}
+		m.log.Warn("recording shell pid failed", "session", sess.id, "error", err)
+		return false
+	}
+	return true
+}
+
+// retryShellPID keeps trying to record the shell pid until it lands, the session ends, or it gives up.
+func (m *Manager) retryShellPID(sess *Session) {
+	for range shellPIDAttempts {
+		select {
+		case <-sess.Done():
+			return
+		case <-time.After(shellPIDRetryDelay):
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ok := m.recordShellPID(ctx, sess)
+		cancel()
+		if ok {
+			return
+		}
+	}
+	// Said out loud, because the visible result is a session listed with pid 0 and nothing else to explain
+	// it, which is the state this retry exists to avoid.
+	m.log.Warn("gave up recording the shell pid; this session will report pid 0", "session", sess.id)
 }
 
 // shimArgs builds the argv a shim is spawned with.
