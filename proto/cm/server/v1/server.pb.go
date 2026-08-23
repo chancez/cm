@@ -3571,6 +3571,20 @@ type SwitchRequest struct {
 	// The name bound is the one this session is known by. A session with no name has nothing to bind, and
 	// the call says so rather than silently switching for this client only.
 	Bind bool `protobuf:"varint,3,opt,name=bind,proto3" json:"bind,omitempty"`
+	// End the session the name is being moved off, once the windows have left it.
+	//
+	// Only with bind, because a switch leaves the name pointing at that session: ending it would leave the
+	// name resolving to nothing.
+	Replace bool `protobuf:"varint,5,opt,name=replace,proto3" json:"replace,omitempty"`
+	// Replace even when the session being ended is running something.
+	Force bool `protobuf:"varint,6,opt,name=force,proto3" json:"force,omitempty"`
+	// The session the caller is itself running in, from CM_SESSION, or empty.
+	//
+	// Needed for one decision the server cannot make alone: whether to check that the session being ended is
+	// busy. A rebind typed inside that session *is* the busy command, since OSC 133 reports a foreground
+	// command and this is one, so the check would refuse every time and mean nothing. It is worth making when
+	// the caller is somewhere else, where a foreground command really is somebody else's work.
+	CallerSession string `protobuf:"bytes,7,opt,name=caller_session,json=callerSession,proto3" json:"caller_session,omitempty"`
 	// Switch every client of the session rather than only the one someone is using.
 	//
 	// Off by default: a switch is about one window, and the active client is the one that typed the command
@@ -3632,6 +3646,27 @@ func (x *SwitchRequest) GetBind() bool {
 	return false
 }
 
+func (x *SwitchRequest) GetReplace() bool {
+	if x != nil {
+		return x.Replace
+	}
+	return false
+}
+
+func (x *SwitchRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+func (x *SwitchRequest) GetCallerSession() string {
+	if x != nil {
+		return x.CallerSession
+	}
+	return ""
+}
+
 func (x *SwitchRequest) GetAllClients() bool {
 	if x != nil {
 		return x.AllClients
@@ -3648,7 +3683,14 @@ type SwitchResponse struct {
 	TargetId   string `protobuf:"bytes,2,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
 	SwitchedTo string `protobuf:"bytes,3,opt,name=switched_to,json=switchedTo,proto3" json:"switched_to,omitempty"`
 	// The name that was rebound, empty when bind was not asked for.
-	BoundName     string `protobuf:"bytes,4,opt,name=bound_name,json=boundName,proto3" json:"bound_name,omitempty"`
+	BoundName string `protobuf:"bytes,4,opt,name=bound_name,json=boundName,proto3" json:"bound_name,omitempty"`
+	// The session that was ended, empty when none was.
+	KilledSession string `protobuf:"bytes,5,opt,name=killed_session,json=killedSession,proto3" json:"killed_session,omitempty"`
+	// Why the session was left running when replace was asked for, empty otherwise.
+	//
+	// Reported rather than silently skipped: a caller that asked for the old session to go needs to know it
+	// is still there, and why, since every reason is something they can act on.
+	KeptReason    string `protobuf:"bytes,6,opt,name=kept_reason,json=keptReason,proto3" json:"kept_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3707,6 +3749,20 @@ func (x *SwitchResponse) GetSwitchedTo() string {
 func (x *SwitchResponse) GetBoundName() string {
 	if x != nil {
 		return x.BoundName
+	}
+	return ""
+}
+
+func (x *SwitchResponse) GetKilledSession() string {
+	if x != nil {
+		return x.KilledSession
+	}
+	return ""
+}
+
+func (x *SwitchResponse) GetKeptReason() string {
+	if x != nil {
+		return x.KeptReason
 	}
 	return ""
 }
@@ -4574,20 +4630,26 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"(\n" +
 	"\x12SurvivingProcesses\x12\x12\n" +
-	"\x04pids\x18\x01 \x03(\x05R\x04pids\"v\n" +
+	"\x04pids\x18\x01 \x03(\x05R\x04pids\"\xcd\x01\n" +
 	"\rSwitchRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x16\n" +
 	"\x06target\x18\x02 \x01(\tR\x06target\x12\x12\n" +
-	"\x04bind\x18\x03 \x01(\bR\x04bind\x12\x1f\n" +
+	"\x04bind\x18\x03 \x01(\bR\x04bind\x12\x18\n" +
+	"\areplace\x18\x05 \x01(\bR\areplace\x12\x14\n" +
+	"\x05force\x18\x06 \x01(\bR\x05force\x12%\n" +
+	"\x0ecaller_session\x18\a \x01(\tR\rcallerSession\x12\x1f\n" +
 	"\vall_clients\x18\x04 \x01(\bR\n" +
-	"allClients\"\x83\x01\n" +
+	"allClients\"\xcb\x01\n" +
 	"\x0eSwitchResponse\x12\x14\n" +
 	"\x05asked\x18\x01 \x01(\rR\x05asked\x12\x1b\n" +
 	"\ttarget_id\x18\x02 \x01(\tR\btargetId\x12\x1f\n" +
 	"\vswitched_to\x18\x03 \x01(\tR\n" +
 	"switchedTo\x12\x1d\n" +
 	"\n" +
-	"bound_name\x18\x04 \x01(\tR\tboundName\"g\n" +
+	"bound_name\x18\x04 \x01(\tR\tboundName\x12%\n" +
+	"\x0ekilled_session\x18\x05 \x01(\tR\rkilledSession\x12\x1f\n" +
+	"\vkept_reason\x18\x06 \x01(\tR\n" +
+	"keptReason\"g\n" +
 	"\vBindRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x12\n" +

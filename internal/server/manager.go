@@ -1392,7 +1392,7 @@ func (m *Manager) Kill(
 			// closed" from a test that creates twenty rapidly-exiting sessions, which hits the window often
 			// enough to fail a run in three. The resize path above already checks both for the same reason.
 			ended, _ := sess.Ended()
-			if !ended && !isSessionOver(err) && !isTransportClosed(err) {
+			if !ended && !isSessionOver(err) && !isTransportClosed(err) && !isProcessGone(err) {
 				return nil, fmt.Errorf("stopping %s: %w", id, err)
 			}
 		}
@@ -1430,7 +1430,8 @@ func (m *Manager) Kill(
 			// sessions reaches Kill after the session left the registry but while its shim is still
 			// shutting down, so the probe succeeds and the request loses the race, and cleanup reported
 			// "stopping d14: ttrpc: closed" about one run in three.
-			if err != nil && !force && !isSessionOver(err) && !isTransportClosed(err) {
+			if err != nil && !force && !isSessionOver(err) && !isTransportClosed(err) &&
+				!isProcessGone(err) {
 				return nil, fmt.Errorf("stopping %s: %w", id, err)
 			}
 			if resp != nil {

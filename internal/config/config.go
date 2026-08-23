@@ -75,6 +75,14 @@ type Config struct {
 	// duration. Empty means DefaultDatabaseBackupRetention, and "0" keeps them forever.
 	DatabaseBackupRetention string `toml:"database_backup_retention"`
 
+	// RebindReplaces makes `cm rebind` end the session it moves a name off, as though --replace had been
+	// passed. --replace=false overrides it for one call.
+	//
+	// Off by default: the session left behind is a live shell, and cm asks before ending one rather than
+	// implying it. On is the right setting for someone whose windows are per-window sessions, where the
+	// vacated one is the shell the emulator made and nothing else.
+	RebindReplaces bool `toml:"rebind_replaces"`
+
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 }

@@ -65,8 +65,11 @@ type configJSON struct {
 	ShimLogRetention string `json:"shim_log_retention"`
 	// DatabaseBackupRetention, for the same reason: a snapshot is what a rollback needs, so how long one
 	// survives is worth being able to read back before finding out by needing it.
-	DatabaseBackupRetention string   `json:"database_backup_retention"`
-	EnvCapture              []string `json:"env_capture"`
+	DatabaseBackupRetention string `json:"database_backup_retention"`
+	// RebindReplaces, because "my setting does nothing" is the question this command answers, and a
+	// default that ends a session is one worth being able to read back.
+	RebindReplaces bool     `json:"rebind_replaces"`
+	EnvCapture     []string `json:"env_capture"`
 	// UnknownSettings are settings in the file this build does not know, which everything else ignores
 	// with a warning. Empty on a healthy install.
 	UnknownSettings []string `json:"unknown_settings"`
@@ -155,6 +158,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		ShimLogRetention: durationOrNever(shimLogRetention),
 		// Also "never" rather than "0s" when disabled, where zero means "keep every snapshot".
 		DatabaseBackupRetention: durationOrNever(dbBackupRetention),
+		RebindReplaces:          cfg.RebindReplaces,
 		EnvCapture:              cfg.EnvPatterns(),
 		UnknownSettings:         cfg.UnknownSettings(),
 	}
@@ -193,6 +197,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "forget_unpersisted_after  %s\n", out.ForgetAfter)
 	fmt.Fprintf(os.Stdout, "shim_log_retention        %s\n", out.ShimLogRetention)
 	fmt.Fprintf(os.Stdout, "database_backup_retention %s\n", out.DatabaseBackupRetention)
+	fmt.Fprintf(os.Stdout, "rebind_replaces           %t\n", out.RebindReplaces)
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))
 	if len(out.UnknownSettings) > 0 {
 		// In the report rather than on stderr, next to the values that are in effect, since the whole

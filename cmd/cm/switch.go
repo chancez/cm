@@ -34,6 +34,8 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 	var (
 		from       string
 		allClients bool
+		replace    bool
+		force      bool
 		asJSON     bool
 	)
 
@@ -58,6 +60,17 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 				session = from
 			}
 
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			// The config sets the default and the flag overrides it, including to turn it off, which is
+			// why this reads Changed rather than the value: an unset bool flag is false, which is
+			// indistinguishable from --replace=false without asking cobra whether it was given.
+			if bind && !cmd.Flags().Changed("replace") {
+				replace = cfg.RebindReplaces
+			}
+
 			dirs, err := g.dirs()
 			if err != nil {
 				return err
@@ -69,21 +82,42 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 					Session:    session,
 					Target:     target,
 					Bind:       bind,
+					Replace:    replace,
+					Force:      force,
 					AllClients: allClients,
+					// So the server can tell whether the session being replaced is the one this command
+					// is running in, which decides whether checking it for a running command means
+					// anything. See replaceable.
+					CallerSession: os.Getenv(paths.SessionEnv()),
 				})
 				if err != nil {
 					return err
 				}
 				if asJSON {
 					return writeJSON(os.Stdout, map[string]any{
-						"session":     session,
-						"target":      target,
-						"target_id":   resp.TargetId,
-						"switched_to": resp.SwitchedTo,
-						"bound_name":  resp.BoundName,
-						"asked":       resp.Asked,
+						"session":        session,
+						"target":         target,
+						"target_id":      resp.TargetId,
+						"switched_to":    resp.SwitchedTo,
+						"bound_name":     resp.BoundName,
+						"asked":          resp.Asked,
+						"killed_session": resp.KilledSession,
+						"kept_reason":    resp.KeptReason,
 					})
 				}
+				// Printed after the move, and to stderr when the old session survived a --replace, because
+				// that is the case a caller might act on. Neither line is likely to be seen when the
+				// replaced session is the caller's own: killing it takes the shell this command is
+				// printing to. The window is on the target by then, which is the answer that matters.
+				defer func() {
+					switch {
+					case resp.KilledSession != "":
+						fmt.Printf("killed %s\n", paths.FormatSessionID(resp.KilledSession))
+					case resp.KeptReason != "":
+						fmt.Fprintf(os.Stderr, "%s: left it running: %s\n", paths.Name, resp.KeptReason)
+					}
+				}()
+
 				target := paths.FormatSessionID(resp.TargetId)
 				// A rebind reports the name first, because the name moving is the durable half and the
 				// window following is a consequence. A switch has only the window to report.
@@ -118,6 +152,12 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 	_ = cmd.RegisterFlagCompletionFunc("from", completeSessionNames(g))
 	f.BoolVar(&allClients, "all-clients", false,
 		"move every window showing this session, not only the one in use")
+	if bind {
+		f.BoolVar(&replace, "replace", false,
+			"end the session this name is moving off (default from rebind_replaces)")
+		f.BoolVar(&force, "force", false,
+			"replace even when that session is running something, or has other names")
+	}
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
 }

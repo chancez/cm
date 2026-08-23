@@ -961,6 +961,23 @@ message SwitchRequest {
   // The name bound is the one this session is known by. A session with no name has nothing to bind, and
   // the call says so rather than silently switching for this client only.
   bool bind = 3;
+  // End the session the name is being moved off, once the windows have left it.
+  //
+  // Only with bind, because a switch leaves the name pointing at that session: ending it would leave the
+  // name resolving to nothing.
+  bool replace = 5;
+
+  // Replace even when the session being ended is running something.
+  bool force = 6;
+
+  // The session the caller is itself running in, from CM_SESSION, or empty.
+  //
+  // Needed for one decision the server cannot make alone: whether to check that the session being ended is
+  // busy. A rebind typed inside that session *is* the busy command, since OSC 133 reports a foreground
+  // command and this is one, so the check would refuse every time and mean nothing. It is worth making when
+  // the caller is somewhere else, where a foreground command really is somebody else's work.
+  string caller_session = 7;
+
   // Switch every client of the session rather than only the one someone is using.
   //
   // Off by default: a switch is about one window, and the active client is the one that typed the command
@@ -978,6 +995,15 @@ message SwitchResponse {
   string switched_to = 3;
   // The name that was rebound, empty when bind was not asked for.
   string bound_name = 4;
+
+  // The session that was ended, empty when none was.
+  string killed_session = 5;
+
+  // Why the session was left running when replace was asked for, empty otherwise.
+  //
+  // Reported rather than silently skipped: a caller that asked for the old session to go needs to know it
+  // is still there, and why, since every reason is something they can act on.
+  string kept_reason = 6;
 }
 
 message BindRequest {

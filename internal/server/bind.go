@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
@@ -129,6 +131,13 @@ func (s *Service) Switch(
 		return nil, errors.New("no target session given to switch to")
 	}
 
+	if req.Replace && !req.Bind {
+		// A switch leaves the name pointing at the session being left, so ending it would leave that name
+		// resolving to nothing and the next attach by it creating a session under a name that meant
+		// something else an instant ago.
+		return nil, errors.New("replace needs the name to move as well; use `cm rebind`")
+	}
+
 	fromID, err := s.mgr.Resolve(ctx, req.Session)
 	if err != nil {
 		return nil, err
@@ -163,6 +172,13 @@ func (s *Service) Switch(
 	//
 	// Without bind, the name still points at the session being left, so the client is told the target's
 	// ID. Sending the name would send it straight back where it started.
+	// Checked before anything moves, so a refusal leaves the window where it was rather than half done.
+	if req.Replace && !req.Force {
+		if err := s.replaceable(ctx, req, fromID); err != nil {
+			return nil, err
+		}
+	}
+
 	switchTo := paths.FormatSessionID(targetID)
 	boundName := ""
 	if req.Bind {
@@ -189,10 +205,122 @@ func (s *Service) Switch(
 	}
 
 	asked := sess.SwitchClients(switchTo, !req.AllClients)
-	return &serverv1.SwitchResponse{
+
+	resp := &serverv1.SwitchResponse{
 		Asked:      uint32(asked),
 		TargetId:   targetID,
 		SwitchedTo: switchTo,
 		BoundName:  boundName,
-	}, nil
+	}
+	if req.Replace {
+		resp.KilledSession, resp.KeptReason = s.replacePrevious(sess, asked)
+	}
+	return resp, nil
 }
+
+// replaceable reports why the session a name is moving off must not be ended, or nil when it may be.
+//
+// Two conditions, and neither is about the window being moved. A session with another name is something
+// else's, since that name is how it is reached and nothing here asked for it to go. And a session running a
+// foreground command has work in it worth more than the tidiness of removing it.
+//
+// The busy check is skipped when the caller is inside the session it is replacing, because there it cannot
+// mean anything: `cm rebind` is itself a foreground command, so OSC 133 reports that session busy every
+// time, and refusing on that would refuse always. A backgrounded job does not set it, so the shell would
+// read idle in the one case where work really is running unattended. What guards the case instead is that a
+// foreground command would have kept the user from typing the command at all.
+func (s *Service) replaceable(ctx context.Context, req *serverv1.SwitchRequest, fromID string) error {
+	names, err := s.mgr.Names(ctx, fromID)
+	if err != nil {
+		return err
+	}
+	if len(names) > 1 {
+		return fmt.Errorf(
+			"%s has other names (%s), so it is not this window's alone; unbind them first or pass --force",
+			paths.FormatSessionID(fromID), strings.Join(names, " "))
+	}
+
+	if req.CallerSession != "" {
+		if callerID, err := s.mgr.Resolve(ctx, req.CallerSession); err == nil && callerID == fromID {
+			return nil
+		}
+	}
+
+	sess, live := s.mgr.Get(fromID)
+	if !live {
+		return nil
+	}
+	if busy, what := sessionBusy(sess); busy {
+		if what == "" {
+			what = "something"
+		}
+		return fmt.Errorf("%s is running %s; pass --force to end it anyway, or --replace=false to keep it",
+			paths.FormatSessionID(fromID), what)
+	}
+	return nil
+}
+
+// replacePrevious ends the session a name was moved off, once no window is watching it.
+//
+// Waits first, and that ordering is the whole of it: the clients were asked to move a moment ago and are
+// reattaching, so ending the session before they have gone would evict them from it instead, and a window
+// would exit rather than move. A window still there after the wait is one this call did not move, since
+// --all-clients was not given, and taking its session away is not what was asked for.
+//
+// The kill runs on its own context rather than the request's. In the ordinary case the caller is the shell
+// inside this session, so this kills the process waiting for the reply: on the request's context that death
+// would cancel the kill halfway and leave the session running.
+func (s *Service) replacePrevious(sess *Session, asked int) (killed, keptReason string) {
+	if asked > 0 && !waitForNoClients(sess, clientsLeaveTimeout) {
+		return "", fmt.Sprintf("a window is still attached to %s", paths.FormatSessionID(sess.id))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), replaceKillTimeout)
+	defer cancel()
+	if _, err := s.mgr.Kill(ctx, sess.id, false, 0); err != nil {
+		return "", fmt.Sprintf("ending %s failed: %v", paths.FormatSessionID(sess.id), err)
+	}
+	return sess.id, ""
+}
+
+// waitForNoClients waits for a session to have nothing attached, reporting whether it got there.
+func waitForNoClients(sess *Session, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		if sess.Clients() == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(clientsLeaveInterval)
+	}
+}
+
+// sessionBusy reports whether a session is running something, and what.
+//
+// The same derivation `cm list` uses: what the shell reports through OSC 133, overridden by a program's own
+// report about itself when it has made one.
+func sessionBusy(sess *Session) (bool, string) {
+	if r := sess.Reported(); r.State != "" {
+		if r.State == "idle" {
+			return false, ""
+		}
+		what := r.Detail
+		if what == "" {
+			what = r.State
+		}
+		return true, what
+	}
+	cmd := sess.Command()
+	return cmd.Running, cmd.Command
+}
+
+const (
+	// clientsLeaveTimeout bounds the wait for switched windows to reattach elsewhere. Generous against
+	// what it waits for: a client reconnects on its own 100ms retry.
+	clientsLeaveTimeout  = 5 * time.Second
+	clientsLeaveInterval = 50 * time.Millisecond
+	// replaceKillTimeout bounds ending the session, on a context of its own.
+	replaceKillTimeout = 10 * time.Second
+)

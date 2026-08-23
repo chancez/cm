@@ -174,7 +174,9 @@ What the split buys, and each of these is now one write to the bindings table:
 - Renaming is binding a new name and unbinding the old one. `cm bind`.
 - Several names for one session, so an emulator's automatic name and a name a person chose coexist.
 - `cm switch`, which points a terminal window at another session for as long as that client lives, and
-  `cm rebind`, which moves the window's name too so a restored window follows.
+  `cm rebind`, which moves the window's name too so a restored window follows. `cm rebind --replace` ends
+  the session the name came off, which is safe to offer only because nothing else depends on that session
+  once its last name has moved.
 
 Nothing moves on disk when a name changes, which is what makes it cheap. `shim_socket` and `log_path` are
 recorded in the row rather than derived, a property they were given so a socket layout change could not
@@ -606,6 +608,32 @@ a reboot is ordinary, so those two meet often, while a name being rebound under 
 is given up is that such a window follows its name on the next upgrade rather than staying where it was,
 which is defensible on its own terms: the name means the other session now, and following a binding is what
 every other attach does.
+
+### Replacing the session a name came off
+
+`cm rebind --replace` ends it, and `rebind_replaces` makes that the default. Three rules, each about
+something the request did not ask for.
+
+*It waits for the window to leave first.* The clients were asked to move a moment earlier and are
+reattaching, so ending the session before they have gone evicts them from it instead and a window exits
+rather than moves. A window still attached after the wait is one this call did not move, since --all-clients
+was not given, so its session is kept and the reason reported.
+
+*The kill runs on its own context, not the request's.* In the ordinary case the caller is the shell inside
+the session being ended, so this kills the process waiting for the reply. On the request's context that death
+cancels the kill halfway and leaves the session running.
+
+*The busy check is skipped when the caller is inside the session being replaced.* There it cannot mean
+anything: `cm rebind` is itself a foreground command, so OSC 133 reports that session busy every time and
+refusing on it would refuse always, while a backgrounded job does not set it at all. What guards that case
+instead is that a foreground command would have prevented the user typing the command. From elsewhere the
+check is real, and `--force` overrides it, as it does the refusal to end a session that still has another
+name.
+
+Ending a session whose shell had just exited also used to report failure. The shim signals the shell's
+process group, and if the shell went in the window before the shim reaped it that call fails with ESRCH,
+which was the one shape of "already gone" the server did not tolerate. Reached most often here, since the
+session being ended was created moments earlier.
 
 ### A switch reattaches rather than re-execing
 

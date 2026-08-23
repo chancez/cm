@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/chancez/cm/internal/input"
@@ -1252,6 +1253,26 @@ func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) er
 // outcome the caller wanted.
 func isTransportClosed(err error) bool {
 	return transport.IsClosed(err)
+}
+
+// isProcessGone reports whether an error is the shell having already exited.
+//
+// A third shape of "the session is already over", alongside ErrSessionOver and a closed transport, and the
+// only one that was not tolerated. The shim signals the shell's process group to stop it, and if the shell
+// exited in the window before the shim reaped it, that call fails with ESRCH: the process is gone, which is
+// what the caller asked for, but it arrived as a raw errno and a kill reported "no such process" for a
+// session it had successfully disposed of.
+//
+// Reached most often by ending a session that was created moments earlier, which is what `cm rebind
+// --replace` does to the session it moves a name off.
+//
+// Matched on the message because that is how it crosses the wire, which is what isSessionOver does with its
+// sentinel for the same reason.
+func isProcessGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), syscall.ESRCH.Error())
 }
 
 func isSessionOver(err error) bool {

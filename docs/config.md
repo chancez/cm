@@ -37,6 +37,9 @@ shim_log_retention = "168h"
 # How long a pre-migration snapshot of the database is kept, for rolling back.
 database_backup_retention = "168h"
 
+# Whether `cm rebind` ends the session it moves a name off.
+rebind_replaces = false
+
 # Where sockets and state live. Absolute paths: "~" is not expanded.
 runtime_dir = "/tmp/cm"
 state_dir = "/home/user/.local/state/cm"
@@ -85,6 +88,7 @@ forget_unpersisted_after = "5m"
 | `log_level` | `debug`, `info`, `warn`, `error`, `off` | `info` |
 | `shim_log_retention` | Go duration; `0` keeps every log | `168h` (a week) |
 | `database_backup_retention` | Go duration; `0` keeps every snapshot | `168h` (a week) |
+| `rebind_replaces` | bool; `cm rebind` ends the session it moves a name off | `false` |
 | `runtime_dir` | path | see [Directories](#directories) |
 | `state_dir` | path | see [Directories](#directories) |
 
@@ -171,6 +175,20 @@ snapshot of a database with one session, against a real install's 61440-byte dat
 hourly, on the same pass as the shim logs.
 
 `database_backup_retention = "0"` keeps every snapshot.
+
+### rebind_replaces
+
+Makes `cm rebind` end the session it moves a name off, as though `--replace` had been passed.
+`--replace=false` overrides it for one call.
+
+Off by default, because the session left behind is a live shell and cm asks before ending one. On is the
+right setting when your windows are per-window sessions: the vacated one is then the shell the emulator
+made for that window and nothing else refers to it.
+
+Two things are refused even with the setting on, since neither is what it asked for. A session with another
+name is not this window's alone, and one running a foreground command has work in it; `--force` overrides
+both. The busy check is skipped when the rebind is typed inside the session being replaced, because there it
+cannot mean anything: `cm rebind` is itself a foreground command, so the session always reads busy.
 
 ## Directories
 

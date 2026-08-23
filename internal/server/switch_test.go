@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +10,23 @@ import (
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
+
+// fixtureAttachments holds each fixture session's attachment, so leaveWindow can drop it.
+//
+// A map rather than another return value, because eleven call sites do not need it and would each have to
+// ignore one.
+var fixtureAttachments = map[*Session]attachment{}
+
+// leaveWindow detaches the fixture's client, standing in for a window that has moved elsewhere.
+func leaveWindow(t *testing.T, sess *Session) {
+	t.Helper()
+	att, ok := fixtureAttachments[sess]
+	if !ok {
+		t.Fatal("no fixture attachment for this session")
+	}
+	sess.detach(att)
+	delete(fixtureAttachments, sess)
+}
 
 // switchFixture is a live session with one client that has typed, plus a second session to switch to.
 //
@@ -35,9 +53,13 @@ func switchFixture(t *testing.T) (*Service, *store.Store, *Session, *attachToken
 
 	tok := sess.reserveClient()
 	sess.noteClientIdentity(tok, "v1", 1000)
-	if _, err := sess.attach(nil, tok); err != nil {
+	att, err := sess.attach(nil, tok)
+	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
+	// Kept so a test can make this window leave. A real client detaches and reattaches elsewhere on its
+	// own; nothing here does, so a test that needs the session unwatched has to say so.
+	fixtureAttachments[sess] = att
 	// The client someone is using is the one that typed most recently, so a switch has nothing to act on
 	// until something has been typed.
 	sess.noteClientInput(tok)
@@ -296,5 +318,110 @@ func TestSwitchLeavesOtherWindowsAlone(t *testing.T) {
 	}
 	if got := sess.switchTarget(quiet); got != "" {
 		t.Errorf("a window that typed nothing was told to switch to %q, want left alone", got)
+	}
+}
+
+// A rebind with replace ends the session the name moved off, once no window is watching it.
+func TestRebindWithReplaceEndsThePreviousSession(t *testing.T) {
+	svc, st, sess, _, target := switchFixture(t)
+	ctx := context.Background()
+
+	// The window has moved on, which is the state replace waits for: a real client reattaches elsewhere
+	// within its own retry, and the kill happens once nothing is watching.
+	leaveWindow(t, sess)
+
+	resp, err := svc.Switch(ctx, &serverv1.SwitchRequest{
+		Session: "here", Target: target, Bind: true, Replace: true,
+		// From inside the session being replaced, which is the ordinary case and the one that skips the
+		// busy check.
+		CallerSession: "here",
+	})
+	if err != nil {
+		t.Fatalf("Switch(replace) error = %v", err)
+	}
+	if resp.KilledSession != sess.id {
+		t.Errorf("KilledSession = %q, want %q (kept: %q)", resp.KilledSession, sess.id, resp.KeptReason)
+	}
+	if _, err := st.Get(ctx, sess.id); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Get() error = %v, want the record gone", err)
+	}
+}
+
+// A session with another name is not this window's alone, so replace leaves it and says why. That name is
+// how something else reaches it, and nothing here asked for that to stop working.
+func TestRebindWithReplaceRefusesASessionWithOtherNames(t *testing.T) {
+	svc, st, sess, _, target := switchFixture(t)
+	ctx := context.Background()
+
+	if err := st.Bind(ctx, store.Binding{
+		Name: "alsohere", SessionID: sess.id, OnKill: store.KillTarget,
+	}); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+
+	_, err := svc.Switch(ctx, &serverv1.SwitchRequest{
+		Session: "here", Target: target, Bind: true, Replace: true, CallerSession: "here",
+	})
+	if err == nil {
+		t.Fatal("Switch(replace) on a session with another name = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "other names") {
+		t.Errorf("error = %v, want it to name the problem", err)
+	}
+	// Refused before anything moved, so the window is still where it was.
+	if _, err := st.Get(ctx, sess.id); err != nil {
+		t.Errorf("Get() error = %v, want the session untouched", err)
+	}
+	binding, err := st.Binding(ctx, "here")
+	if err != nil || binding.SessionID != sess.id {
+		t.Errorf("Binding(here) = %+v, %v, want it still on the old session", binding, err)
+	}
+}
+
+// Replace without moving the name is refused: a switch leaves the name pointing at the session being left,
+// so ending it would leave that name resolving to nothing.
+func TestReplaceWithoutBindIsRefused(t *testing.T) {
+	svc, _, _, _, target := switchFixture(t)
+
+	_, err := svc.Switch(context.Background(), &serverv1.SwitchRequest{
+		Session: "here", Target: target, Replace: true,
+	})
+	if err == nil {
+		t.Fatal("Switch(replace without bind) = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "rebind") {
+		t.Errorf("error = %v, want it to point at cm rebind", err)
+	}
+}
+
+// A window still attached after the switch keeps its session alive, and the reason is reported.
+//
+// Only the client that typed is moved unless --all-clients is given, so a session can still be on someone
+// else's screen. Ending it would take that window's session away, which nothing asked for.
+func TestRebindWithReplaceKeepsASessionAWindowIsStillWatching(t *testing.T) {
+	svc, st, sess, _, target := switchFixture(t)
+	ctx := context.Background()
+
+	// Deliberately not leaving: the fixture's client stays attached, which is what a second window on the
+	// same session looks like from here.
+	resp, err := svc.Switch(ctx, &serverv1.SwitchRequest{
+		Session: "here", Target: target, Bind: true, Replace: true, CallerSession: "here",
+	})
+	if err != nil {
+		t.Fatalf("Switch(replace) error = %v", err)
+	}
+	if resp.KilledSession != "" {
+		t.Errorf("KilledSession = %q, want nothing killed while a window is attached", resp.KilledSession)
+	}
+	if !strings.Contains(resp.KeptReason, "still attached") {
+		t.Errorf("KeptReason = %q, want it to say a window is still attached", resp.KeptReason)
+	}
+	// The name still moved: that half was asked for and is not conditional on the old session going.
+	if _, err := st.Get(ctx, sess.id); err != nil {
+		t.Errorf("Get() error = %v, want the session still there", err)
+	}
+	binding, err := st.Binding(ctx, "here")
+	if err != nil || binding.SessionID != "there222" {
+		t.Errorf("Binding(here) = %+v, %v, want it moved to the target", binding, err)
 	}
 }
