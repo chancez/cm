@@ -298,6 +298,24 @@ func TestCloseLeavesShimRunningAndPersistsResumePoint(t *testing.T) {
 		t.Fatalf("attach() error = %v", err)
 	}
 	readUntil(t, att.reader, "SOMETHING")
+
+	// Waited for rather than assumed, and it is the same window TestListReportsLiveSequence documents:
+	// the pump appends a chunk to the client log *before* it takes the lock to advance lastSeq, which is
+	// the order resumePoints explains and depends on. So having read the output does not mean the
+	// position accounts for it, and Close inside that gap persists the zero the fixture stored. Failed
+	// that way in two of four full Linux suite runs, as `LastSeq = 0 after Close`.
+	//
+	// Close is what is under test here, so the wait goes before it rather than around the assertion.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if shimSeq, _ := sess.resumePoints(); shimSeq > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the pump to advance the resume point past 0")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	sess.detach(att)
 
 	if err := mgr.Close(); err != nil {
