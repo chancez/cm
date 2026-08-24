@@ -17,6 +17,9 @@
 package vt
 
 /*
+// These are the only #cgo directives in the package. They are package-scoped, so another file in
+// package vt needing <ghostty/vt.h> just includes it; repeating the LDFLAGS line puts the same
+// archive on the link line twice and ld warns about duplicate libraries on every build.
 #cgo CFLAGS: -I${SRCDIR}/../../third_party/ghostty/zig-out/include
 #cgo LDFLAGS: ${SRCDIR}/../../third_party/ghostty/zig-out/lib/libghostty-vt.a
 #include <ghostty/vt.h>

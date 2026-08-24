@@ -1,8 +1,9 @@
 package vt
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../third_party/ghostty/zig-out/include
-#cgo LDFLAGS: ${SRCDIR}/../../third_party/ghostty/zig-out/lib/libghostty-vt.a
+// The #cgo CFLAGS and LDFLAGS for libghostty live in vt.go and apply to the whole package, so
+// they are deliberately absent here. Repeating them named the same static archive twice on the
+// link line, which ld reports as "ignoring duplicate libraries" on every build.
 #include <ghostty/vt.h>
 #include <stdlib.h>
 */
