@@ -503,6 +503,25 @@ server adopt a shim an old one spawned, and matters most for the layer that cann
 protocol may change, and a client and server are expected to be upgraded together: `cm doctor` reports the
 skew, and `cm clients upgrade` is how the client half converges without closing a window.
 
+**A shim is re-exec'd from the binary on disk, so an old server spawns new shims.** This is the skew that
+is easy to miss, because it needs no upgrade command to happen: replacing the binary is enough, and from
+that moment a still-running old server pairs itself with shims from the new build. Installing and carrying
+on working, which is the normal way to try a build, is exactly this state.
+
+So the argv the server passes a shim is a compatibility surface in both directions, and it has produced two
+bugs. The shim validated `--session` as an ID, which rejects a dot, and an older server passes a name: every
+session created after the install died before binding its socket, and the server waited out its full
+ten-second readiness timeout for a socket that would never appear. Measured at 10.38s per attempt against a
+kitty split, whose sessions are named `kitty.N`, and 0.36s once names were accepted; a session called `work`
+worked throughout, which is what made it look intermittent. The shim also built `CM_SESSION` by adding the
+ID sigil, turning a name into `@kitty.325`, a reference that resolves to nothing, so every cm command inside
+such a session answered "no session given".
+
+The rule both point at: anything added to that argv has to be optional, and its absence has to mean what
+the older server meant. `--session-ref` is the worked example. The server states the reference it wants
+exported rather than leaving the shim to derive one, because the two spellings overlap and cannot be told
+apart by inspection: a name of only lowercase letters is also a syntactically valid ID.
+
 Sessions created before an upgrade keep working, including their environment: a shell in one has already
 exported what that build put in its environment, and nothing rewrites it afterwards. A change to what cm
 exports therefore reaches new sessions only, which is a property to design around rather than a bug. The ID
@@ -516,6 +535,13 @@ newer build migrated cannot be read by an older one. Two things make that surviv
 Opening refuses when the recorded version is ahead of what the build knows, and says both numbers. It used
 to fail later and confusingly: `migrate` had nothing to apply, `Open` succeeded, and the first query failed
 with a missing column, naming the column rather than the version skew that removed it.
+
+**Only a server migrates.** A client opens the database with `OpenExisting`, which reads and refuses any
+schema that is not the one this build knows. The reason is the skew above: while a new binary is installed
+and an old server is still running, a client is the *newer* process, and `cm logs shim <name>` reading a
+binding took the schema from 6 to 7 in 0.01s, after which every request that server served failed with
+`SQL logic error: no such column: name`. Migrating is a decision about a file two other processes are using,
+and the process that owns it is the one that should make it.
 
 And a migration copies the database before it changes anything, to `cm.db.v<from>.bak`, which the refusal
 above then names, because that snapshot is a database the older build can read. `VACUUM INTO` rather than

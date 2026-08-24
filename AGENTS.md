@@ -262,6 +262,19 @@ Three places, by kind:
   wrong made `cm switch` close the window instead of moving it, since a switch re-execs the client as
   `cm attach @<id>`, and the entire test suite passed because nothing below the CLI had been given a
   reference to validate. Only a real terminal showed it.
+- **A shim is re-exec'd from the binary on disk**, so replacing the binary pairs a still-running old server
+  with new shims, with no upgrade command involved. Installing a build and carrying on working is that state.
+  So anything added to the server-to-shim argv must be optional, and its absence must mean what the older
+  server meant: an older server passes a session *name* where a current one passes an ID. Assuming an ID
+  cost two bugs. Validating it as one rejected `kitty.325` for its dot, so the shim exited before binding
+  its socket and the server waited out its full ten-second readiness timeout, 10.38s per attempt against
+  0.36s fixed, while a session named `work` worked and hid it. Deriving `CM_SESSION` from it exported
+  `@kitty.325`, and every cm command inside answered "no session given". `--session-ref` is the pattern:
+  the server states what it wants exported rather than letting the shim guess, because the two spellings
+  overlap and cannot be told apart by inspection.
+- **Only a server migrates the database.** Clients use `store.OpenExisting`, which reads and refuses a
+  schema that is not this build's. `cm logs shim <name>` used `Open` and took a live server's database from
+  6 to 7 in 0.01s, after which every request it served failed with `no such column: name`.
 - **Two sequence-number spaces exist** and mixing them corrupts output: the shim's numbering and the
   server's post-rewrite numbering differ in length. See `docs/architecture.md`.
 - **`os.MkdirAll(dir, 0700)` over an existing directory leaves its mode alone**, so pointing
