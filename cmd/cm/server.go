@@ -140,6 +140,16 @@ Each session's shim owns its pty, so a server exiting leaves every session intac
 and the next server adopts them. That is how an upgrade works: stop the old server,
 and the next command starts a new one that picks the sessions back up.
 
+Attached clients wait rather than replace it. A client whose server *dies* starts
+one, since a window frozen over a live shell recovers no other way, but a stop is
+recorded and honored: that is what makes it safe to stop the server while restoring
+a database snapshot or running one in the foreground. Windows say so on screen
+instead of freezing silently.
+
+Honored for two minutes, after which a client with a session on screen starts one
+anyway. An upgrade that died between stopping the old server and starting the new
+one would otherwise leave every window waiting for a server nobody will start.
+
 Use 'cm kill' to end sessions themselves.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

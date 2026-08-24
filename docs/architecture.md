@@ -744,6 +744,48 @@ mark on pid 1000 and then 1001 across two identical calls. `--current` on a sess
 active client asks nobody and reports zero, rather than falling back to every client: a caller reached
 for the flag precisely to spare the other windows.
 
+## Losing a server, and who fixes it
+
+A client that loses its server reconnects forever, because the shim holds the pty and the shell is still
+running: waiting is right and giving up is not. What was missing was everything around that wait.
+
+**The wait was invisible.** The client owns the terminal while it reconnects, so a frozen window is
+indistinguishable from a hung program. Past `reconnectQuietPeriod`, which is the same three seconds the log
+uses, the client paints one line on the bottom row saying what is happening and for how long. Nothing is
+painted below that threshold, since a restart takes about 450ms and a flash of text on every upgrade would
+be worse than silence.
+
+That line overwrites a row the session owns, and cm's terminal model is the only thing that knows what was
+there, so recovery drops the resume position and reattaches, which the server answers with a serialized
+screen. It is the same move a detected output gap makes, and the same trade: output that scrolled past
+during the outage is not replayed, which is the right choice once an outage has lasted this long.
+
+**Nobody was starting a server.** Every cm command starts one when none is running, which is why the fix for
+a frozen window was to open a new window and run any of them. The machinery existed and the client that had
+noticed was the one process that could not reach it. It now does, throttled to one attempt every five
+seconds, with the failure shown on the same line: a server that refuses to start is otherwise
+indistinguishable from one that is slow, and one unknown config setting once stopped a replacement from ever
+coming up.
+
+**A stop has to stay stopped**, which is the one case where restarting is wrong. Restoring a database
+snapshot and running a server in the foreground both require that nothing starts one behind your back. So a
+server exiting on request leaves `server-stopped` in the runtime directory and a starting server removes it.
+
+A file rather than a message on the wire, for three reasons: it reaches clients that attach after the stop,
+it survives the process that wrote it, and it self-heals, since the next server to start clears it. It is
+written after `Serve` returns rather than in the `Shutdown` handler, so a signal counts the same as the RPC,
+and a process killed outright writes nothing, which is exactly right because nobody asked it to stop.
+
+Honored for two minutes rather than forever. An upgrade that died between stopping the old server and
+starting the new one would otherwise leave every window waiting for a server nobody will start, and that
+failure is silent. Two minutes is longer than a snapshot restore takes, and that case has no clients
+attached anyway, since the recipe stops the sessions first.
+
+*Not a `cm doctor` check.* "Clients attached and no server running" looks like exactly what doctor is for,
+and it cannot work: `cm doctor` connects to a server, which starts one, so running the check would create
+the condition's cure and report nothing. That is deliberate for other reasons, and it makes this state
+observable only from inside a client, which is where it is now handled.
+
 ## Terminal queries: cm answers, or asks one client and relays
 
 A program in a session can ask the terminal questions: what are you (`CSI c`), where is the cursor
