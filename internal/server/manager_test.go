@@ -463,6 +463,7 @@ func TestShimArgsCarryPixelSize(t *testing.T) {
 		"--state-dir", mgr.dirs.State,
 		"shim",
 		"--session", "pixels",
+		"--session-ref", "@pixels",
 		"--rows", "30",
 		"--cols", "100",
 		"--xpixel", "800",
@@ -486,6 +487,7 @@ func TestShimArgsOmitUnknownPixelSize(t *testing.T) {
 		"--state-dir", mgr.dirs.State,
 		"shim",
 		"--session", "nopixels",
+		"--session-ref", "@nopixels",
 		"--rows", "24",
 		"--cols", "80",
 	}

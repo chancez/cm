@@ -23,6 +23,7 @@ import (
 func newShimCommand(g *globals) *cobra.Command {
 	var (
 		session         string
+		sessionRef      string
 		dir             string
 		rows, cols      uint16
 		xpixel, ypixel  uint16
@@ -38,7 +39,7 @@ func newShimCommand(g *globals) *cobra.Command {
 		DisableSuggestions: true,
 		// Everything after the flags is the command to run, so args are not restricted.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := paths.ValidateSessionID(session); err != nil {
+			if err := validateShimSession(session); err != nil {
 				return err
 			}
 			dirs, err := g.dirs()
@@ -54,6 +55,7 @@ func newShimCommand(g *globals) *cobra.Command {
 			}
 			return runShim(cmd.Context(), dirs, cfg, shim.Config{
 				Session:     session,
+				SessionRef:  sessionRef,
 				Command:     args,
 				Dir:         dir,
 				Rows:        rows,
@@ -71,7 +73,11 @@ func newShimCommand(g *globals) *cobra.Command {
 	}
 	cmd.Flags().SetInterspersed(false)
 	f := cmd.Flags()
-	f.StringVar(&session, "session", "", "session name this shim serves")
+	f.StringVar(&session, "session", "", "session this shim serves, as the server identifies it")
+	// Absent from an older server's argv, which is what makes the fallback in shim.Config.SessionRef the
+	// compatible behavior rather than a convenience.
+	f.StringVar(&sessionRef, "session-ref", "",
+		"reference to export as CM_SESSION (defaults to --session unchanged)")
 	f.StringVar(&dir, "dir", "", "working directory for the shell")
 	f.Uint16Var(&rows, "rows", 24, "initial window rows")
 	f.Uint16Var(&cols, "cols", 80, "initial window columns")
@@ -87,6 +93,34 @@ func newShimCommand(g *globals) *cobra.Command {
 	f.Int64Var(&persistMaxBytes, "persist-max-bytes", 0,
 		"byte ceiling for the persisted log (0 for the default)")
 	return cmd
+}
+
+// validateShimSession accepts what a server passes to name the session a shim serves.
+//
+// Either spelling, and rejecting a name is what made this worth its own function. A server passes its own
+// idea of what identifies a session, and during an upgrade that server is the *previous* build: a shim is
+// re-exec'd from the binary on disk, so a running old server spawns a new shim as soon as the binary is
+// replaced. An older server passes a name.
+//
+// Requiring an ID therefore broke every session an old server created once the new binary was installed,
+// and the failure landed nowhere near the cause. The shim exited before binding its socket, so the server
+// waited its full ten seconds for a socket that would never appear and reported `shim for kitty.2 did not
+// become ready: timed out after 10s`. Measured at 10.38s per attempt, against kitty splits, which name
+// sessions kitty.N: the dot is what fails the ID rules, so names without one worked and hid it.
+//
+// Both are checked rather than neither, because this value becomes a path component: it is the traversal
+// boundary, and the name rules are what guarded it before IDs existed.
+func validateShimSession(session string) error {
+	idErr := paths.ValidateSessionID(session)
+	if idErr == nil {
+		return nil
+	}
+	if paths.ValidateSessionName(session) == nil {
+		return nil
+	}
+	// The ID error, since a current server passes an ID and that is the likelier mistake to be reading
+	// about. A name that fails both is malformed under either set of rules anyway.
+	return idErr
 }
 
 // runShim binds the socket, starts the session, and serves until the session ends.

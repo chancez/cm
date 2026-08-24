@@ -44,9 +44,18 @@ const DefaultLogBytes = 4 << 20 // 4 MiB
 
 // Config describes a session to run.
 type Config struct {
-	// Session is the name this shim serves. Used for the socket path and exported to
-	// the shell.
+	// Session is what this shim serves, as the server names it. Used for the socket path.
+	//
+	// An ID from a current server, a name from an older one. The shim does not care which and must not
+	// guess: the two overlap, since a name of only lowercase letters also satisfies the ID rules.
 	Session string
+	// SessionRef is what to export as CM_SESSION, or empty to export Session unchanged.
+	//
+	// Carried separately because only the server knows whether the value it passed is an identity, and
+	// the sigil that makes it one cannot be added by inspection. Building it here from Session exported
+	// `@kitty.325` under an older server, an ID that is not one, and every cm command inside such a
+	// session then reported "no session given" because the reference failed to resolve.
+	SessionRef string
 	// Command is the program to run. Empty means the user's login shell.
 	Command []string
 	// Dir is the working directory. Empty means inherit.
@@ -182,7 +191,14 @@ func Start(cfg Config) (*Session, error) {
 	// under can be pointed at a different session while this shell runs, and every script in here that
 	// had captured it would then be reading somewhere else. An ID cannot be reassigned, which is the
 	// only property that makes a variable captured once at shell startup safe to keep using.
-	cmd.Env = append(cmd.Env, paths.SessionEnv()+"="+paths.FormatSessionID(cfg.Session))
+	//
+	// Taken from the server rather than built here. See Config.SessionRef: an older server passes a name,
+	// and turning that into a reference produced one that resolves to nothing.
+	sessionRef := cfg.SessionRef
+	if sessionRef == "" {
+		sessionRef = cfg.Session
+	}
+	cmd.Env = append(cmd.Env, paths.SessionEnv()+"="+sessionRef)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		// Setsid plus Setctty makes the pty the child's controlling terminal, which is
 		// what gives it job control and delivers SIGWINCH on resize. Ctty is an index

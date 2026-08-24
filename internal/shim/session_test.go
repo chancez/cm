@@ -289,9 +289,10 @@ func TestSessionWriteAfterExitFails(t *testing.T) {
 // bare ID would be read as a name, and there is no session of that name.
 func TestSessionExportsSessionEnv(t *testing.T) {
 	s, err := Start(Config{
-		Session: "mysession",
-		Command: []string{"/bin/sh", "-c", "printf 'env=%s\\n' \"$CM_SESSION\""},
-		Rows:    24, Cols: 80,
+		Session:    "mysession",
+		SessionRef: "@mysession",
+		Command:    []string{"/bin/sh", "-c", "printf 'env=%s\\n' \"$CM_SESSION\""},
+		Rows:       24, Cols: 80,
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -303,6 +304,33 @@ func TestSessionExportsSessionEnv(t *testing.T) {
 	got := readUntil(t, r, "env=")
 	if !strings.Contains(got, "env=@mysession") {
 		t.Errorf("output = %q, want it to contain %q", got, "env=@mysession")
+	}
+}
+
+// A server that sends no reference gets the value it did send, exported unchanged.
+//
+// That server is the previous build, and it is reachable in the ordinary way: a shim is re-exec'd from
+// the binary on disk, so a running old server spawns new shims the moment the binary is replaced. What it
+// passes is a name. Deriving the reference here instead exported `@kitty.325`, an ID that is not one, and
+// every cm command inside the session answered "no session given" because it resolved to nothing.
+func TestSessionExportsSessionEnvVerbatimWithoutARef(t *testing.T) {
+	s, err := Start(Config{
+		// A name an older server would pass, dot included, since that is what a per-window session is
+		// called and the dot is not legal in an ID.
+		Session: "kitty.325",
+		Command: []string{"/bin/sh", "-c", "printf 'env=%s\\n' \"$CM_SESSION\""},
+		Rows:    24, Cols: 80,
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	r := s.Log().Subscribe(0)
+	defer r.Close()
+
+	got := readUntil(t, r, "env=")
+	if !strings.Contains(got, "env=kitty.325") {
+		t.Errorf("output = %q, want it to contain %q", got, "env=kitty.325")
 	}
 }
 

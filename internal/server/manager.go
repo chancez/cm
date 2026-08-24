@@ -1122,6 +1122,9 @@ func (m *Manager) shimArgs(opts OpenOptions, logPath string) []string {
 		"--state-dir", m.dirs.State,
 		"shim",
 		"--session", opts.id,
+		// Spelled out rather than left for the shim to derive, because only this side knows the value
+		// above is an identity. A shim that added the sigil itself exported `@name` under an older server.
+		"--session-ref", paths.FormatSessionID(opts.id),
 		"--rows", strconv.Itoa(int(opts.Rows)),
 		"--cols", strconv.Itoa(int(opts.Cols)),
 	}
