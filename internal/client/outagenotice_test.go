@@ -140,16 +140,16 @@ func TestNoticeTextFitsTheWidth(t *testing.T) {
 			want: " cm: lost the serve",
 		},
 		{
-			name:   "a reason replaces the wait",
+			name:   "a note replaces the wait but keeps the elapsed time",
 			cols:   80,
-			reason: "unknown setting foo",
-			want:   " cm: the server is not starting: unknown setting foo ",
+			reason: "the server is not starting: unknown setting foo",
+			want:   " cm: the server is not starting: unknown setting foo (5s) ",
 		},
 		{
-			name:   "newlines in a reason are collapsed",
+			name:   "newlines in a note are collapsed",
 			cols:   80,
 			reason: "line one\nline two",
-			want:   " cm: the server is not starting: line one line two ",
+			want:   " cm: line one line two (5s) ",
 		},
 	}
 

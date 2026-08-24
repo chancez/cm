@@ -48,7 +48,7 @@ type outageNotice struct {
 //
 // waited is passed in rather than measured here so the decision is testable without sleeping, which is
 // the same reason report takes the outage rather than a clock.
-func (n *outageNotice) update(waited time.Duration, reason string) {
+func (n *outageNotice) update(waited time.Duration, note string) {
 	if !n.enabled || waited < n.quietFor {
 		return
 	}
@@ -57,7 +57,7 @@ func (n *outageNotice) update(waited time.Duration, reason string) {
 		return
 	}
 
-	text := noticeText(waited, reason, int(cols))
+	text := noticeText(waited, note, int(cols))
 	if n.painted && text == n.last {
 		return
 	}
@@ -92,10 +92,12 @@ func (n *outageNotice) clear() bool {
 // its pending-wrap state, and a single further byte would scroll the screen: that would move the
 // session's content up by a row and desynchronize it from the model that is about to repaint it. One
 // unused column costs nothing by comparison.
-func noticeText(waited time.Duration, reason string, cols int) string {
+func noticeText(waited time.Duration, note string, cols int) string {
 	text := fmt.Sprintf(" cm: lost the server, reconnecting (%s) ", waited.Round(time.Second))
-	if reason != "" {
-		text = fmt.Sprintf(" cm: the server is not starting: %s ", reason)
+	if note != "" {
+		// The elapsed time stays, whatever the note says: a window that has been waiting two minutes reads
+		// very differently from one that has been waiting five seconds, and the note alone does not say.
+		text = fmt.Sprintf(" cm: %s (%s) ", note, waited.Round(time.Second))
 	}
 	// Collapsed to one line, since a reason read from the server's stderr can carry newlines and a
 	// newline here would scroll the screen.

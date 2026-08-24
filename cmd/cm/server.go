@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -214,6 +215,15 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 
 	logger.Info("server starting", "pid", os.Getpid(), "socket", dirs.ServerSocket())
 
+	// A server that is up means no stop is in effect, whoever asked for the last one. Removed here rather
+	// than by whatever started this process, so a server run by hand clears it too, and so the marker can
+	// never outlive the condition it describes: see paths.ServerStopped.
+	if err := os.Remove(dirs.ServerStopped()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Not fatal. The cost of a marker left behind is that clients will not start a replacement for
+		// this server if it dies, which is worth a line rather than a refusal to serve.
+		logger.Warn("could not clear the server-stopped marker", "error", err)
+	}
+
 	// A server must hold no client's values, because every shim inherits its environment and the creating
 	// client's values are layered *over* that: a name the client does not have is never overwritten, so it
 	// reaches the shell. See sessionenv.ClientValues for the incident, where a server started from a shell
@@ -334,7 +344,24 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	// the state directory, which survives the deletion, so this is the one channel that still works.
 	go watchOwnSocket(ctx, mgr)
 
-	return server.Serve(ctx, l, server.NewService(mgr))
+	// Serving is over when the context is cancelled, which is what both a Shutdown RPC and a signal do, so
+	// a clean return here means this server was asked to stop rather than having died. That is the
+	// distinction clients need: a crash leaves windows frozen over live shells and nothing but a client can
+	// recover it, while a stop has to stay stopped, since restoring a database snapshot and running a
+	// server in the foreground both require that nothing starts one behind your back.
+	//
+	// Written after Serve returns rather than in the Shutdown handler, so a signal counts the same as the
+	// RPC and neither has to remember to do it. A process that is killed outright writes nothing, which is
+	// exactly right: nobody asked it to stop.
+	serveErr := server.Serve(ctx, l, server.NewService(mgr))
+	if serveErr == nil {
+		if err := os.WriteFile(dirs.ServerStopped(), nil, 0o600); err != nil {
+			// Advisory, so a failure here costs a client starting a server that was meant to stay stopped,
+			// not correctness.
+			logger.Warn("could not record that this server was stopped on purpose", "error", err)
+		}
+	}
+	return serveErr
 }
 
 // withServer runs fn against a server, starting one if needed.

@@ -175,6 +175,26 @@ type Options struct {
 	// still in flight, losing the command's output about a third of the time.
 	OnOutput func(next uint64)
 
+	// StartServer, when set, starts a server and waits for it to accept connections.
+	//
+	// Supplied by the caller rather than done here, because spawning a process is not this package's
+	// business. Its absence disables recovery, which is what a caller that has no business starting one
+	// gets.
+	//
+	// Why a client starts one at all: a server that dies leaves every attached window frozen over a live
+	// shell, and nothing in the system notices. The recovery was to open a new window and run any cm
+	// command, since every one of them starts a server, so the machinery already existed and only the
+	// client could not reach it.
+	StartServer func(context.Context) error
+
+	// ServerStopped reports whether the server was stopped on purpose. Nil means never.
+	//
+	// Consulted before starting one, because a stop has to stay stopped: restoring a database snapshot and
+	// running a server in the foreground both need nothing starting one behind your back. Honored for
+	// stoppedGrace rather than forever, so an upgrade that died between stopping and starting does not
+	// leave every window waiting for a server nobody will start.
+	ServerStopped func() bool
+
 	// notice overrides the on-screen outage indicator, and is unexported because only a test sets it: a
 	// terminal cannot be faked from outside this package, since whether output is one is read from the
 	// file descriptor. Nil means Attach builds the real one from the terminal it was given.
@@ -298,6 +318,8 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		}
 	}
 
+	starter := &serverStarter{start: opts.StartServer, stopped: opts.ServerStopped}
+
 	var outage outageState
 	for {
 		conn, cl, err := dial(opts.SocketPath)
@@ -310,7 +332,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
 			outage.report(log)
-			notice.update(outage.waited(), "")
+			notice.update(outage.waited(), starter.attempt(ctx, outage.waited(), time.Now()))
 			if waitErr := outage.sleep(ctx); waitErr != nil {
 				return result, waitErr
 			}
@@ -385,7 +407,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
 			outage.report(log)
-			notice.update(outage.waited(), "")
+			notice.update(outage.waited(), starter.attempt(ctx, outage.waited(), time.Now()))
 			if waitErr := outage.sleep(ctx); waitErr != nil {
 				return result, waitErr
 			}

@@ -103,11 +103,20 @@ receives it and the window closes instead of detaching.`,
 
 			opts := client.Options{
 				SocketPath: dirs.ServerSocket(),
-				Session:    session,
-				ReadOnly:   readOnly,
-				Dir:        dir,
-				Command:    argsAfterDash(cmd, args),
-				DetachKey:  detachKey,
+				// Recovery for a window whose server died. Every cm command already starts one when none is
+				// running, which is why the fix for a frozen window was to open a new one and run any of
+				// them; this hands the same machinery to the client that noticed.
+				StartServer: func(ctx context.Context) error { return ensureServer(ctx, dirs) },
+				// Honored so a stop stays stopped. See paths.ServerStopped.
+				ServerStopped: func() bool {
+					_, err := os.Stat(dirs.ServerStopped())
+					return err == nil
+				},
+				Session:   session,
+				ReadOnly:  readOnly,
+				Dir:       dir,
+				Command:   argsAfterDash(cmd, args),
+				DetachKey: detachKey,
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),

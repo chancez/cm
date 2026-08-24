@@ -155,6 +155,23 @@ func (d Dirs) ServerStartErr() string {
 	return filepath.Join(d.Runtime, "server-start.err")
 }
 
+// ServerStopped marks a server that exited because it was asked to, rather than one that died.
+//
+// The distinction exists for the clients. A client that loses its server keeps reconnecting, and it may
+// start a replacement, because a server that crashed leaves every attached window frozen with a live shell
+// behind it and nothing else recovers that. A server that was *told* to stop must stay stopped: restoring a
+// database snapshot and running one in the foreground both need no server, and clients racing to start one
+// would defeat both.
+//
+// A file in the runtime directory rather than a message on the wire, for three reasons. It reaches clients
+// that attach after the stop, which a message cannot. It survives the process, which is the point. And it
+// self-heals, because a starting server removes it, so a stale marker cannot suppress recovery forever.
+//
+// In the runtime directory, so a reboot clears it along with the sockets: a stop is about this boot.
+func (d Dirs) ServerStopped() string {
+	return filepath.Join(d.Runtime, "server-stopped")
+}
+
 // Database is the sqlite file holding session metadata.
 func (d Dirs) Database() string {
 	return filepath.Join(d.State, Name+".db")
