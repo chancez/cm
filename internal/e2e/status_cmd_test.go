@@ -217,9 +217,16 @@ func TestLogsClearEmptiesTheLogAndLoggingContinues(t *testing.T) {
 	e := newEnv(t)
 
 	// Something in the log to clear.
+	//
+	// Waiting for the session's *end* rather than for any content at all, because the log is truncated
+	// next and the two race otherwise. The command here exits immediately, but the server logs "session
+	// ended" from the pump that notices it, so a wait satisfied by the earlier "session started" line
+	// leaves that write still in flight and it lands after the clear. Seen on Linux as a log holding one
+	// line, `session ended state=exited exit_code=0`, where the test wanted it empty. Nothing else is
+	// written about a session after that line, so once it is there the clear has nothing to race.
 	e.mustRun("run", "--session", "noisy", "-d", "--", trueBinary())
-	e.waitFor("the log to have content", 15*time.Second, func() bool {
-		return len(e.readFileOrEmpty(e.serverLogPath())) > 0
+	e.waitFor("the session to be logged as ended", 15*time.Second, func() bool {
+		return strings.Contains(e.readFileOrEmpty(e.serverLogPath()), `msg="session ended"`)
 	})
 
 	e.mustRun("logs", "server", "--clear")
