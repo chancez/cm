@@ -174,6 +174,11 @@ type Options struct {
 	// reached it; without this it stopped following as soon as the wait returned and truncated whatever was
 	// still in flight, losing the command's output about a third of the time.
 	OnOutput func(next uint64)
+
+	// notice overrides the on-screen outage indicator, and is unexported because only a test sets it: a
+	// terminal cannot be faked from outside this package, since whether output is one is read from the
+	// file descriptor. Nil means Attach builds the real one from the terminal it was given.
+	notice *outageNotice
 }
 
 // SessionMetadata is what a session reports about itself.
@@ -280,6 +285,19 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// request the user made, and becomes an ID or a switch target as the loop learns better.
 	ref := opts.Session
 
+	// Painted only by a client that owns a terminal and is willing to have it repainted. NoRestore marks
+	// the followers, which stream bytes to a pipe where an escape sequence is corruption rather than
+	// information, and it is the same signal the gap repaint keys on.
+	notice := opts.notice
+	if notice == nil {
+		notice = &outageNotice{
+			out:      tty,
+			size:     tty.Size,
+			enabled:  tty.IsTerminal() && !opts.NoRestore,
+			quietFor: reconnectQuietPeriod,
+		}
+	}
+
 	var outage outageState
 	for {
 		conn, cl, err := dial(opts.SocketPath)
@@ -292,6 +310,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
 			outage.report(log)
+			notice.update(outage.waited(), "")
 			if waitErr := outage.sleep(ctx); waitErr != nil {
 				return result, waitErr
 			}
@@ -301,6 +320,15 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		// Reached the server, so any outage is over. Logged only if it was reported, which keeps an
 		// ordinary restart silent on both sides rather than announcing a recovery nobody was told about.
 		outage.end(log)
+		// A notice that was on screen overwrote the session's bottom row, and cm's terminal model is the
+		// only thing that knows what was there. Erasing it alone would leave a blank row where a prompt or
+		// a status line belongs, so the position is dropped and the attachment repaints, which is the same
+		// move a detected output gap makes for the same reason. The cost is that output which scrolled past
+		// during the outage is not replayed, and that is the right trade at this point: the outage lasted
+		// longer than reconnectQuietPeriod, and a correct screen beats a complete one.
+		if notice.clear() {
+			resumeFrom = nil
+		}
 
 		outcome, err := runSession(
 			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, input, inputErr)
@@ -357,6 +385,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			}
 			outage.begin(err, resumeFromValue(resumeFrom), len(pending))
 			outage.report(log)
+			notice.update(outage.waited(), "")
 			if waitErr := outage.sleep(ctx); waitErr != nil {
 				return result, waitErr
 			}
@@ -423,6 +452,14 @@ func (o *outageState) report(log *slog.Logger) {
 		"resume_from", o.resumeFrom, "pending_bytes", o.pending)
 	o.reported = true
 	o.lastLogged = time.Now()
+}
+
+// waited reports how long the current outage has lasted, or zero when there is none.
+func (o *outageState) waited() time.Duration {
+	if o.since.IsZero() {
+		return 0
+	}
+	return time.Since(o.since)
 }
 
 // end clears the outage, reporting recovery only when the outage itself was reported.
