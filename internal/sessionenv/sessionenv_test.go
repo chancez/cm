@@ -324,3 +324,35 @@ func TestNoInheritDoesNotOvermatch(t *testing.T) {
 		t.Errorf("Inherit() = %+v, want %+v", got, want)
 	}
 }
+
+func TestClientValues(t *testing.T) {
+	environ := []string{
+		"TERM=xterm-kitty",
+		"KITTY_PID=123",
+		"SSH_CLIENT=192.0.2.1 51174 22",
+		// Kept: the machine's, not a client's, and a shim with no PATH cannot start a shell.
+		"PATH=/usr/bin",
+		"HOME=/home/someone",
+		// Dropped without being in the capture list, since it names one session.
+		"CM_SESSION=work",
+		"malformed-no-equals",
+		"=novalue",
+		// Listed twice, which os.Environ can produce, and reported once.
+		"TERM=xterm-256color",
+	}
+
+	got := ClientValues(environ, NewMatcher([]string{"TERM", "KITTY_*", "SSH_*"}))
+	want := []string{"CM_SESSION", "KITTY_PID", "SSH_CLIENT", "TERM"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ClientValues() = %v, want %v", got, want)
+	}
+}
+
+// Nothing to drop is the ordinary case, and it must not be reported as something to do: the server
+// logs the names it dropped, and a line listing none would be noise on every start.
+func TestClientValuesEmptyWhenNothingMatches(t *testing.T) {
+	got := ClientValues([]string{"PATH=/usr/bin", "HOME=/home/someone"}, NewMatcher([]string{"TERM"}))
+	if len(got) != 0 {
+		t.Errorf("ClientValues() = %v, want nothing", got)
+	}
+}

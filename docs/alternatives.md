@@ -83,7 +83,23 @@ close to cm's `DefaultCapture`, applied on attach. `PATH` is handled outside tha
 is not on the server's path. tmux scopes the override to unattached clients, and falls back to
 `_PATH_DEFPATH` (`/usr/bin:/bin`) when nothing supplies one.
 
-It is tempting to read that as tmux confirming cm's design, and worth being careful about how much it
+cm diverges on exactly that point, and a bug is what decided it. A cm server drops every variable the
+capture list covers, plus `CM_SESSION`, before it can spawn anything, rather than keeping its own
+`environ` as a baseline. A shim inherits the server's environment with the creating client's layered over
+it, so a name no client has is never overwritten: a server started from a shell inside an SSH session gave
+every session created afterwards `SSH_CLIENT`, `SSH_CONNECTION` and `SSH_TTY`, and prompts printed
+`user@host` in windows and splits that had never been near SSH. `SSH_AUTH_SOCK` in those same sessions was
+correct, which is the tell, because a local client has one to overwrite it with. It also survived every
+server restart, since a restart is spawned from a shell that has the values by then, and reinstalling the
+previous binary changed nothing: the running process is what carries them.
+
+Dropping them in the server rather than filtering them when spawning a shim was the choice, because it
+also covers a `cm server` started by hand and makes `ps eww` on the server honest. What makes the capture
+list the right list to use is that it already answers the same question from the other side: those are the
+variables that describe a client rather than the machine, which is why they follow a client in and why a
+long-lived process must not hold them.
+
+It is tempting to read the rest as tmux confirming cm's design, and worth being careful about how much it
 confirms, because the two servers are not equivalent. tmux's server is explicit and plural: it has
 `kill-server` and `start-server`, a flag to refuse starting one, per-server log files, and `-L`/`-S`
 to run several independent servers on purpose. cm's is close to invisible, started on demand and

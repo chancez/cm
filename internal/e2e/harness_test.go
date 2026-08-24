@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,6 +137,9 @@ type env struct {
 	// reads. Kept as raw KEY=VALUE strings rather than a map, since that is what exec wants and the order is
 	// never interesting.
 	extraEnv []string
+	// serverOnly holds the names in serverEnv, kept after serverEnv itself is cleared so every later
+	// client can have them removed. See environ.
+	serverOnly []string
 	// serverEnv is appended to the server's environment only, not to clients'.
 	//
 	// Exists because a session used to inherit its environment from the server, so the only way to test
@@ -188,6 +192,10 @@ func newEnvWith(t *testing.T, bin, version string, serverEnv ...string) *env {
 		state:   filepath.Join(root, "s"),
 		// Applied to the server-starting command below, then cleared.
 		serverEnv: serverEnv,
+	}
+	for _, kv := range serverEnv {
+		name, _, _ := strings.Cut(kv, "=")
+		e.serverOnly = append(e.serverOnly, name)
 	}
 	for _, d := range []string{e.runtime, e.state} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -265,7 +273,28 @@ func scrubbedEnviron() []string {
 }
 
 func (e *env) environ() []string {
-	out := append(scrubbedEnviron(),
+	base := scrubbedEnviron()
+	// Names the server was given are removed from every invocation, and then re-added only for the one
+	// that starts the server. Without this the asymmetry newEnvWithServerEnv promises does not exist on a
+	// machine whose own environment holds the same names: the developer's value reaches the client, the
+	// client's value is layered over the server's, and the server-only value can never be observed.
+	//
+	// That is not a hypothetical either. The person working on cm works inside cm, and while this was
+	// written every one of their shells held SSH_CLIENT, SSH_CONNECTION and SSH_TTY, which is the very leak
+	// the first test using this helper was about. The test passed with the fix reverted, because the
+	// client's real SSH_CLIENT overwrote the fake one the server had.
+	if len(e.serverOnly) > 0 {
+		kept := make([]string, 0, len(base))
+		for _, kv := range base {
+			name, _, _ := strings.Cut(kv, "=")
+			if slices.Contains(e.serverOnly, name) {
+				continue
+			}
+			kept = append(kept, kv)
+		}
+		base = kept
+	}
+	out := append(base,
 		"CM_RUNTIME_DIR="+e.runtime,
 		"CM_STATE_DIR="+e.state,
 		// A predictable shell, so a session's own output does not depend on the developer's prompt.

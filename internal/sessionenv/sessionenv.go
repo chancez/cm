@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/chancez/cm/internal/paths"
 )
 
 // DefaultCapture lists the variables worth following a client into a session.
@@ -168,6 +170,46 @@ func Capture(environ []string, m *Matcher) map[string]string {
 		}
 	}
 	return out
+}
+
+// ClientValues returns the names in environ that describe a client rather than the machine.
+//
+// For stripping them from a process that outlives any one client, which means the server. The capture
+// list already decides which variables belong to a client and its terminal, so this reuses it rather
+// than keeping a second list that could disagree with it. CM_SESSION is added on top, because it names
+// one session, which is client state by definition.
+//
+// The incident: a server started from a shell inside an SSH session held SSH_CLIENT, SSH_CONNECTION and
+// SSH_TTY. Every shim inherits the server's environment and has the creating client's values layered
+// *over* it, so a name the client does not have is never overwritten and survives into the shell. Every
+// session created afterwards looked like an SSH login, and prompts printed user@host, including in
+// splits of sessions that had never been near SSH. SSH_AUTH_SOCK in the same session was correct, which
+// is the tell: the client had one to overwrite it with, and no local client has an SSH_CLIENT.
+//
+// It also survived every server restart, because a restart is spawned from a shell that has the values
+// by then, and reinstalling the previous binary changed nothing, since the running process is what
+// carries them.
+//
+// Names are returned sorted and deduplicated, so a caller can log them and a test can assert on them.
+func ClientValues(environ []string, m *Matcher) []string {
+	seen := make(map[string]struct{}, len(environ))
+	var names []string
+	for _, kv := range environ {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if !m.Match(k) && k != paths.SessionEnv() {
+			continue
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Format selects how variables are rendered.
