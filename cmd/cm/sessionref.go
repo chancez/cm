@@ -16,9 +16,12 @@ import (
 // sends the reference to the server and lets it resolve, since the server holds the same table and is
 // already being talked to.
 //
-// The store is opened read-only in effect: this only reads, and a missing database means no sessions
-// exist, which is reported as the reference not resolving rather than as a failure to open a file the
-// user has never heard of.
+// Opened with OpenExisting rather than Open, and that is the whole reason this comment is longer than the
+// function. Open applies migrations, so reading a name here converted a running server's database to a
+// schema it could not read: measured at 0.01s for the migration and every request after it failing with
+// `SQL logic error: no such column: name`. A missing or older database means this cannot answer, which is
+// reported as the reference not resolving rather than as a failure to open a file the user has never heard
+// of.
 func resolveSessionID(ctx context.Context, dirs paths.Dirs, ref string) (string, error) {
 	value, isID := paths.SessionRef(ref)
 	if isID {
@@ -31,7 +34,7 @@ func resolveSessionID(ctx context.Context, dirs paths.Dirs, ref string) (string,
 		return "", err
 	}
 
-	st, err := store.Open(ctx, dirs.Database())
+	st, err := store.OpenExisting(ctx, dirs.Database())
 	if err != nil {
 		return "", fmt.Errorf("reading session names: %w", err)
 	}

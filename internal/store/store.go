@@ -62,6 +62,53 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenExisting opens the database for reading without migrating it.
+//
+// For a client, and the distinction is not a nicety: Open applies migrations, so a command that only
+// wanted to read a name converted the whole database out from under a running server. Measured against a
+// server on the previous build: `cm logs shim <name>` took the schema from 6 to 7 in 0.01s, and every
+// request that server served afterwards failed with `SQL logic error: no such column: name`. A snapshot
+// was left behind, so it was recoverable, but nothing asked and nothing warned.
+//
+// The schema has to match this build exactly. Reading an older one is refused rather than attempted
+// because the tables a caller wants may not be there yet, and the error for that is a bare "no such
+// table" naming a detail the reader cannot act on. Newer is refused for the reason migrate gives.
+//
+// Not opened with mode=ro, which would look stricter and be worse: a WAL database needs its shared-memory
+// file, and a read-only connection cannot create one, so this would fail exactly when no server is running
+// and the shm is absent. That is the case this exists to serve, since the reason to read a shim's log is
+// usually that something is already wrong. Migration is what had to be prevented, and not calling it is
+// what prevents it.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	// Checked rather than left to sqlite, which creates the file it cannot find. A client that created an
+	// empty database would leave one behind for the next server to adopt as the real thing.
+	if !fileExists(path) {
+		return nil, fmt.Errorf("no database at %s: %w", path, ErrNotFound)
+	}
+
+	dsn := path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(1)
+
+	s := &Store{db: db}
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reading schema version: %w", err)
+	}
+	if version != len(migrations) {
+		db.Close()
+		return nil, fmt.Errorf(
+			"%s is at schema version %d and this build knows %d: run a cm command that starts a server to "+
+				"migrate it, since a client will not",
+			path, version, len(migrations))
+	}
+	return s, nil
+}
+
 // fileExists reports whether a path is there, treating any error as absent.
 //
 // Only used to decide whether an error message can name a file, so a path that cannot be stat'd is the

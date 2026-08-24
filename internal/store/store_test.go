@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -537,4 +538,97 @@ func TestOpenRefusesADatabaseFromANewerBuild(t *testing.T) {
 			t.Errorf("Open() error = %v, want it to mention %q", err, want)
 		}
 	}
+}
+
+// OpenExisting must not migrate, which is what keeps a client from converting a running server's database.
+//
+// The incident: `cm logs shim <name>` resolves a name by reading the bindings table, and it used Open,
+// which migrates. Against a server on the previous build that took the schema from 6 to 7 in 0.01s, and
+// every request that server served afterwards failed with `SQL logic error: no such column: name`. A
+// client is not the process that gets to decide the schema.
+func TestOpenExistingDoesNotMigrate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cm.db")
+	ctx := context.Background()
+
+	// A real older database, tables and all, built by applying every migration but the last. Setting
+	// user_version alone is not enough and passes for the wrong reason: the tables would still be this
+	// build's shape, so a migration that did run would fail on its own and the refusal would look
+	// identical to not having tried.
+	older := len(migrations) - 1
+	seedAtVersion(t, path, older)
+
+	if _, err := OpenExisting(ctx, path); err == nil {
+		t.Error("OpenExisting() on an older schema = nil error, want a refusal rather than a migration")
+	}
+
+	// The point of the test: the file is untouched, so the server still owns the schema.
+	if after := schemaVersionOf(t, path); after != older {
+		t.Errorf("user_version = %d after OpenExisting(), want it left at %d", after, older)
+	}
+	// And no snapshot, which is the other half of having not migrated.
+	if backup := BackupPath(path, older); fileExists(backup) {
+		t.Errorf("%s exists, so a client took a snapshot on its way through a migration", backup)
+	}
+}
+
+// A database that is not there must not be created by a client reading it.
+//
+// An empty one left behind is worse than an error: the next server adopts it as the real thing, and every
+// session recorded in the database that should have been there is gone.
+func TestOpenExistingDoesNotCreateADatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cm.db")
+
+	if _, err := OpenExisting(context.Background(), path); !errors.Is(err, ErrNotFound) {
+		t.Errorf("OpenExisting() error = %v, want ErrNotFound", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) error = %v, want the file not to exist", path, err)
+	}
+}
+
+// OpenExisting reads a database at the schema this build knows, which is the ordinary case.
+func TestOpenExistingReadsACurrentDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cm.db")
+	ctx := context.Background()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	want := sampleBinding("work", "a7k2m9x4")
+	if err := s.Bind(ctx, want); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	s.Close()
+
+	ro, err := OpenExisting(ctx, path)
+	if err != nil {
+		t.Fatalf("OpenExisting() error = %v", err)
+	}
+	defer ro.Close()
+
+	got, err := ro.Binding(ctx, "work")
+	if err != nil {
+		t.Fatalf("Binding() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Binding() = %+v\nwant %+v", got, want)
+	}
+}
+
+// schemaVersionOf reads user_version without going through Open, which would migrate it.
+func schemaVersionOf(t *testing.T, path string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("reading user_version: %v", err)
+	}
+	return version
 }
