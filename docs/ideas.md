@@ -360,6 +360,18 @@ appeared" is a different question.
 
 ## Output delivery
 
+**Dropping stale mouse reports.** cm already drops a kitty key release and a focus report that arrive when
+its model says no program wants them, which is the fix for `execute: 3u[O_` appearing after quitting codex.
+Mouse tracking is the same shape: a program enables 1000/1002/1003, exits, and a report generated before
+the reset reaches the terminal is typed at the shell. libghostty exposes the state as
+`GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING`, so the check is cheap.
+
+Left out on purpose, because the cost of being wrong is not symmetric with the keyboard case. A dropped
+release is invisible; a dropped mouse report means the mouse stops working in a session, and mouse state is
+where the model is most likely to disagree with the terminal, since `docs/restore.md` records three
+separate mouse modes being replayed to a fresh client. Worth doing if anyone reports the mouse artifact,
+and not on speculation. See "Events that outlive the program that asked for them" in `docs/architecture.md`.
+
 **Coalescing output to a client that has fallen behind.** cm streams bytes to every client. A client that
 cannot keep up falls behind and is eventually told there is a gap, at which point
 `internal/client/attach.go` drops its resume point and repaints from a fresh attach. That recovery works,

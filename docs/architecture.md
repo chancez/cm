@@ -1208,6 +1208,50 @@ arriving, which is why `i=2` disappeared. The narrower rule is to drop a reply o
 **forwarded** to the terminal, and keep it for one cm **consumed**, since for a consumed command the model
 is the sole answerer. `handleGraphics` already knows which of the two it did to each command.
 
+## Events that outlive the program that asked for them
+
+A program turns on optional reporting, exits, and the terminal keeps sending it for a moment. Those
+events reach the pty and are typed at whatever is reading it now, which is the shell.
+
+Reported as `execute: 3u[O_` left in zsh's line editor shortly after quitting codex. codex pushes kitty
+keyboard flags 7, which includes report-event-types, and sets mode 1004. On ctrl-d it reads the key
+*press* and exits; the *release* is generated afterwards. zsh's line editor ate each ESC as a meta prefix
+and inserted the rest, so `\x1b[100;5:3u` showed as `3u` and `\x1b[O` as `[O`.
+
+**Not a reply-ordering bug**, which is the trap: the symptom is identical to the recorded `wallfacer`
+corruption, and the first three hypotheses were all about the query proxy. Measured against bare kitty in
+the same terminal, the proxy delivers in 3.8-4.1ms against 3.6ms with order preserved, so it was never
+slow or misordered. The clue that redirected it was the byte shape: `3u` is a key release, not a reply.
+
+Why they reached the shell, measured through cm's own classifiers:
+
+| client sends | IsUserInput | IsQueryReply | SplitInput | old result |
+| --- | --- | --- | --- | --- |
+| `\x1b[100;5:3u` release | false | false | nil | `sess.Write` verbatim |
+| `\x1b[O` focus out | false | false | 1 part | `sess.Write` verbatim |
+
+cm already recognized both as not-typing. Nothing acted on that: `Service.Attach` only splits a chunk
+when it yields more than one part, so both fell through to the verbatim write.
+
+The fix is a filter ahead of the typing decision. cm's model tracks the kitty keyboard flags and mode
+1004, so flags back at zero means no program in the session wants protocol events and an event in that
+encoding was generated for one that has gone. Same shape as `DenyModes`: cm is the one that knows.
+
+**Only a release and a focus report qualify, never a key press**, and that asymmetry is the design rather
+than an omission. The two ways of being wrong are not comparable. Dropping a stale release loses nothing,
+because no shell wants one and a program that does want them degrades to not seeing releases. Dropping a
+press would make a session ignore the keyboard, and the model can read flags zero while a program really
+has them on, most plausibly after a server restart rebuilds the model from a bounded log that no longer
+contains the push.
+
+The race is how fast the key is lifted: the program's own pop has to reach the terminal before the
+terminal encodes the release, and under cm that is a round trip through the shim, the server and the
+client. It reproduced twice in three tries quitting codex as soon as it opened, which is why the
+regression test constructs the state at the seam instead of racing it.
+
+Mouse reports are the same shape and are deliberately not covered, since dropping one wrongly costs the
+user the mouse. See `docs/ideas.md`.
+
 ## Terminal state
 
 `internal/vt` is the only package that imports "C". Everything else works with Go types, so an

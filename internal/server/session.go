@@ -18,6 +18,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/graphics"
+	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
@@ -382,6 +383,10 @@ type Terminal interface {
 	Pwd() string
 	// FocusReporting reports whether the program asked to be told about focus changes.
 	FocusReporting() bool
+	// KittyKeyboardProtocol reports whether a program has the kitty keyboard protocol enabled, so an
+	// event in that encoding is one something asked for rather than one left over from a program that
+	// has exited.
+	KittyKeyboardProtocol() bool
 	// Plain, VT, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
@@ -2111,6 +2116,24 @@ func (s *Session) detach(a attachment) (last bool) {
 		}
 	}
 	return s.clients.Add(-1) == 0
+}
+
+// terminalModes reports which optional terminal modes a program in the session has enabled.
+//
+// Used to recognize an event generated for a program that has since exited. A session with no model,
+// which is any session whose terminal failed to start, reports both modes on, so nothing is ever dropped
+// on the strength of state cm does not have.
+func (s *Session) terminalModes() input.TerminalModes {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return input.TerminalModes{KittyKeyboard: true, FocusReports: true}
+	}
+	return input.TerminalModes{
+		KittyKeyboard: term.KittyKeyboardProtocol(),
+		FocusReports:  term.FocusReporting(),
+	}
 }
 
 // ReportFocus tells the program in the session whether anyone is watching.

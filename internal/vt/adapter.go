@@ -241,3 +241,24 @@ func (s *SessionTerminal) FocusReporting() bool {
 	}
 	return on
 }
+
+// KittyKeyboardProtocol reports whether a program in the session has the kitty keyboard protocol
+// enabled, meaning its flags are anything other than zero.
+//
+// Used to recognize a keyboard event no program asked for. A terminal encodes keys in this protocol only
+// while some program has pushed flags, so an event in that encoding arriving when the model's flags are
+// zero was generated for a program that has since exited. See input.IsStaleEvent.
+//
+// The model rather than a separate tracker, for the reason InBandResizeMode gives: the model already
+// parses every byte the program writes, and it cannot lag the real terminal here, because a program's
+// push reaches the model on its way to the client rather than after it.
+func (s *SessionTerminal) KittyKeyboardProtocol() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	flags, err := s.term.kittyKeyboardFlags()
+	if err != nil {
+		// Treated as on, so an unreadable model never causes an event to be dropped.
+		return true
+	}
+	return flags != 0
+}

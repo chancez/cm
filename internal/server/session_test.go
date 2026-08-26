@@ -40,6 +40,8 @@ type fakeTerminal struct {
 	restoredAt  int
 	// focusReporting stands in for DECSET 1004 being enabled by the program.
 	focusReporting bool
+	// kittyKeyboard stands in for a program having pushed kitty keyboard protocol flags.
+	kittyKeyboard bool
 
 	// answers maps a query to the reply the emulator would generate for it, so a test can exercise
 	// the path where output triggers a write back to the pty. Real libghostty answers CSI 6n and
@@ -134,6 +136,12 @@ func (f *fakeTerminal) FocusReporting() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.focusReporting
+}
+
+func (f *fakeTerminal) KittyKeyboardProtocol() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.kittyKeyboard
 }
 
 func (f *fakeTerminal) Pwd() string {

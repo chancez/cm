@@ -353,6 +353,23 @@ func (t *Terminal) focusEventMode() (bool, error) {
 	return t.mode(C.cm_mode_focus_event())
 }
 
+// kittyKeyboardFlags reports the kitty keyboard protocol flags in effect, 0 when the protocol is off.
+//
+// The active screen's flags, which is what the formatter reads too: libghostty keeps a separate stack
+// per screen, so a program on the alternate screen has its own. Reading the active one is right because
+// it is the screen the program is drawing on.
+func (t *Terminal) kittyKeyboardFlags() (uint8, error) {
+	if t.closed {
+		return 0, nil
+	}
+	var flags C.uint8_t
+	if err := check(C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS,
+		unsafe.Pointer(&flags)), "reading kitty keyboard flags"); err != nil {
+		return 0, err
+	}
+	return uint8(flags), nil
+}
+
 // InBandResizeMode reports whether the program has enabled mode 2048, in-band size reports.
 //
 // Read from the model rather than tracked separately because the model is already parsing every byte

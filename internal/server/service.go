@@ -589,6 +589,28 @@ func (s *Service) recvLoop(
 				}
 				parts := frameInput(&replies, req.GetInput().Data, time.Now())
 				armReplyTimer()
+				// Events a program asked for and then stopped wanting are dropped before the typing
+				// decision, because everything after this treats them as bytes to deliver: they reach
+				// the pty and get typed at whatever is reading it now.
+				//
+				// Reported as "execute: 3u[O_" left at a zsh prompt after quitting codex. codex sets
+				// kitty keyboard flags 7 and mode 1004, reads the ctrl-d *press* and exits, and the
+				// release arrives after it is gone. See input.IsStaleEvent for why only a release and a
+				// focus report qualify, and never a key press.
+				//
+				// Here rather than inside the not-typed branch below, because IsUserInput already calls
+				// a release not-typing: recognizing them was never the problem, nothing acting on it
+				// was.
+				//
+				// After frameInput rather than before, so a fragment the expiry released is filtered on
+				// the same terms as anything else. Nothing of that kind can be dropped in practice,
+				// since only OSC, DCS and APC are held and this recognizes CSI alone.
+				parts = input.DropStaleParts(parts, sess.terminalModes())
+				if len(parts) == 0 {
+					// Nothing but stale events. Skipped entirely, so this also cannot mark the client
+					// as the one being typed in.
+					continue
+				}
 				typed := false
 				for _, part := range parts {
 					if !part.Reply && input.IsUserInput(part.Data) {
