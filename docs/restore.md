@@ -120,6 +120,40 @@ already captured describe the old width.
 - **Which screen the content belongs to**, when it is the main screen: `?1049l` followed by a
   clear, in front of everything else. See below.
 
+Keyboard state is not in this list, but it needed two formatter options rather than one and only one
+was set. See below.
+
+## Keyboard state takes two options, not one
+
+The formatter has two, they cover different sequences, and their names are close enough that setting
+one reads as having handled both:
+
+- `extra.keyboard` is xterm's modifyOtherKeys, emitted as `CSI > 4 ; 2 m`.
+- `extra.screen.kitty_keyboard` is the kitty keyboard protocol's flags, emitted as `CSI = <flags> ; 1 u`.
+
+Only the first was set, so every reattach dropped the kitty flags. The blob is all a fresh client
+gets and its terminal has just been reset, so the terminal went back to legacy key encoding while the
+program in the session still believed the flags it pushed were in effect.
+
+Claude Code pushes flag 1 at startup, measured in a sandbox as `\x1b[<u\x1b[>1u\x1b[>4;2m`, and
+`claude agents` does the same. Flag 1 is "disambiguate escape codes", which is what makes Escape
+arrive as `CSI 27 u` rather than a bare `ESC`, so the symptom is Escape and modified keys such as
+shift+tab and ctrl+o going dead after a reattach while ordinary typing still works. Plain arrows are
+unaffected by flag 1, which is worth knowing because it rules this out as a cause of dead arrow keys.
+
+The state is emitted **after** the content rather than in the mode preamble. That cost a false
+negative while diagnosing this: a probe that sliced the blob at the start of the screen text reported
+both sequences missing, and modifyOtherKeys had been restored all along. Search the whole blob.
+
+libghostty emits the `=` form, which sets the current flags rather than pushing. A program that later
+pops therefore pops a stack the client's terminal never pushed onto. That is the emulator's choice and
+it is the right trade here, since the goal is for the effective state to match rather than for the
+stack depth to.
+
+`VT()` carries the same options as `emitViewport` deliberately. `cm history --format vt` is the only
+way to read this state, so an option set in one and not the other makes that view lie about what a
+client would receive.
+
 ## A main-screen blob has to say so
 
 The formatter emits only modes that *differ* from libghostty's defaults, and the main screen is the

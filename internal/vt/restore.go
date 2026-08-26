@@ -205,9 +205,15 @@ func (t *Terminal) emitViewport(buf *bytes.Buffer) error {
 		emit: C.GHOSTTY_FORMATTER_FORMAT_VT,
 		// Modes, the scrolling region, and keyboard state are what make a restored screen
 		// behave rather than merely look right.
+		//
+		// Both keyboard options are needed and they cover different sequences: keyboard is xterm's
+		// modifyOtherKeys, kittyKeyboard is the kitty protocol's flags. Only the first was set for a
+		// long time, and the names are close enough that the gap read as already handled. See
+		// TestRestoreCarriesKittyKeyboardFlags.
 		modes:           true,
 		scrollingRegion: true,
 		keyboard:        true,
+		kittyKeyboard:   true,
 		cursor:          true,
 		style:           true,
 		hyperlink:       true,
@@ -373,12 +379,16 @@ func (t *Terminal) VT() ([]byte, error) {
 	if t.closed {
 		return nil, fmt.Errorf("terminal is closed")
 	}
+	// The same state options as the restore blob, since this is how the state is read: `cm history
+	// --format vt` is the only way to see what a fresh client would receive, so an option set here
+	// that differs from emitViewport's makes this view lie about it.
 	return t.format(formatOptions{
-		emit:     C.GHOSTTY_FORMATTER_FORMAT_VT,
-		modes:    true,
-		keyboard: true,
-		cursor:   true,
-		style:    true,
+		emit:          C.GHOSTTY_FORMATTER_FORMAT_VT,
+		modes:         true,
+		keyboard:      true,
+		kittyKeyboard: true,
+		cursor:        true,
+		style:         true,
 	})
 }
 
@@ -392,6 +402,7 @@ type formatOptions struct {
 	modes           bool
 	scrollingRegion bool
 	keyboard        bool
+	kittyKeyboard   bool
 	tabstops        bool
 	palette         bool
 	pwd             bool
@@ -414,6 +425,7 @@ func (t *Terminal) format(o formatOptions) ([]byte, error) {
 	opts.extra.tabstops = C.bool(o.tabstops)
 	opts.extra.palette = C.bool(o.palette)
 	opts.extra.pwd = C.bool(o.pwd)
+	opts.extra.screen.kitty_keyboard = C.bool(o.kittyKeyboard)
 	opts.extra.screen.cursor = C.bool(o.cursor)
 	opts.extra.screen.style = C.bool(o.style)
 	opts.extra.screen.hyperlink = C.bool(o.hyperlink)
