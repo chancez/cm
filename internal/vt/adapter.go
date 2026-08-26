@@ -250,8 +250,17 @@ func (s *SessionTerminal) FocusReporting() bool {
 // zero was generated for a program that has since exited. See input.IsStaleEvent.
 //
 // The model rather than a separate tracker, for the reason InBandResizeMode gives: the model already
-// parses every byte the program writes, and it cannot lag the real terminal here, because a program's
-// push reaches the model on its way to the client rather than after it.
+// parses every byte the program writes, so a second tracker would be a second thing to keep correct.
+//
+// The model *does* lag the client, which is worth stating because an earlier version of this comment
+// claimed the opposite and was wrong. Session.pump appends to s.recent before it calls feedTerminal, so
+// a client receives a mode change some lines of code before the model consumes it. What makes the lag
+// harmless is not ordering but scale: an event generated *because* of a mode the client just learned has
+// to travel back through the client, and that round trip measures 3.8-4.1ms against bare kitty's 3.6ms,
+// while the gap here is two sequential calls in one goroutine. The reply cannot beat the model write.
+//
+// And if it ever did, the cost is bounded by what input.IsStaleEvent is willing to drop: a key release
+// or a focus report, never a key press. That is the other half of why the filter is scoped that way.
 func (s *SessionTerminal) KittyKeyboardProtocol() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
