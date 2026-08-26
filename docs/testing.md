@@ -146,11 +146,11 @@ payload above it is *guaranteed* to fragment rather than merely likely to.
 
 This has bitten twice, once in each direction, and both times the visible symptom pointed elsewhere.
 
-**Inbound**, a client reply longer than 1022 bytes arrives as several messages, and cm classifies each
-one on its own. An 18008-byte OSC 52 clipboard reply arrived as 18 chunks. The leading fragment is
-detectable, since `classifyReply` returns `n == 0` for an unterminated sequence, but a *continuation*
-fragment is plain text and indistinguishable from typing, so the tail is routed to the pty as
-keystrokes.
+**Inbound**, a client reply longer than 1022 bytes arrives as several messages. An 18008-byte OSC 52
+clipboard reply arrived as 18 chunks. `input.ReplyFramer` holds an unterminated OSC, DCS, or APC per
+client attachment until its terminator arrives, then routes the complete reply through the query matcher.
+The continuation is plain text and would otherwise be indistinguishable from typing, so framing has to
+happen before either input classification or a pty write.
 
 **Outbound**, a single large write to the pty is read by the program in the same 1022-byte chunks: a
 1201-byte write came back as `[1022, 179]`. A full-screen program doing paste detection sees that

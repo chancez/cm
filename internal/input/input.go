@@ -125,6 +125,79 @@ type Part struct {
 	Reply bool
 }
 
+// ReplyFramer holds an incomplete terminal reply until its remaining bytes arrive.
+//
+// A pty read is capped at 1022 bytes on macOS, while an OSC 52 clipboard response can be much
+// larger. Classifying each read independently sends the unterminated head to the program and then
+// mistakes the continuation for typing. The buffer belongs to one client attachment: replies from
+// different terminals must never be joined.
+//
+// Only string controls are held. A CSI reply is short, while holding a partial CSI would delay an
+// ordinary escape-prefixed keypress. OSC, DCS, and APC are the reply forms whose payload can be large.
+type ReplyFramer struct {
+	partial []byte
+}
+
+// Split returns complete input parts from p and holds an incomplete string-control reply for the next
+// call. A reply part is kept whole so the server can match it to the query it sent; all other bytes stay
+// in order as ordinary input.
+func (f *ReplyFramer) Split(p []byte) []Part {
+	if len(f.partial) > 0 {
+		p = append(f.partial, p...)
+		f.partial = nil
+	}
+
+	var out []Part
+	for len(p) > 0 {
+		if p[0] != 0x1b {
+			i := 1
+			for i < len(p) && p[i] != 0x1b {
+				i++
+			}
+			out = appendInputPart(out, p[:i])
+			p = p[i:]
+			continue
+		}
+
+		n, reply := classifyReply(p)
+		if n > 0 {
+			if reply {
+				out = append(out, Part{Data: p[:n], Reply: true})
+			} else {
+				out = appendInputPart(out, p[:n])
+			}
+			p = p[n:]
+			continue
+		}
+
+		if beginsStringControl(p) {
+			f.partial = append(f.partial, p...)
+			break
+		}
+
+		// A bare escape or incomplete CSI is a keypress, not a large reply. Passing it through keeps
+		// escape responsive rather than waiting for a later read that may never happen.
+		out = appendInputPart(out, p[:1])
+		p = p[1:]
+	}
+	return out
+}
+
+func beginsStringControl(p []byte) bool {
+	return len(p) >= 2 && p[0] == 0x1b && (p[1] == ']' || p[1] == 'P' || p[1] == '_')
+}
+
+func appendInputPart(parts []Part, data []byte) []Part {
+	if len(data) == 0 {
+		return parts
+	}
+	if n := len(parts); n > 0 && !parts[n-1].Reply {
+		parts[n-1].Data = append(parts[n-1].Data, data...)
+		return parts
+	}
+	return append(parts, Part{Data: data})
+}
+
 // SplitInput breaks a client's input chunk into its sequences and says where each one goes.
 //
 // This exists because IsQueryReply is all-or-nothing, and a real terminal does not write chunks that

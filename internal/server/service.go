@@ -65,6 +65,24 @@ func (s *Service) Shutdown(
 // NewService wraps a manager.
 func NewService(m *Manager) *Service { return &Service{mgr: m} }
 
+// routeInput sends each framed part to its owner.
+//
+// A terminal can place a reply beside a keypress, and a reply may span several reads. Keeping the
+// routing here makes both cases take the same path: only a complete recognized reply reaches the query
+// matcher, and ordinary input still reaches the program in order.
+func routeInput(ctx context.Context, sess *Session, tok *attachToken, parts []input.Part) error {
+	for _, part := range parts {
+		if part.Reply {
+			sess.answerFromClient(tok, part.Data)
+			continue
+		}
+		if err := sess.Write(ctx, part.Data); err != nil {
+			return fmt.Errorf("writing to session %s: %w", sess.id, err)
+		}
+	}
+	return nil
+}
+
 // openOptionsFrom translates a client's Open into the options a session is created from.
 //
 // A function rather than a literal inside Attach so what it copies can be asserted without a stream, a
@@ -483,6 +501,7 @@ func (s *Service) recvLoop(
 	tok *attachToken,
 	detached chan<- struct{},
 ) error {
+	var replies input.ReplyFramer
 	for {
 		req, err := srv.Recv()
 		if err != nil {
@@ -518,7 +537,15 @@ func (s *Service) recvLoop(
 			if readOnly {
 				continue
 			}
-			if !input.IsUserInput(req.GetInput().Data) {
+			parts := replies.Split(req.GetInput().Data)
+			typed := false
+			for _, part := range parts {
+				if !part.Reply && input.IsUserInput(part.Data) {
+					typed = true
+					break
+				}
+			}
+			if !typed {
 				// A reply to a terminal query, a mouse report, or a focus change. None of them may claim
 				// sizing: otherwise a window nobody is using takes over because the program polled the
 				// terminal.
@@ -539,35 +566,8 @@ func (s *Service) recvLoop(
 				// Mouse and focus events are still forwarded from every client, unchanged. They describe
 				// one window rather than the session, so each client sends its own, and dropping them
 				// would make a session ignore the mouse in every window but one.
-				if input.IsQueryReply(req.GetInput().Data) {
-					sess.answerFromClient(tok, req.GetInput().Data)
-					continue
-				}
-				// A chunk holding replies *and* bytes only the program should see, which is what a real
-				// terminal writes when a program probes it while a window event lands. IsQueryReply is
-				// all-or-nothing, so before this the whole blob fell through to the verbatim write below
-				// and the reply half was echoed back by the tty in caret notation. Reported against
-				// `kitten icat`, whose APC probe was answered together with an unsolicited DA1 reply:
-				// "\x1b_Gi=1;OK\x1b\\\x1b[?62;52;c" printed as "=1;OK" and "/62;52;c" beside the prompt.
-				//
-				// Each part goes where it belongs rather than the chunk going one way. A graphics
-				// response is deliberately *not* a reply: cm asks no graphics query, so it would match
-				// no outstanding request and be discarded as unsolicited, and the program that asked
-				// would never receive it.
-				if parts := input.SplitInput(req.GetInput().Data); len(parts) > 1 {
-					for _, part := range parts {
-						if part.Reply {
-							sess.answerFromClient(tok, part.Data)
-							continue
-						}
-						if err := sess.Write(ctx, part.Data); err != nil {
-							return fmt.Errorf("writing to session %s: %w", sess.id, err)
-						}
-					}
-					continue
-				}
-				if err := sess.Write(ctx, req.GetInput().Data); err != nil {
-					return fmt.Errorf("writing to session %s: %w", sess.id, err)
+				if err := routeInput(ctx, sess, tok, parts); err != nil {
+					return err
 				}
 				continue
 			}
@@ -590,8 +590,8 @@ func (s *Service) recvLoop(
 					}
 				}
 			}
-			if err := sess.Write(ctx, req.GetInput().Data); err != nil {
-				return fmt.Errorf("writing to session %s: %w", sess.id, err)
+			if err := routeInput(ctx, sess, tok, parts); err != nil {
+				return err
 			}
 
 		case req.GetResize() != nil:

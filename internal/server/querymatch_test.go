@@ -1,12 +1,62 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/shim"
 )
+
+// An OSC 52 response can be larger than the pty's 1022-byte read limit. Its continuation begins with
+// clipboard data rather than ESC, so routing each read independently writes it to the pty as typing.
+func TestFragmentedClientReplyDoesNotBecomeInput(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "fragmentedreply",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24,
+		Cols:    80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	sess.noteQueries([]byte("\x1b]52;c;?\x07"))
+	select {
+	case <-att.queries:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the client was never asked the OSC 52 query")
+	}
+
+	reply := "\x1b]52;c;" + strings.Repeat("a", 1100) + "\x07"
+	var framer input.ReplyFramer
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[:1022]))); err != nil {
+		t.Fatalf("routeInput(first fragment) error = %v", err)
+	}
+	if got := awaitStream(t, sess, "aaaa", 700*time.Millisecond); strings.Contains(got, "aaaa") {
+		t.Errorf("the first reply fragment reached the pty as input; stream was %q", got)
+	}
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[1022:]))); err != nil {
+		t.Fatalf("routeInput(second fragment) error = %v", err)
+	}
+	sess.mu.Lock()
+	got := len(sess.requests)
+	sess.mu.Unlock()
+	if got != 0 {
+		t.Errorf("requests after the complete reply = %d, want 0", got)
+	}
+}
 
 // A reply must answer the question cm asked, not merely arrive from the client cm asked.
 //

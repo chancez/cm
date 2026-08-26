@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestReplyFramerKeepsAFragmentedOSCReplyWhole(t *testing.T) {
+	const reply = "\x1b]52;c;" + "aGk=" + "\x07"
+
+	var framer ReplyFramer
+	if got, want := framer.Split([]byte(reply[:8])), []Part(nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(first fragment) = %#v, want %#v", got, want)
+	}
+	if got, want := framer.Split([]byte(reply[8:])), []Part{{Data: []byte(reply), Reply: true}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(second fragment) = %#v, want %#v", got, want)
+	}
+}
+
+func TestReplyFramerSeparatesAReplyFromTyping(t *testing.T) {
+	const reply = "\x1b]11;rgb:2828/2c2c/3434\x07"
+
+	var framer ReplyFramer
+	if got, want := framer.Split([]byte(reply+"x")), []Part{
+		{Data: []byte(reply), Reply: true},
+		{Data: []byte("x")},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(reply and typing) = %#v, want %#v", got, want)
+	}
+}
+
 func TestIsQueryReply(t *testing.T) {
 	tests := []struct {
 		name  string
