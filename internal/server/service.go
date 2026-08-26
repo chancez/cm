@@ -83,6 +83,13 @@ func routeInput(ctx context.Context, sess *Session, tok *attachToken, parts []in
 	return nil
 }
 
+// frameInput releases an expired reply fragment before framing new input, so a missing terminator cannot
+// turn a later keypress into part of a terminal response.
+func frameInput(framer *input.ReplyFramer, data []byte, now time.Time) []input.Part {
+	parts := framer.FlushExpired(now)
+	return append(parts, framer.Split(data, now)...)
+}
+
 // openOptionsFrom translates a client's Open into the options a session is created from.
 //
 // A function rather than a literal inside Attach so what it copies can be asserted without a stream, a
@@ -502,118 +509,173 @@ func (s *Service) recvLoop(
 	detached chan<- struct{},
 ) error {
 	var replies input.ReplyFramer
-	for {
-		req, err := srv.Recv()
-		if err != nil {
-			return err
+	type received struct {
+		req *serverv1.AttachRequest
+		err error
+	}
+	requests := make(chan received, 1)
+	go func() {
+		defer close(requests)
+		for {
+			req, err := srv.Recv()
+			select {
+			case requests <- received{req: req, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
+	}()
 
-		switch {
-		case req.GetDetach() != nil:
-			// Acknowledged before signalling, so a client that asks can wait for confirmation rather than
-			// racing its own disconnect.
-			//
-			// Skipped when the client said it will not wait. `cm run -d`, `cm attach --no-attach`, and an
-			// interrupted follower all detach as their last act and exit; their connection is closing as
-			// the Detach arrives, so the reply lost a race about 40% of the time and produced a warning
-			// for behavior that was intended, which also made `cm doctor` report a healthy installation as
-			// having a problem.
-			if !req.GetDetach().NoAck {
-				if err := srv.Send(&serverv1.AttachResponse{
-					Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
-				}); err != nil {
-					// An interactive client that asked for the acknowledgement and lost its connection
-					// before it arrived, unlike the case above where not waiting was the intent.
-					s.mgr.log.Warn("acknowledging a detach failed",
-						"session", sess.id, "error", err)
-				}
+	var (
+		replyTimer *time.Timer
+		replyC     <-chan time.Time
+	)
+	stopReplyTimer := func() {
+		if replyTimer != nil {
+			replyTimer.Stop()
+			replyTimer = nil
+			replyC = nil
+		}
+	}
+	defer stopReplyTimer()
+	armReplyTimer := func() {
+		stopReplyTimer()
+		if deadline, holding := replies.Deadline(); holding {
+			replyTimer = time.NewTimer(time.Until(deadline))
+			replyC = replyTimer.C
+		}
+	}
+	for {
+		select {
+		case received, ok := <-requests:
+			if !ok {
+				return nil
 			}
-			close(detached)
-			return nil
-
-		case req.GetInput() != nil:
-			// A read-only follower's input is dropped rather than refused, so a stray
-			// keystroke does not tear down its stream.
-			if readOnly {
-				continue
+			if received.err != nil {
+				return received.err
 			}
-			parts := replies.Split(req.GetInput().Data)
-			typed := false
-			for _, part := range parts {
-				if !part.Reply && input.IsUserInput(part.Data) {
-					typed = true
-					break
-				}
-			}
-			if !typed {
-				// A reply to a terminal query, a mouse report, or a focus change. None of them may claim
-				// sizing: otherwise a window nobody is using takes over because the program polled the
-				// terminal.
+			req := received.req
+			switch {
+			case req.GetDetach() != nil:
+				// Acknowledged before signalling, so a client that asks can wait for confirmation rather than
+				// racing its own disconnect.
 				//
-				// A query reply is not written to the pty here, and that is the core of the proxy design.
-				// It is handed to the session, which matches it against the question cm asked *this*
-				// client and writes it in the order the program's questions were asked. A reply matching
-				// no outstanding question is discarded.
-				//
-				// This replaces electing one client to answer and forwarding its replies straight through.
-				// The election could be wrong in four ways and was, each in turn: a read-only follower or a
-				// reserved-but-unattached client elected meant nothing answered and the program hung; two
-				// attached clients meant a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c"; and after
-				// a restart cm answered a backlog query that the reconnecting client answered again from
-				// the log, typing a git branch name into the prompt. Matching a reply to a request cm
-				// actually made removes all four, because an unsolicited reply is now recognizable as such.
-				//
-				// Mouse and focus events are still forwarded from every client, unchanged. They describe
-				// one window rather than the session, so each client sends its own, and dropping them
-				// would make a session ignore the mouse in every window but one.
-				if err := routeInput(ctx, sess, tok, parts); err != nil {
-					return err
-				}
-				continue
-			}
-			// Recorded on every keystroke rather than only when sizing moves, so a listing can name
-			// the window someone is using under any resize policy. See clientSize.lastInputAt for why
-			// typing is the only signal that can identify one client out of several.
-			sess.noteClientInput(tok)
-			// Typing may transfer sizing, depending on the policy. Checked before the write so
-			// the shell is already at the right size when it sees the keystroke.
-			if rows, cols, x, y, resize := sess.claimLeadership(tok); resize {
-				if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
-					s.mgr.log.Warn("resizing on leadership change failed",
-						"session", sess.id, "error", err)
-				} else {
-					ir, ic := int(rows), int(cols)
-					if err := s.mgr.store.Apply(ctx, sess.id,
-						store.Update{Rows: &ir, Cols: &ic}); err != nil {
-						s.mgr.log.Warn("recording session size failed",
+				// Skipped when the client said it will not wait. `cm run -d`, `cm attach --no-attach`, and an
+				// interrupted follower all detach as their last act and exit; their connection is closing as
+				// the Detach arrives, so the reply lost a race about 40% of the time and produced a warning
+				// for behavior that was intended, which also made `cm doctor` report a healthy installation as
+				// having a problem.
+				if !req.GetDetach().NoAck {
+					if err := srv.Send(&serverv1.AttachResponse{
+						Event: &serverv1.AttachResponse_Detached{Detached: &serverv1.Detached{}},
+					}); err != nil {
+						// An interactive client that asked for the acknowledgement and lost its connection
+						// before it arrived, unlike the case above where not waiting was the intent.
+						s.mgr.log.Warn("acknowledging a detach failed",
 							"session", sess.id, "error", err)
 					}
 				}
+				close(detached)
+				return nil
+
+			case req.GetInput() != nil:
+				// A read-only follower's input is dropped rather than refused, so a stray
+				// keystroke does not tear down its stream.
+				if readOnly {
+					continue
+				}
+				parts := frameInput(&replies, req.GetInput().Data, time.Now())
+				armReplyTimer()
+				typed := false
+				for _, part := range parts {
+					if !part.Reply && input.IsUserInput(part.Data) {
+						typed = true
+						break
+					}
+				}
+				if !typed {
+					// A reply to a terminal query, a mouse report, or a focus change. None of them may claim
+					// sizing: otherwise a window nobody is using takes over because the program polled the
+					// terminal.
+					//
+					// A query reply is not written to the pty here, and that is the core of the proxy design.
+					// It is handed to the session, which matches it against the question cm asked *this*
+					// client and writes it in the order the program's questions were asked. A reply matching
+					// no outstanding question is discarded.
+					//
+					// This replaces electing one client to answer and forwarding its replies straight through.
+					// The election could be wrong in four ways and was, each in turn: a read-only follower or a
+					// reserved-but-unattached client elected meant nothing answered and the program hung; two
+					// attached clients meant a single CSI c came back as "\x1b[?62;52;c\x1b[?62;52;c"; and after
+					// a restart cm answered a backlog query that the reconnecting client answered again from
+					// the log, typing a git branch name into the prompt. Matching a reply to a request cm
+					// actually made removes all four, because an unsolicited reply is now recognizable as such.
+					//
+					// Mouse and focus events are still forwarded from every client, unchanged. They describe
+					// one window rather than the session, so each client sends its own, and dropping them
+					// would make a session ignore the mouse in every window but one.
+					if err := routeInput(ctx, sess, tok, parts); err != nil {
+						return err
+					}
+					continue
+				}
+				// Recorded on every keystroke rather than only when sizing moves, so a listing can name
+				// the window someone is using under any resize policy. See clientSize.lastInputAt for why
+				// typing is the only signal that can identify one client out of several.
+				sess.noteClientInput(tok)
+				// Typing may transfer sizing, depending on the policy. Checked before the write so
+				// the shell is already at the right size when it sees the keystroke.
+				if rows, cols, x, y, resize := sess.claimLeadership(tok); resize {
+					if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+						s.mgr.log.Warn("resizing on leadership change failed",
+							"session", sess.id, "error", err)
+					} else {
+						ir, ic := int(rows), int(cols)
+						if err := s.mgr.store.Apply(ctx, sess.id,
+							store.Update{Rows: &ir, Cols: &ic}); err != nil {
+							s.mgr.log.Warn("recording session size failed",
+								"session", sess.id, "error", err)
+						}
+					}
+				}
+				if err := routeInput(ctx, sess, tok, parts); err != nil {
+					return err
+				}
+
+			case req.GetResize() != nil:
+				if readOnly {
+					continue
+				}
+				r := req.GetResize()
+				// The policy decides whether this client's new size takes effect, so a window being
+				// resized while someone else is typing in another does not reflow theirs.
+				rows, cols, x, y, resize := sess.registerClientSize(
+					tok, uint16(r.Rows), uint16(r.Cols), uint16(r.XPixel), uint16(r.YPixel), readOnly,
+				)
+				if !resize {
+					continue
+				}
+				if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+					return fmt.Errorf("resizing session %s: %w", sess.id, err)
+				}
+				ir, ic := int(rows), int(cols)
+				if err := s.mgr.store.Apply(ctx, sess.id, store.Update{Rows: &ir, Cols: &ic}); err != nil {
+					s.mgr.log.Warn("recording session size failed", "session", sess.id, "error", err)
+				}
 			}
-			if err := routeInput(ctx, sess, tok, parts); err != nil {
+
+		case <-replyC:
+			replyTimer = nil
+			replyC = nil
+			if err := routeInput(ctx, sess, tok, replies.FlushExpired(time.Now())); err != nil {
 				return err
 			}
 
-		case req.GetResize() != nil:
-			if readOnly {
-				continue
-			}
-			r := req.GetResize()
-			// The policy decides whether this client's new size takes effect, so a window being
-			// resized while someone else is typing in another does not reflow theirs.
-			rows, cols, x, y, resize := sess.registerClientSize(
-				tok, uint16(r.Rows), uint16(r.Cols), uint16(r.XPixel), uint16(r.YPixel), readOnly,
-			)
-			if !resize {
-				continue
-			}
-			if err := sess.Resize(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
-				return fmt.Errorf("resizing session %s: %w", sess.id, err)
-			}
-			ir, ic := int(rows), int(cols)
-			if err := s.mgr.store.Apply(ctx, sess.id, store.Update{Rows: &ir, Cols: &ic}); err != nil {
-				s.mgr.log.Warn("recording session size failed", "session", sess.id, "error", err)
-			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

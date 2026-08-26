@@ -152,6 +152,9 @@ client attachment until its terminator arrives, then routes the complete reply t
 The continuation is plain text and would otherwise be indistinguishable from typing, so framing has to
 happen before either input classification or a pty write.
 
+A partial reply that has no terminator is released unchanged after 50ms. The release avoids losing an
+unknown escape sequence while preventing later typing from becoming its tail.
+
 **Outbound**, a single large write to the pty is read by the program in the same 1022-byte chunks: a
 1201-byte write came back as `[1022, 179]`. A full-screen program doing paste detection sees that
 burst as a paste, so a carriage return travelling at the end of it is consumed as pasted content

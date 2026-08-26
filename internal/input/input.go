@@ -10,7 +10,17 @@
 // injected input did, so the cases below are enumerated rather than inferred.
 package input
 
-import "bytes"
+import (
+	"bytes"
+	"time"
+)
+
+// ReplyGrace is how long an incomplete string-control reply may wait for its terminator.
+//
+// Terminal output fragmented by a pty arrives again within microseconds. 50ms covers that boundary
+// without letting a malformed reply absorb the next keypress indefinitely. It matches the detach-key
+// escape grace for the same reason: this is one host, not a network protocol.
+const ReplyGrace = 50 * time.Millisecond
 
 // IsUserInput reports whether p contains something a person typed.
 //
@@ -136,15 +146,17 @@ type Part struct {
 // ordinary escape-prefixed keypress. OSC, DCS, and APC are the reply forms whose payload can be large.
 type ReplyFramer struct {
 	partial []byte
+	heldAt  time.Time
 }
 
 // Split returns complete input parts from p and holds an incomplete string-control reply for the next
 // call. A reply part is kept whole so the server can match it to the query it sent; all other bytes stay
 // in order as ordinary input.
-func (f *ReplyFramer) Split(p []byte) []Part {
+func (f *ReplyFramer) Split(p []byte, now time.Time) []Part {
 	if len(f.partial) > 0 {
 		p = append(f.partial, p...)
 		f.partial = nil
+		f.heldAt = time.Time{}
 	}
 
 	var out []Part
@@ -172,6 +184,7 @@ func (f *ReplyFramer) Split(p []byte) []Part {
 
 		if beginsStringControl(p) {
 			f.partial = append(f.partial, p...)
+			f.heldAt = now
 			break
 		}
 
@@ -181,6 +194,28 @@ func (f *ReplyFramer) Split(p []byte) []Part {
 		p = p[1:]
 	}
 	return out
+}
+
+// FlushExpired releases a reply whose terminator did not arrive before now.
+//
+// The bytes are preserved rather than discarded because an unknown escape sequence may be deliberate
+// program input. Releasing before the next input is framed keeps that input from becoming the missing tail.
+func (f *ReplyFramer) FlushExpired(now time.Time) []Part {
+	if len(f.partial) == 0 || now.Before(f.heldAt.Add(ReplyGrace)) {
+		return nil
+	}
+	out := []Part{{Data: f.partial}}
+	f.partial = nil
+	f.heldAt = time.Time{}
+	return out
+}
+
+// Deadline reports when an incomplete reply must be released.
+func (f *ReplyFramer) Deadline() (time.Time, bool) {
+	if len(f.partial) == 0 {
+		return time.Time{}, false
+	}
+	return f.heldAt.Add(ReplyGrace), true
 }
 
 func beginsStringControl(p []byte) bool {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,13 +42,14 @@ func TestFragmentedClientReplyDoesNotBecomeInput(t *testing.T) {
 
 	reply := "\x1b]52;c;" + strings.Repeat("a", 1100) + "\x07"
 	var framer input.ReplyFramer
-	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[:1022]))); err != nil {
+	now := time.Now()
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[:1022]), now)); err != nil {
 		t.Fatalf("routeInput(first fragment) error = %v", err)
 	}
 	if got := awaitStream(t, sess, "aaaa", 700*time.Millisecond); strings.Contains(got, "aaaa") {
 		t.Errorf("the first reply fragment reached the pty as input; stream was %q", got)
 	}
-	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[1022:]))); err != nil {
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[1022:]), now.Add(time.Millisecond))); err != nil {
 		t.Fatalf("routeInput(second fragment) error = %v", err)
 	}
 	sess.mu.Lock()
@@ -55,6 +57,22 @@ func TestFragmentedClientReplyDoesNotBecomeInput(t *testing.T) {
 	sess.mu.Unlock()
 	if got != 0 {
 		t.Errorf("requests after the complete reply = %d, want 0", got)
+	}
+}
+
+func TestExpiredReplyFragmentDoesNotAbsorbFollowingInput(t *testing.T) {
+	const fragment = "\x1b]52;c;partial"
+
+	var framer input.ReplyFramer
+	now := time.Now()
+	if got, want := frameInput(&framer, []byte(fragment), now), []input.Part(nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("frameInput(fragment) = %#v, want %#v", got, want)
+	}
+	if got, want := frameInput(&framer, []byte("x"), now.Add(input.ReplyGrace)), []input.Part{
+		{Data: []byte(fragment)},
+		{Data: []byte("x")},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("frameInput(after expiry) = %#v, want %#v", got, want)
 	}
 }
 
