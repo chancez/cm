@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 // that an observer is not that caller.
 //
 // No `--timeout` here on purpose. One would end the follow on a clock rather than on the session being
-// over, which is exactly the symptom masking the cause, and this test would then pass against the bug.
+// over, which is the symptom masking the cause, and this test would then pass against the bug.
 func TestFollowOnAnAlreadyEndedSession(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
@@ -30,7 +31,7 @@ func TestFollowOnAnAlreadyEndedSession(t *testing.T) {
 	e.waitFor("session gone to end", 20*time.Second, func() bool {
 		return strings.Contains(e.run("ls").stdout, "exited")
 	})
-	before := e.run("ls").stdout
+	before := e.sessionDetail(t, "gone")
 
 	out := e.mustRunWithin(10*time.Second, "read", "--follow", "gone")
 	if !strings.Contains(out, "DONE") {
@@ -39,9 +40,14 @@ func TestFollowOnAnAlreadyEndedSession(t *testing.T) {
 
 	// The assertion that names the defect. Returning is necessary and not sufficient: a version that
 	// revived the session and also reported an exit would satisfy the check above while still having
-	// started a shell nobody asked for. The listing has to be unchanged, pid included.
-	if after := e.run("ls").stdout; after != before {
-		t.Errorf("following an ended session changed it, so the read had a side effect.\n"+
-			"before:\n%s\nafter:\n%s", before, after)
+	// started a shell nobody asked for. So the whole record has to be unchanged, shell pid included.
+	//
+	// The record rather than the `cm ls` table, which was the first version and failed under -race: that
+	// table carries a relative CREATED column, and on a slow build it ticks over between the two reads, so
+	// the test reported a side effect that was a clock.
+	after := e.sessionDetail(t, "gone")
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("following an ended session changed it, so a read had a side effect.\n"+
+			"before: %+v\nafter:  %+v", before, after)
 	}
 }
