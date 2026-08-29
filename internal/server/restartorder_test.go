@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -154,7 +155,12 @@ func TestRestartPersistsResumePointsBeforeReleasingTheSocket(t *testing.T) {
 	// Compared as a pair rather than field by field: the two positions count the same output in
 	// different spaces, and checking one while the other is wrong is how they diverged before.
 	// store.Session itself is not comparable, since it carries a tag map.
-	type resumePoint struct{ LastSeq, ClientSeq uint64 }
+	// The field types are what keep the pair honest now: one space each, so a future edit cannot
+	// quietly compare the wrong two numbers.
+	type resumePoint struct {
+		LastSeq   seq.Shim
+		ClientSeq seq.Log
+	}
 	got := resumePoint{l.rec.LastSeq, l.rec.ClientSeq}
 	if want := (resumePoint{want, wantClient}); got != want {
 		t.Errorf("as the listener closed, store held %+v, want %+v.\n"+

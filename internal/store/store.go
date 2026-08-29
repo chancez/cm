@@ -18,6 +18,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	_ "modernc.org/sqlite" // pure-Go driver, so cgo stays confined to internal/vt
 )
 
@@ -158,14 +159,14 @@ type Session struct {
 	ShellPID int
 	// LastSeq is how far the server had consumed the shim's output log. This is the
 	// resume point after a server restart, in the shim's numbering.
-	LastSeq uint64
+	LastSeq seq.Shim
 	// ClientSeq is how far the server had served clients, in the numbering clients see.
 	//
 	// Distinct from LastSeq because output is rewritten on the way through and the rewrite changes
 	// length, so the two counts diverge by nine bytes per prompt marker. An adopting server has to
 	// start its client log here rather than at LastSeq, or a resuming client asks for a position the
 	// new log does not have and loses the bytes in between. See docs/architecture.md.
-	ClientSeq uint64
+	ClientSeq seq.Log
 	State     State
 	// ExitCode is meaningful only when State is StateExited.
 	ExitCode int

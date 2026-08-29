@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/chancez/cm/internal/seq"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,7 +106,7 @@ func TestApplyUpdatesOnlyGivenFields(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	newSeq := uint64(12345)
+	newSeq := seq.Shim(12345)
 	newState := StateExited
 	code := 3
 	if err := s.Apply(ctx, "upd", Update{
@@ -133,8 +134,8 @@ func TestApplyUpdatesOnlyGivenFields(t *testing.T) {
 
 func TestApplyMissingReturnsNotFound(t *testing.T) {
 	s := openTestStore(t)
-	seq := uint64(1)
-	err := s.Apply(context.Background(), "ghost", Update{LastSeq: &seq})
+	pos := seq.Shim(1)
+	err := s.Apply(context.Background(), "ghost", Update{LastSeq: &pos})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("Apply() error = %v, want ErrNotFound", err)
 	}

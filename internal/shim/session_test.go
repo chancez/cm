@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 // readUntil accumulates output until want appears or the deadline passes. Terminal output
 // arrives in arbitrarily sized pieces, so tests cannot assume one read per write.
-func readUntil(t *testing.T, r *seqlog.Reader, want string) string {
+func readUntil(t *testing.T, r *seqlog.Reader[seq.Shim], want string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

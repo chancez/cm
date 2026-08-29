@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
@@ -277,7 +278,7 @@ func waitSocket(t *testing.T, socket string) {
 }
 
 // readUntil accumulates from a reader until want appears.
-func readUntil(t *testing.T, r *seqlog.Reader, want string) string {
+func readUntil(t *testing.T, r *seqlog.Reader[seq.Log], want string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -356,7 +357,7 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 		t.Error("first attach reports first = false, want true so focus can be reported")
 	}
 
-	from := uint64(0)
+	from := seq.Log(0)
 	resumed, err := sess.attach(&from, nil)
 	if err != nil {
 		t.Fatalf("resumed attach() error = %v", err)
@@ -434,7 +435,7 @@ func TestMultipleClientsEachSeeOutput(t *testing.T) {
 	if n := sess.Clients(); n != 2 {
 		t.Errorf("Clients() = %d, want 2", n)
 	}
-	for i, r := range []*seqlog.Reader{a1.reader, a2.reader} {
+	for i, r := range []*seqlog.Reader[seq.Log]{a1.reader, a2.reader} {
 		if got := readUntil(t, r, "SHARED"); !strings.Contains(got, "SHARED") {
 			t.Errorf("client %d saw %q, want SHARED", i, got)
 		}
@@ -584,7 +585,7 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 	defer sess.detach(att)
 	out := readUntil(t, att.reader, "COUNTED")
 
-	if got := sess.LastSeq(); got < uint64(len(out)) {
+	if got := sess.LastSeq(); got < seq.Shim(len(out)) {
 		t.Errorf("LastSeq() = %d, want at least %d after consuming %q",
 			got, len(out), out)
 	}
@@ -611,7 +612,9 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 	resumeFrom := first.LastSeq()
 	first.Close()
 
-	second, err := newSession(rec, nil, resumeFrom, resumeFrom)
+	// Both positions from the shim's number, which is what this test is reproducing: a resume that has
+	// only the one value. The conversion says so out loud rather than the two being interchangeable.
+	second, err := newSession(rec, nil, resumeFrom, seq.Log(resumeFrom))
 	if err != nil {
 		t.Fatalf("second newSession() error = %v", err)
 	}
@@ -623,7 +626,7 @@ func TestSessionPreservesShimSequenceNumbering(t *testing.T) {
 	}
 	defer second.detach(a2)
 
-	if got := a2.reader.Position(); got < resumeFrom {
+	if got := a2.reader.Position(); uint64(got) < uint64(resumeFrom) {
 		t.Errorf("resumed reader position = %d, want at least the resume point %d",
 			got, resumeFrom)
 	}
@@ -927,7 +930,7 @@ func TestAttachStreamStartsOnASequenceBoundary(t *testing.T) {
 
 	// And the two counters really do differ here, so the test would catch a regression rather than
 	// passing because the rewrite happened to be a no-op.
-	if sess.LastSeq() == sess.recent.Next() {
+	if uint64(sess.LastSeq()) == uint64(sess.recent.Next()) {
 		t.Skip("rewrite did not change the length, so this case cannot desynchronize")
 	}
 	_ = prompt

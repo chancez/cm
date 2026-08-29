@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/store"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -226,7 +227,7 @@ func waitForShimOutput(t *testing.T, socket, want string) {
 
 // shimNextSeq reports the sequence number a shim will assign next, which is where a server that had
 // consumed everything would resume from.
-func shimNextSeq(t *testing.T, socket string) uint64 {
+func shimNextSeq(t *testing.T, socket string) seq.Shim {
 	t.Helper()
 
 	conn, shim, err := dialShim(socket)
@@ -239,5 +240,5 @@ func shimNextSeq(t *testing.T, socket string) uint64 {
 	if err != nil {
 		t.Fatalf("State() error = %v", err)
 	}
-	return st.NextSeq
+	return seq.Shim(st.NextSeq)
 }

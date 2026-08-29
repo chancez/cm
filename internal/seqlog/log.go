@@ -10,6 +10,8 @@ package seqlog
 import (
 	"errors"
 	"sync"
+
+	"github.com/chancez/cm/internal/seq"
 )
 
 // ErrClosed is returned once the log is closed and no further output will arrive.
@@ -30,11 +32,11 @@ var ErrClosed = errors.New("output log is closed")
 // The buffer is bounded and drops from the front. A detached session that keeps
 // producing output must not grow without limit, and the oldest output is the least
 // valuable: terminal state is reconstructed from the most recent bytes.
-type Log struct {
+type Log[S seq.Number] struct {
 	mu sync.Mutex
 	// buf holds bytes for sequence numbers [oldest, oldest+len(buf)).
 	buf    []byte
-	oldest uint64
+	oldest S
 	max    int
 	closed bool
 	// subs are woken on append and on close. Keyed by pointer so a subscriber can
@@ -48,8 +50,8 @@ type subscriber struct {
 
 // New returns a log retaining at most max bytes, numbering from zero. A max below 1 is
 // treated as 1 so the invariants below hold without special cases.
-func New(max int) *Log {
-	return NewAt(max, 0)
+func New[S seq.Number](max int) *Log[S] {
+	return NewAt[S](max, 0)
 }
 
 // NewAt returns a log whose first byte will be numbered start.
@@ -58,11 +60,11 @@ func New(max int) *Log {
 // beginning at some sequence number and must keep using those numbers, so a position named
 // by a client means the same thing on both hops. Numbering from zero would make the two
 // disagree by however much the server had already missed.
-func NewAt(max int, start uint64) *Log {
+func NewAt[S seq.Number](max int, start S) *Log[S] {
 	if max < 1 {
 		max = 1
 	}
-	return &Log{
+	return &Log[S]{
 		max:    max,
 		oldest: start,
 		subs:   make(map[*subscriber]struct{}),
@@ -74,7 +76,7 @@ func NewAt(max int, start uint64) *Log {
 // A write larger than the whole buffer keeps its tail rather than being rejected: the
 // most recent bytes are what matter for reconstructing terminal state, and refusing the
 // write would mean losing them instead.
-func (l *Log) Append(p []byte) {
+func (l *Log[S]) Append(p []byte) {
 	if len(p) == 0 {
 		return
 	}
@@ -86,7 +88,7 @@ func (l *Log) Append(p []byte) {
 
 	if len(p) >= l.max {
 		// Advance oldest past everything we are discarding, including the head of p.
-		l.oldest += uint64(len(l.buf)) + uint64(len(p)-l.max)
+		l.oldest += S(len(l.buf)) + S(len(p)-l.max)
 		l.buf = append(l.buf[:0], p[len(p)-l.max:]...)
 	} else {
 		l.buf = append(l.buf, p...)
@@ -95,7 +97,7 @@ func (l *Log) Append(p []byte) {
 			// as the window advances, so the buffer would retain max bytes but occupy
 			// unboundedly more memory.
 			l.buf = l.buf[:copy(l.buf, l.buf[excess:])]
-			l.oldest += uint64(excess)
+			l.oldest += S(excess)
 		}
 	}
 
@@ -103,7 +105,7 @@ func (l *Log) Append(p []byte) {
 }
 
 // Close marks the log complete. Subscribers drain what remains and then see ErrClosed.
-func (l *Log) Close() {
+func (l *Log[S]) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
@@ -116,7 +118,7 @@ func (l *Log) Close() {
 // wakeLocked signals every subscriber. The channels have capacity 1 and carry no data,
 // so a non-blocking send is enough: a subscriber that has not yet observed the previous
 // signal will see the new state when it wakes.
-func (l *Log) wakeLocked() {
+func (l *Log[S]) wakeLocked() {
 	for s := range l.subs {
 		select {
 		case s.ch <- struct{}{}:
@@ -126,25 +128,25 @@ func (l *Log) wakeLocked() {
 }
 
 // Oldest returns the lowest sequence number still retained.
-func (l *Log) Oldest() uint64 {
+func (l *Log[S]) Oldest() S {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.oldest
 }
 
 // Next returns the sequence number that will be assigned to the next byte appended.
-func (l *Log) Next() uint64 {
+func (l *Log[S]) Next() S {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.oldest + uint64(len(l.buf))
+	return l.oldest + S(len(l.buf))
 }
 
 // Bounds returns the oldest retained sequence number and the next sequence number to be
 // assigned. Everything in [oldest, next) is currently readable.
-func (l *Log) Bounds() (oldest, next uint64) {
+func (l *Log[S]) Bounds() (oldest, next S) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.oldest, l.oldest + uint64(len(l.buf))
+	return l.oldest, l.oldest + S(len(l.buf))
 }
 
 // Snapshot returns the retained bytes from a sequence number, without waiting for more.
@@ -158,11 +160,11 @@ func (l *Log) Bounds() (oldest, next uint64) {
 // asked. That matters more here than for a follower: replaying from a hole cannot reconstruct the state
 // the missing bytes established, and for a read anchored at a command boundary it means the command's
 // output has partly aged out of the buffer.
-func (l *Log) Snapshot(from uint64) (data []byte, gap bool) {
+func (l *Log[S]) Snapshot(from S) (data []byte, gap bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	end := l.oldest + uint64(len(l.buf))
+	end := l.oldest + S(len(l.buf))
 	if from >= end {
 		// Nothing yet. Not an error: a command that has just started has printed nothing, and an empty
 		// read is the honest answer.
@@ -173,7 +175,7 @@ func (l *Log) Snapshot(from uint64) (data []byte, gap bool) {
 	}
 	// Copied rather than aliased, since the buffer is trimmed from the front under this same lock and a
 	// retained slice would shift out from under the caller.
-	out := make([]byte, end-from)
+	out := make([]byte, uint64(end-from))
 	copy(out, l.buf[from-l.oldest:])
 	return out, gap
 }

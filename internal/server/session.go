@@ -21,6 +21,7 @@ import (
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/transport"
@@ -82,17 +83,17 @@ type Session struct {
 	// A position in the log's numbering, not the shim's, because it is what a fresh attach streams
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
-	modelSeq uint64
+	modelSeq seq.Log
 
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
 	// log type as the shim means the gap semantics are identical on both hops.
-	recent *seqlog.Log
+	recent *seqlog.Log[seq.Log]
 
 	mu sync.Mutex
 	// lastSeq is one past the last sequence number consumed from the shim, and is the
 	// resume point if this server restarts.
-	lastSeq uint64
+	lastSeq seq.Shim
 	// ended is set once the shim reports the shell exited.
 	ended    bool
 	exitCode int
@@ -420,7 +421,7 @@ func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 // position to number the client log from are different numbers describing the same instant. Conflating
 // them is what let a resuming client ask its new server for a position past the end of that server's
 // log, where seqlog clamps forward and the bytes in between are lost.
-func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*Session, error) {
+func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq seq.Log) (*Session, error) {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
 		return nil, err
@@ -436,7 +437,7 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 		conn:     conn,
 		shim:     shim,
 		term:     term,
-		recent:   seqlog.NewAt(DefaultRecentBytes, clientSeq),
+		recent:   seqlog.NewAt[seq.Log](DefaultRecentBytes, clientSeq),
 		metaSubs: make(map[*metaSub]struct{}),
 		// Positioned at the same offset as the log, since a session adopted after a server restart
 		// resumes partway in and a tracker starting from zero would place every boundary wrongly.
@@ -467,7 +468,7 @@ func newSession(rec store.Session, term Terminal, fromSeq, clientSeq uint64) (*S
 		stopPump: stopPump,
 	}
 
-	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: fromSeq})
+	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: uint64(fromSeq)})
 	if err != nil {
 		stopPump()
 		conn.Close()
@@ -610,7 +611,7 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// client's resume position inside an escape sequence and slices the ESC off the front of
 		// it. The visible result is a cursor move rendering as literal text beside the prompt.
 		s.mu.Lock()
-		s.lastSeq = out.Seq + uint64(len(out.Data))
+		s.lastSeq = seq.Shim(out.Seq) + seq.Shim(len(out.Data))
 		s.mu.Unlock()
 
 		// The model is fed gfxData rather than out.Data, which is a change from feeding the shell's
@@ -720,7 +721,7 @@ func (s *Session) handleGraphics(segs []graphics.Segment) []byte {
 // Its own method because the pair must be atomic with respect to attach. attach serializes a screen
 // and picks a position to stream from, and if it could see the model updated but the position not
 // yet, it would replay a chunk the client is also about to receive.
-func (s *Session) feedTerminal(data []byte, modelEnd uint64) {
+func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 	s.mu.Lock()
 	term := s.term
 	s.mu.Unlock()
@@ -1024,7 +1025,7 @@ func (s *Session) Reported() Reported {
 //
 // gap reports that output at or after from had already been trimmed, so the result starts later than
 // asked for.
-func (s *Session) SnapshotFrom(from uint64) (data []byte, gap bool) {
+func (s *Session) SnapshotFrom(from seq.Log) (data []byte, gap bool) {
 	return s.recent.Snapshot(from)
 }
 
@@ -1047,9 +1048,12 @@ func (s *Session) Size() (rows, cols uint16) {
 // A helper rather than two lines inline, so the pairing of construction and positioning is in one place:
 // a tracker built without SetPosition silently records every boundary as an offset from zero, which for
 // an adopted session is wrong by however far into its life the server restarted.
-func newBoundaryTrackerAt(fromSeq uint64) *osc.BoundaryTracker {
+// fromSeq is in the log's numbering, which is the trap this function exists to make explicit:
+// boundaries are recorded from the rewritten bytes, and taking them from the pre-rewrite stream drifts
+// by nine bytes per prompt marker. internal/osc still counts in plain uint64, so the space stops here.
+func newBoundaryTrackerAt(fromSeq seq.Log) *osc.BoundaryTracker {
 	t := osc.NewBoundaryTracker(0)
-	t.SetPosition(fromSeq)
+	t.SetPosition(uint64(fromSeq))
 	return t
 }
 
@@ -1069,13 +1073,16 @@ var ErrNoCommandBoundaries = errors.New("session has not reported any command bo
 //
 // available reports how many command blocks are known when n exceeds them, so a caller can say how many
 // there are rather than quietly returning fewer than asked for.
-func (s *Session) SinceCommands(n int) (seq uint64, available int, err error) {
+func (s *Session) SinceCommands(n int) (pos seq.Log, available int, err error) {
 	s.boundariesMu.Lock()
 	defer s.boundariesMu.Unlock()
 
-	seq, available, ok := s.boundaries.SinceCommands(n)
+	// Named at rather than seq, which would shadow the package naming the two spaces. internal/osc
+	// counts in plain uint64, so the space is applied here: a boundary is a position in the log's
+	// numbering, because the tracker is fed the rewritten bytes.
+	at, available, ok := s.boundaries.SinceCommands(n)
 	if ok {
-		return seq, available, nil
+		return seq.Log(at), available, nil
 	}
 	if available == 0 {
 		return 0, 0, ErrNoCommandBoundaries
@@ -1088,15 +1095,15 @@ func (s *Session) SinceCommands(n int) (seq uint64, available int, err error) {
 //
 // Excludes the prompt and the echoed command line, unlike SinceCommands, which is the difference between
 // a transcript and something a parser can read directly.
-func (s *Session) LastOutput() (uint64, error) {
+func (s *Session) LastOutput() (seq.Log, error) {
 	s.boundariesMu.Lock()
 	defer s.boundariesMu.Unlock()
 
-	seq, ok := s.boundaries.LastOutput()
+	at, ok := s.boundaries.LastOutput()
 	if !ok {
 		return 0, ErrNoCommandBoundaries
 	}
-	return seq, nil
+	return seq.Log(at), nil
 }
 
 // CommandRuns counts the commands the shell has reported starting.
@@ -1271,7 +1278,7 @@ func (s *Session) Ended() (bool, int) {
 }
 
 // LastSeq returns the resume point: one past the last byte consumed from the shim.
-func (s *Session) LastSeq() uint64 {
+func (s *Session) LastSeq() seq.Shim {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastSeq
@@ -1282,7 +1289,7 @@ func (s *Session) LastSeq() uint64 {
 // Distinct from LastSeq, which counts the shim's bytes. The prompt rewrite lengthens output, so the
 // two diverge, and an adopting server needs this one to position its client log. See resumePoints for
 // why the pair is usually read together rather than one at a time.
-func (s *Session) ClientSeq() uint64 {
+func (s *Session) ClientSeq() seq.Log {
 	return s.recent.Next()
 }
 
@@ -1302,7 +1309,7 @@ func (s *Session) ClientSeq() uint64 {
 // while the log numbering already counted them, and a client resuming there would be served from a
 // position whose bytes never arrive. Duplicated output is visible and recoverable; a silent hole in
 // the middle of an escape sequence is the corruption this pair exists to prevent.
-func (s *Session) resumePoints() (shimSeq, clientSeq uint64) {
+func (s *Session) resumePoints() (shimSeq seq.Shim, clientSeq seq.Log) {
 	s.mu.Lock()
 	shimSeq = s.lastSeq
 	s.mu.Unlock()
@@ -1534,7 +1541,7 @@ type attachment struct {
 	// token identifies this attachment for sizing purposes.
 	token *attachToken
 	// reader streams session output.
-	reader *seqlog.Reader
+	reader *seqlog.Reader[seq.Log]
 	// restore holds bytes reproducing the current screen, empty when resuming.
 	restore []byte
 	// first reports that this is the only attached client, so a program that tracks focus should
@@ -1612,7 +1619,7 @@ func (s *Session) releaseClient(tok *attachToken) {
 // The caller gets restore bytes and a starting sequence under one lock, so no output can
 // slip between snapshotting the screen and subscribing. Getting that wrong would show a
 // client a screen that is either missing bytes or replaying them twice.
-func (s *Session) attach(resumeFrom *uint64, tok *attachToken) (attachment, error) {
+func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1695,7 +1702,7 @@ func (s *Session) attach(resumeFrom *uint64, tok *attachToken) (attachment, erro
 // From the current end rather than from the oldest retained byte, because a wait asks about what happens
 // next. Starting from history would satisfy a wait for text the session printed before the caller asked,
 // which is the same mistake as a wait satisfied by the state a session was already in.
-func (s *Session) SubscribeOutput() *seqlog.Reader {
+func (s *Session) SubscribeOutput() *seqlog.Reader[seq.Log] {
 	_, next := s.recent.Bounds()
 	return s.recent.Subscribe(next)
 }
@@ -1708,7 +1715,7 @@ func (s *Session) SubscribeOutput() *seqlog.Reader {
 // tok is the reservation from reserveClient when the caller made one, so the size entry it already
 // holds is kept rather than replaced: replacing it would discard the size the session was just resized
 // to and, under ResizeLeader, the leadership that went with it.
-func (s *Session) newAttachmentLocked(from uint64, restore []byte, tok *attachToken) attachment {
+func (s *Session) newAttachmentLocked(from seq.Log, restore []byte, tok *attachToken) attachment {
 	token := tok
 	if token == nil {
 		token = s.reserveClientLocked()

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -24,7 +25,7 @@ func replayTerminal(t *testing.T) (NewTerminalFunc, *fakeTerminal) {
 func TestReplayPersistedRebuildsScreen(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "session.log")
 
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -58,7 +59,7 @@ func TestReplayPersistedRebuildsScreen(t *testing.T) {
 // laid out for the wrong width.
 func TestReplayPersistedUsesRequestedSize(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "session.log")
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -79,7 +80,7 @@ func TestReplayPersistedUsesRequestedSize(t *testing.T) {
 // shell.
 func TestReplayPersistedDiscardsGeneratedInput(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "session.log")
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -129,7 +130,7 @@ func TestReplayPersistedMissingCases(t *testing.T) {
 // produced no output is a normal thing to encounter.
 func TestReplayPersistedEmptyLog(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "empty.log")
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -146,7 +147,7 @@ func TestReplayPersistedEmptyLog(t *testing.T) {
 // must reflect the trimmed numbering rather than starting from zero.
 func TestReplayPersistedAfterTrim(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "trimmed.log")
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{MaxLines: 2})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{MaxLines: 2})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}

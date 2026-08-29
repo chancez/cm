@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/chancez/cm/internal/seq"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestDetachedAnswerIsNotReplayedToALaterClient(t *testing.T) {
 
 	// A client attaches later and resumes from before the query, which is what a reconnect after any
 	// interruption does. It is served the question, because cm forwards output verbatim.
-	var resume uint64
+	var resume seq.Log
 	att, err := sess.attach(&resume, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)

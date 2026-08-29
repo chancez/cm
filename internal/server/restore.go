@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -25,7 +26,7 @@ func replayPersisted(
 	newTerminal NewTerminalFunc,
 	rows, cols uint16,
 	limits seqlog.FileLimits,
-) (restore []byte, next uint64, err error) {
+) (restore []byte, next seq.Shim, err error) {
 	if logPath == "" {
 		return nil, 0, ErrNothingToRestore
 	}
@@ -40,7 +41,7 @@ func replayPersisted(
 		return nil, 0, ErrNothingToRestore
 	}
 
-	f, err := seqlog.OpenFile(logPath, limits)
+	f, err := seqlog.OpenFile[seq.Shim](logPath, limits)
 	if err != nil {
 		return nil, 0, fmt.Errorf("opening persisted log: %w", err)
 	}

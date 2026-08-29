@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/chancez/cm/internal/seq"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,13 +49,13 @@ const (
 //
 // Writes are not synced. Terminal output is worth keeping but not worth an fsync per chunk, and the
 // failure this protects against is a process dying rather than the machine losing power mid-write.
-type File struct {
+type File[S seq.Number] struct {
 	mu     sync.Mutex
 	f      *os.File
 	limits FileLimits
 
 	// oldest is the sequence number of the first retained byte.
-	oldest uint64
+	oldest S
 	// size is the payload length, excluding the header.
 	size int64
 	// lines counts newlines in the payload, so trimming does not have to rescan the file.
@@ -65,7 +66,7 @@ type File struct {
 //
 // An existing file is adopted rather than truncated, which is what makes the log survive a restart:
 // the shim reopens it and continues appending at the recorded position.
-func OpenFile(path string, limits FileLimits) (*File, error) {
+func OpenFile[S seq.Number](path string, limits FileLimits) (*File[S], error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("creating log directory: %w", err)
 	}
@@ -76,7 +77,7 @@ func OpenFile(path string, limits FileLimits) (*File, error) {
 		return nil, fmt.Errorf("opening log %s: %w", path, err)
 	}
 
-	fl := &File{f: f, limits: limits}
+	fl := &File[S]{f: f, limits: limits}
 	if err := fl.load(); err != nil {
 		f.Close()
 		return nil, err
@@ -89,7 +90,7 @@ func OpenFile(path string, limits FileLimits) (*File, error) {
 // A file whose header is missing or unrecognized is truncated rather than rejected. The alternative
 // is refusing to start a session because of an unreadable cache, which trades something recoverable
 // for something that is not.
-func (l *File) load() error {
+func (l *File[S]) load() error {
 	info, err := l.f.Stat()
 	if err != nil {
 		return fmt.Errorf("measuring log: %w", err)
@@ -107,7 +108,7 @@ func (l *File) load() error {
 		return l.reset(0)
 	}
 
-	l.oldest = binary.BigEndian.Uint64(header[len(fileMagic):])
+	l.oldest = S(binary.BigEndian.Uint64(header[len(fileMagic):]))
 	l.size = info.Size() - int64(fileHeaderBytes)
 	l.lines, err = countLines(l.f, int64(fileHeaderBytes), l.size)
 	if err != nil {
@@ -117,13 +118,13 @@ func (l *File) load() error {
 }
 
 // reset truncates the file and writes a header numbering the payload from oldest.
-func (l *File) reset(oldest uint64) error {
+func (l *File[S]) reset(oldest S) error {
 	if err := l.f.Truncate(0); err != nil {
 		return fmt.Errorf("truncating log: %w", err)
 	}
 	header := make([]byte, fileHeaderBytes)
 	copy(header, fileMagic)
-	binary.BigEndian.PutUint64(header[len(fileMagic):], oldest)
+	binary.BigEndian.PutUint64(header[len(fileMagic):], uint64(oldest))
 	if _, err := l.f.WriteAt(header, 0); err != nil {
 		return fmt.Errorf("writing log header: %w", err)
 	}
@@ -155,7 +156,7 @@ func countLines(r io.ReaderAt, off, size int64) (int, error) {
 }
 
 // Append adds output and trims the front if the limits are exceeded.
-func (l *File) Append(p []byte) error {
+func (l *File[S]) Append(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
@@ -178,7 +179,7 @@ func (l *File) Append(p []byte) error {
 // was exceeded, an exact boundary is not available and the cut is made anyway: a caller replaying
 // from the middle of a sequence is told there is a gap, which is the same contract the in-memory log
 // has.
-func (l *File) trimLocked() error {
+func (l *File[S]) trimLocked() error {
 	drop := int64(0)
 
 	if l.limits.MaxLines > 0 && l.lines > l.limits.MaxLines {
@@ -208,7 +209,7 @@ func (l *File) trimLocked() error {
 		}
 	}
 
-	newOldest := l.oldest + uint64(drop)
+	newOldest := l.oldest + S(drop)
 	if err := l.reset(newOldest); err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func (l *File) trimLocked() error {
 }
 
 // offsetAfterLines returns the payload offset just past the nth newline.
-func (l *File) offsetAfterLines(n int) (int64, error) {
+func (l *File[S]) offsetAfterLines(n int) (int64, error) {
 	if n <= 0 {
 		return 0, nil
 	}
@@ -256,10 +257,10 @@ func (l *File) offsetAfterLines(n int) (int64, error) {
 }
 
 // Bounds returns the oldest retained sequence number and the next to be assigned.
-func (l *File) Bounds() (oldest, next uint64) {
+func (l *File[S]) Bounds() (oldest, next S) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.oldest, l.oldest + uint64(l.size)
+	return l.oldest, l.oldest + S(l.size)
 }
 
 // ReadFrom returns retained bytes starting at a sequence number, and whether bytes before it were
@@ -267,7 +268,7 @@ func (l *File) Bounds() (oldest, next uint64) {
 //
 // A gap is reported rather than an error because it is expected: a caller resuming from a position
 // the log has since trimmed needs to know its view is discontinuous, not that something failed.
-func (l *File) ReadFrom(from uint64) (data []byte, gap bool, err error) {
+func (l *File[S]) ReadFrom(from S) (data []byte, gap bool, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -275,7 +276,7 @@ func (l *File) ReadFrom(from uint64) (data []byte, gap bool, err error) {
 	if start < l.oldest {
 		start, gap = l.oldest, true
 	}
-	end := l.oldest + uint64(l.size)
+	end := l.oldest + S(l.size)
 	if start >= end {
 		return nil, gap, nil
 	}
@@ -292,14 +293,14 @@ func (l *File) ReadFrom(from uint64) (data []byte, gap bool, err error) {
 //
 // Called at points where losing the tail would matter, such as a session ending, rather than on
 // every append: terminal output is worth keeping but not worth an fsync per chunk.
-func (l *File) Sync() error {
+func (l *File[S]) Sync() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.f.Sync()
 }
 
 // Close flushes and releases the file.
-func (l *File) Close() error {
+func (l *File[S]) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.f == nil {

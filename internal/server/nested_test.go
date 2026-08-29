@@ -6,6 +6,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -28,7 +29,7 @@ func newNestedTestSession(t *testing.T, term Terminal) *Session {
 	t.Helper()
 	sess := &Session{
 		id:          "parent",
-		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
+		recent:      seqlog.NewAt[seq.Log](DefaultRecentBytes, 0),
 		term:        term,
 		clientSizes: make(map[*attachToken]*clientSize),
 		evicts:      make(map[*attachToken]chan struct{}),

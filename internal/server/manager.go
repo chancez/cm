@@ -17,6 +17,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/tags"
@@ -363,7 +364,7 @@ const socketRefusalGrace = 250 * time.Millisecond
 // "same as fromSeq", which is right for a brand new session, where nothing has been rewritten yet and
 // both spaces start together.
 func (m *Manager) adopt(
-	ctx context.Context, rec store.Session, fromSeq, clientSeq uint64,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, clientSeq seq.Log,
 ) (*Session, error) {
 	term, err := m.buildTerminal(uint16(rec.Rows), uint16(rec.Cols))
 	if err != nil {
@@ -382,7 +383,10 @@ func (m *Manager) adopt(
 	// reproduces the old behavior for that one adoption rather than starting the log at zero, which
 	// would make every subscriber look like it had missed the entire session.
 	if clientSeq == 0 {
-		clientSeq = fromSeq
+		// The one deliberate crossing between the two spaces, and the conversion is what makes it say
+		// so. Wrong by the rewrite drift for this single adoption, which self-corrects on the next
+		// restart, and far better than starting the log at zero.
+		clientSeq = seq.Log(fromSeq)
 	}
 	sess, err := newSession(rec, term, fromSeq, clientSeq)
 	if err != nil {
@@ -417,7 +421,7 @@ func (m *Manager) adopt(
 // either already saw or will receive as part of a restored screen. Appending them would replay old
 // output to an attached client as though it were new.
 func (m *Manager) replayShimHistory(
-	ctx context.Context, rec store.Session, fromSeq uint64, term Terminal,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, term Terminal,
 ) error {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
@@ -429,7 +433,7 @@ func (m *Manager) replayShimHistory(
 	if err != nil {
 		return fmt.Errorf("reading shim state: %w", err)
 	}
-	if st.OldestSeq >= fromSeq {
+	if seq.Shim(st.OldestSeq) >= fromSeq {
 		// Nothing retained before where the pump will start, so there is no history to replay.
 		return nil
 	}
@@ -453,16 +457,17 @@ func (m *Manager) replayShimHistory(
 		}
 		data := out.Data
 		// Trim the tail that the pump will deliver, so the boundary byte is written exactly once.
-		if end := out.Seq + uint64(len(data)); end > fromSeq {
-			if out.Seq >= fromSeq {
+		chunkStart := seq.Shim(out.Seq)
+		if end := chunkStart + seq.Shim(len(data)); end > fromSeq {
+			if chunkStart >= fromSeq {
 				break
 			}
-			data = data[:fromSeq-out.Seq]
+			data = data[:fromSeq-chunkStart]
 		}
 		if err := term.Write(data); err != nil {
 			return fmt.Errorf("replaying output: %w", err)
 		}
-		if out.Seq+uint64(len(data)) >= fromSeq {
+		if chunkStart+seq.Shim(len(data)) >= fromSeq {
 			break
 		}
 	}
@@ -596,13 +601,13 @@ func (m *Manager) watch(sess *Session) {
 		return
 	}
 
-	seq, clientSeq := sess.resumePoints()
+	shimSeq, clientSeq := sess.resumePoints()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := m.store.Apply(ctx, sess.id, store.Update{
 		State:     &state,
 		ExitCode:  &code,
-		LastSeq:   &seq,
+		LastSeq:   &shimSeq,
 		ClientSeq: &clientSeq,
 	}); err != nil {
 		// A record that is already gone is the expected outcome of a kill, not a failure.
@@ -1628,7 +1633,7 @@ func (m *Manager) replayFromDisk(
 		limits = m.persist.Limits
 	}
 
-	f, err := seqlog.OpenFile(rec.LogPath, limits)
+	f, err := seqlog.OpenFile[seq.Shim](rec.LogPath, limits)
 	if err != nil {
 		return nil, fmt.Errorf("opening persisted log for %s: %w", name, err)
 	}
@@ -1687,13 +1692,13 @@ func (m *Manager) Close() error {
 		// Persist both resume points so the next server picks up exactly here. The client position is
 		// stored alongside the shim one because they count the same output differently and the adopting
 		// server needs both: one to resubscribe with, one to number its client log from.
-		seq, clientSeq := sess.resumePoints()
+		shimSeq, clientSeq := sess.resumePoints()
 		if err := m.store.Apply(ctx, sess.id,
-			store.Update{LastSeq: &seq, ClientSeq: &clientSeq}); err != nil {
+			store.Update{LastSeq: &shimSeq, ClientSeq: &clientSeq}); err != nil {
 			// Losing this means the next server resubscribes from an older position and replays
 			// output the client already saw, so it is worth knowing about.
 			m.log.Error("recording resume point failed",
-				"session", sess.id, "seq", seq, "error", err)
+				"session", sess.id, "seq", shimSeq, "error", err)
 		}
 		sess.Close()
 	}

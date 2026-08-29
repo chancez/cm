@@ -287,6 +287,10 @@ Three places, by kind:
   and `kitty --dump-bytes` settled it in one run. When a capture and reality disagree, instrument the far
   end.
 - **Two sequence-number spaces exist** and mixing them corrupts output: the shim's numbering and the
-  server's post-rewrite numbering differ in length. See `docs/architecture.md`.
+  server's post-rewrite numbering differ in length. They are now distinct types in `internal/seq`, and
+  `seqlog` is generic over the space, so the mistake is a compile error rather than a silent corruption:
+  `recent.Subscribe(lastSeq)` does not build. Conversions that remain are the real crossings, the
+  protobuf wire and the sqlite row and one documented fallback in adoption, and each says why.
+  See `docs/architecture.md`.
 - **`os.MkdirAll(dir, 0700)` over an existing directory leaves its mode alone**, so pointing
   `CM_RUNTIME_DIR` at a shared path can yield world-readable session logs. Hence `loose-dir-perms`.

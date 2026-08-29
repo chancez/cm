@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -94,7 +95,7 @@ func TestResizeDoesNotNudgeOnRealChange(t *testing.T) {
 
 // waitFor reports whether want appears before a short deadline, without failing the test, so a
 // caller can distinguish a control failure from the behavior under test.
-func waitFor(t *testing.T, r *seqlog.Reader, want string) bool {
+func waitFor(t *testing.T, r *seqlog.Reader[seq.Shim], want string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

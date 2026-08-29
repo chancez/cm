@@ -251,7 +251,7 @@ func waitResult(sess *Session, ok bool) *serverv1.WaitResponse {
 		// How far the server has consumed the session's output, so a follower can tell when it has caught
 		// up. The wait says the command finished; it does not say the output has reached the client, and a
 		// caller that stops following on the reply truncates whatever is still in flight.
-		LastSeq: sess.LastSeq(),
+		LastSeq: uint64(sess.LastSeq()),
 	}
 	// A report describes the session better than the derived state, so busy reflects it when present.
 	if r.State != "" {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -86,10 +87,10 @@ type Session struct {
 	cfg Config
 	// outputLog holds the session's terminal output. Distinct from log, which records what the shim
 	// itself did.
-	outputLog *seqlog.Log
+	outputLog *seqlog.Log[seq.Shim]
 	// persist mirrors output to disk when the session is configured to survive this process. Nil
 	// otherwise, which is the common case.
-	persist *seqlog.File
+	persist *seqlog.File[seq.Shim]
 
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
@@ -137,7 +138,7 @@ func Start(cfg Config) (*Session, error) {
 		logBytes = DefaultLogBytes
 	}
 
-	s := &Session{cfg: cfg, log: cmlog.Discard(), outputLog: seqlog.New(logBytes)}
+	s := &Session{cfg: cfg, log: cmlog.Discard(), outputLog: seqlog.New[seq.Shim](logBytes)}
 
 	if cfg.PersistPath != "" {
 		limits := cfg.PersistLimits
@@ -147,7 +148,7 @@ func Start(cfg Config) (*Session, error) {
 		// A log that cannot be opened is reported rather than ignored: the caller asked for a
 		// session whose content survives, and silently not doing that would be discovered only
 		// after a reboot, when it is too late to matter.
-		pf, err := seqlog.OpenFile(cfg.PersistPath, limits)
+		pf, err := seqlog.OpenFile[seq.Shim](cfg.PersistPath, limits)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +348,7 @@ func (s *Session) SetLogger(l *slog.Logger) {
 }
 
 // Log exposes the output log for subscribers.
-func (s *Session) Log() *seqlog.Log { return s.outputLog }
+func (s *Session) Log() *seqlog.Log[seq.Shim] { return s.outputLog }
 
 // Write sends input to the pty.
 //

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
 )
@@ -24,9 +25,9 @@ func testPolicy() *PersistPolicy {
 }
 
 // writeSavedLog creates a persisted log as a previous incarnation would have left it.
-func writeSavedLog(t *testing.T, path, content string) uint64 {
+func writeSavedLog(t *testing.T, path, content string) seq.Shim {
 	t.Helper()
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -299,7 +300,7 @@ func TestRestoredScreenSkippedOnResume(t *testing.T) {
 
 	sess.setRestored([]byte("SCREEN_FROM_BEFORE"))
 
-	from := uint64(0)
+	from := seq.Log(0)
 	att, err := sess.attach(&from, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)

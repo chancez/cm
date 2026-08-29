@@ -60,7 +60,9 @@ func TestResumePointsUseSeparateNumberingSpaces(t *testing.T) {
 	if shimSeq == 0 || clientSeq == 0 {
 		t.Fatalf("resumePoints() = (%d, %d), want both advanced past zero", shimSeq, clientSeq)
 	}
-	if clientSeq <= shimSeq {
+	// Compared across the two spaces on purpose, which is what this test is for, so the conversion is
+	// explicit. Everywhere else the types make this a compile error; see internal/seq.
+	if uint64(clientSeq) <= uint64(shimSeq) {
 		t.Errorf("resumePoints() = (shim %d, client %d), want the client position ahead.\n"+
 			"The rewrite appends \";redraw=0\" to each prompt marker, so the bytes clients received are "+
 			"longer than the bytes the shim sent. Equal values mean one number is being used for both "+
@@ -107,7 +109,7 @@ func TestAdoptedSessionServesAResumingClient(t *testing.T) {
 	sub.Close()
 
 	shimSeq, clientSeq := first.resumePoints()
-	if clientSeq == shimSeq {
+	if uint64(clientSeq) == uint64(shimSeq) {
 		t.Fatalf("the two positions did not diverge (both %d), so this test would pass either way",
 			shimSeq)
 	}
@@ -164,7 +166,7 @@ func TestAdoptFallsBackWhenClientSeqIsUnset(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if got := sess.recent.Next(); got != rec.LastSeq {
+	if got := sess.recent.Next(); uint64(got) != uint64(rec.LastSeq) {
 		t.Errorf("adopted log begins at %d, want the LastSeq fallback %d.\n"+
 			"Zero in client_seq means the record predates the column. Taking it literally would start "+
 			"the log at 0, so every client position would look like the distant future.",

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/transport"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
@@ -58,11 +59,13 @@ func (s *Service) State(context.Context, *shimv1.StateRequest) (*shimv1.StateRes
 		rows, cols = 0, 0
 	}
 	return &shimv1.StateResponse{
-		Session:   s.session.cfg.Session,
-		ShimPid:   int32(os.Getpid()),
-		ShellPid:  int32(s.session.ShellPID()),
-		NextSeq:   next,
-		OldestSeq: oldest,
+		Session:  s.session.cfg.Session,
+		ShimPid:  int32(os.Getpid()),
+		ShellPid: int32(s.session.ShellPID()),
+		// The wire carries a plain uint64, so the space is stated here and nowhere else. Both of these
+		// are the shim's own numbering: it is the thing doing the numbering. See internal/seq.
+		NextSeq:   uint64(next),
+		OldestSeq: uint64(oldest),
 		Exited:    exited,
 		ExitCode:  int32(code),
 		Rows:      uint32(rows),
@@ -78,7 +81,8 @@ func (s *Service) State(context.Context, *shimv1.StateRequest) (*shimv1.StateRes
 // It returns nil rather than an error when the log closes: the shell exiting is a normal
 // end to the stream, and the caller learns the exit status from State.
 func (s *Service) Subscribe(ctx context.Context, req *shimv1.SubscribeRequest, srv shimv1.Shim_SubscribeServer) error {
-	r := s.session.Log().Subscribe(req.FromSeq)
+	// A resubscribe names a position in the shim's numbering, which is the only space this side knows.
+	r := s.session.Log().Subscribe(seq.Shim(req.FromSeq))
 	defer r.Close()
 
 	for {
@@ -97,7 +101,7 @@ func (s *Service) Subscribe(ctx context.Context, req *shimv1.SubscribeRequest, s
 		for off := 0; off < len(c.Data); off += subscribeChunkMax {
 			end := min(off+subscribeChunkMax, len(c.Data))
 			if err := srv.Send(&shimv1.Output{
-				Seq:  c.Seq + uint64(off),
+				Seq:  uint64(c.Seq) + uint64(off),
 				Data: c.Data[off:end],
 				Gap:  gap,
 			}); err != nil {

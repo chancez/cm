@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -33,7 +34,7 @@ func TestAttachStreamsFromTheModelNotTheLog(t *testing.T) {
 
 	sess := &Session{
 		id:          "modellag",
-		recent:      seqlog.NewAt(DefaultRecentBytes, 0),
+		recent:      seqlog.NewAt[seq.Log](DefaultRecentBytes, 0),
 		term:        &fakeTerminal{restore: []byte("SCREEN")},
 		clientSizes: make(map[*attachToken]*clientSize),
 		evicts:      make(map[*attachToken]chan struct{}),

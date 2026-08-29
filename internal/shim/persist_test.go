@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 )
 
@@ -40,7 +41,7 @@ func TestSessionPersistsOutput(t *testing.T) {
 	// parallel test run on Linux, which is a real ordering assumption rather than a platform quirk.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+		f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 		if err != nil {
 			t.Fatalf("OpenFile() error = %v", err)
 		}
@@ -93,7 +94,7 @@ func TestSessionContinuesPersistedSequenceNumbering(t *testing.T) {
 	path := filepath.Join(dir, "continue.log")
 
 	// Pre-existing content, as an earlier run of the same session would have left.
-	pre, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	pre, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}
@@ -168,7 +169,7 @@ func TestSessionFlushesPersistedLogOnExit(t *testing.T) {
 	}
 	waitExit(t, sess)
 
-	f, err := seqlog.OpenFile(path, seqlog.FileLimits{})
+	f, err := seqlog.OpenFile[seq.Shim](path, seqlog.FileLimits{})
 	if err != nil {
 		t.Fatalf("OpenFile() error = %v", err)
 	}

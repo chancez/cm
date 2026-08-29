@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -42,7 +43,7 @@ func (s *Service) awaitMatch(
 func (s *Service) matchOn(
 	ctx context.Context,
 	sess *Session,
-	reader *seqlog.Reader,
+	reader *seqlog.Reader[seq.Log],
 	pattern string,
 	raw bool,
 	timeoutMs uint64,

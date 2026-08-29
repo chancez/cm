@@ -2,18 +2,19 @@ package seqlog
 
 import (
 	"bytes"
+	"github.com/chancez/cm/internal/seq"
 	"strings"
 	"testing"
 )
 
 func TestSnapshotFromAPosition(t *testing.T) {
-	l := New(1024)
+	l := New[seq.Log](1024)
 	l.Append([]byte("hello "))
 	l.Append([]byte("world"))
 
 	tests := []struct {
 		name string
-		from uint64
+		from seq.Log
 		want string
 	}{
 		{name: "from the start", from: 0, want: "hello world"},
@@ -45,7 +46,7 @@ func TestSnapshotFromAPosition(t *testing.T) {
 // boundary it means the command's own output has partly aged out, which is different from the command
 // having printed little.
 func TestSnapshotReportsAGap(t *testing.T) {
-	l := New(10)
+	l := New[seq.Log](10)
 	l.Append([]byte("0123456789"))
 	// Pushes the first five bytes out.
 	l.Append([]byte("abcde"))
@@ -80,7 +81,7 @@ func TestSnapshotReportsAGap(t *testing.T) {
 // after a trim, so a snapshot taken before one and read after it would return output from the wrong
 // position.
 func TestSnapshotDoesNotAliasTheBuffer(t *testing.T) {
-	l := New(16)
+	l := New[seq.Log](16)
 	l.Append([]byte("AAAAAAAA"))
 
 	got, _ := l.Snapshot(0)
@@ -98,7 +99,7 @@ func TestSnapshotDoesNotAliasTheBuffer(t *testing.T) {
 
 // An empty log answers empty rather than failing.
 func TestSnapshotOnAnEmptyLog(t *testing.T) {
-	l := New(64)
+	l := New[seq.Log](64)
 	got, gap := l.Snapshot(0)
 	if len(got) != 0 || gap {
 		t.Errorf("Snapshot(0) = (%q, gap=%v) on an empty log, want (empty, false)", got, gap)
@@ -112,7 +113,7 @@ func TestSnapshotOnAnEmptyLog(t *testing.T) {
 // when the server started following it.
 func TestSnapshotHonorsAStartingOffset(t *testing.T) {
 	const start = 1000
-	l := NewAt(64, start)
+	l := NewAt[seq.Log](64, start)
 	l.Append([]byte("offset output"))
 
 	got, gap := l.Snapshot(start + 7)

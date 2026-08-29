@@ -11,6 +11,7 @@ import (
 
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
@@ -200,7 +201,13 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		}
 	}
 
-	att, err := sess.attach(open.ResumeFromSeq, tok)
+	// The wire carries a plain uint64. A resume position is in the log's numbering, since it is what
+	// this client last received, so that is what it becomes here.
+	var resumeFrom *seq.Log
+	if open.ResumeFromSeq != nil {
+		resumeFrom = new(seq.Log(*open.ResumeFromSeq))
+	}
+	att, err := sess.attach(resumeFrom, tok)
 	if err != nil {
 		sess.releaseClient(tok)
 		if errors.Is(err, ErrSessionGone) {
@@ -222,7 +229,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 						Session:   sess.Label(),
 						SessionId: sess.id,
 						Created:   created,
-						NextSeq:   sess.LastSeq(),
+						NextSeq:   uint64(sess.LastSeq()),
 					},
 				},
 			}); err != nil {
@@ -292,7 +299,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				SessionId: sess.id,
 				Created:   created,
 				Restore:   restore,
-				NextSeq:   startSeq,
+				NextSeq:   uint64(startSeq),
 			},
 		},
 	}); err != nil {
@@ -319,7 +326,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// Output is read on its own goroutine because the reader blocks, and this loop also has
 	// to notice a detach or a dropped connection.
 	type chunkMsg struct {
-		chunk seqlog.Chunk
+		chunk seqlog.Chunk[seq.Log]
 		err   error
 	}
 	chunks := make(chan chunkMsg, 1)
@@ -358,7 +365,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Output{
 					Output: &serverv1.Output{
-						Seq:  msg.chunk.Seq,
+						Seq:  uint64(msg.chunk.Seq),
 						Data: msg.chunk.Data,
 						Gap:  msg.chunk.Gap,
 					},
@@ -1238,7 +1245,7 @@ func (s *Service) readFromCommand(
 	sess *Session, req *serverv1.ReadRequest,
 ) (*serverv1.ReadResponse, error) {
 	var (
-		from uint64
+		from seq.Log
 		err  error
 	)
 	if req.LastOutput {

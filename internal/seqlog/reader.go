@@ -2,11 +2,13 @@ package seqlog
 
 import (
 	"context"
+
+	"github.com/chancez/cm/internal/seq"
 )
 
 // Chunk is a run of output bytes and the sequence number of its first byte.
-type Chunk struct {
-	Seq  uint64
+type Chunk[S seq.Number] struct {
+	Seq  S
 	Data []byte
 	// Gap reports that bytes before Seq were dropped before this reader could read
 	// them, so its view is not continuous with what it last saw.
@@ -22,12 +24,12 @@ type Chunk struct {
 // until the log closes or the context is cancelled.
 // A Reader may be closed while another goroutine is blocked in Next, which is the normal shape of a
 // client detaching, so sub is guarded by the log's mutex rather than only read at setup.
-type Reader struct {
-	log *Log
+type Reader[S seq.Number] struct {
+	log *Log[S]
 	// sub is nil once closed. Read and written under log.mu.
 	sub *subscriber
 	// next is the sequence number this reader wants next.
-	next uint64
+	next S
 	// gap is set when the next chunk must be flagged as discontinuous.
 	gap bool
 }
@@ -53,16 +55,20 @@ type Reader struct {
 // bytes" into "tell the reader its view is discontinuous", which a client already knows
 // how to handle by resynchronizing rather than by continuing.
 //
+// The numbering mistake itself is now a compile error rather than something to detect: S ties a log
+// to one sequence space, so a position from the other one cannot be passed here. See internal/seq.
+// The clamp and the flag remain for the benign case, a log genuinely reset behind a subscriber.
+//
 // A from before the oldest retained byte is served from the oldest instead, and is
 // likewise flagged with Gap.
-func (l *Log) Subscribe(from uint64) *Reader {
+func (l *Log[S]) Subscribe(from S) *Reader[S] {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	s := &subscriber{ch: make(chan struct{}, 1)}
 	l.subs[s] = struct{}{}
 
-	next, end := from, l.oldest+uint64(len(l.buf))
+	next, end := from, l.oldest+S(len(l.buf))
 	gap := false
 	if next < l.oldest {
 		next, gap = l.oldest, true
@@ -77,7 +83,7 @@ func (l *Log) Subscribe(from uint64) *Reader {
 	default:
 	}
 
-	return &Reader{log: l, sub: s, next: next, gap: gap}
+	return &Reader[S]{log: l, sub: s, next: next, gap: gap}
 }
 
 // Close releases the reader's registration. Safe to call more than once, and safe to call while
@@ -88,7 +94,7 @@ func (l *Log) Subscribe(from uint64) *Reader {
 // time it dereferenced it Close had nilled it, so a detaching client crashed the server with a nil
 // dereference. Rare in practice, because it needs the detach to land inside a window a few
 // instructions wide, and a crash rather than a wrong answer when it does.
-func (r *Reader) Close() {
+func (r *Reader[S]) Close() {
 	r.log.mu.Lock()
 	defer r.log.mu.Unlock()
 	if r.sub == nil {
@@ -117,7 +123,7 @@ func (r *Reader) Close() {
 // than an immediate error.
 //
 // The returned Data is a fresh copy and is safe to retain.
-func (r *Reader) Next(ctx context.Context) (Chunk, error) {
+func (r *Reader[S]) Next(ctx context.Context) (Chunk[S], error) {
 	for {
 		r.log.mu.Lock()
 
@@ -127,12 +133,12 @@ func (r *Reader) Next(ctx context.Context) (Chunk, error) {
 			r.next, r.gap = r.log.oldest, true
 		}
 
-		end := r.log.oldest + uint64(len(r.log.buf))
+		end := r.log.oldest + S(len(r.log.buf))
 		if r.next < end {
 			off := int(r.next - r.log.oldest)
 			data := make([]byte, len(r.log.buf)-off)
 			copy(data, r.log.buf[off:])
-			c := Chunk{Seq: r.next, Data: data, Gap: r.gap}
+			c := Chunk[S]{Seq: r.next, Data: data, Gap: r.gap}
 			r.next = end
 			r.gap = false
 			r.log.mu.Unlock()
@@ -144,26 +150,26 @@ func (r *Reader) Next(ctx context.Context) (Chunk, error) {
 		// ErrClosed, the same as a closed log, since either way nothing further is coming.
 		if r.sub == nil {
 			r.log.mu.Unlock()
-			return Chunk{}, ErrClosed
+			return Chunk[S]{}, ErrClosed
 		}
 		ch := r.sub.ch
 		r.log.mu.Unlock()
 
 		if closed {
-			return Chunk{}, ErrClosed
+			return Chunk[S]{}, ErrClosed
 		}
 
 		select {
 		case <-ch:
 		case <-ctx.Done():
-			return Chunk{}, ctx.Err()
+			return Chunk[S]{}, ctx.Err()
 		}
 	}
 }
 
 // Position returns the sequence number the reader will deliver next. A client records this
 // so it can resume from the same place after a reconnect.
-func (r *Reader) Position() uint64 {
+func (r *Reader[S]) Position() S {
 	r.log.mu.Lock()
 	defer r.log.mu.Unlock()
 	return r.next

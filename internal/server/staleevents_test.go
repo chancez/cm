@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -152,7 +153,7 @@ func TestKeyReleaseReachesAProgramThatAskedForIt(t *testing.T) {
 //
 // A window rather than a wait for a needle, because these tests assert an *absence*: there is nothing to
 // wait for, and returning early would mean the bytes simply had not arrived yet.
-func drainFor(t *testing.T, watch *seqlog.Reader, d time.Duration) string {
+func drainFor(t *testing.T, watch *seqlog.Reader[seq.Log], d time.Duration) string {
 	t.Helper()
 	deadline, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()

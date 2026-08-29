@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/chancez/cm/internal/seq"
 	"strings"
 	"time"
 )
@@ -102,8 +103,8 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 type Update struct {
 	ShimPID   *int
 	ShellPID  *int
-	LastSeq   *uint64
-	ClientSeq *uint64
+	LastSeq   *seq.Shim
+	ClientSeq *seq.Log
 	State     *State
 	ExitCode  *int
 	Cwd       *string
@@ -248,8 +249,10 @@ func scanSession(sc scanner) (Session, error) {
 	}
 	sess.Env = decodeStringMap(envJSON)
 	sess.Tags = decodeStringMap(tagsJSON)
-	sess.LastSeq = uint64(lastSeq)
-	sess.ClientSeq = uint64(clientSeq)
+	// sqlite hands back an int64, so the space is named here. This is the row that stored one number
+	// for both and skipped the difference without a word; see internal/seq.
+	sess.LastSeq = seq.Shim(lastSeq)
+	sess.ClientSeq = seq.Log(clientSeq)
 	sess.State = State(state)
 	sess.PersistRequested = requested
 	sess.CreatedAt = time.UnixMilli(created)

@@ -1,18 +1,19 @@
 package seqlog
 
 import (
+	"github.com/chancez/cm/internal/seq"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func openTestFile(t *testing.T, limits FileLimits) (*File, string) {
+func openTestFile(t *testing.T, limits FileLimits) (*File[seq.Shim], string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "session.log")
-	f, err := OpenFile(path, limits)
+	f, err := OpenFile[seq.Shim](path, limits)
 	if err != nil {
-		t.Fatalf("OpenFile() error = %v", err)
+		t.Fatalf("OpenFile[seq.Shim]() error = %v", err)
 	}
 	t.Cleanup(func() { f.Close() })
 	return f, path
@@ -70,9 +71,9 @@ func TestFileReadFromOffset(t *testing.T) {
 func TestFileReopenContinues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.log")
 
-	first, err := OpenFile(path, FileLimits{})
+	first, err := OpenFile[seq.Shim](path, FileLimits{})
 	if err != nil {
-		t.Fatalf("OpenFile() error = %v", err)
+		t.Fatalf("OpenFile[seq.Shim]() error = %v", err)
 	}
 	if err := first.Append([]byte("before\n")); err != nil {
 		t.Fatalf("Append() error = %v", err)
@@ -82,7 +83,7 @@ func TestFileReopenContinues(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	second, err := OpenFile(path, FileLimits{})
+	second, err := OpenFile[seq.Shim](path, FileLimits{})
 	if err != nil {
 		t.Fatalf("reopen error = %v", err)
 	}
@@ -126,10 +127,10 @@ func TestFileTrimsByLines(t *testing.T) {
 	// The sequence numbering must account for what was dropped, or a replay would number the
 	// output from zero and disagree with the rest of the system.
 	oldest, next := f.Bounds()
-	if oldest != uint64(len("one\ntwo\n")) {
+	if oldest != seq.Shim(len("one\ntwo\n")) {
 		t.Errorf("oldest = %d, want %d", oldest, len("one\ntwo\n"))
 	}
-	if next-oldest != uint64(len("three\nfour\nfive\n")) {
+	if next-oldest != seq.Shim(len("three\nfour\nfive\n")) {
 		t.Errorf("retained span = %d, want %d", next-oldest, len("three\nfour\nfive\n"))
 	}
 }
@@ -205,9 +206,9 @@ func TestFileResetsOnUnrecognizedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := OpenFile(path, FileLimits{})
+	f, err := OpenFile[seq.Shim](path, FileLimits{})
 	if err != nil {
-		t.Fatalf("OpenFile() on a corrupt file error = %v, want it to recover", err)
+		t.Fatalf("OpenFile[seq.Shim]() on a corrupt file error = %v, want it to recover", err)
 	}
 	defer f.Close()
 
@@ -226,9 +227,9 @@ func TestFileTruncatedHeaderRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := OpenFile(path, FileLimits{})
+	f, err := OpenFile[seq.Shim](path, FileLimits{})
 	if err != nil {
-		t.Fatalf("OpenFile() error = %v", err)
+		t.Fatalf("OpenFile[seq.Shim]() error = %v", err)
 	}
 	defer f.Close()
 	if err := f.Append([]byte("ok")); err != nil {

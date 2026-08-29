@@ -3,6 +3,7 @@ package seqlog
 import (
 	"context"
 	"errors"
+	"github.com/chancez/cm/internal/seq"
 	"runtime"
 	"strings"
 	"sync"
@@ -13,7 +14,7 @@ import (
 
 // drain reads chunks until the reader would block, returning the concatenated bytes and
 // whether any chunk was flagged as a gap.
-func drain(t *testing.T, r *Reader) (string, bool) {
+func drain(t *testing.T, r *Reader[seq.Log]) (string, bool) {
 	t.Helper()
 	var sb strings.Builder
 	gap := false
@@ -21,7 +22,7 @@ func drain(t *testing.T, r *Reader) (string, bool) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		var (
-			c   Chunk
+			c   Chunk[seq.Log]
 			err error
 		)
 		go func() {
@@ -49,7 +50,7 @@ func drain(t *testing.T, r *Reader) (string, bool) {
 
 func TestLogAppendAndRead(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(1024)
+		l := New[seq.Log](1024)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -66,7 +67,7 @@ func TestLogAppendAndRead(t *testing.T) {
 // Bounds is how the server learns where to resume, so its arithmetic is worth asserting
 // directly rather than only through reads.
 func TestLogBounds(t *testing.T) {
-	l := New(10)
+	l := New[seq.Log](10)
 
 	if oldest, next := l.Bounds(); oldest != 0 || next != 0 {
 		t.Errorf("empty Bounds() = (%d, %d), want (0, 0)", oldest, next)
@@ -86,7 +87,7 @@ func TestLogBounds(t *testing.T) {
 
 func TestLogDropsOldestWhenFull(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(5)
+		l := New[seq.Log](5)
 		l.Append([]byte("abcdefgh"))
 
 		// Only the last 5 bytes survive, and a reader starting from 0 is told its view
@@ -104,7 +105,7 @@ func TestLogDropsOldestWhenFull(t *testing.T) {
 // away the most recent output, which is exactly what a reattaching client needs.
 func TestLogAppendLargerThanBuffer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(4)
+		l := New[seq.Log](4)
 		l.Append([]byte("0123456789"))
 
 		if oldest, next := l.Bounds(); oldest != 6 || next != 10 {
@@ -125,7 +126,7 @@ func TestLogAppendLargerThanBuffer(t *testing.T) {
 // duplication.
 func TestResumeAfterSubscriberGoesAway(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(1024)
+		l := New[seq.Log](1024)
 
 		r1 := l.Subscribe(0)
 		l.Append([]byte("before"))
@@ -154,7 +155,7 @@ func TestResumeAfterSubscriberGoesAway(t *testing.T) {
 // that depended on the missing bytes.
 func TestResumeReportsGapWhenOutrun(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(8)
+		l := New[seq.Log](8)
 		l.Append([]byte("12345678"))
 		_, resumeFrom := l.Bounds() // 8
 
@@ -177,7 +178,7 @@ func TestResumeReportsGapWhenOutrun(t *testing.T) {
 
 func TestSubscribeBeyondEndClampsToPresent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(64)
+		l := New[seq.Log](64)
 		l.Append([]byte("abc"))
 
 		// Ahead of the log: served from the present rather than rejected, and flagged as a gap.
@@ -206,12 +207,12 @@ func TestSubscribeBeyondEndClampsToPresent(t *testing.T) {
 // Next must block rather than spin or return empty chunks, and must wake on append.
 func TestNextBlocksUntilAppend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(64)
+		l := New[seq.Log](64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
 		type result struct {
-			c   Chunk
+			c   Chunk[seq.Log]
 			err error
 		}
 		done := make(chan result, 1)
@@ -243,7 +244,7 @@ func TestNextBlocksUntilAppend(t *testing.T) {
 // after the shell exits still sees its final output.
 func TestCloseDrainsThenReportsClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(64)
+		l := New[seq.Log](64)
 		l.Append([]byte("last words"))
 		l.Close()
 
@@ -265,7 +266,7 @@ func TestCloseDrainsThenReportsClosed(t *testing.T) {
 
 func TestCloseWakesBlockedReader(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(64)
+		l := New[seq.Log](64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -286,7 +287,7 @@ func TestCloseWakesBlockedReader(t *testing.T) {
 
 func TestNextRespectsContextCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(64)
+		l := New[seq.Log](64)
 		r := l.Subscribe(0)
 		defer r.Close()
 
@@ -310,7 +311,7 @@ func TestNextRespectsContextCancellation(t *testing.T) {
 // independently.
 func TestMultipleSubscribersEachSeeEverything(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		l := New(1024)
+		l := New[seq.Log](1024)
 		r1 := l.Subscribe(0)
 		defer r1.Close()
 		r2 := l.Subscribe(0)
@@ -318,7 +319,7 @@ func TestMultipleSubscribersEachSeeEverything(t *testing.T) {
 
 		l.Append([]byte("shared output"))
 
-		for i, r := range []*Reader{r1, r2} {
+		for i, r := range []*Reader[seq.Log]{r1, r2} {
 			got, gap := drain(t, r)
 			if got != "shared output" || gap {
 				t.Errorf("subscriber %d drain = (%q, %v), want (%q, false)", i, got, gap, "shared output")
@@ -331,7 +332,7 @@ func TestMultipleSubscribersEachSeeEverything(t *testing.T) {
 // would retain max bytes while occupying far more memory over a long session.
 func TestBackingArrayStaysBounded(t *testing.T) {
 	const max = 64
-	l := New(max)
+	l := New[seq.Log](max)
 	for range 1000 {
 		l.Append([]byte("0123456789"))
 	}
@@ -351,7 +352,7 @@ func TestBackingArrayStaysBounded(t *testing.T) {
 }
 
 func TestAppendAfterCloseIsIgnored(t *testing.T) {
-	l := New(64)
+	l := New[seq.Log](64)
 	l.Append([]byte("abc"))
 	l.Close()
 	l.Append([]byte("ignored"))
@@ -363,7 +364,7 @@ func TestAppendAfterCloseIsIgnored(t *testing.T) {
 }
 
 func TestEmptyAppendIsNoop(t *testing.T) {
-	l := New(64)
+	l := New[seq.Log](64)
 	l.Append(nil)
 	l.Append([]byte{})
 	if oldest, next := l.Bounds(); oldest != 0 || next != 0 {
@@ -384,7 +385,7 @@ func TestCloseWhileBlockedInNext(t *testing.T) {
 	// Many iterations, because the window is a few instructions wide. A single pass passes even with
 	// the bug present.
 	for range 200 {
-		log := New(1024)
+		log := New[seq.Log](1024)
 		r := log.Subscribe(0)
 
 		// Blocked in Next: nothing has been appended, so it is waiting on the subscriber channel.
@@ -418,7 +419,7 @@ func TestCloseWhileBlockedInNext(t *testing.T) {
 // Close has to stay safe to call repeatedly, since the service closes readers from more than one
 // exit path and both can run.
 func TestReaderCloseIsIdempotentUnderConcurrency(t *testing.T) {
-	log := New(1024)
+	log := New[seq.Log](1024)
 	r := log.Subscribe(0)
 
 	var wg sync.WaitGroup

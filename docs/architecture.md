@@ -31,6 +31,15 @@ The shim's log covers the gap while no server is subscribed. Without it, a serve
 would either wedge the shell on a full pty buffer or silently drop output. The server's log
 covers the gap for clients, so one attaching mid-session is not shown a blank screen.
 
+**The two numberings are distinct types, so mixing them is a compile error.** `internal/seq` names
+them: `seq.Shim` for what the shim counted, `seq.Log` for what clients received after the rewrite.
+`seqlog` is generic over the space, so a log is tied to one and `recent.Subscribe(lastSeq)` no longer
+builds. Both were `uint64`, which is why conflating them compiled, and it cost three bugs, all silent:
+adoption storing one number for both, `--since-commands` anchoring in the wrong space, and `modelSeq`
+needing a comment to say which space it was in. The remaining conversions are the honest crossings and
+each says why: the protobuf wire, the sqlite row, and one deliberate fallback in adoption for a
+database written before `client_seq` existed.
+
 Numbers count bytes rather than writes, so a resume point stays meaningful even if a chunk is
 split differently on a second pass. `seqlog.NewAt` exists so an adopted session's log continues
 from where the previous server left off rather than from zero, which would make every existing
