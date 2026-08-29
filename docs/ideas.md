@@ -763,6 +763,25 @@ What is done instead is cheaper and covers the reason this came up. An unknown c
 rather than fatal, and `cm upgrade` reads the config before stopping anything, so the failure that produced
 this idea cannot recur.
 
+**A stable client id, carried across a re-exec.** A client's place in the attach order now survives a
+dropped stream, which is what stops a repaint or an outage moving who sizes the session. It is keyed on the
+client's process id, because that is already on the wire and is stable across a reconnect: the client redials
+from inside the same process.
+
+It is not stable across `cm clients upgrade`, which re-execs into a new binary and therefore a new process. So
+an upgraded client is treated as a new attachment and loses its place, which under `first-attach` hands sizing
+to another window. That is no worse than before any of this existed, and it is the one case left.
+
+An id the client generates once and passes through its own re-exec would close it, as a `client_id` field on
+`Open` with the pid as the fallback. Two things make it more than a rename. It has to be optional in both
+directions, since an older client sends none and an older server ignores one, which is the same compatibility
+rule the shim argv follows. And it would remove the remaining reliance on pids not being reused within a
+session's lifetime, which is unlikely rather than impossible.
+
+Not done yet because the case it fixes is narrow: an upgrade with several clients attached at different sizes,
+under a policy keyed on attach order. Worth doing when the id has a second use, and identifying a client across
+a re-exec is the kind of thing more than one feature wants.
+
 **Configuration per session in a file.** Sessions are created by whatever starts them, with flags. A file
 mapping session names to settings would move that decision away from the caller who has the context, and
 `--env`, `--dir`, and `--on-restore` already cover it. The one exception already exists, because it has to:

@@ -283,7 +283,16 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 		"read_only", open.ReadOnly,
 		"inside", open.InsideSession, "restore_bytes", len(att.restore))
 	reader := att.reader
+	// Set when this client asked to go, which is the difference between leaving and being cut off. A
+	// deliberate detach forfeits this client's place in the attach order; a dropped stream does not, because
+	// the same window is coming back. See Session.resumeOrders.
+	deliberate := false
+
 	defer func() {
+		// Recorded before the detach below, which deletes the size entry the order lives on.
+		if !deliberate {
+			sess.rememberOrder(open.ClientPid, att.token)
+		}
 		// Tell a program that tracks focus when the last client leaves, since a detached session
 		// is exactly "nobody is watching".
 		if last := sess.detach(att); last {
@@ -454,7 +463,9 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			}
 
 		case <-detached:
-			// Deliberate detach: the session keeps running.
+			// Deliberate detach: the session keeps running, and this client has left rather than been cut
+			// off, so it does not keep its place in the attach order.
+			deliberate = true
 			return nil
 
 		case <-att.evict:
@@ -484,6 +495,14 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			default:
 				s.mgr.log.Info("client detached on request", "session", sess.id)
 			}
+			// Asked to go, so this client forfeits its place in the attach order the same way one that
+			// pressed the detach key does.
+			//
+			// An upgrade does come back, and still forfeits it, because it re-execs: the returning client is
+			// a new process with a new pid, so there is nothing for resumeOrders to key on. No worse than
+			// before this existed, and worth stating so the omission does not read as an oversight. A stable
+			// client id carried across the re-exec would close it; see docs/ideas.md.
+			deliberate = true
 			return nil
 
 		case err := <-recvErr:

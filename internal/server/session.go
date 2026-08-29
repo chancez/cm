@@ -86,6 +86,25 @@ type Session struct {
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq seq.Log
+	// resumeOrders remembers a client's attach order by process id, so one that comes back after a dropped
+	// stream keeps its place rather than becoming the newest attachment.
+	//
+	// It exists because a repaint is delivered as a gap, which makes the client drop its resume position and
+	// reattach. That is a real attach with a new order, and ResizeFirstAttach and ResizeLastAttach both
+	// decide who sizes the session from the order, so a repaint moved sizing between windows with nobody
+	// having attached or detached on purpose. An outage reconnect did the same thing for the same reason.
+	//
+	// Keyed on the client's process id, which is already on the wire and is stable across a reconnect
+	// because the client redials from inside the same process. Only recorded when a stream ends *without* a
+	// deliberate detach: somebody who detaches on purpose has left, and should lose the earliest slot.
+	//
+	// An older client sends no pid, which reads as zero and is ignored, so it keeps the previous behaviour.
+	//
+	// A pid does not survive `cm clients upgrade`, which re-execs into a new process, so an upgraded client
+	// still loses its place. A stable client id carried across the re-exec would fix that and would also
+	// remove the reliance on pids not being reused; see docs/ideas.md.
+	resumeOrders map[int32]uint64
+
 	// outPartial holds the tail of a chunk that ends inside an unfinished escape sequence, and
 	// outPartialSeq is that tail's position in the shim's numbering.
 	//
@@ -466,6 +485,13 @@ type Terminal interface {
 	// Close releases emulator resources.
 	Close() error
 }
+
+// maxResumeOrders bounds how many dropped clients a session remembers a place for.
+//
+// An entry is consumed only if that client comes back, so a session whose clients keep dropping without
+// returning would otherwise accumulate one per process forever. Far above the number of clients any real
+// session has, and the cost of forgetting is only that a returning client is treated as new.
+const maxResumeOrders = 32
 
 // maxHeldTail bounds the trailing partial sequence the pump will hold.
 //
@@ -1551,6 +1577,52 @@ func (s *Session) noteClientIdentity(tok *attachToken, version string, pid int32
 	defer s.mu.Unlock()
 	if cs := s.clientSizes[tok]; cs != nil {
 		cs.version, cs.pid = version, pid
+	}
+	// Restores the place this client held if its previous stream dropped rather than detaching. Done here
+	// because this is the first point the pid is known and it is still ahead of sizeForAttach: doing it
+	// afterwards would size the session once on the new order and again on the restored one.
+	s.adoptOrderLocked(pid, tok)
+}
+
+// rememberOrder records this client's attach order against its pid, so a reconnect keeps its place.
+//
+// Called only when a stream ended without a deliberate detach. See resumeOrders.
+func (s *Session) rememberOrder(pid int32, tok *attachToken) {
+	if pid == 0 || tok == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cs := s.clientSizes[tok]
+	if cs == nil {
+		return
+	}
+	if s.resumeOrders == nil {
+		s.resumeOrders = make(map[int32]uint64)
+	}
+	// Bounded, since an entry is consumed only if that client comes back, and a session whose clients keep
+	// dropping without returning would otherwise accumulate one per process forever.
+	if len(s.resumeOrders) >= maxResumeOrders {
+		return
+	}
+	s.resumeOrders[pid] = cs.order
+}
+
+// adoptOrderLocked gives a returning client the order it had before its stream dropped.
+//
+// Consumed rather than left, so one drop restores one place: a client that later detaches deliberately does
+// not get the slot back a second time. Callers must hold mu.
+func (s *Session) adoptOrderLocked(pid int32, tok *attachToken) {
+	if pid == 0 {
+		return
+	}
+	order, ok := s.resumeOrders[pid]
+	if !ok {
+		return
+	}
+	delete(s.resumeOrders, pid)
+	if cs := s.clientSizes[tok]; cs != nil {
+		cs.order = order
 	}
 }
 
