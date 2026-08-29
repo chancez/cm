@@ -92,12 +92,14 @@ func IsTerminalOnlyRequest(p []byte) bool {
 //
 //   - OSC 10, 11, 12, 17, 19: foreground, background, cursor, and selection colours. Live in the
 //     terminal's theme. `wallfacer -h` blocks on OSC 11, which is the recorded hang this set fixes.
-//   - OSC 4: a palette entry, same reason.
 //   - OSC 52 with a "?" payload: a clipboard read. Only the terminal has the clipboard.
 //   - CSI 14/16/18 t: pixel size, cell size, and text-area size in pixels. cm knows its own grid in
 //     cells but nothing about pixels, which depend on the font the client is rendering with.
 //
-// Note what is deliberately *absent*: CSI 21 t, the window title report. The emulator answers that one
+// Note what is deliberately *absent*. OSC 4, the palette query, which libghostty answers from the palette
+// it models, so it belongs to the answerable set; listing it here was this implementation's first mistake
+// and the summary above kept claiming it long after classifyOSCQuery stopped agreeing. And CSI 21 t, the
+// window title report. The emulator answers that one
 // from the title it tracks, verified against the live emulator, so it belongs to the answerable set. A
 // sequence must never be in both sets, or cm would answer it *and* ask a client, which is the exact
 // duplicate this design exists to remove. The overlap check is asserted by a test rather than left to

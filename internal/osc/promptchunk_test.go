@@ -25,14 +25,16 @@ import (
 // offsets 7 through 14 of a 22-byte stream, and offset 7 is the byte after the ESC.
 //
 // This function is deliberately left stateless, and the gap is closed a level up instead: the output pump
-// holds a partial marker back so this is never handed one. See PartialMarkerLen and
-// Session.promptPartial, and TestHoldingBackRestoresTheRewriteAtEveryBoundary for the same sweep with the
-// holdback applied, which passes at every offset.
+// holds a partial sequence back so this is never handed one. See ansi.PartialTailLen and
+// Session.outPartial, with ansi.TestHoldingBackReassemblesEveryStream for the sweep that shows the holdback
+// reassembles every split.
 //
-// The holdback belongs there rather than here because it has to happen before the graphics transform, so
-// the held bytes are still the shim's and lastSeq can decline to count them. Holding after that transform
-// would mean mapping post-transform lengths back to shim positions, which is the two-numbering-spaces
-// mistake in a new place.
+// The holdback belongs there rather than here for two reasons. It has to happen before the graphics
+// transform, so the held bytes are still the shim's and lastSeq can decline to count them; holding after
+// that transform would mean mapping post-transform lengths back to shim positions, which is the
+// two-numbering-spaces mistake in a new place. And the same gap existed in noteQueries, where a split query
+// went unrecorded and the program that asked hung, so one holdback covering every scanner is the fix rather
+// than a stateful rewrite here and a stateful classifier there.
 //
 // Kept as a record of what this function does on its own, so that if someone later feeds it a split marker
 // from a new call site the consequence is written down rather than rediscovered.

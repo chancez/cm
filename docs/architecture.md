@@ -461,10 +461,32 @@ sends them again, which matches a log that never received them. Counting them wo
 server, which is this same hole from a new direction. Holding *after* the graphics transform would mean
 mapping post-transform lengths back to shim positions, which is the mistake this whole section is about.
 
-`PartialMarkerLen` scans forward past complete sequences rather than searching backwards for the last
-introducer. The backward version was written first and was wrong: given a terminated marker followed by the
-start of another, it found the terminated one, saw its terminator, and reported nothing pending, so the
-second marker was lost exactly as before. Caught by sweeping the boundary through a stream with two prompts.
+The holdback covers *any* short trailing sequence, not just a prompt marker, because the same gap was in
+`noteQueries` and cost more there. A terminal-only query split by a read boundary was never recorded, and
+since the stream is forwarded verbatim the client's terminal answered it anyway; `answerFromClient` then
+discarded the reply, nothing being outstanding to match it, so the program that asked waits forever. Measured
+across seven query shapes: OSC 10, OSC 11, OSC 52, CSI 14t, CSI 16t, XTGETTCAP, and a kitty graphics query.
+OSC 11 is `wallfacer -h`, the recorded hang the proxy exists for.
+
+Two scanners with the same bug is the argument for holding back once in the pump rather than making each
+scanner stateful. `ansi.Tracker` is already the only escape-sequence state machine in cm, so
+`ansi.PartialTailLen` asks it where the sequence ends and the pump trims there.
+
+It scans forward rather than searching backwards for the last ESC. The backward version was written first, as
+an OSC-specific helper, and was wrong: given a terminated sequence followed by the start of another it found
+the terminated one, saw its terminator, and reported nothing pending, so the second was lost exactly as
+before. Caught by sweeping the boundary through a stream with two prompts. A backward search is also wrong in
+general, since an ESC appears inside a string control's payload as part of its ST terminator.
+
+`maxHeldTail` is 256 bytes, and the bound is about kitty graphics rather than tidiness. A transmission is an
+APC carrying a payload chunked at about 4 KiB, so a partial one is routinely larger than any query or prompt
+marker; holding those would delay every image and buffer megabytes, and buy nothing, because the graphics
+scanner already reassembles a transmission across chunks. Past the bound the tail passes through, which is
+what happened before any holdback existed.
+
+The scan costs about 1.3us per 1022-byte chunk, measured as 5240 to 6467 ns/op for the pump's per-chunk
+scans on plain output, 4708 to 6245 with a prompt marker, and 4921 to 6934 with graphics. At 1 MB/s of
+session output that is roughly 0.13% of a core, against 36us for a single reverse index in the emulator.
 
 And `client_seq` defaults to 0 on a database written before the column existed, which is
 indistinguishable from a session that served nothing. Adoption falls back to `last_seq` in that case:

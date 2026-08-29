@@ -86,23 +86,27 @@ type Session struct {
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq seq.Log
-	// promptPartial holds the tail of a chunk that ends inside an unfinished OSC 133 sequence, and
-	// promptPartialSeq is that tail's position in the shim's numbering.
+	// outPartial holds the tail of a chunk that ends inside an unfinished escape sequence, and
+	// outPartialSeq is that tail's position in the shim's numbering.
 	//
-	// The pump holds those bytes rather than passing them on, so every consumer of a prompt marker sees a
-	// whole one. Without it RewritePromptRedraw silently skipped a marker split by a read boundary and the
-	// marker reached the client carrying redraw=1, which makes the client's terminal clear the prompt lines
-	// on resize and wait for a repaint that arrives in the pty's coordinates rather than the window's: the
-	// prompt is cleared and does not come back. Measured as every split strictly inside the marker, a
-	// 26-byte window for one carrying parameters.
+	// The pump holds those bytes rather than passing them on, so every scanner downstream is looking at
+	// whole sequences. Two of them were not, and each failed differently:
+	//
+	//   - RewritePromptRedraw skipped a prompt marker it received in pieces, so the client got redraw=1 and
+	//     its terminal cleared the prompt on the next resize, waiting for a repaint that arrives in the
+	//     pty's coordinates rather than the window's. The prompt is cleared and does not come back.
+	//   - noteQueries did not record a terminal-only query it received in pieces. The stream is forwarded
+	//     verbatim, so the client's terminal answered anyway and answerFromClient discarded the reply,
+	//     nothing being outstanding to match it. The program that asked waits forever. Measured across
+	//     seven query shapes, OSC 11 among them, which is the `wallfacer -h` hang the proxy exists for.
 	//
 	// Held before the graphics transform on purpose, so the bytes are still the shim's and lastSeq can
 	// simply not count them. Holding after it would mean mapping post-transform lengths back to shim
 	// positions, which is the two-numbering-spaces mistake in a new place.
 	//
-	// Owned by the pump goroutine alone, so no lock: every read and write is in pump.
-	promptPartial    []byte
-	promptPartialSeq seq.Shim
+	// Owned by the pump goroutine alone, so no lock: every read and write is in processChunk.
+	outPartial    []byte
+	outPartialSeq seq.Shim
 
 	// modelTrack follows the same bytes the model consumes, so modelPending below knows how much of an
 	// incomplete sequence is sitting at the end of them. Guarded by termMu, like modelSeq.
@@ -463,6 +467,23 @@ type Terminal interface {
 	Close() error
 }
 
+// maxHeldTail bounds the trailing partial sequence the pump will hold.
+//
+// A bound is needed for two different reasons, and the second is why it is small.
+//
+// A program can emit an introducer and then stop, and holding those bytes forever would withhold session
+// output on a stream that is never going to complete the sequence. That argues only for some bound.
+//
+// The size argues for a small one: a kitty graphics transmission is an APC carrying a payload chunked at
+// about 4 KiB, so a partial one is routinely larger than any query or prompt marker. Holding those would
+// delay every image and buffer megabytes, and it would buy nothing, because the graphics scanner already
+// reassembles a transmission across chunks. 256 bytes covers every sequence the scanners here care about,
+// the longest being an XTGETTCAP request, and leaves graphics to the code that already handles it.
+//
+// Past the bound the tail is passed through, which is the behavior that existed before any holdback: no
+// worse than it was, and it keeps a pathological stream from stalling a session.
+const maxHeldTail = 256
+
 // dialShim connects to a shim's socket.
 func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 	conn, cl, err := transport.DialShim(socket)
@@ -569,168 +590,180 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			return
 		}
 
-		// A chunk ending inside an OSC 133 sequence is trimmed, and the tail waits for the rest.
-		//
-		// Everything below reads a whole marker or none, which is what the trackers, the rewrite and the
-		// log all assumed and only the trackers actually arranged. Done here, before the graphics
-		// transform, so the held bytes are still the shim's and lastSeq can decline to count them; a
-		// restarting server then resubscribes from before them and the shim sends them again, which is
-		// correct because the log never received them.
-		//
-		// data replaces out.Data for the rest of the body. Using out.Data anywhere below would feed a
-		// consumer bytes the log is not going to receive yet, which is how the two numbering spaces drift.
-		data := out.Data
-		base := seq.Shim(out.Seq)
-		if len(s.promptPartial) > 0 {
-			// Prepended, so the sequence is whole again and its position is where the partial began.
-			data = append(s.promptPartial, out.Data...)
-			base = s.promptPartialSeq
-			s.promptPartial = nil
-		}
-		if held := osc.PartialMarkerLen(data); held > 0 {
-			s.promptPartial = append([]byte(nil), data[len(data)-held:]...)
-			s.promptPartialSeq = base + seq.Shim(len(data)-held)
-			data = data[:len(data)-held]
-		}
-		if len(data) == 0 {
-			// The whole chunk was the start of a marker. Nothing has been consumed, so nothing advances:
-			// not the trackers, not the log, not lastSeq.
-			continue
-		}
-
-		// Track what the shell says about itself from the bytes as the shell sent them, before the
-		// rewrite below, so the markers are read exactly as written.
-		//
-		// This is where "is a command running" comes from. The shell reports it via OSC 133 as part of
-		// its normal output, so cm reads it in passing rather than asking the shell to maintain it: zmx
-		// needed shell hooks writing a label for the same information.
-		//
-		// Kept ahead of the append so a waiter sees a command start no later than the output it
-		// produced. A client that learned of output first and of the command afterwards could observe
-		// a command's own bytes while the session still claimed to be idle.
-		// Fed regardless of nesting, so the trackers stay in sync with the byte stream: a chunk
-		// skipped here can split a sequence across the resume and leave the next real report
-		// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
-		// noteReport, not the parsing.
-		if s.commands.Feed(data) {
-			s.noteCommand()
-		}
-
-		// cm's own sequence, read from the same stream for the same reason: a shell integration writes it
-		// straight to the pty, which costs nothing, where shelling out to `cm report` from a prompt hook
-		// costs about 23ms twice per command. That was measured before choosing this design, and it is the
-		// whole reason the sequence exists rather than only the command.
-		if s.reports.Feed(data) {
-			s.noteReport()
-		}
-
-		// Terminal queries are deliberately *not* removed from the stream, and two earlier versions of
-		// this code removed them, so the reasons are worth recording.
-		//
-		// The first stripped them unconditionally to make cm the only answerer. That fixed a duplicate
-		// DA1 reply but left the real defect, cm injecting answers mid-read of an unrelated program, and
-		// it silenced queries an attached terminal was going to answer. The second stripped only what cm
-		// answered, which was correct about who answers and wrong about byte counts: removing bytes makes
-		// the client log shorter than the shim's numbering accounts for, which inverted the resume
-		// ordering and clamped a reconnecting client into the middle of an escape sequence.
-		//
-		// So the stream is forwarded verbatim, and the fix is in *who writes replies* instead. cm is now
-		// the only writer of a reply to this pty: it answers what its model can answer, and for a query
-		// only a real terminal can answer it asks one client and relays what comes back. A client never
-		// answers directly, so a query reaching several clients, or reaching one twice across a restart,
-		// cannot produce a second answer.
-		//
-		// Kitty graphics is taken out of the stream and re-emitted by cm, which is the one protocol cm
-		// consumes rather than forwards. The reason is that a transmission may name a *file* and the
-		// file is consumed once, so forwarding one lets the program and the real terminal race for it:
-		// the reported "EBADF ... No such file or directory" on exactly the probes that name a path.
-		// See docs/architecture.md on what cm presents itself as.
-		//
-		// Ahead of the prompt rewrite because a graphics payload is arbitrary base64 that may contain
-		// the bytes the rewrite matches on, and rewriting inside a payload would corrupt the image.
-		//
-		// Ahead of noteQueries too, and that ordering is load-bearing rather than incidental. cm rewrites
-		// a graphics query when it resolves a transfer, so the command the *terminal* is asked is not the
-		// one the program wrote. noteQueries has to register the rewritten form, or the reply arriving
-		// from the terminal is matched against a question nobody asked and discarded as unsolicited. This
-		// used to run after noteQueries, on the reasoning that a graphics command was not a proxied query
-		// at all, which stopped being true when a=q joined the terminal-only set.
-		gfxData := data
-		if segs := s.gfxScan.Scan(data); segs != nil {
-			gfxData = s.handleGraphics(segs)
-		}
-
-		// Registered before the model is fed, which is the load-bearing ordering here. The model
-		// generates replies to answerable queries synchronously inside its Write, so a question later in
-		// this same chunk must already be outstanding by then or the reply would be written straight to
-		// the pty and overtake it. See noteQueries and queueOrWriteReply.
-		//
-		// Fed the post-graphics bytes for the reason above: these are what reach the terminal, so these
-		// are the questions it will answer.
-		s.noteQueries(gfxData)
-
-		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
-		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
-		// repaint its prompt clears it and never gets a usable repaint back.
-		rewritten := osc.RewritePromptRedraw(gfxData)
-
-		// Command boundaries come from the rewritten bytes, not the originals.
-		//
-		// This is the load-bearing ordering in this function, and getting it wrong is silent. The log
-		// below numbers exactly these bytes, and RewritePromptRedraw can make a prompt marker nine bytes
-		// longer than the shell sent, so feeding the pre-rewrite chunk instead would drift every
-		// recorded position by nine bytes per prompt and a read would start mid-sequence. Fed here
-		// rather than beside s.commands.Feed above for that reason alone.
-		s.boundariesMu.Lock()
-		s.boundaries.Feed(rewritten)
-		s.boundariesMu.Unlock()
-
-		// Appending both records the output for later subscribers and wakes current ones.
-		// A slow client cannot stall the session: it simply falls behind and is told there
-		// is a gap if the window passes it.
-		s.recent.Append(rewritten)
-
-		// The window resumePoints documents: the chunk is in the log and lastSeq does not account for it
-		// yet. No lock closes it, so a test widens it instead.
-		fault.At(fault.AfterLogAppend)
-
-		// Two sequence numbers, deliberately, because the transforms above change the length: the
-		// prompt rewrite lengthens, and the query strip shortens.
-		//
-		// lastSeq tracks the shim's numbering, since it is the position to resubscribe from after
-		// a restart, and the shim knows nothing about either transform. It is therefore computed from
-		// `data`, never from the stripped or rewritten bytes. Clients are served from s.recent,
-		// which numbers what they actually receive.
-		//
-		// `data` rather than out.Data, and the difference is a partial prompt marker held back at the top
-		// of the loop. Those bytes are still the shim's, so declining to count them is exactly right: a
-		// restart resubscribes from before them and the shim sends them again, matching a log that never
-		// received them. Counting them would skip them on the next server, which is the same hole this
-		// pair of numbers exists to prevent.
-		//
-		// Conflating them desynchronizes the two by however much the rewrite added, which puts a
-		// client's resume position inside an escape sequence and slices the ESC off the front of
-		// it. The visible result is a cursor move rendering as literal text beside the prompt.
-		s.mu.Lock()
-		// Counted from what was consumed rather than from what arrived, so bytes held back for an
-		// unfinished marker are re-sent after a restart instead of being skipped.
-		s.lastSeq = base + seq.Shim(len(data))
-		s.mu.Unlock()
-
-		// The model is fed gfxData rather than out.Data, which is a change from feeding the shell's
-		// original bytes and is required rather than incidental: a graphics command cm removed from the
-		// client stream must also be removed from what the model sees, or the model would store an image
-		// from a command naming a file it cannot read, and its idea of the screen would disagree with
-		// every client's. The inlined replacement cm produced is in gfxData, so both see the same thing.
-		//
-		// The prompt rewrite is still not applied here, which is the existing asymmetry this preserves:
-		// the model gets the markers as the shell wrote them, and only clients see redraw=0.
-		// The model-lag window: clients have this chunk and the model does not. Both bugs that lived here
-		// were found by chance, one at about one attach in eight.
-		fault.At(fault.BeforeModelFeed)
-
-		s.feedTerminal(gfxData, s.recent.Next())
+		s.processChunk(out.Data, seq.Shim(out.Seq))
 	}
+}
+
+// processChunk is one chunk of shim output, from arrival to the model.
+//
+// Extracted from pump so the ordering in it can be tested directly. The pump reads from a ttrpc stream, so
+// the alternative was driving a real shim for every question about what a chunk does, which cannot express
+// "this chunk ends inside a sequence" without racing a pty.
+//
+// Called only from pump, on pump's goroutine, which is what lets promptPartial and the trackers go without
+// locks.
+func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
+
+	// A chunk ending inside an escape sequence is trimmed, and the tail waits for the rest.
+	//
+	// Everything below reads whole sequences or none, which several scanners assumed and only the OSC 133
+	// trackers arranged for themselves. Done here, before the graphics transform, so the held bytes are
+	// still the shim's and lastSeq can decline to count them; a restarting server resubscribes from before
+	// them and the shim sends them again, which matches a log that never received them.
+	//
+	// data replaces raw for the rest of this function. Using raw anywhere below would feed a consumer
+	// bytes the log is not going to receive yet, which is how the two numbering spaces drift.
+	data := raw
+	base := rawSeq
+	if len(s.outPartial) > 0 {
+		// Prepended, so the sequence is whole again and its position is where the partial began.
+		data = append(s.outPartial, raw...)
+		base = s.outPartialSeq
+		s.outPartial = nil
+	}
+	if held := ansi.PartialTailLen(data); held > 0 && held <= maxHeldTail {
+		s.outPartial = append([]byte(nil), data[len(data)-held:]...)
+		s.outPartialSeq = base + seq.Shim(len(data)-held)
+		data = data[:len(data)-held]
+	}
+	if len(data) == 0 {
+		// The whole chunk was the start of a sequence. Nothing has been consumed, so nothing advances:
+		// not the trackers, not the log, not lastSeq.
+		return
+	}
+
+	// Track what the shell says about itself from the bytes as the shell sent them, before the
+	// rewrite below, so the markers are read exactly as written.
+	//
+	// This is where "is a command running" comes from. The shell reports it via OSC 133 as part of
+	// its normal output, so cm reads it in passing rather than asking the shell to maintain it: zmx
+	// needed shell hooks writing a label for the same information.
+	//
+	// Kept ahead of the append so a waiter sees a command start no later than the output it
+	// produced. A client that learned of output first and of the command afterwards could observe
+	// a command's own bytes while the session still claimed to be idle.
+	// Fed regardless of nesting, so the trackers stay in sync with the byte stream: a chunk
+	// skipped here can split a sequence across the resume and leave the next real report
+	// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
+	// noteReport, not the parsing.
+	if s.commands.Feed(data) {
+		s.noteCommand()
+	}
+
+	// cm's own sequence, read from the same stream for the same reason: a shell integration writes it
+	// straight to the pty, which costs nothing, where shelling out to `cm report` from a prompt hook
+	// costs about 23ms twice per command. That was measured before choosing this design, and it is the
+	// whole reason the sequence exists rather than only the command.
+	if s.reports.Feed(data) {
+		s.noteReport()
+	}
+
+	// Terminal queries are deliberately *not* removed from the stream, and two earlier versions of
+	// this code removed them, so the reasons are worth recording.
+	//
+	// The first stripped them unconditionally to make cm the only answerer. That fixed a duplicate
+	// DA1 reply but left the real defect, cm injecting answers mid-read of an unrelated program, and
+	// it silenced queries an attached terminal was going to answer. The second stripped only what cm
+	// answered, which was correct about who answers and wrong about byte counts: removing bytes makes
+	// the client log shorter than the shim's numbering accounts for, which inverted the resume
+	// ordering and clamped a reconnecting client into the middle of an escape sequence.
+	//
+	// So the stream is forwarded verbatim, and the fix is in *who writes replies* instead. cm is now
+	// the only writer of a reply to this pty: it answers what its model can answer, and for a query
+	// only a real terminal can answer it asks one client and relays what comes back. A client never
+	// answers directly, so a query reaching several clients, or reaching one twice across a restart,
+	// cannot produce a second answer.
+	//
+	// Kitty graphics is taken out of the stream and re-emitted by cm, which is the one protocol cm
+	// consumes rather than forwards. The reason is that a transmission may name a *file* and the
+	// file is consumed once, so forwarding one lets the program and the real terminal race for it:
+	// the reported "EBADF ... No such file or directory" on exactly the probes that name a path.
+	// See docs/architecture.md on what cm presents itself as.
+	//
+	// Ahead of the prompt rewrite because a graphics payload is arbitrary base64 that may contain
+	// the bytes the rewrite matches on, and rewriting inside a payload would corrupt the image.
+	//
+	// Ahead of noteQueries too, and that ordering is load-bearing rather than incidental. cm rewrites
+	// a graphics query when it resolves a transfer, so the command the *terminal* is asked is not the
+	// one the program wrote. noteQueries has to register the rewritten form, or the reply arriving
+	// from the terminal is matched against a question nobody asked and discarded as unsolicited. This
+	// used to run after noteQueries, on the reasoning that a graphics command was not a proxied query
+	// at all, which stopped being true when a=q joined the terminal-only set.
+	gfxData := data
+	if segs := s.gfxScan.Scan(data); segs != nil {
+		gfxData = s.handleGraphics(segs)
+	}
+
+	// Registered before the model is fed, which is the load-bearing ordering here. The model
+	// generates replies to answerable queries synchronously inside its Write, so a question later in
+	// this same chunk must already be outstanding by then or the reply would be written straight to
+	// the pty and overtake it. See noteQueries and queueOrWriteReply.
+	//
+	// Fed the post-graphics bytes for the reason above: these are what reach the terminal, so these
+	// are the questions it will answer.
+	s.noteQueries(gfxData)
+
+	// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
+	// sits between the shell and the outer terminal, so a terminal that trusts the shell to
+	// repaint its prompt clears it and never gets a usable repaint back.
+	rewritten := osc.RewritePromptRedraw(gfxData)
+
+	// Command boundaries come from the rewritten bytes, not the originals.
+	//
+	// This is the load-bearing ordering in this function, and getting it wrong is silent. The log
+	// below numbers exactly these bytes, and RewritePromptRedraw can make a prompt marker nine bytes
+	// longer than the shell sent, so feeding the pre-rewrite chunk instead would drift every
+	// recorded position by nine bytes per prompt and a read would start mid-sequence. Fed here
+	// rather than beside s.commands.Feed above for that reason alone.
+	s.boundariesMu.Lock()
+	s.boundaries.Feed(rewritten)
+	s.boundariesMu.Unlock()
+
+	// Appending both records the output for later subscribers and wakes current ones.
+	// A slow client cannot stall the session: it simply falls behind and is told there
+	// is a gap if the window passes it.
+	s.recent.Append(rewritten)
+
+	// The window resumePoints documents: the chunk is in the log and lastSeq does not account for it
+	// yet. No lock closes it, so a test widens it instead.
+	fault.At(fault.AfterLogAppend)
+
+	// Two sequence numbers, deliberately, because the transforms above change the length: the
+	// prompt rewrite lengthens, and the query strip shortens.
+	//
+	// lastSeq tracks the shim's numbering, since it is the position to resubscribe from after
+	// a restart, and the shim knows nothing about either transform. It is therefore computed from
+	// `data`, never from the stripped or rewritten bytes. Clients are served from s.recent,
+	// which numbers what they actually receive.
+	//
+	// `data` rather than out.Data, and the difference is a partial prompt marker held back at the top
+	// of the loop. Those bytes are still the shim's, so declining to count them is exactly right: a
+	// restart resubscribes from before them and the shim sends them again, matching a log that never
+	// received them. Counting them would skip them on the next server, which is the same hole this
+	// pair of numbers exists to prevent.
+	//
+	// Conflating them desynchronizes the two by however much the rewrite added, which puts a
+	// client's resume position inside an escape sequence and slices the ESC off the front of
+	// it. The visible result is a cursor move rendering as literal text beside the prompt.
+	s.mu.Lock()
+	// Counted from what was consumed rather than from what arrived, so bytes held back for an
+	// unfinished marker are re-sent after a restart instead of being skipped.
+	s.lastSeq = base + seq.Shim(len(data))
+	s.mu.Unlock()
+
+	// The model is fed gfxData rather than out.Data, which is a change from feeding the shell's
+	// original bytes and is required rather than incidental: a graphics command cm removed from the
+	// client stream must also be removed from what the model sees, or the model would store an image
+	// from a command naming a file it cannot read, and its idea of the screen would disagree with
+	// every client's. The inlined replacement cm produced is in gfxData, so both see the same thing.
+	//
+	// The prompt rewrite is still not applied here, which is the existing asymmetry this preserves:
+	// the model gets the markers as the shell wrote them, and only clients see redraw=0.
+	// The model-lag window: clients have this chunk and the model does not. Both bugs that lived here
+	// were found by chance, one at about one attach in eight.
+	fault.At(fault.BeforeModelFeed)
+
+	s.feedTerminal(gfxData, s.recent.Next())
 }
 
 // graphicsRestore builds the commands that re-send this session's images to an attaching client.

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chancez/cm/internal/ansi"
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 )
@@ -159,6 +160,17 @@ func BenchmarkPumpPerChunkScans(b *testing.B) {
 			b.SetBytes(int64(len(tc.data)))
 			b.ResetTimer()
 			for range b.N {
+				// The holdback scan, first, in the position the pump runs it. Included because it is a full
+				// pass over every byte of session output on a path that already had several, so its cost
+				// belongs in the same number as theirs.
+				//
+				// Measured at about 1.3us per 1022-byte chunk: 5240 to 6467 ns/op plain, 4708 to 6245 with
+				// a prompt marker, 4921 to 6934 with graphics. Kept as a forward scan rather than a
+				// backward search for the last ESC, which would be cheaper and is subtly wrong, since an
+				// ESC appears inside a string control's payload as part of its ST terminator. At 1MB/s of
+				// session output this is about 0.13% of a core, against 36us for a reverse index in the
+				// emulator.
+				_ = ansi.PartialTailLen(tc.data)
 				cmds.Feed(tc.data)
 				reports.Feed(tc.data)
 				// The graphics scan, in the position the pump runs it: after the trackers and ahead of
