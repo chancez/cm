@@ -18,6 +18,7 @@ import (
 
 	"github.com/chancez/cm/internal/ansi"
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/osc"
@@ -619,6 +620,10 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// is a gap if the window passes it.
 		s.recent.Append(data)
 
+		// The window resumePoints documents: the chunk is in the log and lastSeq does not account for it
+		// yet. No lock closes it, so a test widens it instead.
+		fault.At(fault.AfterLogAppend)
+
 		// Two sequence numbers, deliberately, because the transforms above change the length: the
 		// prompt rewrite lengthens, and the query strip shortens.
 		//
@@ -642,6 +647,10 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		//
 		// The prompt rewrite is still not applied here, which is the existing asymmetry this preserves:
 		// the model gets the markers as the shell wrote them, and only clients see redraw=0.
+		// The model-lag window: clients have this chunk and the model does not. Both bugs that lived here
+		// were found by chance, one at about one attach in eight.
+		fault.At(fault.BeforeModelFeed)
+
 		s.feedTerminal(gfxData, s.recent.Next())
 	}
 }
@@ -2206,6 +2215,11 @@ func (s *Session) ReportFocus(ctx context.Context, focused bool) {
 
 // Write sends input to the session's shell.
 func (s *Session) Write(ctx context.Context, data []byte) error {
+	// The write that cannot otherwise be made to fail: os.File.Write loops until the pty accepts
+	// everything, so a short or failed write has no natural cause to provoke.
+	if err := fault.Err(fault.BeforeShimWrite); err != nil {
+		return err
+	}
 	_, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data})
 	return err
 }

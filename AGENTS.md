@@ -154,8 +154,26 @@ the state the race lands in instead of racing it.
 **Use `testing/synctest` for concurrency and timing.**
 
 **Test-only behavior goes behind the `cm_testhooks` build tag**, so a released binary does not contain
-the code at all. `CM_VERSION` and `CM_SOCKET_WATCH_INTERVAL` work this way. An env var a shipped binary
-honors is one a stale `export` can use to make it lie.
+the code at all. `CM_VERSION`, `CM_SOCKET_WATCH_INTERVAL`, `CM_TESTHOOK_TRANSCRIPT`, and
+`CM_TESTHOOK_FAULTS` work this way. An env var a shipped binary honors is one a stale `export` can use to
+make it lie.
+
+**To make a timing window reachable, add a fault point rather than a callback.** `internal/fault` holds
+every point in one list, `points.go`, and a call site is one line that compiles to nothing in a released
+build: `fault.At(fault.AfterLogAppend)`, or `fault.Err(...)` where the fault has to surface as a failure.
+Adding a point is one constant plus one call; adding a fault type is one case. The alternative, a callback
+field on whatever struct needs one, was rejected because the fields accumulate on types that have nothing
+to do with testing and nothing anywhere lists what can be intervened in.
+
+Faults exist because the windows are too narrow to hit on purpose. `resumePoints` documents one a few
+instructions wide, the read-only-follower bug was found only because `-race` happened to slow a client
+enough to lose a startup race, and the partial-sequence bug reproduced about one attach in eight. A point
+must correspond to something that actually went wrong, same bar as a `cm doctor` check.
+
+**`go test -race ./internal/e2e/` instruments the spawned cm too**, not just the test binary, and timeouts
+scale by 4 to absorb it. Worth running before believing a change to the client/server/shim wiring: the
+unit tests that run under `-race` exercise types in isolation, and this is the only thing that puts three
+real processes under the detector.
 
 **Anything touching escape sequences: read `docs/testing.md` first.** That conversation is where most
 of cm's bugs live and it is the hardest thing here to observe, because a wrong result looks like a

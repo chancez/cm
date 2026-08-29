@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
@@ -308,6 +309,11 @@ func checkSocketUnserved(socketPath string) error {
 // cleaning up is removed first, but only after confirming nothing answers on it: removing
 // a live shim's socket would orphan it with no way back.
 func Listen(socketPath string) (net.Listener, error) {
+	// Before the socket exists, so the server sees a shim that is starting and not yet answering. That is
+	// the state its ten-second readiness timeout exists for, measured at 10.38s per attempt against 0.36s
+	// when a session reference was validated as a name and the shim exited before binding.
+	fault.At(fault.BeforeShimReady)
+
 	// Check the length first: bind() reports an over-long path as a bare EINVAL, which
 	// gives no hint about the actual problem.
 	if err := paths.CheckSocketPath(socketPath); err != nil {

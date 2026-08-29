@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
@@ -314,6 +315,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}); err != nil {
 		return err
 	}
+
+	// The client has been told the session exists and has received none of it. A test that has to act on
+	// the session while a client sits in that gap pauses here; the follower-revive bug was found in this
+	// window by accident.
+	fault.At(fault.AfterAttachOpened)
 
 	// A detach and a dropped connection are the same outcome here: this client stops watching and
 	// the session keeps running. They were once distinguished, because an owned session ended when
