@@ -152,19 +152,14 @@ receives it and the window closes instead of detaching.`,
 				return createWithoutAttaching(cmd.Context(), dirs, opts)
 			}
 
-			if setTitle {
-				// Forward the session's title to the outer terminal.
-				//
-				// The shell reports its title to cm, not to the terminal, so without this a tab
-				// shows the client's process name. Emitted only when output is a terminal, since
-				// escape bytes in a pipe would corrupt it.
-				opts.OnMetadata = func(meta client.SessionMetadata) {
-					if meta.Title == "" {
-						return
-					}
-					fmt.Fprintf(os.Stdout, "\x1b]2;%s\x07", meta.Title)
-				}
-			}
+			// Forward the session's title to the outer terminal.
+			//
+			// A flag rather than a callback that writes the sequence here, which is what this was and
+			// where it was a bug: writing to os.Stdout bypassed the terminal internal/client owns, so
+			// the title landed inside whatever escape sequence the session was halfway through and the
+			// remainder printed as text on screen. The command layer states the policy; the client owns
+			// every byte that reaches a terminal. See internal/client.screen.
+			opts.SetTitle = setTitle
 			return runAttach(cmd.Context(), dirs, opts, func(res client.Result) []string {
 				return upgradeArgv(cmd, args, res)
 			})

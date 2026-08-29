@@ -149,6 +149,14 @@ type Options struct {
 	// reconnect signals again.
 	OnAttached func()
 
+	// SetTitle forwards the session's title to the terminal, as OSC 2.
+	//
+	// Here rather than in a caller's OnMetadata, which is what this replaced and where it was a bug: the
+	// title was written straight to os.Stdout, outside TTY and outside any ordering with the session's
+	// output, and it landed in the middle of the program's escape sequences. Only this package knows when
+	// the terminal can safely be written to, so only this package writes to it. See screen.
+	SetTitle bool
+
 	// OnMetadata, when set, is called as the session reports its title and directory.
 	//
 	// This is how a terminal emulator learns values the shell reported to cm rather than to the
@@ -199,6 +207,15 @@ type Options struct {
 	// terminal cannot be faked from outside this package, since whether output is one is read from the
 	// file descriptor. Nil means Attach builds the real one from the terminal it was given.
 	notice *outageNotice
+
+	// screen is the single writer to the terminal, carried here so it survives a reconnect.
+	//
+	// On Options rather than a parameter for the reason notice is: it is nobody's business outside this
+	// package, and threading a twelfth argument through runSession would touch every test that drives it.
+	// It has to outlive one connection because the tracker inside it describes the terminal, which does
+	// not reset when a stream does. Nil means one is built on the spot, which is what a test calling
+	// runSession directly gets.
+	screen *screen
 }
 
 // SessionMetadata is what a session reports about itself.
@@ -308,10 +325,19 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// Painted only by a client that owns a terminal and is willing to have it repainted. NoRestore marks
 	// the followers, which stream bytes to a pipe where an escape sequence is corruption rather than
 	// information, and it is the same signal the gap repaint keys on.
+	// One writer for everything this attachment puts on the terminal, built here so it outlives a
+	// reconnect: the tracker inside it describes the terminal, and the terminal does not reset when a
+	// stream does.
+	if opts.screen == nil {
+		opts.screen = newScreen(screenDest(tty, opts), opts.Output == nil && tty.IsTerminal(), opts.Log)
+	}
+
 	notice := opts.notice
 	if notice == nil {
 		notice = &outageNotice{
-			out:      tty,
+			// Through the screen rather than straight at the terminal, so a notice cannot land inside a
+			// half-written sequence. It builds its line with one Fprintf, so this is one injection.
+			out:      injectWriter{opts.screen},
 			size:     tty.Size,
 			enabled:  tty.IsTerminal() && !opts.NoRestore,
 			quietFor: reconnectQuietPeriod,
@@ -557,6 +583,16 @@ func runSession(
 	if opts.Log == nil {
 		opts.Log = slog.New(discardLogHandler{})
 	}
+	// The single writer to the terminal, defaulted for the same reason. Every write below goes through
+	// it, so nothing can reach the terminal without an ordering decision having been made.
+	scr := opts.screen
+	if scr == nil {
+		scr = newScreen(screenDest(tty, opts), opts.Output == nil && tty.IsTerminal(), opts.Log)
+	}
+	// The last title written, so an unchanged one is not rewritten. Per connection rather than per
+	// attachment on purpose: a reconnect repaints, and re-asserting the title once after that is right,
+	// since anything could have retitled the window while the server was away.
+	var lastTitle string
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -598,21 +634,16 @@ func runSession(
 	}
 
 	if len(opened.Restore) > 0 {
-		if opts.Output != nil {
-			// No clear: that writes an escape sequence to a terminal, and a caller taking the bytes itself is
-			// not painting one.
-			if _, err := opts.Output.Write(opened.Restore); err != nil {
-				return outcomeDone, err
-			}
-		} else {
-			// Clear first so restored state is not painted over whatever the client's own
-			// shell left on screen.
-			if err := tty.Clear(); err != nil {
-				return outcomeDone, err
-			}
-			if _, err := tty.Write(opened.Restore); err != nil {
-				return outcomeDone, err
-			}
+		// Clear first so restored state is not painted over whatever the client's own shell left on
+		// screen. Injected rather than written, so it is skipped for a caller taking the bytes itself: that
+		// one is not painting a terminal, and an escape sequence in its stream is corruption.
+		if err := scr.inject([]byte(clearSequence)); err != nil {
+			return outcomeDone, err
+		}
+		// The session's own bytes, so tracked: a restore that ends mid-sequence must hold the next
+		// injection rather than let it split what the replay started.
+		if err := scr.session(opened.Restore); err != nil {
+			return outcomeDone, err
 		}
 	}
 	seq := opened.NextSeq
@@ -745,13 +776,31 @@ func runSession(
 				// question written into that stream would corrupt what it is collecting and could never be
 				// answered. The server's request then expires, which is the same outcome as today.
 				if opts.Output == nil && !opts.ReadOnly {
-					if _, err := tty.Write(q.Data); err != nil {
+					// Injected, so a question cannot be asked in the middle of the program's own sequence.
+					if err := scr.inject(q.Data); err != nil {
 						return outcomeDone, err
 					}
 				}
 				continue
 			}
 			if m := msg.resp.GetMetadata(); m != nil {
+				// The shell reports its title to cm rather than to the terminal, so without this a tab shows
+				// the client's process name.
+				//
+				// Written here rather than by a caller, and injected rather than written straight out. Both
+				// halves of that were the bug: cmd/cm emitted this to os.Stdout, so it bypassed the terminal
+				// this package owns, and it went out the instant the metadata arrived, which put it inside
+				// whatever escape sequence the session was halfway through.
+				//
+				// Only on a change, since the server publishes metadata whenever any of the three fields
+				// moves and the terminal has no use for the same title twice. That also removes a duplicate
+				// visible in a capture of the old path, which wrote the title twice per change.
+				if opts.SetTitle && m.Title != "" && m.Title != lastTitle {
+					lastTitle = m.Title
+					if err := scr.inject([]byte("\x1b]2;" + m.Title + "\x07")); err != nil {
+						return outcomeDone, err
+					}
+				}
 				if opts.OnMetadata != nil {
 					opts.OnMetadata(SessionMetadata{
 						Title:      m.Title,
@@ -792,11 +841,7 @@ func runSession(
 					// state.
 					return outcomeReconnect, nil
 				}
-				w := io.Writer(tty)
-				if opts.Output != nil {
-					w = opts.Output
-				}
-				if _, err := w.Write(o.Data); err != nil {
+				if err := scr.session(o.Data); err != nil {
 					return outcomeDone, err
 				}
 				next := o.Seq + uint64(len(o.Data))
