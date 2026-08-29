@@ -498,11 +498,22 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			// Asked to go, so this client forfeits its place in the attach order the same way one that
 			// pressed the detach key does.
 			//
-			// An upgrade does come back, and still forfeits it, because it re-execs: the returning client is
-			// a new process with a new pid, so there is nothing for resumeOrders to key on. No worse than
-			// before this existed, and worth stating so the omission does not read as an oversight. A stable
-			// client id carried across the re-exec would close it; see docs/ideas.md.
-			deliberate = true
+			// Whether this client keeps its place depends on whether it is coming back.
+			//
+			// An upgrade is: it re-execs, and exec *keeps the process id*, which is the whole reason
+			// reexecForUpgrade uses it rather than spawning a child. So the returning client has the same pid
+			// and resumeOrders recognises it. Measured on a forced upgrade: the client came back with its
+			// order restored to 1.
+			//
+			// That correction is worth spelling out because the opposite was written down first, in a comment
+			// and in docs/ideas.md, and a whole feature was designed on it: a re-exec was assumed to produce a
+			// new pid, so a stable client id looked necessary to survive one. It is not. Nothing else here
+			// needs an identity that outlives a process.
+			//
+			// A switch or a plain `cm detach` is not coming back to *this* session, so it forfeits the slot
+			// the same way a client that pressed the detach key does. A switch reattaches to a different
+			// session, where it is genuinely new.
+			deliberate = !upgrade
 			return nil
 
 		case err := <-recvErr:

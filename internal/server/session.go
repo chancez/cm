@@ -100,9 +100,14 @@ type Session struct {
 	//
 	// An older client sends no pid, which reads as zero and is ignored, so it keeps the previous behaviour.
 	//
-	// A pid does not survive `cm clients upgrade`, which re-execs into a new process, so an upgraded client
-	// still loses its place. A stable client id carried across the re-exec would fix that and would also
-	// remove the reliance on pids not being reused; see docs/ideas.md.
+	// A pid survives `cm clients upgrade` too, which is not obvious and was got wrong here first: the client
+	// re-execs, and exec keeps the process id, which is the whole reason reexecForUpgrade uses it rather than
+	// spawning a child. So an upgraded client is recognised by the same key as a reconnecting one. Measured on
+	// a forced upgrade: the client came back with its order restored.
+	//
+	// What a pid does not survive is being reused by an unrelated process after this client exited. An entry
+	// is consumed on first use and there are at most maxResumeOrders of them, so the window is small and the
+	// consequence is only a place in the attach order. Not worth an identity of its own.
 	resumeOrders map[int32]uint64
 
 	// outPartial holds the tail of a chunk that ends inside an unfinished escape sequence, and

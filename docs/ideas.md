@@ -763,24 +763,23 @@ What is done instead is cheaper and covers the reason this came up. An unknown c
 rather than fatal, and `cm upgrade` reads the config before stopping anything, so the failure that produced
 this idea cannot recur.
 
-**A stable client id, carried across a re-exec.** A client's place in the attach order now survives a
-dropped stream, which is what stops a repaint or an outage moving who sizes the session. It is keyed on the
-client's process id, because that is already on the wire and is stable across a reconnect: the client redials
-from inside the same process.
+**Deliberately not doing: a stable client id.** A client's place in the attach order survives a dropped
+stream, keyed on its process id, which is what stops a repaint or an outage moving who sizes the session.
 
-It is not stable across `cm clients upgrade`, which re-execs into a new binary and therefore a new process. So
-an upgraded client is treated as a new attachment and loses its place, which under `first-attach` hands sizing
-to another window. That is no worse than before any of this existed, and it is the one case left.
+This entry used to propose an identity that outlived the process, on the reasoning that a pid cannot follow
+`cm clients upgrade` because the client re-execs. That reasoning is wrong, and it is recorded here because it
+was convincing enough to design a feature around, build, and only then measure. **exec keeps the process id.**
+That is not incidental: it is the whole reason `reexecForUpgrade` uses exec rather than spawning a child, and
+the comment there says so. Measured on a forced upgrade, the returning client had the same pid and its order
+restored to 1.
 
-An id the client generates once and passes through its own re-exec would close it, as a `client_id` field on
-`Open` with the pid as the fallback. Two things make it more than a rename. It has to be optional in both
-directions, since an older client sends none and an older server ignores one, which is the same compatibility
-rule the shim argv follows. And it would remove the remaining reliance on pids not being reused within a
-session's lifetime, which is unlikely rather than impossible.
+What a pid genuinely does not survive is reuse by an unrelated process after this client exited. An entry is
+consumed on first use and there are at most `maxResumeOrders` of them, so the window is small and the
+consequence is only a place in the attach order. That is a hypothetical, and the bar here is a real incident.
 
-Not done yet because the case it fixes is narrow: an upgrade with several clients attached at different sizes,
-under a policy keyed on attach order. Worth doing when the id has a second use, and identifying a client across
-a re-exec is the kind of thing more than one feature wants.
+If an identity outliving a process is ever wanted for something else, the shape is a `client_id` on `Open`
+with the pid as the fallback, optional in both directions the way the shim argv is. It should not be added for
+this.
 
 **Configuration per session in a file.** Sessions are created by whatever starts them, with flags. A file
 mapping session names to settings would move that decision away from the caller who has the context, and
