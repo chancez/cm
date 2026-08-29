@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -23,9 +24,32 @@ import (
 // point is to have a client stopped inside cm while the test does something else.
 type bgCmd struct {
 	cmd    *exec.Cmd
-	out    *bytes.Buffer
-	errBuf *bytes.Buffer
+	out    *syncBuffer
+	errBuf *syncBuffer
 	done   chan error
+}
+
+// syncBuffer is a bytes.Buffer safe for the one pattern here: os/exec writes it from its own copy
+// goroutine while the test reads it.
+//
+// bytes.Buffer is not safe for that, and -race said so in four places before this existed. Worth stating
+// because the plain version looks fine and passes: the reads only observe a torn buffer under contention,
+// which is what the detector is for.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (e *env) startInBackground(t *testing.T, args ...string) *bgCmd {
@@ -36,8 +60,8 @@ func (e *env) startInBackground(t *testing.T, args ...string) *bgCmd {
 	cmd.Dir = e.state
 	b := &bgCmd{
 		cmd:    cmd,
-		out:    &bytes.Buffer{},
-		errBuf: &bytes.Buffer{},
+		out:    &syncBuffer{},
+		errBuf: &syncBuffer{},
 		done:   make(chan error, 1),
 	}
 	cmd.Stdout = b.out
