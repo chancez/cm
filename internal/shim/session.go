@@ -281,12 +281,30 @@ func (s *Session) pump() {
 	}
 
 	// Reap the child so it does not linger as a zombie, and record why it ended.
+	//
+	// A signal death is reported as 128+signal, the shell convention, rather than through ExitCode. Go
+	// documents ExitCode as returning -1 for a process "terminated by a signal", which is the same value it
+	// returns for one that has not exited, and the server reads a negative code as "the shim vanished, so
+	// the outcome is unknown". So a shell killed by SIGTERM was recorded as a lost session with exit code 0,
+	// meaning `cm ls` reported success for a session that was killed and `cm run` collapsed every signal to
+	// exit 1 with "ended unexpectedly". Measured against /bin/sh, which gives 143, 137 and 130 for TERM,
+	// KILL and INT; cm gave 1 for all three.
+	//
+	// 128+signal rather than the raw number because that is what a shell reports and what a script
+	// comparing statuses expects, and `cm run` documents itself as usable the way a local command is.
 	code := 0
 	if err := s.cmd.Wait(); err != nil {
 		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		switch {
+		case errors.As(err, &ee):
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				code = 128 + int(ws.Signal())
+				break
+			}
 			code = ee.ExitCode()
-		} else {
+		default:
+			// Genuinely unknown: Wait itself failed rather than the child reporting a status. This is the
+			// case the server's negative-code branch is for, and now the only one.
 			code = -1
 		}
 	}

@@ -551,7 +551,13 @@ func (m *Manager) watch(sess *Session) {
 
 	state := store.StateExited
 	if code < 0 {
-		// The shim vanished rather than the shell exiting, so the outcome is unknown.
+		// Genuinely unknown: the shim could not obtain a status at all, so there is nothing to report.
+		//
+		// Only that. A shell killed by a signal used to arrive here too, because Go's ExitCode returns -1
+		// for "terminated by a signal" as well as for "has not exited", so a tracked session killed by
+		// SIGTERM was recorded as a lost one with exit code 0 and `cm ls` reported success for it. The shim
+		// now reports 128+signal, the shell convention, so a negative code means only what this branch
+		// says.
 		state = store.StateDead
 		code = 0
 	}
