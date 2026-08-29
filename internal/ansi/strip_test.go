@@ -30,6 +30,24 @@ func TestStrip(t *testing.T) {
 		{name: "OSC with ST terminator", in: "\x1b]7;file://host/tmp\x1b\\done", want: "done"},
 		// A title, which is an OSC with text inside that must not leak through.
 		{name: "OSC title", in: "\x1b]2;my title\x07text", want: "text"},
+		// The string controls, which this filter used to leak. `ESC P` was treated as a complete two-byte
+		// sequence, so everything up to the ST was emitted as text: the values below are what Strip
+		// actually returned before the fix, measured rather than imagined.
+		//
+		// It matters because these reach a follower in ordinary use. cm's own query proxy writes the
+		// XTGETTCAP, kitty graphics uses APC, and a program drawing an image uses sixel, so `cm read
+		// --follow` was putting protocol payloads into the text an agent reads.
+		// Returned "a+q4D73b".
+		{name: "DCS, which is what cm's own XTGETTCAP query is", in: "a\x1bP+q4D73\x1b\\b", want: "ab"},
+		// Returned "aGf=100;payloadb".
+		{name: "APC, the kitty graphics form", in: "a\x1b_Gf=100;payload\x1b\\b", want: "ab"},
+		// Returned "aq#0;2;0;0;0b".
+		{name: "sixel, a DCS with a different introducer", in: "a\x1bPq#0;2;0;0;0\x1b\\b", want: "ab"},
+		// PM and SOS, for completeness: rare, same terminator, same handling.
+		{name: "privacy message", in: "a\x1b^text\x1b\\b", want: "ab"},
+		{name: "start of string", in: "a\x1bXtext\x1b\\b", want: "ab"},
+		// A string control terminated by BEL rather than ST, which is legal and which OSC uses.
+		{name: "DCS terminated by BEL", in: "a\x1bP+q4D73\x07b", want: "ab"},
 		// A short sequence with no parameters at all.
 		{name: "full reset", in: "\x1bctext", want: "text"},
 		{name: "keypad mode", in: "\x1b=text\x1b>", want: "text"},

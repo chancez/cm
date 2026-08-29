@@ -24,29 +24,17 @@ import (
 // tail of a split sequence through as text, which is the bug this exists to avoid.
 type Stripper struct {
 	w io.Writer
-	// state is what the filter is in the middle of, if anything.
-	state state
-	// pending holds an incomplete sequence's bytes, so a terminator arriving in a later write is recognized.
+	// track is the state machine, shared with Tracker rather than reimplemented here.
 	//
-	// Bounded by maxPending: a stream that opens an escape and never terminates it would otherwise grow this
-	// without limit, so past that the bytes are treated as text rather than held forever.
+	// It used to be a near-copy, and the copy was missing the string controls: `ESC P` was treated as a
+	// complete two-byte sequence, so a DCS payload was emitted as text. `cm read --follow` on a session
+	// using XTGETTCAP, kitty graphics or sixel put that payload into the stream an agent reads, and
+	// `Strip("a\x1bP+q4D73\x1b\\b")` returned `"a+q4D73b"`. Two machines meant one of them was wrong.
+	track Tracker
+	// pending holds a withheld sequence's bytes, so an unterminated one can still be emitted rather than
+	// silently swallowed. Bounded by maxPending, which is also where Tracker gives up on the sequence.
 	pending []byte
 }
-
-type state int
-
-const (
-	// stateText is ordinary output.
-	stateText state = iota
-	// stateEscape is just after ESC, deciding what kind of sequence this is.
-	stateEscape
-	// stateCSI is inside a control sequence, which ends at a byte in 0x40..0x7e.
-	stateCSI
-	// stateOSC is inside an operating system command, which ends at BEL or ST.
-	stateOSC
-	// stateOSCEscape is inside an OSC and has just seen ESC, which may begin the ST terminator.
-	stateOSCEscape
-)
 
 // maxPending bounds an unterminated sequence.
 //
@@ -70,78 +58,41 @@ func (s *Stripper) Write(p []byte) (int, error) {
 	out.Grow(len(p))
 
 	for _, b := range p {
-		switch s.state {
-		case stateText:
+		// Ordinary text, and the only place a byte is emitted. Decided before feeding the tracker, since
+		// the byte that opens a sequence and the byte that closes one both belong to the sequence.
+		if !s.track.InSequence() && b != 0x1b {
 			switch b {
-			case 0x1b: // ESC
-				s.state = stateEscape
-				s.pending = append(s.pending[:0], b)
 			case '\r', '\b', 0x07:
-			// Dropped, for the same reason as the escape sequences: these move the cursor or ring a bell
-			// rather than carrying content, and there is no screen here to move a cursor on.
-			//
-			// CR because a pty translates newline to CRLF, so keeping it would give a redirected file
-			// Windows line endings for output that never meant to have them. Backspace because a line
-			// editor emits it to redraw a prompt, which showed up as a stray "p\b" at the start of
-			// followed output. BEL because a bell in a log file is nothing but a stray byte.
-			//
-			// Tab is deliberately not in this list: it is layout a program chose, and columns in a build
-			// log matter.
+				// Dropped, for the same reason as the escape sequences: these move the cursor or ring a
+				// bell rather than carrying content, and there is no screen here to move a cursor on.
+				//
+				// CR because a pty translates newline to CRLF, so keeping it would give a redirected file
+				// Windows line endings for output that never meant to have them. Backspace because a line
+				// editor emits it to redraw a prompt, which showed up as a stray "p\b" at the start of
+				// followed output. BEL because a bell in a log file is nothing but a stray byte.
+				//
+				// Tab is deliberately not in this list: it is layout a program chose, and columns in a
+				// build log matter.
 			default:
 				out.WriteByte(b)
 			}
-
-		case stateEscape:
-			s.pending = append(s.pending, b)
-			switch {
-			case b == '[':
-				s.state = stateCSI
-			case b == ']':
-				s.state = stateOSC
-			case b >= 0x20 && b <= 0x2f:
-				// An intermediate byte, so the sequence continues. Stays in this state, which is enough for
-				// the two-and-three-byte sequences that appear in practice.
-			default:
-				// A final byte, so this was a short sequence such as ESC c or ESC =. Done.
-				s.state = stateText
-				s.pending = s.pending[:0]
-			}
-
-		case stateCSI:
-			s.pending = append(s.pending, b)
-			// Parameters and intermediates are 0x20..0x3f; anything in 0x40..0x7e ends the sequence.
-			if b >= 0x40 && b <= 0x7e {
-				s.state = stateText
-				s.pending = s.pending[:0]
-			}
-
-		case stateOSC:
-			s.pending = append(s.pending, b)
-			switch b {
-			case 0x07: // BEL, the common terminator
-				s.state = stateText
-				s.pending = s.pending[:0]
-			case 0x1b: // possibly ST, which is ESC backslash
-				s.state = stateOSCEscape
-			}
-
-		case stateOSCEscape:
-			s.pending = append(s.pending, b)
-			if b == '\\' {
-				s.state = stateText
-				s.pending = s.pending[:0]
-			} else {
-				// Not ST after all, so still inside the OSC.
-				s.state = stateOSC
-			}
+			continue
 		}
 
-		// An unterminated sequence is not held forever. Emitting what was collected is the honest failure:
-		// dropping it would silently lose output, which is worse than showing bytes that look odd.
-		if len(s.pending) > maxPending {
+		// Part of a sequence, so withheld rather than emitted, and kept in case it never terminates.
+		s.pending = append(s.pending, b)
+		s.track.feedByte(b)
+		switch {
+		case !s.track.InSequence():
+			// Terminated, so the whole sequence is dropped.
+			s.pending = s.pending[:0]
+		case len(s.pending) > maxPending:
+			// An unterminated sequence is not held forever. Emitting what was collected is the honest
+			// failure: dropping it would silently lose output, which is worse than showing bytes that look
+			// odd. Tracker gives up at the same bound, so the two agree on when this stops being a
+			// sequence.
 			out.Write(s.pending)
 			s.pending = s.pending[:0]
-			s.state = stateText
 		}
 	}
 
