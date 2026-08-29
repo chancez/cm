@@ -86,6 +86,16 @@ func buildCM(t *testing.T, once *buildResult, extraArgs []string) string {
 		}
 		path := filepath.Join(dir, "cm")
 		args := append([]string{"build"}, extraArgs...)
+		// Instrumented when the test binary is, so `go test -race ./internal/e2e/` puts the spawned cm
+		// under the detector too. Without this every e2e test drove an uninstrumented binary, which left
+		// the client, server and shim wiring as the one part of cm the detector never saw. A race there
+		// surfaces as a crash in someone's live session rather than as a test failure.
+		//
+		// Costs build time and makes cm slower, which is why it follows the test binary rather than being
+		// on always: a plain `go test ./internal/e2e/` is unchanged.
+		if raceEnabled {
+			args = append(args, "-race")
+		}
 		args = append(args, "-o", path, "./cmd/cm")
 		cmd := exec.Command("go", args...)
 		cmd.Dir = repoRoot()
@@ -359,6 +369,7 @@ func (e *env) runInSession(session string, args ...string) result {
 }
 
 func (e *env) runWithin(timeout time.Duration, args ...string) result {
+	timeout = scaleTimeout(timeout)
 	e.t.Helper()
 
 	cmd := exec.Command(e.bin, args...)
@@ -836,6 +847,7 @@ func (e *env) deleteSessionRecord(name string) string {
 // Polling rather than sleeping: how long a shell takes to produce output is not something to hardcode,
 // and a fixed sleep is either flaky or slow.
 func (e *env) waitFor(describe string, timeout time.Duration, cond func() bool) {
+	timeout = scaleTimeout(timeout)
 	e.t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -974,3 +986,27 @@ func (e *env) withOSC133() []string {
 	}
 	return []string{"--env", "ZDOTDIR=" + dir}
 }
+
+// scaleTimeout stretches a deadline when the cm under test is race-instrumented.
+//
+// A -race build of cm is several times slower, and the e2e timeouts are sized for a normal one. Measured
+// on the first race-instrumented run: four `read --follow` tests timed out at 3s, 20s and 30s while doing
+// exactly what they were supposed to, and one upper-bound assertion missed by 54ms. Those are the
+// instrumentation rather than findings, and leaving them failing would teach everyone to stop running the
+// suite that way, which loses the coverage the instrumentation was added for.
+//
+// Applied in runWithin and waitFor, which every e2e timeout passes through, rather than at each call site,
+// so no test has to know about this.
+func scaleTimeout(d time.Duration) time.Duration {
+	if !raceEnabled {
+		return d
+	}
+	return d * raceTimeoutFactor
+}
+
+// raceTimeoutFactor is how much slack a race-instrumented cm gets.
+//
+// 4 rather than a tuned number: what it has to absorb is startup and first-output latency, which the
+// detector inflates by a large and variable amount, and the only cost of being generous is how long a
+// genuinely hung test takes to report.
+const raceTimeoutFactor = 4

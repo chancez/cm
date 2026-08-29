@@ -77,7 +77,11 @@ func TestWaitMatchOnASessionThatReportsNothing(t *testing.T) {
 		t.Errorf("wait --until idle exited %d on a session with no OSC 133, want it satisfied at once",
 			r.code)
 	}
-	if idle := time.Since(start); idle > time.Second {
+	// An upper bound rather than a timeout, so scaleTimeout does not reach it. Scaled here for the same
+	// reason: a race-instrumented cm measured 1.054s against this 1s bound while behaving correctly. The
+	// claim is that idle is satisfied at once rather than waiting out the 5s timeout, and that stays a
+	// real assertion with the slack.
+	if idle := time.Since(start); idle > scaleTimeout(time.Second) {
 		t.Errorf("wait --until idle took %v, want it immediate: this test rests on idle being "+
 			"trivially true without OSC 133", idle)
 	}
