@@ -86,6 +86,24 @@ type Session struct {
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq seq.Log
+	// promptPartial holds the tail of a chunk that ends inside an unfinished OSC 133 sequence, and
+	// promptPartialSeq is that tail's position in the shim's numbering.
+	//
+	// The pump holds those bytes rather than passing them on, so every consumer of a prompt marker sees a
+	// whole one. Without it RewritePromptRedraw silently skipped a marker split by a read boundary and the
+	// marker reached the client carrying redraw=1, which makes the client's terminal clear the prompt lines
+	// on resize and wait for a repaint that arrives in the pty's coordinates rather than the window's: the
+	// prompt is cleared and does not come back. Measured as every split strictly inside the marker, a
+	// 26-byte window for one carrying parameters.
+	//
+	// Held before the graphics transform on purpose, so the bytes are still the shim's and lastSeq can
+	// simply not count them. Holding after it would mean mapping post-transform lengths back to shim
+	// positions, which is the two-numbering-spaces mistake in a new place.
+	//
+	// Owned by the pump goroutine alone, so no lock: every read and write is in pump.
+	promptPartial    []byte
+	promptPartialSeq seq.Shim
+
 	// modelTrack follows the same bytes the model consumes, so modelPending below knows how much of an
 	// incomplete sequence is sitting at the end of them. Guarded by termMu, like modelSeq.
 	modelTrack ansi.Tracker
@@ -200,7 +218,8 @@ type Session struct {
 	// Outside mu for the same reason as commands and reports: only the pump feeds it. Unlike those two
 	// it *removes* bytes from what clients see, which the two sequence-number spaces already allow,
 	// since the prompt rewrite beside it lengthens the stream. What must not happen is the shim's
-	// numbering being computed from the shortened bytes, and it is not: lastSeq comes from out.Data.
+	// numbering being computed from the shortened bytes, and it is not: lastSeq comes from the pump's
+	// `data`, which is out.Data minus only a held-back partial marker, both of which are shim bytes.
 	gfxScan graphics.Scanner
 	// gfxStore keeps the payloads those commands carried, so images can be re-sent on attach.
 	//
@@ -550,6 +569,35 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 			return
 		}
 
+		// A chunk ending inside an OSC 133 sequence is trimmed, and the tail waits for the rest.
+		//
+		// Everything below reads a whole marker or none, which is what the trackers, the rewrite and the
+		// log all assumed and only the trackers actually arranged. Done here, before the graphics
+		// transform, so the held bytes are still the shim's and lastSeq can decline to count them; a
+		// restarting server then resubscribes from before them and the shim sends them again, which is
+		// correct because the log never received them.
+		//
+		// data replaces out.Data for the rest of the body. Using out.Data anywhere below would feed a
+		// consumer bytes the log is not going to receive yet, which is how the two numbering spaces drift.
+		data := out.Data
+		base := seq.Shim(out.Seq)
+		if len(s.promptPartial) > 0 {
+			// Prepended, so the sequence is whole again and its position is where the partial began.
+			data = append(s.promptPartial, out.Data...)
+			base = s.promptPartialSeq
+			s.promptPartial = nil
+		}
+		if held := osc.PartialMarkerLen(data); held > 0 {
+			s.promptPartial = append([]byte(nil), data[len(data)-held:]...)
+			s.promptPartialSeq = base + seq.Shim(len(data)-held)
+			data = data[:len(data)-held]
+		}
+		if len(data) == 0 {
+			// The whole chunk was the start of a marker. Nothing has been consumed, so nothing advances:
+			// not the trackers, not the log, not lastSeq.
+			continue
+		}
+
 		// Track what the shell says about itself from the bytes as the shell sent them, before the
 		// rewrite below, so the markers are read exactly as written.
 		//
@@ -564,7 +612,7 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// skipped here can split a sequence across the resume and leave the next real report
 		// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
 		// noteReport, not the parsing.
-		if s.commands.Feed(out.Data) {
+		if s.commands.Feed(data) {
 			s.noteCommand()
 		}
 
@@ -572,7 +620,7 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// straight to the pty, which costs nothing, where shelling out to `cm report` from a prompt hook
 		// costs about 23ms twice per command. That was measured before choosing this design, and it is the
 		// whole reason the sequence exists rather than only the command.
-		if s.reports.Feed(out.Data) {
+		if s.reports.Feed(data) {
 			s.noteReport()
 		}
 
@@ -607,8 +655,8 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// from the terminal is matched against a question nobody asked and discarded as unsolicited. This
 		// used to run after noteQueries, on the reasoning that a graphics command was not a proxied query
 		// at all, which stopped being true when a=q joined the terminal-only set.
-		gfxData := out.Data
-		if segs := s.gfxScan.Scan(out.Data); segs != nil {
+		gfxData := data
+		if segs := s.gfxScan.Scan(data); segs != nil {
 			gfxData = s.handleGraphics(segs)
 		}
 
@@ -624,7 +672,7 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// Forcing redraw=0 into prompt markers before anything else sees them. A multiplexer
 		// sits between the shell and the outer terminal, so a terminal that trusts the shell to
 		// repaint its prompt clears it and never gets a usable repaint back.
-		data := osc.RewritePromptRedraw(gfxData)
+		rewritten := osc.RewritePromptRedraw(gfxData)
 
 		// Command boundaries come from the rewritten bytes, not the originals.
 		//
@@ -634,13 +682,13 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		// recorded position by nine bytes per prompt and a read would start mid-sequence. Fed here
 		// rather than beside s.commands.Feed above for that reason alone.
 		s.boundariesMu.Lock()
-		s.boundaries.Feed(data)
+		s.boundaries.Feed(rewritten)
 		s.boundariesMu.Unlock()
 
 		// Appending both records the output for later subscribers and wakes current ones.
 		// A slow client cannot stall the session: it simply falls behind and is told there
 		// is a gap if the window passes it.
-		s.recent.Append(data)
+		s.recent.Append(rewritten)
 
 		// The window resumePoints documents: the chunk is in the log and lastSeq does not account for it
 		// yet. No lock closes it, so a test widens it instead.
@@ -651,14 +699,22 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 		//
 		// lastSeq tracks the shim's numbering, since it is the position to resubscribe from after
 		// a restart, and the shim knows nothing about either transform. It is therefore computed from
-		// out.Data, never from the stripped or rewritten bytes. Clients are served from s.recent,
+		// `data`, never from the stripped or rewritten bytes. Clients are served from s.recent,
 		// which numbers what they actually receive.
+		//
+		// `data` rather than out.Data, and the difference is a partial prompt marker held back at the top
+		// of the loop. Those bytes are still the shim's, so declining to count them is exactly right: a
+		// restart resubscribes from before them and the shim sends them again, matching a log that never
+		// received them. Counting them would skip them on the next server, which is the same hole this
+		// pair of numbers exists to prevent.
 		//
 		// Conflating them desynchronizes the two by however much the rewrite added, which puts a
 		// client's resume position inside an escape sequence and slices the ESC off the front of
 		// it. The visible result is a cursor move rendering as literal text beside the prompt.
 		s.mu.Lock()
-		s.lastSeq = seq.Shim(out.Seq) + seq.Shim(len(out.Data))
+		// Counted from what was consumed rather than from what arrived, so bytes held back for an
+		// unfinished marker are re-sent after a restart instead of being skipped.
+		s.lastSeq = base + seq.Shim(len(data))
 		s.mu.Unlock()
 
 		// The model is fed gfxData rather than out.Data, which is a change from feeding the shell's

@@ -24,12 +24,18 @@ import (
 // terminator is harmless; a split anywhere inside it loses the rewrite. For the first fixture that is
 // offsets 7 through 14 of a 22-byte stream, and offset 7 is the byte after the ESC.
 //
-// Not fixed here, and the reason is that the fix is not local. Holding a partial marker back is the only
-// correct shape, and it has to happen before the graphics transform so the held bytes are still the shim's,
-// which means lastSeq must stop counting them or a server restart would resubscribe past bytes the log
-// never received. That is the two-sequence-number-spaces contract, and changing it is not something to slip
-// into a test. Written as an assertion on the gap so a fix fails here and has to update this on purpose,
-// the same shape as TestSplitIntroducerIsNotFramedToday in internal/input.
+// This function is deliberately left stateless, and the gap is closed a level up instead: the output pump
+// holds a partial marker back so this is never handed one. See PartialMarkerLen and
+// Session.promptPartial, and TestHoldingBackRestoresTheRewriteAtEveryBoundary for the same sweep with the
+// holdback applied, which passes at every offset.
+//
+// The holdback belongs there rather than here because it has to happen before the graphics transform, so
+// the held bytes are still the shim's and lastSeq can decline to count them. Holding after that transform
+// would mean mapping post-transform lengths back to shim positions, which is the two-numbering-spaces
+// mistake in a new place.
+//
+// Kept as a record of what this function does on its own, so that if someone later feeds it a split marker
+// from a new call site the consequence is written down rather than rediscovered.
 func TestRewritePromptRedrawIsLostWhenAMarkerIsSplit(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

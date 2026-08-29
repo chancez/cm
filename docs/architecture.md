@@ -445,6 +445,27 @@ makes the window harmless. It can only leave the stored client position at or ah
 position accounts for, so the next server resubscribes from slightly behind its log's start and
 re-delivers the overlap. The other order loses bytes instead, which is the whole failure again.
 
+A third consequence, added later: `lastSeq` counts what the pump *consumed*, not what the shim sent.
+
+The pump holds back a chunk's tail when it ends inside an unfinished OSC 133 sequence, so every consumer
+downstream sees a whole marker. It has to, because `RewritePromptRedraw` is stateless and silently skips a
+marker it receives in pieces: the introducer went out unrewritten, nothing matched it afterwards, and the
+client got `redraw=1`. A terminal that believes that clears the prompt lines on the next resize and waits
+for a repaint that arrives in the pty's coordinates rather than the window's, so the prompt is cleared and
+does not come back. Measured as every split strictly inside the marker, a 26-byte window for one carrying
+parameters, and reproduced by writing the marker in two `printf`s.
+
+The holdback sits *before* the graphics transform on purpose, so the held bytes are still the shim's and
+`lastSeq` can simply not count them. A restarting server then resubscribes from before them and the shim
+sends them again, which matches a log that never received them. Counting them would skip them on the next
+server, which is this same hole from a new direction. Holding *after* the graphics transform would mean
+mapping post-transform lengths back to shim positions, which is the mistake this whole section is about.
+
+`PartialMarkerLen` scans forward past complete sequences rather than searching backwards for the last
+introducer. The backward version was written first and was wrong: given a terminated marker followed by the
+start of another, it found the terminated one, saw its terminator, and reported nothing pending, so the
+second marker was lost exactly as before. Caught by sweeping the boundary through a stream with two prompts.
+
 And `client_seq` defaults to 0 on a database written before the column existed, which is
 indistinguishable from a session that served nothing. Adoption falls back to `last_seq` in that case:
 wrong by the rewrite drift for that one adoption, which self-corrects on the next restart, rather than
