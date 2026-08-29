@@ -87,9 +87,16 @@ func routeInput(ctx context.Context, sess *Session, tok *attachToken, parts []in
 
 // frameInput releases an expired reply fragment before framing new input, so a missing terminator cannot
 // turn a later keypress into part of a terminal response.
-func frameInput(framer *input.ReplyFramer, data []byte, now time.Time) []input.Part {
+//
+// expectReply is whether cm has a question outstanding with this client, which the framer needs to decide
+// what to do with an incomplete sequence at the end of a read. See ReplyFramer.Split: holding one always
+// would delay every Escape keypress, and releasing one always dismantled a reply whose read ended between
+// the ESC and its introducer.
+func frameInput(
+	framer *input.ReplyFramer, data []byte, now time.Time, expectReply bool,
+) []input.Part {
 	parts := framer.FlushExpired(now)
-	return append(parts, framer.Split(data, now)...)
+	return append(parts, framer.Split(data, now, expectReply)...)
 }
 
 // openOptionsFrom translates a client's Open into the options a session is created from.
@@ -634,7 +641,7 @@ func (s *Service) recvLoop(
 				if readOnly {
 					continue
 				}
-				parts := frameInput(&replies, req.GetInput().Data, time.Now())
+				parts := frameInput(&replies, req.GetInput().Data, time.Now(), sess.awaitingReply(tok))
 				armReplyTimer()
 				// Events a program asked for and then stopped wanting are dropped before the typing
 				// decision, because everything after this treats them as bytes to deliver: they reach

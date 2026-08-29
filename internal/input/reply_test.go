@@ -12,10 +12,10 @@ func TestReplyFramerKeepsAFragmentedOSCReplyWhole(t *testing.T) {
 
 	var framer ReplyFramer
 	now := time.Now()
-	if got, want := framer.Split([]byte(reply[:8]), now), []Part(nil); !reflect.DeepEqual(got, want) {
+	if got, want := framer.Split([]byte(reply[:8]), now, true), []Part(nil); !reflect.DeepEqual(got, want) {
 		t.Errorf("Split(first fragment) = %#v, want %#v", got, want)
 	}
-	if got, want := framer.Split([]byte(reply[8:]), now.Add(time.Millisecond)), []Part{{Data: []byte(reply), Reply: true}}; !reflect.DeepEqual(got, want) {
+	if got, want := framer.Split([]byte(reply[8:]), now.Add(time.Millisecond), true), []Part{{Data: []byte(reply), Reply: true}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Split(second fragment) = %#v, want %#v", got, want)
 	}
 }
@@ -24,7 +24,7 @@ func TestReplyFramerSeparatesAReplyFromTyping(t *testing.T) {
 	const reply = "\x1b]11;rgb:2828/2c2c/3434\x07"
 
 	var framer ReplyFramer
-	if got, want := framer.Split([]byte(reply+"x"), time.Now()), []Part{
+	if got, want := framer.Split([]byte(reply+"x"), time.Now(), true), []Part{
 		{Data: []byte(reply), Reply: true},
 		{Data: []byte("x")},
 	}; !reflect.DeepEqual(got, want) {
@@ -37,7 +37,7 @@ func TestReplyFramerExpiresAnIncompleteReply(t *testing.T) {
 
 	var framer ReplyFramer
 	now := time.Now()
-	framer.Split([]byte(fragment), now)
+	framer.Split([]byte(fragment), now, true)
 	if got, ok := framer.Deadline(); !ok || !got.Equal(now.Add(ReplyGrace)) {
 		t.Errorf("Deadline() = (%v, %v), want (%v, true)", got, ok, now.Add(ReplyGrace))
 	}
@@ -47,7 +47,7 @@ func TestReplyFramerExpiresAnIncompleteReply(t *testing.T) {
 	if got, want := framer.FlushExpired(now.Add(ReplyGrace)), []Part{{Data: []byte(fragment)}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("FlushExpired(at grace) = %#v, want %#v", got, want)
 	}
-	if got, want := framer.Split([]byte("x"), now.Add(ReplyGrace)), []Part{{Data: []byte("x")}}; !reflect.DeepEqual(got, want) {
+	if got, want := framer.Split([]byte("x"), now.Add(ReplyGrace), true), []Part{{Data: []byte("x")}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Split(after expiry) = %#v, want %#v", got, want)
 	}
 }

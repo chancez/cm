@@ -13,6 +13,8 @@ package input
 import (
 	"bytes"
 	"time"
+
+	"github.com/chancez/cm/internal/ansi"
 )
 
 // ReplyGrace is how long an incomplete string-control reply may wait for its terminator.
@@ -152,7 +154,19 @@ type ReplyFramer struct {
 // Split returns complete input parts from p and holds an incomplete string-control reply for the next
 // call. A reply part is kept whole so the server can match it to the query it sent; all other bytes stay
 // in order as ordinary input.
-func (f *ReplyFramer) Split(p []byte, now time.Time) []Part {
+// expectReply says whether cm has a question outstanding with this client, which is what decides how an
+// incomplete sequence at the end of a read is treated.
+//
+// Without it the only safe choice is to release, because holding costs keystroke latency: pressing Escape
+// alone produces a one-byte read, so holding every lone trailing ESC would delay every Escape by ReplyGrace.
+// That is why this used to release unconditionally, and why a reply whose read ended between the ESC and its
+// introducer was dismantled and delivered to the program as typing.
+//
+// With it the cost is conditional and effectively zero. A lone ESC cannot be the start of a reply to a
+// question nobody asked, so when nothing is outstanding it goes straight through exactly as before. When
+// something is outstanding the window is short, and it is precisely the moment the user is not typing
+// Escape.
+func (f *ReplyFramer) Split(p []byte, now time.Time, expectReply bool) []Part {
 	if len(f.partial) > 0 {
 		p = append(f.partial, p...)
 		f.partial = nil
@@ -183,6 +197,24 @@ func (f *ReplyFramer) Split(p []byte, now time.Time) []Part {
 		}
 
 		if beginsStringControl(p) {
+			f.partial = append(f.partial, p...)
+			f.heldAt = now
+			break
+		}
+
+		// An incomplete sequence at the end of the read, while cm is waiting for an answer from this
+		// client. Held whole rather than dismantled, because the rest is already in the pty and arrives on
+		// the next read within microseconds.
+		//
+		// beginsStringControl above catches an OSC, DCS or APC once its introducer has arrived. This
+		// catches what it cannot: a lone ESC, whose introducer is in the next read, and an incomplete CSI,
+		// which is the shape of a reply to CSI 14t or 16t. Measured across seven query forms, every one was
+		// lost at some boundary inside it.
+		//
+		// ansi.PartialTailLen rather than a check of its own, so there is still one escape-sequence state
+		// machine in cm. It also keeps this narrow: ESC O A, an arrow key, is a complete two-byte sequence
+		// followed by text, so it reports nothing pending and the key is released at once even mid-query.
+		if expectReply && ansi.PartialTailLen(p) == len(p) {
 			f.partial = append(f.partial, p...)
 			f.heldAt = now
 			break

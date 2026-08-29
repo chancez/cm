@@ -50,7 +50,13 @@ func showRuns(rs []run) string {
 // The flush at the end is part of the contract rather than tidying up: a stream ending inside a string
 // control is held on purpose, and the bytes are released unchanged once no more are coming. Without it
 // the conservation check would report the held tail as lost.
-func frameAll(data []byte, chunk int) []Part {
+func frameAll(data []byte, chunk int) []Part { return frameAllExpecting(data, chunk, true) }
+
+// frameAllExpecting is frameAll with the caller choosing whether cm is waiting for an answer.
+//
+// Almost every case here is about a reply, so frameAll passes true. The false variant is what a session with
+// no outstanding question sees, and it is the one that has to keep Escape responsive.
+func frameAllExpecting(data []byte, chunk int, expectReply bool) []Part {
 	var f ReplyFramer
 	var parts []Part
 	now := time.Unix(0, 0)
@@ -59,7 +65,7 @@ func frameAll(data []byte, chunk int) []Part {
 		end := min(off+chunk, len(data))
 		// Each read a little later than the last, which is what the grace period measures against.
 		now = now.Add(time.Millisecond)
-		parts = append(parts, f.Split(data[off:end], now)...)
+		parts = append(parts, f.Split(data[off:end], now, expectReply)...)
 	}
 	parts = append(parts, f.FlushExpired(now.Add(2*ReplyGrace))...)
 	return parts
@@ -111,20 +117,16 @@ func FuzzFramingRoutesIndependentlyOfChunking(f *testing.F) {
 	f.Add([]byte("typed\x1b[Amore"), 3)
 	f.Add([]byte("\x1b_Gi=1;OK\x1b\\"), 2)
 
+	// No exclusion any more. This target used to skip every input whose chunking ended on an ESC that begins
+	// a string control, because that boundary defeated the framer and the fuzzer would otherwise report the
+	// same gap forever. Holding an incomplete tail when a reply is expected closed it, so the fuzzer is free
+	// to look at those boundaries too. Fed with expectReply true, which is the state the exclusion was about.
 	f.Fuzz(func(t *testing.T, data []byte, chunk int) {
 		if len(data) == 0 {
 			return
 		}
 		if chunk < 1 {
 			chunk = 1
-		}
-		// Excluded because cm does not guarantee it today, and the exclusion is the finding rather than a
-		// convenience: a read ending between an ESC and the introducer that follows it routes the whole
-		// reply to the program as input. See TestSplitIntroducerIsNotFramedToday for the measurement and
-		// what fixing it would cost. Without this the fuzzer reports that one gap forever instead of
-		// looking for others.
-		if splitsAnIntroducer(data, chunk) {
-			return
 		}
 
 		whole := runsOf(frameAll(data, len(data)))
@@ -173,69 +175,44 @@ func TestLargeClipboardReplyArrivesAsOneReply(t *testing.T) {
 	}
 }
 
-// splitsAnIntroducer reports whether feeding data in chunks of this size ends a chunk on an ESC that
-// begins a string control.
+// TestSplitIntroducerIsFramedWhenAReplyIsExpected covers the boundary that used to defeat the framer.
 //
-// That is the one boundary where routing is known to depend on chunking, so the property test skips it
-// and the characterization test below pins it.
-func splitsAnIntroducer(data []byte, chunk int) bool {
-	for off := chunk; off < len(data); off += chunk {
-		if data[off-1] == 0x1b && (data[off] == ']' || data[off] == 'P' || data[off] == 'X' ||
-			data[off] == '^' || data[off] == '_') {
-			return true
-		}
-	}
-	return false
-}
-
-// TestSplitIntroducerIsNotFramedToday pins a known gap, found by the fuzzer above.
-//
-// A read that ends between the ESC and the introducer byte after it defeats the reply framer: the lone
-// ESC is released immediately as a keypress, so when the introducer arrives in the next read there is
-// nothing to attach it to and the whole reply reaches the program as text. Measured for every reply
-// form, not just one:
+// A read ending between the ESC and the introducer after it left the lone ESC released as a keypress, so when
+// the introducer arrived in the next read there was nothing to attach it to and the whole reply reached the
+// program as text. Measured for every reply form:
 //
 //	ESC | ]52;c;YWJj BEL   -> input("\x1b"), input("]52;c;YWJj\a")
 //	ESC ] | 52;c;YWJj BEL  -> reply("\x1b]52;c;YWJj\a")
 //
-// This is the same class as the fragmented-reply bug fixed in 0be9fa6, reached one byte earlier. It is
-// not fixed here because the fix has a cost that is not mine to choose: the framer would have to hold a
-// lone trailing ESC, and an Escape keypress landing at the end of a read would then be delayed by
-// ReplyGrace. cm deliberately releases a bare escape immediately, and the comment in Split says why.
-// There is precedent both ways, since the client's own detach gate holds a partial for escapeGrace, and
-// tmux ships an escape-time for exactly this tension.
-//
-// Written as an assertion on current behaviour so a future fix fails this test and has to update it on
-// purpose, rather than the gap being silently closed or silently kept.
-func TestSplitIntroducerIsNotFramedToday(t *testing.T) {
+// It is fixed by holding an incomplete tail *only when cm has a question outstanding with this client*.
+// Holding one unconditionally was the reason this stayed open: pressing Escape alone produces a one-byte
+// read, so it would have delayed every Escape by ReplyGrace. A lone ESC cannot begin a reply to a question
+// nobody asked, so with nothing outstanding it still goes straight through.
+func TestSplitIntroducerIsFramedWhenAReplyIsExpected(t *testing.T) {
 	for _, tc := range []struct{ name, stream string }{
 		{"OSC 52 clipboard reply", "\x1b]52;c;YWJj\x07"},
 		{"DCS capability reply", "\x1bP+q4D73\x1b\\"},
 		{"APC graphics reply", "\x1b_Gi=1;OK\x1b\\"},
+		// A CSI reply, which beginsStringControl never covered: this is the answer to CSI 14t or 16t.
+		{"CSI pixel size reply", "\x1b[4;600;800t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Split after the ESC, which is the boundary in question.
 			afterESC := runsOf(splitOnceAt(tc.stream, 1))
-			for i, r := range afterESC {
-				if r.reply {
-					t.Fatalf("run %d is a reply, so the gap this test pins has been closed. That is an "+
-						"improvement: update this test to assert the reply is framed, and note the Escape "+
-						"latency it costs.\ngot %s", i, showRuns(afterESC))
-				}
+			if len(afterESC) != 1 || !afterESC[0].reply {
+				t.Errorf("split after the ESC gave %s, want a single reply: the lone ESC was released as a "+
+					"keypress, so the rest arrives with nothing to attach it to and reaches the program as "+
+					"text", showRuns(afterESC))
 			}
 
-			// The control, and the reason this test is not vacuous. Splitting one byte later, after the
-			// introducer, must produce exactly one reply. Without this the assertion above would also pass
-			// for a stream that is not a reply at all, which is how a test that cannot fail gets written:
-			// escaping a fixture wrongly leaves plain text, and "no reply was framed" is then trivially true.
+			// And splitting one byte later still works, which is the control: it did before the fix, so a
+			// change that broke it would be a regression this test has to catch.
 			afterIntroducer := runsOf(splitOnceAt(tc.stream, 2))
 			if len(afterIntroducer) != 1 || !afterIntroducer[0].reply {
-				t.Fatalf("split after the introducer gave %s, want a single reply: the fixture is not a "+
-					"recognizable reply, so the assertion above proves nothing", showRuns(afterIntroducer))
+				t.Errorf("split after the introducer gave %s, want a single reply", showRuns(afterIntroducer))
 			}
 
-			// And the bytes are all still there either way, which is what makes this a routing defect
-			// rather than a loss.
+			// The bytes are all still there either way.
 			for _, parts := range [][]Part{splitOnceAt(tc.stream, 1), splitOnceAt(tc.stream, 2)} {
 				var all []byte
 				for _, p := range parts {
@@ -249,12 +226,50 @@ func TestSplitIntroducerIsNotFramedToday(t *testing.T) {
 	}
 }
 
+// TestEscapeIsNotDelayedWhenNoReplyIsExpected is the other half, and the reason the fix is conditional.
+//
+// Pressing Escape alone produces a one-byte read. If the framer held every incomplete tail, every Escape
+// would wait out ReplyGrace before reaching the program, which is why this boundary was left open rather
+// than closed with an unconditional holdback. With nothing outstanding the ESC must still go straight
+// through.
+func TestEscapeIsNotDelayedWhenNoReplyIsExpected(t *testing.T) {
+	var f ReplyFramer
+	now := time.Unix(0, 0)
+
+	parts := f.Split([]byte("\x1b"), now, false)
+	runs := runsOf(parts)
+	if len(runs) != 1 || runs[0].reply || !bytes.Equal(runs[0].data, []byte("\x1b")) {
+		t.Fatalf("a lone Escape with no query outstanding gave %s, want it delivered at once as input",
+			showRuns(runs))
+	}
+	// And nothing is being held, so no later keypress can be absorbed into it.
+	if _, holding := f.Deadline(); holding {
+		t.Error("the framer is holding a fragment after releasing a lone Escape, so the next keypress " +
+			"could be treated as its continuation")
+	}
+}
+
+// An arrow key is released at once even while a reply is expected, which is what keeps the holdback narrow.
+//
+// ESC O A is a complete two-byte escape sequence followed by a letter, so the tracker reports nothing
+// pending and the key does not wait. Without this the fix would delay cursor keys inside every query window.
+func TestArrowKeysAreNotHeldWhileAReplyIsExpected(t *testing.T) {
+	var f ReplyFramer
+	now := time.Unix(0, 0)
+
+	runs := runsOf(f.Split([]byte("\x1bOA"), now, true))
+	if len(runs) != 1 || runs[0].reply || !bytes.Equal(runs[0].data, []byte("\x1bOA")) {
+		t.Fatalf("an arrow key with a query outstanding gave %s, want it delivered at once as input",
+			showRuns(runs))
+	}
+}
+
 // splitOnceAt frames a stream delivered as exactly two reads, split at the given offset.
 func splitOnceAt(stream string, at int) []Part {
 	var f ReplyFramer
 	now := time.Unix(0, 0)
 	var parts []Part
-	parts = append(parts, f.Split([]byte(stream[:at]), now)...)
-	parts = append(parts, f.Split([]byte(stream[at:]), now.Add(time.Millisecond))...)
+	parts = append(parts, f.Split([]byte(stream[:at]), now, true)...)
+	parts = append(parts, f.Split([]byte(stream[at:]), now.Add(time.Millisecond), true)...)
 	return append(parts, f.FlushExpired(now.Add(2*ReplyGrace))...)
 }

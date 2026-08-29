@@ -227,6 +227,28 @@ func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 	s.writeReplies(ready)
 }
 
+// awaitingReply reports whether cm has asked this client a question it has not answered.
+//
+// Read by the input framer, which treats an incomplete sequence at the end of a read differently depending
+// on the answer: held when a reply is expected, released as a keypress otherwise. That is what makes the
+// holdback cost nothing in normal use, since the overwhelmingly common state is nothing outstanding.
+//
+// Only questions proxied to *this* client count. A question asked of another client cannot be answered by
+// this one, so holding this one's keystrokes for it would be latency for nothing.
+func (s *Session) awaitingReply(tok *attachToken) bool {
+	if tok == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.requests {
+		if r.proxied && r.tok == tok {
+			return true
+		}
+	}
+	return false
+}
+
 // queueOrWriteReply decides what to do with a reply cm's own emulator generated.
 //
 // Written immediately when nothing is outstanding, which is the overwhelmingly common case and keeps the

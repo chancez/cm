@@ -43,13 +43,13 @@ func TestFragmentedClientReplyDoesNotBecomeInput(t *testing.T) {
 	reply := "\x1b]52;c;" + strings.Repeat("a", 1100) + "\x07"
 	var framer input.ReplyFramer
 	now := time.Now()
-	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[:1022]), now)); err != nil {
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[:1022]), now, true)); err != nil {
 		t.Fatalf("routeInput(first fragment) error = %v", err)
 	}
 	if got := awaitStream(t, sess, "aaaa", 700*time.Millisecond); strings.Contains(got, "aaaa") {
 		t.Errorf("the first reply fragment reached the pty as input; stream was %q", got)
 	}
-	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[1022:]), now.Add(time.Millisecond))); err != nil {
+	if err := routeInput(context.Background(), sess, att.token, framer.Split([]byte(reply[1022:]), now.Add(time.Millisecond), true)); err != nil {
 		t.Fatalf("routeInput(second fragment) error = %v", err)
 	}
 	sess.mu.Lock()
@@ -65,10 +65,10 @@ func TestExpiredReplyFragmentDoesNotAbsorbFollowingInput(t *testing.T) {
 
 	var framer input.ReplyFramer
 	now := time.Now()
-	if got, want := frameInput(&framer, []byte(fragment), now), []input.Part(nil); !reflect.DeepEqual(got, want) {
+	if got, want := frameInput(&framer, []byte(fragment), now, true), []input.Part(nil); !reflect.DeepEqual(got, want) {
 		t.Errorf("frameInput(fragment) = %#v, want %#v", got, want)
 	}
-	if got, want := frameInput(&framer, []byte("x"), now.Add(input.ReplyGrace)), []input.Part{
+	if got, want := frameInput(&framer, []byte("x"), now.Add(input.ReplyGrace), true), []input.Part{
 		{Data: []byte(fragment)},
 		{Data: []byte("x")},
 	}; !reflect.DeepEqual(got, want) {
