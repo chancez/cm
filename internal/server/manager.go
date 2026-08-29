@@ -685,7 +685,35 @@ type OpenOptions struct {
 	// ClientEnv holds terminal-related variables from the attaching client, recorded so a shell
 	// in the session can refresh them later.
 	ClientEnv map[string]string
+	// ReadOnly marks a caller that only observes: `cm read --follow`, `cm attach --read-only`, and the
+	// follower half of `cm send --follow`.
+	//
+	// It exists here for one decision, that such a caller must not revive a dead session. See
+	// openExisting. Everything else read-only implies is a property of the attachment rather than of
+	// opening the session, and lives on the token instead.
+	ReadOnly bool
 }
+
+// EndedSessionError reports that a read-only caller asked for a session whose shell is gone.
+//
+// Carries what the reply needs rather than only saying so, because the caller is Attach and the answer it
+// has to send is an Opened followed by an Exited: a follower is told the same thing whether the shell
+// exited while it was watching or before it arrived. Without the fields it would have to re-read the
+// record it was just refused on.
+//
+// Reports as ErrSessionGone so existing checks keep working.
+type EndedSessionError struct {
+	ID       string
+	Label    string
+	ExitCode int
+	LastSeq  seq.Shim
+}
+
+func (e *EndedSessionError) Error() string {
+	return fmt.Sprintf("%s: %s", e.ID, ErrSessionGone)
+}
+
+func (e *EndedSessionError) Is(target error) bool { return target == ErrSessionGone }
 
 // Open returns the session a reference names, creating one when a name holds nothing yet.
 //
@@ -787,6 +815,26 @@ func (m *Manager) openExisting(
 				m.mu.Unlock()
 				return sess, false, nil
 			}
+		}
+	}
+
+	// An observer is told the session ended rather than being given a new shell.
+	//
+	// The revive below is deliberate for an interactive attach, and wrong for a reader. `cm read --follow`
+	// on a session whose shell had exited started a fresh shell under it and then streamed that, so a read
+	// command silently resurrected the thing it was asked to report on, and never returned: the session it
+	// was following was alive again by its own doing, so no exit was ever coming. It hung until --timeout,
+	// and without one it hung forever.
+	//
+	// Reported as ErrSessionGone, which the Attach handler already turns into Opened followed by Exited,
+	// because that is the same answer a follower gets when the shell exits while it is watching. One
+	// answer for one situation, whichever side of the attach the exit fell on.
+	if opts.ReadOnly {
+		return nil, false, &EndedSessionError{
+			ID:       rec.ID,
+			Label:    opts.name,
+			ExitCode: rec.ExitCode,
+			LastSeq:  seq.Shim(rec.LastSeq),
 		}
 	}
 

@@ -116,6 +116,8 @@ func openOptionsFrom(open *serverv1.Open) OpenOptions {
 		CaptureOutput: open.CaptureOutput,
 		OnRestore:     RestoreAction(open.OnRestore),
 		Tags:          open.Tags,
+		// Carried so a reader is not given a new shell in place of the session it asked to observe.
+		ReadOnly: open.ReadOnly,
 	}
 }
 
@@ -142,6 +144,13 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 
 	sess, created, err := s.mgr.Open(ctx, openOptionsFrom(open))
 	if err != nil {
+		// A reader asked for a session whose shell is gone, so it is told that rather than given a new
+		// one. Answered with the same Opened-then-Exited pair as an exit observed mid-stream, since a
+		// follower cannot tell which side of its attach the exit fell on and must not have to.
+		var ended *EndedSessionError
+		if errors.As(err, &ended) {
+			return s.sendEndedSession(srv, ended)
+		}
 		return err
 	}
 
@@ -1320,6 +1329,30 @@ func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) er
 	return srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Exited{
 			Exited: &serverv1.Exited{ExitCode: int32(code)},
+		},
+	})
+}
+
+// sendEndedSession answers a read-only attach to a session that has already finished.
+//
+// Opened first, then Exited, which is the order every other attach uses: a client that has been told the
+// session name and then told it exited needs no special case, whereas a stream opening with Exited would
+// break the invariant that Opened comes first.
+func (s *Service) sendEndedSession(srv serverv1.Server_AttachServer, ended *EndedSessionError) error {
+	if err := srv.Send(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Opened{
+			Opened: &serverv1.Opened{
+				Session:   ended.Label,
+				SessionId: ended.ID,
+				NextSeq:   uint64(ended.LastSeq),
+			},
+		},
+	}); err != nil {
+		return err
+	}
+	return srv.Send(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Exited{
+			Exited: &serverv1.Exited{ExitCode: int32(ended.ExitCode)},
 		},
 	})
 }
