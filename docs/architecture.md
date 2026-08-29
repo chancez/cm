@@ -1039,6 +1039,55 @@ reply queue. Keeping both would send two reports per resize and the model's woul
 turn. So the division is that the model decides *whether* a report is owed, since it tracks the mode the
 program set, and the server decides *when* one is sent.
 
+## One writer per stream
+
+**Exactly one writer per shared byte stream, and bytes cm injects wait for a sequence boundary.**
+
+There are two such streams: the pty, which carries input to the program, and each client's terminal.
+Both have several things to say. The pty side has had this discipline since the `wallfacer -h` failure;
+see "Ordering, and why a queue is needed" above. The terminal side did not, and the bill came due.
+
+Five writers reached a client's terminal with nothing ordering them: the session's output, the screen
+replayed on attach, a proxied query, the outage notice, and the window title. The title did not go
+through `TTY` at all, it went to `os.Stdout` from a callback in `cmd/cm`.
+
+The session's output arrives in chunks bounded by a pty read, so a chunk boundary lands inside an escape
+sequence routinely: 6 to 8 of the roughly 90 writes in one nvim repaint. A title written at such a
+boundary split the sequence. The terminal received `ESC [ 38:2:232 ESC ] 2;nvim ... BEL :102:113m`,
+aborted the CSI, took the OSC as a title, and printed `:102:113m` on screen. Those characters shifted
+the line, the line scrolled the screen, and every cell nvim did not repaint afterwards stayed stale
+until a ctrl-l.
+
+The rules, in `internal/client.screen`:
+
+- The session's bytes are never withheld. Holding them would trade a rendering fault for a stall.
+- Bytes cm generates wait while `ansi.Tracker` says the stream is mid-sequence, and go out at the next
+  boundary.
+- Anything held past `maxHeld` is dropped, not written. Dropping is the safe direction: a title is
+  replaced by the next one, a proxied query expires on the server, and the notice repaints on its timer.
+  Writing it anyway is the bug.
+
+One deliberate exception, and it is not a violation: `TTY.Close` writes CAN before its reset, which
+*aborts* a partial sequence rather than splitting one. That is the correct handling for the one case
+where nothing more is coming.
+
+Enforced rather than requested. `TestCommandLayerWritesNoEscapeSequences` fails if an escape literal
+appears in `cmd/cm`, because that is exactly how this happened: writing one there is easy and looks
+harmless. The command layer states policy, as `SetTitle` does, and constructs no bytes.
+
+**Why tmux and zellij do not have this class of bug, and why copying them is not the answer.** Both keep
+their own screen and re-render it, so every byte is theirs by construction. That is also why they cap
+what a program can use, and why the emulator sits in the hot path of every byte: measured here at 14ms
+for a reverse index against 36us, and `less` emits one per line. cm passes bytes through, which is what
+lets kitty graphics and the keyboard protocol work at all, and the price is that cm has to earn the
+single-writer property instead of getting it free. This section is that property, stated once.
+
+**How it was found, which is the part worth not repeating.** Three rounds of captures taken *inside* cm
+all replayed clean, because none could see a writer that bypassed cm's own abstraction, and an
+incomplete capture that replays clean reads as proof the bytes are fine. `kitty --dump-bytes` settled it
+in one run: kitty had received 160 bytes cm never sent through `TTY`. When a capture and reality
+disagree, instrument the far end.
+
 ## What cm is, from a program's point of view
 
 This section exists because a long run of bugs turned out to share one cause, and the cause is not in any

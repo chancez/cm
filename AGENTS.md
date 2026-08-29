@@ -275,6 +275,17 @@ Three places, by kind:
 - **Only a server migrates the database.** Clients use `store.OpenExisting`, which reads and refuses a
   schema that is not this build's. `cm logs shim <name>` used `Open` and took a live server's database from
   6 to 7 in 0.01s, after which every request it served failed with `no such column: name`.
+- **Exactly one writer per shared byte stream**, and bytes cm injects wait for a sequence boundary.
+  There are two such streams, the pty and each client's terminal, and both have several things to say. A
+  window title written straight to `os.Stdout` from `cmd/cm` landed inside a program's SGR, so the
+  terminal printed `:102:113m` as text, the line shifted, the screen scrolled, and every cell nvim did
+  not repaint stayed stale until a ctrl-l. A chunk boundary falls mid-sequence 6 to 8 times per nvim
+  repaint, so this is routine rather than unlucky. Everything for a terminal goes through
+  `internal/client.screen`, and a test fails if an escape literal appears in `cmd/cm`. See
+  `docs/architecture.md` on one writer per stream. The corollary for debugging: three rounds of captures
+  taken inside cm all replayed clean because none could see a writer that bypassed cm's own abstraction,
+  and `kitty --dump-bytes` settled it in one run. When a capture and reality disagree, instrument the far
+  end.
 - **Two sequence-number spaces exist** and mixing them corrupts output: the shim's numbering and the
   server's post-rewrite numbering differ in length. See `docs/architecture.md`.
 - **`os.MkdirAll(dir, 0700)` over an existing directory leaves its mode alone**, so pointing
