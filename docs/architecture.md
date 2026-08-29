@@ -1084,6 +1084,25 @@ Enforced rather than requested. `TestCommandLayerWritesNoEscapeSequences` fails 
 appears in `cmd/cm`, because that is exactly how this happened: writing one there is easy and looks
 harmless. The command layer states policy, as `SetTitle` does, and constructs no bytes.
 
+**Why the pty side needs no equivalent, measured.** The pty has several writers too, and unlike the
+terminal side nothing serializes them: client typing, a client's answer to a proxied query, cm's own
+emulator replies, and the in-band resize reports all reach `Session.Write` on their own goroutines, and
+`shim.Session.Write` calls `ptmx.Write` outside its lock. The ordering discipline above is about *order*,
+which is a different guarantee from *atomicity*, so this looked like the same bug on the other stream.
+
+It is not, because the tty layer serializes a write to a pty master for its whole duration. Measured:
+262148 bytes written concurrently with 4000 short writes, on both darwin and Linux, with not one short
+write landing inside the payload, while short writes were recorded on both sides of it so the window was
+demonstrably open. `TestConcurrentPtyWritesDoNotInterleave` holds that measurement. Chunking
+`ptmx.Write` into 4096-byte pieces, which is what routing pty writes through a buffer of cm's own would
+amount to, fails it immediately. That is the point at which the pty would need an ordering point of its
+own.
+
+One loose end this turned up: `server.Session.Write` discards the `WriteResponse`, so `Written` is never
+checked. A short write would truncate input silently. It does not happen today, because `os.File.Write`
+loops over `write(2)` until the buffer is consumed, and the test asserts the full count. It is a silent
+failure mode rather than a live bug.
+
 **Why tmux and zellij do not have this class of bug, and why copying them is not the answer.** Both keep
 their own screen and re-render it, so every byte is theirs by construction. That is also why they cap
 what a program can use, and why the emulator sits in the hot path of every byte: measured here at 14ms
