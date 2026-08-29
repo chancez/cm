@@ -338,6 +338,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	metaSub := sess.subscribeMetadata()
 	defer sess.unsubscribeMetadata(metaSub)
 
+	// Nil for a client with no entry, and a nil channel blocks forever, which keeps this case out of the
+	// select for anything that cannot be repainted.
+	repaint := sess.repaintChan(att.token)
+
 	// Output is read on its own goroutine because the reader blocks, and this loop also has
 	// to notice a detach or a dropped connection.
 	type chunkMsg struct {
@@ -382,12 +386,29 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 					Output: &serverv1.Output{
 						Seq:  uint64(msg.chunk.Seq),
 						Data: msg.chunk.Data,
-						// Or a repaint this client is owed because the session left the alternate screen
-						// while it was attached. The gap flag is the existing route to a repaint: the
-						// client drops its resume position and reattaches, and a fresh attach answers with
-						// a serialized screen. See Session.markAltScreenLeft.
-						Gap: msg.chunk.Gap || sess.takeRepaint(att.token),
+						Gap:  msg.chunk.Gap,
 					},
+				},
+			}); err != nil {
+				return err
+			}
+
+		case <-repaint:
+			// The session left the alternate screen and this client attached during the program, so its
+			// terminal's main screen holds whatever its own window held before. An empty chunk flagged as a
+			// gap is the signal: the client drops its resume position and reattaches, and a fresh attach
+			// answers with a serialized screen describing the main screen it never had.
+			//
+			// Empty rather than carrying bytes, because there are none to carry. The client's gap branch
+			// deliberately does not write the chunk's data, so nothing is lost by it being nil, and the
+			// position is this client's current one for the log line rather than for a resume it is about
+			// to discard.
+			//
+			// Sent from this loop rather than pushed from the session, for the same reason a query is: this
+			// is the only goroutine that may write to the stream.
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Output{
+					Output: &serverv1.Output{Seq: uint64(sess.ClientSeq()), Gap: true},
 				},
 			}); err != nil {
 				return err

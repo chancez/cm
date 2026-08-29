@@ -50,9 +50,15 @@ func TestClientAttachedDuringAFullScreenProgramIsRepaintedWhenItQuits(t *testing
 	}
 	defer sess.detach(att)
 
-	// Nothing owed yet: the program is still running and the client is showing the right thing.
-	if sess.takeRepaint(att.token) {
-		t.Error("a repaint was owed while the program was still running, so every chunk would carry a gap")
+	repaint := sess.repaintChan(att.token)
+	if repaint == nil {
+		t.Fatal("the attachment has no repaint channel, so it can never be told to repaint")
+	}
+	// Nothing signalled yet: the program is still running and the client is showing the right thing.
+	select {
+	case <-repaint:
+		t.Error("a repaint was signalled while the program was still running")
+	default:
 	}
 
 	// The program quits, and the fake follows the bytes, so feedTerminal sees the mode change across the
@@ -60,14 +66,20 @@ func TestClientAttachedDuringAFullScreenProgramIsRepaintedWhenItQuits(t *testing
 	sess.recent.Append([]byte("\x1b[?1049l"))
 	sess.feedTerminal([]byte("\x1b[?1049l"), sess.recent.Next())
 
-	if !sess.takeRepaint(att.token) {
-		t.Error("no repaint was owed after the program left the alternate screen, so the client keeps " +
+	// Signalled without waiting for any further output, which is the part that matters: a program leaving
+	// the alternate screen usually produces nothing more, so a repaint that rode on the next chunk would
+	// wait for a byte that never comes. The first version did exactly that and failed about one run in four.
+	select {
+	case <-repaint:
+	default:
+		t.Error("no repaint was signalled after the program left the alternate screen, so the client keeps " +
 			"showing whatever its own window held before it attached")
 	}
-	// Consumed, so one transition is one repaint. Without this a client would reattach on every
-	// subsequent chunk.
-	if sess.takeRepaint(att.token) {
-		t.Error("a second repaint was owed from one transition, so the client would reattach repeatedly")
+	// One transition is one repaint, so the client does not reattach in a loop.
+	select {
+	case <-repaint:
+		t.Error("a second repaint came from one transition, so the client would reattach repeatedly")
+	default:
 	}
 }
 
@@ -98,8 +110,10 @@ func TestClientAttachedBeforeAFullScreenProgramIsNotRepainted(t *testing.T) {
 	sess.recent.Append([]byte("\x1b[?1049l"))
 	sess.feedTerminal([]byte("\x1b[?1049l"), sess.recent.Next())
 
-	if sess.takeRepaint(att.token) {
+	select {
+	case <-sess.repaintChan(att.token):
 		t.Error("a client attached before the program was repainted when it quit: its main screen was " +
 			"already correct, so this is a flicker on every program exit for nothing")
+	default:
 	}
 }

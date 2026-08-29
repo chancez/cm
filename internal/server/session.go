@@ -351,13 +351,16 @@ type clientSize struct {
 	// the program sends on the way out pops the terminal onto it. The symptom is quitting vim and seeing
 	// content from before the attach.
 	openedOnAlt bool
-	// needsRepaint is set when the session leaves the alternate screen and this client is one that attached
-	// during it. Consumed by the attach loop, which flags the next output chunk as a gap.
+	// repaint is signalled when the session leaves the alternate screen and this client is one that
+	// attached during it. The attach loop selects on it and sends an empty output chunk flagged as a gap,
+	// which makes the client drop its resume position and reattach; a fresh attach answers with a
+	// serialized screen, which is the recovery wanted.
 	//
-	// Reusing the gap flag rather than adding a mechanism: a gap already makes the client drop its resume
-	// position and reattach, and a fresh attach answers with a serialized screen. That is exactly the
-	// recovery wanted here, and it is a path that already works.
-	needsRepaint bool
+	// A channel rather than a flag, for the reason evict is one, and the first version of this was the flag:
+	// it was consumed by the next output chunk, and a program leaving the alternate screen usually produces
+	// no more output, so the repaint waited for a byte that never came. Measured as a test failing about one
+	// run in four, which is exactly how often the shell's next write happened to arrive separately.
+	repaint chan struct{}
 	// lastInputAt is when this client last sent something a person typed. Zero until it does.
 	//
 	// This is how cm identifies the client someone is actually using, and it is the only signal that
@@ -1394,29 +1397,35 @@ func (s *Session) markAltScreenLeft() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, cs := range s.clientSizes {
-		if cs.openedOnAlt {
-			cs.openedOnAlt = false
-			cs.needsRepaint = true
+		if !cs.openedOnAlt {
+			continue
+		}
+		// Cleared first, so a program that takes the alternate screen again later does not repaint this
+		// client a second time: by then it has a main screen from the repaint this one triggers.
+		cs.openedOnAlt = false
+		if cs.repaint == nil {
+			continue
+		}
+		// Non-blocking: the loop may be between selects, and a repaint already pending is the same repaint.
+		select {
+		case cs.repaint <- struct{}{}:
+		default:
 		}
 	}
 }
 
-// takeRepaint reports whether this client is owed a repaint, clearing the flag.
-//
-// Consumed rather than read, so one transition produces one repaint. A client that reattaches as a result
-// gets a blob describing the main screen, which is what it was missing.
-func (s *Session) takeRepaint(tok *attachToken) bool {
+// repaintChan returns the channel this client is signalled on when it needs repainting, or nil.
+func (s *Session) repaintChan(tok *attachToken) <-chan struct{} {
 	if tok == nil {
-		return false
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cs := s.clientSizes[tok]
-	if cs == nil || !cs.needsRepaint {
-		return false
+	if cs == nil {
+		return nil
 	}
-	cs.needsRepaint = false
-	return true
+	return cs.repaint
 }
 
 // Clients reports how many clients are attached.
@@ -1868,6 +1877,13 @@ func (s *Session) newAttachmentLocked(from seq.Log, restore []byte, tok *attachT
 		s.evicts = make(map[*attachToken]chan struct{})
 	}
 	s.evicts[token] = evict
+
+	// Buffered, so markAltScreenLeft never blocks on a client that is between selects, and depth one
+	// because two pending repaints are the same repaint.
+	repaint := make(chan struct{}, 1)
+	if cs := s.clientSizes[token]; cs != nil {
+		cs.repaint = repaint
+	}
 
 	// The channel carrying questions cm needs this client to answer. Buffered so the output pump is never
 	// blocked behind a client's socket: a full buffer costs one unanswered query, where blocking would

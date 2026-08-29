@@ -253,6 +253,13 @@ Two halves, because one layer cannot do it alone.
   resume position and reattach. A fresh attach answers with a serialized screen, which is exactly the
   recovery wanted.
 
+  The signal is a channel per attachment, and the first version was a flag consumed by the next output
+  chunk. That is wrong for the reason the `evict` channel exists: a program leaving the alternate screen
+  usually produces no further output, so the repaint waited for a byte that never arrived. Measured as a
+  test failing about one run in four, which is how often the shell's next write happened to land in a
+  separate chunk. The attach loop now selects on the channel and sends an empty chunk flagged as a gap,
+  since the client's gap branch deliberately discards the chunk's data anyway.
+
 Only clients that attached *during* the program are repainted. One attached beforehand received a
 main-screen blob and then the program's own bytes, so its main screen is already correct, and repainting it
 would be a visible flicker on every program exit for nothing. That is the control in
