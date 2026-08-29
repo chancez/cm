@@ -560,7 +560,39 @@ func TestTerminalWriteFailureDoesNotKillSession(t *testing.T) {
 	}
 }
 
+// LastSeq starts where the session was told to resume from, before any output arrives.
+//
+// A silent command, because the pump starts in newSession rather than at attach. With a command that
+// prints, the pump can consume its output before this assertion runs, and the test then fails for
+// having been slow rather than for anything being wrong.
+func TestLastSeqStartsAtTheResumePoint(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "seqinit",
+		Command: []string{"/bin/sh", "-c", "sleep 5"},
+		Rows:    24, Cols: 80,
+	})
+
+	sess, err := newSession(rec, nil, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	if got := sess.LastSeq(); got != 0 {
+		t.Errorf("initial LastSeq() = %d, want 0", got)
+	}
+}
+
 // LastSeq is the resume point a restarting server uses, so it must track consumption.
+//
+// Waited for rather than read once, and the reason is the window resumePoints documents: the pump
+// appends to the client log before it takes s.mu to advance lastSeq. So a client can have the bytes
+// while lastSeq still does not account for them, and reading immediately after readUntil measured
+// LastSeq() = 0 against 9 bytes already delivered, under -race with the rest of the package running.
+//
+// Waiting is correct rather than a workaround. The contract is that lastSeq ends up accounting for
+// consumed output, not that it does so before the reader sees it; asserting the stronger thing would
+// require closing a window that is deliberately open.
 func TestLastSeqAdvancesWithOutput(t *testing.T) {
 	rec := startShimFor(t, shim.Config{
 		Session: "seq",
@@ -574,10 +606,6 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 	}
 	defer sess.Close()
 
-	if got := sess.LastSeq(); got != 0 {
-		t.Errorf("initial LastSeq() = %d, want 0", got)
-	}
-
 	att, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
@@ -585,9 +613,17 @@ func TestLastSeqAdvancesWithOutput(t *testing.T) {
 	defer sess.detach(att)
 	out := readUntil(t, att.reader, "COUNTED")
 
-	if got := sess.LastSeq(); got < seq.Shim(len(out)) {
-		t.Errorf("LastSeq() = %d, want at least %d after consuming %q",
-			got, len(out), out)
+	want := seq.Shim(len(out))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := sess.LastSeq()
+		if got >= want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("LastSeq() = %d, want at least %d after consuming %q", got, want, out)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
