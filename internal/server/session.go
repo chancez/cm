@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chancez/cm/internal/ansi"
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/input"
@@ -84,6 +85,25 @@ type Session struct {
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq seq.Log
+	// modelTrack follows the same bytes the model consumes, so modelPending below knows how much of an
+	// incomplete sequence is sitting at the end of them. Guarded by termMu, like modelSeq.
+	modelTrack ansi.Tracker
+	// modelPending is how many bytes at the end of what the model consumed belong to a sequence that is
+	// not finished.
+	//
+	// It exists because those bytes reach a client from nowhere. A model fed a partial sequence holds it in
+	// its parser rather than on its screen, and Restore serializes the screen, so they are in neither the
+	// snapshot a fresh attach replays nor the stream that follows it. Measured: a program writing
+	// `ESC ] 2;fidelity BEL ESC [ 38:2:1` and then pausing left an attaching client with the title set and
+	// `:2:3m` arriving as text, the nine bytes that opened the SGR gone from both halves. Failed about one
+	// attach in eight.
+	//
+	// A count rather than a second position, deliberately. The pair "position, and the position of the last
+	// boundary" has to be kept consistent by everything that sets either, and a Session built in a test
+	// that set only modelSeq streamed from zero and replayed the whole log. A backlog whose zero value
+	// means "nothing pending" is correct by default, which is the property worth having for a field that
+	// exists to prevent a subtle bug.
+	modelPending int
 
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
@@ -733,6 +753,10 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 	err := term.Write(data)
 	if err == nil {
 		s.modelSeq = modelEnd
+		// Fed the same bytes as the model, so the boundary is expressed in the same positions. modelEnd
+		// minus the tracker's own backlog is where the last complete sequence ended.
+		s.modelTrack.Feed(data)
+		s.modelPending = int(s.modelTrack.Fed() - s.modelTrack.Boundary())
 	}
 	s.termMu.Unlock()
 
@@ -1652,7 +1676,13 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// mu before acquiring termMu so this cannot deadlock against it.
 		s.termMu.Lock()
 		b, err := s.term.Restore()
+		// Backed off to the last complete sequence, so a partial one is replayed rather than lost. Clamped
+		// at the log's start, which matters only for a session whose very first bytes are a partial
+		// sequence, where the backlog can be the whole of what the model has seen.
 		modelEnd := s.modelSeq
+		if pending := seq.Log(s.modelPending); pending <= modelEnd {
+			modelEnd -= pending
+		}
 		s.termMu.Unlock()
 		if err != nil {
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
@@ -1680,6 +1710,13 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// screen just serialized; starting at the log's end would skip exactly that gap, and the
 		// client would never see those bytes from anywhere. Starting at the model's end replays them,
 		// which is correct because the snapshot does not contain them.
+		//
+		// The model's last sequence *boundary* rather than its raw position, which is the other half of
+		// the same problem. A model fed a partial sequence holds it in its parser, and the screen the
+		// snapshot serializes cannot express that, so resuming at the raw position drops those bytes from
+		// both halves: a client saw the title set and `:2:3m` arrive as text with the nine bytes that
+		// opened the SGR missing. Resuming at the boundary replays the partial sequence, which costs a
+		// few duplicated bytes the terminal parses correctly. See modelBoundary.
 		//
 		// Both are positions in the log's numbering, not lastSeq's. lastSeq counts the shim's bytes
 		// while the log numbers the rewritten ones, and prompt rewriting makes those differ by however

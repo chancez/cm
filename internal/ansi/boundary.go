@@ -26,6 +26,17 @@ type Tracker struct {
 	// inside counts the bytes consumed since the current sequence opened, so an unterminated one
 	// cannot make InSequence true forever. See maxPending.
 	inside int
+	// fed is how many bytes have passed through, and boundary is the value fed had the last time the
+	// stream was not mid-sequence.
+	//
+	// Positions rather than a bare flag, because one caller needs to know *where* the last safe point was
+	// rather than whether it is at one. Attaching a client replays a serialized screen and then streams
+	// from where the model stopped, and a screen cannot express "a half-parsed CSI is pending": those
+	// bytes are in neither the snapshot nor the stream, so the client received `:2:3m` with the
+	// `ESC [ 38:2:1` that opened it missing. Resuming at the boundary replays the partial sequence
+	// instead, which the client completes. See Session.attach.
+	fed      int64
+	boundary int64
 }
 
 // state is what the stream is in the middle of, if anything.
@@ -51,6 +62,10 @@ const (
 func (t *Tracker) Feed(p []byte) {
 	for _, b := range p {
 		t.feedByte(b)
+		t.fed++
+		if t.state == stateText {
+			t.boundary = t.fed
+		}
 	}
 }
 
@@ -130,3 +145,16 @@ func (t *Tracker) feedByte(b byte) {
 
 // InSequence reports whether the stream is mid-sequence, so writing anything else now would split it.
 func (t *Tracker) InSequence() bool { return t.state != stateText }
+
+// Fed is how many bytes have been fed.
+func (t *Tracker) Fed() int64 { return t.fed }
+
+// Boundary is how many bytes had been fed at the last point the stream was not mid-sequence.
+//
+// Equal to Fed when the stream is at a boundary now. Behind it by the length of the partial sequence
+// otherwise, so Fed minus Boundary is how many bytes a reader would have to rewind to start somewhere a
+// terminal can parse.
+//
+// Only advanced by Feed, not by feedByte, because Stripper drives feedByte directly and does not count
+// bytes: it decides what to emit rather than where it could restart.
+func (t *Tracker) Boundary() int64 { return t.boundary }

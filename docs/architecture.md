@@ -1387,6 +1387,23 @@ metadata happens after `termMu` is released.
 Note that `modelSeq` lives in the log's numbering rather than the shim's, which is the two
 sequence-number spaces again, reached from a third direction.
 
+**And the model can be ahead of what it is able to describe, which is the same bug from the other side.**
+A partial escape sequence lives in the emulator's parser, not on its screen. `Restore` serializes the
+screen, so resuming at `modelSeq` puts those bytes in neither the snapshot nor the stream: the client
+receives the tail of a sequence whose front nothing ever sent. Measured on a program writing
+`ESC ] 2;fidelity BEL ESC [ 38:2:1` and then pausing: the attaching client had the title set and printed
+`:2:3m` as text, the nine bytes that opened the SGR gone, on about one attach in eight.
+
+So `modelPending` counts the bytes of an unfinished sequence at the end of what the model consumed, and
+attach backs off by that much. Replaying a partial sequence is free, since the client's terminal completes
+it when the rest arrives; skipping it is not.
+
+Stored as a count rather than as a second position on purpose. "The position, and the position of the last
+boundary" has to be kept consistent by everything that writes either, and the first version was: a
+`Session` built in a test set only `modelSeq`, so the boundary stayed zero and the attach replayed the
+entire log. A backlog whose zero value means "nothing pending" is right by default, which is what a field
+guarding a subtle bug should be.
+
 ## What a session reports about itself
 
 A terminal emulator driving cm needs to know more than "this session exists". Three things are tracked
