@@ -41,6 +41,10 @@ type fakeTerminal struct {
 	restoredAt  int
 	// focusReporting stands in for DECSET 1004 being enabled by the program.
 	focusReporting bool
+	// onAltScreen stands in for the model being on the alternate screen, which is what a full-screen
+	// program puts it on. Settable so a test can drive the transition out of it, which is when a client
+	// that attached during the program has to be repainted.
+	onAltScreen bool
 	// kittyKeyboard stands in for a program having pushed kitty keyboard protocol flags.
 	kittyKeyboard bool
 
@@ -69,6 +73,22 @@ func (f *fakeTerminal) Write(p []byte) error {
 		return f.writeErr
 	}
 	f.written = append(f.written, p...)
+	// The alternate screen is tracked from the bytes, rather than being a field a test sets by hand.
+	//
+	// It has to be, because the server detects a full-screen program quitting by reading the mode before
+	// and after a write. A fake whose state a test flipped separately would show the same value on both
+	// sides and the transition would be invisible, so the test would report the mechanism broken when it
+	// was the fixture. Last one wins within a chunk, matching a real emulator.
+	if i := bytes.LastIndex(p, []byte("\x1b[?1049h")); i >= 0 {
+		if j := bytes.LastIndex(p, []byte("\x1b[?1049l")); j < i {
+			f.onAltScreen = true
+		}
+	}
+	if i := bytes.LastIndex(p, []byte("\x1b[?1049l")); i >= 0 {
+		if j := bytes.LastIndex(p, []byte("\x1b[?1049h")); j < i {
+			f.onAltScreen = false
+		}
+	}
 	for query, reply := range f.answers {
 		if bytes.Contains(p, []byte(query)) {
 			f.pending = append(f.pending, []byte(reply))
@@ -137,6 +157,13 @@ func (f *fakeTerminal) FocusReporting() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.focusReporting
+}
+
+// OnAltScreen reports the fake's alternate-screen state.
+func (f *fakeTerminal) OnAltScreen() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.onAltScreen, nil
 }
 
 func (f *fakeTerminal) KittyKeyboardProtocol() bool {

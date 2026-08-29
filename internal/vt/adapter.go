@@ -261,6 +261,16 @@ func (s *SessionTerminal) FocusReporting() bool {
 //
 // And if it ever did, the cost is bounded by what input.IsStaleEvent is willing to drop: a key release
 // or a focus report, never a key press. That is the other half of why the filter is scoped that way.
+// OnAltScreen reports whether the model is on the alternate screen.
+//
+// The server uses the transition *out* of it to repaint clients that attached during a full-screen
+// program, since their restore blob described the alternate screen and nothing described the main one.
+func (s *SessionTerminal) OnAltScreen() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.term.OnAltScreen()
+}
+
 func (s *SessionTerminal) KittyKeyboardProtocol() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

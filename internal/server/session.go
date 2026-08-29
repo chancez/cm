@@ -342,6 +342,22 @@ type clientSize struct {
 	pid     int32
 	// attachedAt is when this attachment became live, for reporting. Zero for a reservation.
 	attachedAt time.Time
+	// openedOnAlt records that this client attached while the session was on the alternate screen, so its
+	// restore blob described that screen and nothing described the main one.
+	//
+	// It matters because the blob cannot carry the session's main screen: libghostty serializes the active
+	// screen and GhosttyTerminalScreen is a read of which one that is, not a selector. So a client that
+	// attaches mid-program has a main screen holding whatever its own window held before, and the ?1049l
+	// the program sends on the way out pops the terminal onto it. The symptom is quitting vim and seeing
+	// content from before the attach.
+	openedOnAlt bool
+	// needsRepaint is set when the session leaves the alternate screen and this client is one that attached
+	// during it. Consumed by the attach loop, which flags the next output chunk as a gap.
+	//
+	// Reusing the gap flag rather than adding a mechanism: a gap already makes the client drop its resume
+	// position and reattach, and a fresh attach answers with a serialized screen. That is exactly the
+	// recovery wanted here, and it is a path that already works.
+	needsRepaint bool
 	// lastInputAt is when this client last sent something a person typed. Zero until it does.
 	//
 	// This is how cm identifies the client someone is actually using, and it is the only signal that
@@ -405,6 +421,9 @@ type Terminal interface {
 	Pwd() string
 	// FocusReporting reports whether the program asked to be told about focus changes.
 	FocusReporting() bool
+	// OnAltScreen reports whether the model is on the alternate screen, so the server can notice a
+	// full-screen program leaving it. A client that attached during one holds no main-screen content.
+	OnAltScreen() (bool, error)
 	// KittyKeyboardProtocol reports whether a program has the kitty keyboard protocol enabled, so an
 	// event in that encoding is one something asked for rather than one left over from a program that
 	// has exited.
@@ -758,6 +777,10 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 		return
 	}
 
+	// Read before the write so the transition out of the alternate screen can be seen. Cheap: a mode
+	// query rather than a serialization.
+	wasOnAlt, altErr := term.OnAltScreen()
+
 	s.termMu.Lock()
 	err := term.Write(data)
 	if err == nil {
@@ -768,6 +791,17 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 		s.modelPending = int(s.modelTrack.Fed() - s.modelTrack.Boundary())
 	}
 	s.termMu.Unlock()
+
+	// A full-screen program has quit. Any client that attached while it was running holds no main-screen
+	// content, so the ?1049l in this very chunk has just switched its terminal onto whatever its own window
+	// held before the attach. Those clients are flagged for a repaint; the rest are left alone, since a
+	// client attached before the program started has the right main screen and repainting it would be a
+	// flicker for nothing.
+	if err == nil && altErr == nil && wasOnAlt {
+		if nowOnAlt, nErr := term.OnAltScreen(); nErr == nil && !nowOnAlt {
+			s.markAltScreenLeft()
+		}
+	}
 
 	if err != nil {
 		// A terminal model that cannot keep up would make restores wrong, but dropping the
@@ -1351,6 +1385,40 @@ func (s *Session) resumePoints() (shimSeq seq.Shim, clientSeq seq.Log) {
 	return shimSeq, s.recent.Next()
 }
 
+// markAltScreenLeft flags every client that attached during a full-screen program for a repaint.
+//
+// Called when the model leaves the alternate screen. Only those clients: one attached beforehand already
+// holds the main screen the session is returning to, and repainting it would be a visible flicker with
+// nothing behind it.
+func (s *Session) markAltScreenLeft() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, cs := range s.clientSizes {
+		if cs.openedOnAlt {
+			cs.openedOnAlt = false
+			cs.needsRepaint = true
+		}
+	}
+}
+
+// takeRepaint reports whether this client is owed a repaint, clearing the flag.
+//
+// Consumed rather than read, so one transition produces one repaint. A client that reattaches as a result
+// gets a blob describing the main screen, which is what it was missing.
+func (s *Session) takeRepaint(tok *attachToken) bool {
+	if tok == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cs := s.clientSizes[tok]
+	if cs == nil || !cs.needsRepaint {
+		return false
+	}
+	cs.needsRepaint = false
+	return true
+}
+
 // Clients reports how many clients are attached.
 func (s *Session) Clients() int64 { return s.clients.Load() }
 
@@ -1777,6 +1845,19 @@ func (s *Session) newAttachmentLocked(from seq.Log, restore []byte, tok *attachT
 		// Stamped here for the same reason attached is: this is the moment the attachment becomes live,
 		// and both paths out of attach come through here. Reported only.
 		cs.attachedAt = s.now()
+		// Whether this client is starting out with no main-screen content, for the same reason: both paths
+		// come through here, and the first attempt set it in attach's snapshot branch only, which the
+		// resume path and the stored-restore path both skip.
+		//
+		// A client attaching while a full-screen program runs gets a blob describing the alternate screen,
+		// and nothing describes the main one, because libghostty serializes the active screen and offers no
+		// way to reach the other. So its terminal's main screen holds whatever that window held before, and
+		// the ?1049l the program sends on the way out pops it onto that. See markAltScreenLeft.
+		if s.term != nil {
+			if onAlt, err := s.term.OnAltScreen(); err == nil && onAlt {
+				cs.openedOnAlt = true
+			}
+		}
 	}
 
 	evict := make(chan struct{})

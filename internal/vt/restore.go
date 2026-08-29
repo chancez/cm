@@ -15,6 +15,19 @@ import (
 	"unsafe"
 )
 
+// OnAltScreen reports whether the model is on the alternate screen.
+//
+// Exposed because the server has to know when a session *leaves* it. A client that attached while a
+// full-screen program was running has no main-screen content, since Restore serializes the active screen
+// and libghostty offers no way to reach the other one, so the transition out is the moment that client has
+// to be repainted. See Session.feedTerminal.
+func (t *Terminal) OnAltScreen() (bool, error) {
+	if t.closed {
+		return false, fmt.Errorf("terminal is closed")
+	}
+	return t.mode(C.cm_mode_alt_screen_save())
+}
+
 // Restore returns bytes that reproduce the current screen when written to a fresh terminal.
 //
 // This is a port of zmx's serializeTerminalState, and every deviation from the obvious
@@ -77,10 +90,26 @@ func (t *Terminal) Restore() ([]byte, error) {
 	//
 	// Held aside rather than written now, so it stays in front of the content and out of the empty
 	// check below. See the prepend at the end.
-	screenPrefix := ""
-	if onAlt, err := t.mode(C.cm_mode_alt_screen_save()); err == nil && !onAlt {
-		screenPrefix = "\x1b[?1049l\x1b[2J\x1b[H"
-	}
+	// Sent whichever screen the model is on, which is a change from sending it only for a main-screen
+	// blob. The two directions looked asymmetric and are not.
+	//
+	// A blob for a session on the *alternate* screen does say where it belongs, via ?1049h from the mode
+	// state, and that was taken to be enough. It is not, because saying where the content belongs says
+	// nothing about the screen it does *not* belong to. The client's main screen is never written, so it
+	// keeps whatever that window held before the attach, and the next ?1049l the program sends on its way
+	// out pops the terminal onto it.
+	//
+	// The symptom: attach to a session running a full-screen program, quit the program, and the screen
+	// fills with content from before the attach rather than the session's shell. Reproduced in
+	// TestRestoreOnTheAlternateScreenSurvivesTheProgramExiting.
+	//
+	// Clearing main is the whole of what can be done here, and it is not the whole fix. cm cannot put the
+	// session's own main screen into this blob, because libghostty serializes the active screen and there is
+	// no API for the other one: GhosttyTerminalScreen is a read of which screen is active, not a selector.
+	// So a client attaching mid-program still loses the shell history that was on screen before the program
+	// started; what it no longer does is show a stranger's content instead. See the test for the remaining
+	// half.
+	screenPrefix := "\x1b[?1049l\x1b[2J\x1b[H"
 
 	hasScrollback, err := t.emitScrollback(&buf)
 	if err != nil {

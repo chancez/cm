@@ -230,6 +230,35 @@ distinguishes it from the false leads above is that the missing mode is one no p
 the question is not which modes the program turned on, but whether the blob describes the screen it
 belongs to. See "A main-screen blob has to say so" above.
 
+## The other screen, when the blob describes the alternate one
+
+The two directions were once read as asymmetric: a main-screen blob had no way to say where it belonged,
+while an alternate-screen blob opens with `?1049h` from the mode state and therefore does. That is true and
+it is not enough, because saying where the content belongs says nothing about the screen it does *not*
+belong to.
+
+A client attaching while a full-screen program runs receives the alternate screen. Nothing writes its main
+screen, so that screen keeps whatever the window held before the attach, and the `?1049l` the program sends
+on the way out pops the terminal onto it. The symptom: attach to a session running vim, quit vim, and the
+screen fills with content from before the attach rather than the session's shell.
+
+Two halves, because one layer cannot do it alone.
+
+- **The blob clears the main screen**, unconditionally now rather than only when the model is on the main
+  one. That is the whole of what `Restore` can do, and it removes the stale content.
+- **The server repaints when the session leaves the alternate screen.** It cannot be done in the blob:
+  libghostty serializes the active screen, and `GhosttyTerminalScreen` is a read of which screen is active
+  rather than a selector, so an alternate-screen blob has no way to carry the main screen. So the transition
+  out is the moment, and the mechanism is the existing gap flag, which already makes a client drop its
+  resume position and reattach. A fresh attach answers with a serialized screen, which is exactly the
+  recovery wanted.
+
+Only clients that attached *during* the program are repainted. One attached beforehand received a
+main-screen blob and then the program's own bytes, so its main screen is already correct, and repainting it
+would be a visible flicker on every program exit for nothing. That is the control in
+`TestClientAttachedBeforeAFullScreenProgramIsNotRepainted`, and without it the fix would be worse than the
+bug for anyone whose client was already right.
+
 For those two the discriminator is the shape of the window rather than the program. Scrolling both halves
 of a split needed a **vertical** split, because a full-width scroll region never routes through margins
 at all. A window that keeps its old height needed a split to **close**, because a program that has

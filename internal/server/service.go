@@ -382,7 +382,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 					Output: &serverv1.Output{
 						Seq:  uint64(msg.chunk.Seq),
 						Data: msg.chunk.Data,
-						Gap:  msg.chunk.Gap,
+						// Or a repaint this client is owed because the session left the alternate screen
+						// while it was attached. The gap flag is the existing route to a repaint: the
+						// client drops its resume position and reattaches, and a fresh attach answers with
+						// a serialized screen. See Session.markAltScreenLeft.
+						Gap: msg.chunk.Gap || sess.takeRepaint(att.token),
 					},
 				},
 			}); err != nil {
