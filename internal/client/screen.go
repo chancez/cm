@@ -38,6 +38,9 @@ type screen struct {
 
 	// track follows what the terminal has received, so Inject knows whether a sequence is half-written.
 	track ansi.Tracker
+	// transcript records what was written and where it came from, for tests. Nil in a released binary,
+	// where the type has no fields at all. See transcript.go.
+	transcript *Transcript
 	// held is what Inject could not write yet, released at the next boundary.
 	held []byte
 }
@@ -53,7 +56,7 @@ const maxHeld = 4096
 
 // newScreen returns the writer for one attachment.
 func newScreen(out io.Writer, paint bool, log *slog.Logger) *screen {
-	return &screen{out: out, paint: paint, log: log}
+	return &screen{out: out, paint: paint, log: log, transcript: newTranscript()}
 }
 
 // screenDest is where an attachment's bytes go: the caller's writer when it supplied one, and the
@@ -91,7 +94,7 @@ func (s *screen) session(p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
-	return s.emit(p)
+	return s.emit(p, "session")
 }
 
 // inject writes bytes cm generated itself, at a point where they cannot split a sequence.
@@ -103,7 +106,7 @@ func (s *screen) inject(p []byte) error {
 		return nil
 	}
 	if !s.track.InSequence() {
-		return s.emit(p)
+		return s.emit(p, "inject")
 	}
 	if len(s.held)+len(p) > maxHeld {
 		// Logged rather than silent, because a client dropping what it meant to say looks identical to
@@ -121,17 +124,22 @@ func (s *screen) inject(p []byte) error {
 // Everything goes through here, injected bytes included, so the tracker's view is what the terminal
 // actually received rather than what the session sent. An injection that was itself incomplete would
 // otherwise leave the tracker claiming a boundary that does not exist.
-func (s *screen) emit(p []byte) error {
+func (s *screen) emit(p []byte, kind string) error {
 	if _, err := s.out.Write(p); err != nil {
 		return err
 	}
+	// Recorded here rather than where the write was requested, so the record is what the terminal
+	// received in the order it received it. Recording at the request instead described intent, and a
+	// held injection then appeared before the bytes that released it, which made a transcript of correct
+	// behaviour look like a violation and a transcript of the bug look fine.
+	s.transcript.record(kind, p)
 	s.track.Feed(p)
 	// Checked after every write rather than only after a session write, since a released batch can
 	// itself end at a boundary that lets the next one go.
 	if len(s.held) > 0 && !s.track.InSequence() {
 		held := s.held
 		s.held = nil
-		return s.emit(held)
+		return s.emit(held, "inject")
 	}
 	return nil
 }
