@@ -794,3 +794,19 @@ this.
 mapping session names to settings would move that decision away from the caller who has the context, and
 `--env`, `--dir`, and `--on-restore` already cover it. The one exception already exists, because it has to:
 persistence by name pattern, since a session's own creator cannot know it will be wanted after a reboot.
+
+**Open: a chunked image is not placed in the model.** An image that arrives as hundreds of chunks through
+the live pump leaves cm's terminal model with the payload but no placement, so a restore carries every byte
+of the picture and no `a=p` to draw it. Measured on a real run: a 1920311-byte restore with the transmission
+present and no placement anywhere in it, against a 28400-byte restore for a small image that works. The same
+chunk sequence fed directly to the model in a unit test *does* produce a placement
+(`TestTwoClientsBothGetTheLiveImage`), so what cm forwards to the model diverges from what it stores
+somewhere in that path. `TestALargeImageReachesASecondClient` in `internal/e2e` is the reproduction and is
+skipped for it; the next step is comparing the forwarded bytes against the stored payload chunk by chunk.
+
+**Open: one oversized command yields an empty restore.** `maxHeld` in `internal/graphics/scan.go` bounds an
+unfinished command at 1 MiB on the reasoning that "what has to fit is one command, not a whole image". A
+program that sends a whole image in a single command exceeds that, and the result is worse than a missed
+interception: the restore came back 35 bytes, with neither the image nor the screen text. kitty's own clients
+chunk at 4096 so this is not what `icat` does, but nothing stops a program doing it, and the failure is
+silent.
