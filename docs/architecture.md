@@ -1232,19 +1232,33 @@ Enforced rather than requested. `TestCommandLayerWritesNoEscapeSequences` fails 
 appears in `cmd/cm`, because that is exactly how this happened: writing one there is easy and looks
 harmless. The command layer states policy, as `SetTitle` does, and constructs no bytes.
 
-**Why the pty side needs no equivalent, measured.** The pty has several writers too, and unlike the
-terminal side nothing serializes them: client typing, a client's answer to a proxied query, cm's own
-emulator replies, and the in-band resize reports all reach `Session.Write` on their own goroutines, and
-`shim.Session.Write` calls `ptmx.Write` outside its lock. The ordering discipline above is about *order*,
-which is a different guarantee from *atomicity*, so this looked like the same bug on the other stream.
+**The pty side has the same problem and now has the same kind of fix.** It has several writers too:
+client typing, a client's answer to a proxied query, cm's own emulator replies, and the in-band resize
+reports all reach `Session.Write` on their own goroutines. The ordering discipline above is about *order*,
+which is a different guarantee from *atomicity*, so on the pty what matters is that each write arrives
+whole.
 
-It is not, because the tty layer serializes a write to a pty master for its whole duration. Measured:
-262148 bytes written concurrently with 4000 short writes, on both darwin and Linux, with not one short
-write landing inside the payload, while short writes were recorded on both sides of it so the window was
-demonstrably open. `TestConcurrentPtyWritesDoNotInterleave` holds that measurement. Chunking
-`ptmx.Write` into 4096-byte pieces, which is what routing pty writes through a buffer of cm's own would
-amount to, fails it immediately. That is the point at which the pty would need an ordering point of its
-own.
+This was measured once and read the wrong way. 262148 bytes written concurrently with 4000 short writes,
+not one landing inside the payload, and the conclusion recorded here was that the tty layer serializes a
+write to a pty master and the pty therefore needs nothing. The measurement was on darwin. **The tty layer
+does not serialize on Linux**: a write larger than the slave's input buffer, 65536 bytes by default,
+cannot be accepted in one syscall, `os.File.Write` loops over the rest, and another goroutine's write
+lands in the gap between syscalls. Measured in the Linux test image at 3 interleaved writes in 120 runs,
+against 0 in 120 on darwin, which is exactly why a platform-specific truth got recorded as a general one.
+
+What it costs is an escape sequence cut in half. An OSC 52 clipboard reply was measured at 18008 bytes; a
+resize report inserted into the middle of one aborts the OSC and the rest of the base64 prints as text.
+That is the window-title bug on the other stream, so `internal/shim.ptyWriter` is the same answer: one
+writer, a mutex held across the whole `os.File.Write`, and every caller going through it. 0 failures in
+120 Linux runs after.
+
+Two tests, deliberately. `TestConcurrentPtyWritesDoNotInterleave` drives a real pty and is what would
+notice a writer reaching `ptmx` without going through the ordering point, but at 3 in 120 it is not
+standing guard. `TestPtyWriterSerializesConcurrentWrites` states the invariant against a fake that pauses
+mid-write, and fails every run without the mutex. Not `synctest`, which is this repo's default for
+concurrency and cannot express it: its documentation is explicit that locking a mutex is not durably
+blocking, so `Wait` never returns while the second writer is on the lock and the test hangs rather than
+asserting.
 
 One loose end this turned up, since closed: `server.Session.Write` discarded the `WriteResponse`, so `Written`
 was never checked and a partial write looked like a complete one. The bytes that did not make it were gone with

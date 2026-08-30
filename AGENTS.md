@@ -299,8 +299,12 @@ Three places, by kind:
   terminal printed `:102:113m` as text, the line shifted, the screen scrolled, and every cell nvim did
   not repaint stayed stale until a ctrl-l. A chunk boundary falls mid-sequence 6 to 8 times per nvim
   repaint, so this is routine rather than unlucky. Everything for a terminal goes through
-  `internal/client.screen`, and a test fails if an escape literal appears in `cmd/cm`. See
-  `docs/architecture.md` on one writer per stream. The corollary for debugging: three rounds of captures
+  `internal/client.screen`, and a test fails if an escape literal appears in `cmd/cm`. The pty has
+  `internal/shim.ptyWriter` for the same reason: **the tty layer does not serialize writes to a pty master
+  on Linux**, whatever it does on darwin, so a reply larger than the slave's 65536-byte buffer takes
+  several syscalls and another writer lands between them. Measured at 3 interleaved writes in 120 runs in
+  the Linux image and 0 in 120 on darwin, which is how a platform-specific result got written down as a
+  general one. See `docs/architecture.md` on one writer per stream. The corollary for debugging: three rounds of captures
   taken inside cm all replayed clean because none could see a writer that bypassed cm's own abstraction,
   and `kitty --dump-bytes` settled it in one run. When a capture and reality disagree, instrument the far
   end.

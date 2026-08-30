@@ -8,26 +8,23 @@ import (
 	"testing"
 )
 
-// TestConcurrentPtyWritesDoNotInterleave pins the assumption that lets cm have several writers on the
-// pty.
+// TestConcurrentPtyWritesDoNotInterleave checks through a real pty that cm orders its writers.
 //
 // docs/architecture.md names two shared byte streams, the pty and each client's terminal, and requires
-// exactly one writer per stream. The terminal half is enforced in code, by internal/client.screen, after
-// a window title landed inside a program's SGR and left stale cells all over nvim. The pty half is not,
-// and has several writers by construction: client typing, a client's answer to a query cm proxied, cm's
-// own emulator replies, and the in-band resize reports, each arriving at Session.Write on its own
-// goroutine. Session.Write calls ptmx.Write outside the lock.
+// exactly one writer per stream. Both are enforced in code now: internal/client.screen for the terminal,
+// after a window title landed inside a program's SGR, and ptyWriter here.
 //
-// That looks like the same bug, and it is not, because the tty layer serializes a write to a pty master
-// for its whole duration. Measured here rather than assumed: 262148 bytes written concurrently with 4000
-// short writes, three runs, and not one short write landed inside the payload's span. The window was
-// demonstrably open, with short writes recorded both before offset 2007 and after offset 18395 in the
-// echoed stream, so the payload's integrity is the tty's doing rather than luck of scheduling.
+// This test was written to justify the pty *not* having one, and it measured the tty layer serializing a
+// 262148-byte write against 4000 short ones across three runs on darwin. That measurement was real and
+// the conclusion drawn from it was wrong: the same test fails on Linux, where a write larger than the
+// slave's 65536-byte input buffer cannot be taken in one syscall, os.File.Write loops, and another
+// goroutine lands in the gap. 3 failures in 120 runs in the Linux test image, 0 in 120 with ptyWriter in
+// place.
 //
-// So the reason there is no lock is a real one, and this test is what keeps it a reason rather than an
-// assumption. It fails if cm ever routes pty writes through a buffer of its own, or on a platform whose
-// tty layer does not serialize, and either of those is the point at which the pty side needs what
-// internal/client.screen does for the terminal side.
+// Kept end to end even though ptyWriter has a deterministic unit test, because this is the only thing
+// that exercises the ordering point against a real tty rather than a fake, and it is what would notice
+// if a future writer reached the pty without going through Session.Write. Its rate is why it is not the
+// only test: see TestPtyWriterSerializesConcurrentWrites.
 func TestConcurrentPtyWritesDoNotInterleave(t *testing.T) {
 	// Raw mode with echo off, so the shell passes input through to output verbatim. Canonical mode would
 	// line-buffer and do erase processing on a binary payload, which would mangle the fixture and prove
@@ -113,7 +110,7 @@ func TestConcurrentPtyWritesDoNotInterleave(t *testing.T) {
 
 	// The assertion: the large reply reached the program in one piece. A short write landing inside it
 	// aborts the OSC partway through, and the rest of the base64 prints as text, which is the pty-side
-	// form of the bug this branch fixed on the terminal side.
+	// form of the window-title bug.
 	if !bytes.Contains(got, big) {
 		detail := "the payload never arrived at all"
 		if start := bytes.Index(got, big[:32]); start >= 0 {
@@ -123,8 +120,8 @@ func TestConcurrentPtyWritesDoNotInterleave(t *testing.T) {
 			}
 		}
 		t.Errorf("a %d-byte reply written concurrently with %d short writes did not reach the program "+
-			"intact: %s.\nThe tty layer no longer serializes writes to a pty master, so the pty needs an "+
-			"ordering point of its own, the way internal/client.screen is one for the terminal.",
+			"intact: %s.\nSomething is writing to the pty without going through ptyWriter, which is the "+
+			"ordering point for this stream: the tty layer does not provide one on Linux.",
 			len(big), smallWrites, detail)
 	}
 }

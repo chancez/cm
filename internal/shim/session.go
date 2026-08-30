@@ -94,7 +94,10 @@ type Session struct {
 
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
-	cmd  *exec.Cmd
+	// writer is the only thing that writes to ptmx, so several callers cannot cut into each other's
+	// escape sequences. See ptyWriter: the tty layer does not order them on Linux.
+	writer *ptyWriter
+	cmd    *exec.Cmd
 
 	// log records what the shim does. Never nil.
 	log *slog.Logger
@@ -220,6 +223,7 @@ func Start(cfg Config) (*Session, error) {
 	}
 
 	s.ptmx = ptmx
+	s.writer = &ptyWriter{w: ptmx}
 	s.cmd = cmd
 
 	go s.pump()
@@ -378,6 +382,14 @@ func (s *Session) Log() *seqlog.Log[seq.Shim] { return s.outputLog }
 // checks the count and returns an error, which is loud rather than a retry policy calibrated against a case
 // nobody has seen: a pty write goes through os.File.Write, which loops over write(2) until the buffer is
 // consumed, so a short count with no error does not arise here in practice.
+//
+// That loop is also why this goes through s.writer rather than straight to the pty. Every caller here is
+// on its own goroutine, and the gap between two of the loop's syscalls is where another one's bytes used
+// to land. See ptyWriter.
+//
+// The exited check stays outside the write lock. It reads a different mutex, so nesting is avoided
+// entirely, and a write that beats an exit by a hair is not the failure worth ordering against: the pty
+// is closed under it either way and the write reports that.
 func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	exited := s.exited
@@ -385,7 +397,7 @@ func (s *Session) Write(p []byte) (int, error) {
 	if exited {
 		return 0, seqlog.ErrClosed
 	}
-	return s.ptmx.Write(p)
+	return s.writer.Write(p)
 }
 
 // Resize sets the pty window size. The kernel signals the child, so a shell redraws
