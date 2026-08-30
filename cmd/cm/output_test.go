@@ -36,6 +36,26 @@ func sampleWireSession(name string) *serverv1.Session {
 	}
 }
 
+// at builds an optional timestamp for a fixture from a unix instant.
+//
+// Lets a want pin the instant rather than copying it out of the result, which is what the string form
+// forced: it rendered in the local zone, so the only portable assertion was "whatever we just produced".
+// Both sides come from time.Unix here, so they carry the same *time.Location, which is what
+// reflect.DeepEqual compares inside a time.Time.
+func at(unix int64) *time.Time {
+	t := time.Unix(unix, 0)
+	return &t
+}
+
+// pinnedZone is a fixture instant in a fixed zone, for tests that assert on rendered output.
+//
+// A fixed offset rather than time.Unix, because the render preserves the zone: a fixture built from the
+// local zone would produce a different string on a machine in another one, which is the same class of
+// machine-dependent failure pinHome exists to prevent.
+func pinnedZone() time.Time {
+	return time.Date(2023, 11, 14, 14, 13, 20, 0, time.FixedZone("", -8*60*60))
+}
+
 // pinHome points HOME somewhere unrelated to the fixture's directory, so the CWD column renders that
 // directory verbatim.
 //
@@ -67,14 +87,13 @@ func TestSessionJSONKeys(t *testing.T) {
 		// session, since a session can have several or none.
 		"name", "id", "names",
 		"state", "shell_pid", "clients", "exit_code", "title",
-		"cwd", "cwd_uri", "cwd_is_local", "created_at", "created_at_unix",
+		"cwd", "cwd_uri", "cwd_is_local", "created_at",
 		"busy", "command",
 		// The last command's own outcome, distinct from exit_code above, which is the session's.
 		"last_command_exit_code", "command_finished",
 		// reported_at makes the state readable: a report stands until the program changes it and
 		// survives a server restart, so its age is what separates "blocked now" from "blocked at 9am".
-		"reported_state", "reported_detail", "reported_source",
-		"reported_at", "reported_at_unix",
+		"reported_state", "reported_detail", "reported_source", "reported_at",
 		"tags", "hosting",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
@@ -102,8 +121,7 @@ func TestSessionJSONValues(t *testing.T) {
 		Cwd:            "/home/user/projects",
 		CwdURI:         "file://myhost/home/user/projects",
 		CwdIsLocal:     true,
-		CreatedAt:      "2023-11-14T14:13:20-08:00",
-		CreatedAtUnix:  1_700_000_000,
+		CreatedAt:      time.Unix(1_700_000_000, 0),
 		Busy:           true,
 		Command:        "nvim notes.md",
 		ReportedState:  "blocked",
@@ -117,15 +135,14 @@ func TestSessionJSONValues(t *testing.T) {
 		// covers the populated case.
 		AttachedClients: []attachedClientJSON{},
 	}
-	// CreatedAt renders in the local zone, so compare it separately rather than pinning a zone.
-	want.CreatedAt = got.CreatedAt
-	// DeepEqual rather than ==, since the struct now holds a map. Still the whole value, which is the
-	// point: a field-by-field check passes while the rest of the struct is wrong.
+	// DeepEqual rather than ==, since the struct holds a map and pointers. Still the whole value, which
+	// is the point: a field-by-field check passes while the rest of the struct is wrong.
+	//
+	// The timestamp is pinned rather than copied from the result, which the string form could not do: it
+	// rendered in the local zone, so an expected literal only held on one machine. A time.Time carries the
+	// instant and the zone separately, so the fixture states the instant and the zone stops mattering.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
-	}
-	if !strings.HasPrefix(got.CreatedAt, "2023-11-14") && !strings.HasPrefix(got.CreatedAt, "2023-11-15") {
-		t.Errorf("CreatedAt = %q, want an RFC 3339 timestamp for the given instant", got.CreatedAt)
 	}
 }
 
@@ -149,27 +166,24 @@ func TestSessionJSONReportsAttachedClients(t *testing.T) {
 	got := toSessionJSON(s).AttachedClients
 	want := []attachedClientJSON{
 		{
-			PID:            4242,
-			Version:        "v0.1.2-9-g4352aa4",
-			AttachedAtUnix: 1_700_000_000,
-			// Rendered in the local zone, so it is filled in from the result below rather than pinned.
-			AttachedAt: got[0].AttachedAt,
+			PID:        4242,
+			Version:    "v0.1.2-9-g4352aa4",
+			AttachedAt: at(1_700_000_000),
 		},
 		{
 			PID:      5150,
 			ReadOnly: true,
-			// No version and no timestamp. AttachedAt stays empty rather than rendering 1970, which
+			// No version and no timestamp. AttachedAt stays nil rather than rendering an instant, which
 			// would read as a client attached decades ago instead of one whose time is unknown.
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("AttachedClients = %+v\nwant %+v", got, want)
 	}
-	if !strings.HasPrefix(got[0].AttachedAt, "2023-11-1") {
-		t.Errorf("AttachedAt = %q, want an RFC 3339 timestamp for the given instant", got[0].AttachedAt)
-	}
-	if got[1].AttachedAt != "" {
-		t.Errorf("AttachedAt = %q for a client that reported no time, want empty", got[1].AttachedAt)
+	// Stated separately as well as inside the whole-value compare, because it is the case a reader gets
+	// wrong: null means the client reported no time, and is not the same as an instant of zero.
+	if got[1].AttachedAt != nil {
+		t.Errorf("AttachedAt = %v for a client that reported no time, want nil", got[1].AttachedAt)
 	}
 }
 
@@ -749,5 +763,37 @@ func TestSessionStateColumnShowsAnOldReportsAge(t *testing.T) {
 	want := "running(blocked: needs approval, 3h)"
 	if got := sessionStateColumn(s); got != want {
 		t.Errorf("sessionStateColumn() = %q, want %q", got, want)
+	}
+}
+
+// An instant nobody recorded marshals as null, with its key still present.
+//
+// The rule the whole timestamp shape rests on, and the one a change would break silently. A time.Time
+// renders its zero value as a real date, so a field that must be able to say nothing has to be a pointer;
+// and omitempty on that pointer would drop the key entirely, leaving a script to handle absence as well as
+// null. Asserted on the bytes rather than the struct, because both failures are invisible from the Go side.
+func TestJSONTimestampsAreNullWhenUnset(t *testing.T) {
+	s := sampleWireSession("work")
+	s.ReportedAtUnix = 0
+	s.AttachedClients = []*serverv1.AttachedClient{{Pid: 5150}}
+
+	var buf bytes.Buffer
+	if err := writeJSON(&buf, toSessionJSON(s)); err != nil {
+		t.Fatalf("writeJSON() error = %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{`"reported_at": null`, `"attached_at": null`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output is missing %s:\n%s\n"+
+				"An unset instant has to be null. A zero time.Time renders as a date decades ago, which a "+
+				"reader acts on, and omitempty removes the key instead of reporting nothing.", want, got)
+		}
+	}
+	// A set one renders as RFC 3339 seconds in the local zone. Nanoseconds would appear if anything ever
+	// built one of these from a clock rather than from the wire's unix seconds, and the sub-second digits
+	// would then vary per run.
+	if !strings.Contains(got, `"created_at": "`) || strings.Contains(got, `.000000`) {
+		t.Errorf("created_at is not a plain RFC 3339 timestamp:\n%s", got)
 	}
 }

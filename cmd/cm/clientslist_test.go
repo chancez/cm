@@ -39,31 +39,29 @@ func TestClientRows(t *testing.T) {
 	want := []clientRowJSON{
 		{
 			Session: "work", PID: 100, Version: "current", Stale: false,
-			AttachedAt: got[0].AttachedAt, AttachedAtUnix: 1_700_000_000,
+			AttachedAt: at(1_700_000_000),
 		},
 		{
 			Session: "work", PID: 101, Version: "old", Stale: true, ReadOnly: true,
-			AttachedAt: got[1].AttachedAt, AttachedAtUnix: 1_700_000_100,
+			AttachedAt: at(1_700_000_100),
 		},
 		{
 			// A client that reported no build counts as stale: the field exists because older clients did
 			// not send one, so unknown is more likely behind than current, and calling it current would
 			// hide exactly what --stale is for.
 			Session: "other", PID: 102, Version: "", Stale: true,
-			// No timestamp, so AttachedAt stays empty rather than rendering 1970.
-			AttachedAt: "", AttachedAtUnix: 0,
+			// No timestamp, so AttachedAt stays nil rather than rendering an instant.
+			AttachedAt: nil,
 		},
 	}
+	// The instants are pinned rather than copied out of the result, which the string form could not do:
+	// it rendered in the machine's zone, so the only portable want was the value just produced, and a
+	// blank satisfied that too.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("clientRows() = %+v\nwant %+v", got, want)
 	}
-	// Asserted separately because the wanted values above are taken from the result, which would let a
-	// blank timestamp through unnoticed.
-	if !strings.HasPrefix(got[0].AttachedAt, "2023-11-1") {
-		t.Errorf("AttachedAt = %q, want an RFC 3339 timestamp for the given instant", got[0].AttachedAt)
-	}
-	if got[2].AttachedAt != "" {
-		t.Errorf("AttachedAt = %q for a client that reported no time, want empty", got[2].AttachedAt)
+	if got[2].AttachedAt != nil {
+		t.Errorf("AttachedAt = %v for a client that reported no time, want nil", got[2].AttachedAt)
 	}
 }
 

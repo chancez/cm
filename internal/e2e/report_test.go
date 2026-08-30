@@ -174,7 +174,7 @@ func TestAReportedStateSurvivesARestart(t *testing.T) {
 	}
 	// With the time it was made, not the time of the restart. That is what lets a listing show a stale
 	// "blocked" as hours old rather than presenting it as current.
-	if s.ReportedAtUnix == 0 {
+	if s.ReportedAt == nil {
 		t.Errorf("session = %+v after a restart, want the report's timestamp carried with it.\n"+
 			"Without it a restored report is indistinguishable from one made a second ago, which is the "+
 			"whole risk of keeping it.", s)

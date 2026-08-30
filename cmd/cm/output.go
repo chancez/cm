@@ -53,11 +53,11 @@ type sessionJSON struct {
 	CwdURI string `json:"cwd_uri"`
 	// CwdIsLocal reports whether Cwd refers to this machine.
 	CwdIsLocal bool `json:"cwd_is_local"`
-	// CreatedAt is an RFC 3339 timestamp, which sorts lexically and needs no timezone guessing.
-	CreatedAt string `json:"created_at"`
-	// CreatedAtUnix is the same instant in seconds, for callers that would otherwise parse the
-	// string back.
-	CreatedAtUnix int64 `json:"created_at_unix"`
+	// CreatedAt is when the session was created, RFC 3339 in the local zone.
+	//
+	// Not a pointer, unlike the other timestamps here: a session always has a creation time, so this field
+	// is never null and a reader needs no check. That is the distinction the pointers carry.
+	CreatedAt time.Time `json:"created_at"`
 	// Busy reports whether a command is running rather than the shell sitting at a prompt, from
 	// OSC 133.
 	//
@@ -90,14 +90,12 @@ type sessionJSON struct {
 	// free-form and optional.
 	ReportedDetail string `json:"reported_detail"`
 	ReportedSource string `json:"reported_source"`
-	// ReportedAt is when the report was made, RFC 3339, empty when nothing has reported.
-	// ReportedAtUnix is the same instant in seconds, 0 when unknown.
+	// ReportedAt is when the report was made, null when nothing has reported.
 	//
 	// Worth reading rather than assuming a report is current: it is the program's last word and stands
 	// until the program says otherwise, including across a server restart. A script deciding whether to
 	// nudge a blocked session wants the age, not just the state.
-	ReportedAt     string `json:"reported_at"`
-	ReportedAtUnix int64  `json:"reported_at_unix"`
+	ReportedAt *time.Time `json:"reported_at"`
 	// Tags are the caller's own labels for this session, set at creation or with `cm tag`.
 	//
 	// A map rather than the "k=v,k" string the table prints, since a script filtering on one key
@@ -138,16 +136,13 @@ type attachedClientJSON struct {
 	// ReadOnly reports a follower rather than an interactive terminal. A follower never sizes the
 	// session and never answers a terminal query.
 	ReadOnly bool `json:"read_only"`
-	// AttachedAt is an RFC 3339 timestamp, empty when unknown. AttachedAtUnix is the same instant in
-	// seconds, and 0 when unknown.
-	AttachedAt     string `json:"attached_at"`
-	AttachedAtUnix int64  `json:"attached_at_unix"`
+	// AttachedAt is when this client attached, null when it reported no time, which is what a client
+	// older than the field looks like.
+	AttachedAt *time.Time `json:"attached_at"`
 }
 
 // toSessionJSON converts a wire session for output.
 func toSessionJSON(s *serverv1.Session) sessionJSON {
-	created := time.Unix(s.CreatedAtUnix, 0)
-
 	// A remote directory is reported as no local path rather than as one that does not exist here,
 	// so a caller cannot act on it by mistake.
 	cwd := s.Cwd
@@ -168,18 +163,12 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	// Empty rather than null, like the two above.
 	clients := make([]attachedClientJSON, 0, len(s.AttachedClients))
 	for _, c := range s.AttachedClients {
-		ac := attachedClientJSON{
-			PID:            c.Pid,
-			Version:        c.Version,
-			ReadOnly:       c.ReadOnly,
-			AttachedAtUnix: c.AttachedAtUnix,
-		}
-		// Formatted only when there is a real instant. Rendering zero would print 1970, which reads as
-		// a client attached decades ago rather than as one whose attach time is unknown.
-		if c.AttachedAtUnix != 0 {
-			ac.AttachedAt = time.Unix(c.AttachedAtUnix, 0).Format(time.RFC3339)
-		}
-		clients = append(clients, ac)
+		clients = append(clients, attachedClientJSON{
+			PID:        c.Pid,
+			Version:    c.Version,
+			ReadOnly:   c.ReadOnly,
+			AttachedAt: unixTimeOrNil(c.AttachedAtUnix),
+		})
 	}
 
 	return sessionJSON{
@@ -194,8 +183,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		Cwd:                 cwd,
 		CwdURI:              s.CwdUri,
 		CwdIsLocal:          s.CwdIsLocal,
-		CreatedAt:           created.Format(time.RFC3339),
-		CreatedAtUnix:       s.CreatedAtUnix,
+		CreatedAt:           time.Unix(s.CreatedAtUnix, 0),
 		Busy:                s.Busy,
 		Command:             s.Command,
 		LastCommandExitCode: s.LastCommandExitCode,
@@ -203,23 +191,39 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedState:       s.ReportedState,
 		ReportedDetail:      s.ReportedDetail,
 		ReportedSource:      s.ReportedSource,
-		ReportedAt:          rfc3339OrEmpty(s.ReportedAtUnix),
-		ReportedAtUnix:      s.ReportedAtUnix,
+		ReportedAt:          unixTimeOrNil(s.ReportedAtUnix),
 		Tags:                sessionTags,
 		Hosting:             hosting,
 		AttachedClients:     clients,
 	}
 }
 
-// rfc3339OrEmpty renders a unix timestamp, keeping zero as empty rather than 1970.
+// unixTimeOrNil converts a wire timestamp for output, keeping zero as nil rather than 1970.
 //
-// The same rule the attached-client times follow: an instant nobody recorded must not print as one
-// decades ago, since a reader acts on the difference.
-func rfc3339OrEmpty(unix int64) string {
-	if unix == 0 {
+// A pointer because that is the only way encoding/json can say "no instant". A time.Time renders its zero
+// value as a real date, and omitempty does not apply to a struct, so a field that must be able to say
+// nothing has to be nilable. Nil marshals as null, which is what every reader of these fields checks.
+//
+// The rule itself is older than this helper and is why it is one: an instant nobody recorded must not print
+// as one decades ago, since a reader acts on the difference. It was written out at four call sites and each
+// was a chance to forget it.
+// formatTimeOrEmpty renders an optional instant for a single-value output, nil as empty.
+//
+// `cm info --field` prints a bare value for a script to read, so "nothing" has to be an empty line rather
+// than the word null.
+func formatTimeOrEmpty(t *time.Time) string {
+	if t == nil {
 		return ""
 	}
-	return time.Unix(unix, 0).Format(time.RFC3339)
+	return t.Format(time.RFC3339)
+}
+
+func unixTimeOrNil(unix int64) *time.Time {
+	if unix == 0 {
+		return nil
+	}
+	t := time.Unix(unix, 0)
+	return &t
 }
 
 // reportAgeThreshold is how old a report has to be before the STATE column shows its age.
@@ -689,7 +693,7 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"cwd", j.Cwd},
 		{"cwd_uri", j.CwdURI},
 		{"cwd_is_local", fmt.Sprint(j.CwdIsLocal)},
-		{"created_at", j.CreatedAt},
+		{"created_at", j.CreatedAt.Format(time.RFC3339)},
 		{"busy", fmt.Sprint(j.Busy)},
 		{"last_command_exit_code", fmt.Sprint(j.LastCommandExitCode)},
 		{"command_finished", fmt.Sprint(j.CommandFinished)},
@@ -698,8 +702,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"reported_detail", j.ReportedDetail},
 		{"reported_source", j.ReportedSource},
 		// When, so a caller can tell a program blocked right now from one that said so before the last
-		// server restart. Empty when nothing has reported.
-		{"reported_at", j.ReportedAt},
+		// server restart. Empty when nothing has reported: `--field` prints one bare value for a script to
+		// read, so there is no null to print here, unlike the JSON.
+		{"reported_at", formatTimeOrEmpty(j.ReportedAt)},
 		// Rendered as "k=v,k" here rather than as a map, since --field prints one bare value for a
 		// script to read. The JSON output carries the map for anything that wants the structure.
 		{"tags", tags.Format(j.Tags)},

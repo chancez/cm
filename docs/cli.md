@@ -67,9 +67,37 @@ Details worth knowing when scripting against it:
   can take the first match. It is unset on every client until something is typed, which is the state a
   freshly attached session is in, so a caller has to handle "nobody". `cm clients current` exits
   non-zero there rather than printing an empty record.
-- `last_input_at` is empty and `last_input_at_unix` is 0 for a client that has never typed, rather than
-  rendering the epoch. Read it alongside `active`, since the mark alone does not say how old it is: a
-  client that last typed days ago is active only in the sense that nothing else has typed since.
+- `last_input_at` is `null` for a client that has never typed, rather than rendering the epoch. Read it
+  alongside `active`, since the mark alone does not say how old it is: a client that last typed days ago
+  is active only in the sense that nothing else has typed since.
+
+## Timestamps in JSON
+
+Every timestamp is one field, RFC 3339, in the machine's local zone, and `null` when there is no instant
+to report. `created_at` is the exception that is never null, because a session always has one.
+
+They were pairs until recently, a string beside a `_unix` integer, and dropping the integer has one cost
+worth knowing because the obvious workaround is silently wrong. jq's date builtins accept only the `Z`
+form:
+
+```
+$ cm list --json | jq '.[0].created_at | fromdateiso8601'
+jq: error: date "2023-11-14T14:13:20-08:00" does not match format "%Y-%m-%dT%H:%M:%SZ"
+```
+
+Reaching for `sub("[+-][0-9][0-9]:[0-9][0-9]$";"Z")` to fix that produces a *plausible wrong answer*:
+measured against a `-08:00` timestamp it returns 1699971200 where the instant is 1700000000, an
+eight-hour error with nothing to indicate it. Use `date` instead, which handles the offset:
+
+```sh
+t=$(cm info work --field created_at)
+date -d "$t" +%s                                      # GNU
+date -j -f '%Y-%m-%dT%H:%M:%S%z' "${t%:*}${t##*:}" +%s  # BSD: %z wants the offset without its colon
+```
+
+Local time is deliberate: these are read by a person as often as by a script, and UTC would mean
+mentally converting every one of them. The `_unix` twin was the alternative and it made every instant two
+fields that could disagree.
 
 ## Shell startup
 

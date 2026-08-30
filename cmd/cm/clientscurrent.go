@@ -142,13 +142,13 @@ func clientFields(r clientRowJSON) []struct {
 	if build == "" {
 		build = "unknown"
 	}
-	lastInput := r.LastInputAt
+	lastInput := formatTimeOrEmpty(r.LastInputAt)
 	if lastInput == "" {
 		// Not reachable through `cm clients current`, since a client with no input time is never the
 		// active one, but this renders any row and a bare empty value would read as a formatting bug.
 		lastInput = "never"
 	}
-	attached := r.AttachedAt
+	attached := formatTimeOrEmpty(r.AttachedAt)
 	if attached == "" {
 		attached = "unknown"
 	}

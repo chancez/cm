@@ -118,19 +118,16 @@ type clientRowJSON struct {
 	Stale bool `json:"stale"`
 	// ReadOnly reports a follower rather than a terminal.
 	ReadOnly bool `json:"read_only"`
-	// AttachedAt is RFC 3339, empty when unknown. AttachedAtUnix is the same instant, 0 when unknown.
-	AttachedAt     string `json:"attached_at"`
-	AttachedAtUnix int64  `json:"attached_at_unix"`
+	// AttachedAt is when this client attached, null when it reported no time.
+	AttachedAt *time.Time `json:"attached_at"`
 	// Active marks the client someone is using: the one that typed most recently. At most one row per
 	// session has it, and no row does when nothing has typed yet.
 	Active bool `json:"active"`
-	// LastInputAt is when this client last sent typing, RFC 3339 and empty when it never has.
-	// LastInputAtUnix is the same instant, 0 when never.
+	// LastInputAt is when this client last sent typing, null when it never has.
 	//
 	// Reported alongside Active because the mark alone cannot say how old it is, and a client that last
 	// typed days ago is the active one only in the sense that nothing else has typed since.
-	LastInputAt     string `json:"last_input_at"`
-	LastInputAtUnix int64  `json:"last_input_at_unix"`
+	LastInputAt *time.Time `json:"last_input_at"`
 }
 
 // clientRows flattens sessions into one row per attached client.
@@ -164,25 +161,16 @@ func clientRows(
 			if onlyStale && !isStale {
 				continue
 			}
-			row := clientRowJSON{
-				Session:         s.Name,
-				PID:             c.Pid,
-				Version:         c.Version,
-				Stale:           isStale,
-				ReadOnly:        c.ReadOnly,
-				AttachedAtUnix:  c.AttachedAtUnix,
-				Active:          c.Active,
-				LastInputAtUnix: c.LastInputAtUnix,
-			}
-			// Formatted only for a real instant. Rendering zero would print 1970, which reads as a client
-			// attached decades ago rather than one whose attach time is unknown.
-			if c.AttachedAtUnix != 0 {
-				row.AttachedAt = time.Unix(c.AttachedAtUnix, 0).Format(time.RFC3339)
-			}
-			if c.LastInputAtUnix != 0 {
-				row.LastInputAt = time.Unix(c.LastInputAtUnix, 0).Format(time.RFC3339)
-			}
-			rows = append(rows, row)
+			rows = append(rows, clientRowJSON{
+				Session:     s.Name,
+				PID:         c.Pid,
+				Version:     c.Version,
+				Stale:       isStale,
+				ReadOnly:    c.ReadOnly,
+				AttachedAt:  unixTimeOrNil(c.AttachedAtUnix),
+				Active:      c.Active,
+				LastInputAt: unixTimeOrNil(c.LastInputAtUnix),
+			})
 		}
 	}
 	return rows
@@ -223,7 +211,7 @@ func printClientRows(w io.Writer, rows []clientRowJSON, serverVersion string) er
 		if r.Stale {
 			build += " (stale)"
 		}
-		attached := r.AttachedAt
+		attached := formatTimeOrEmpty(r.AttachedAt)
 		if attached == "" {
 			attached = "unknown"
 		}

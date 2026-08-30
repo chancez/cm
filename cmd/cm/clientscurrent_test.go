@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -20,16 +21,17 @@ import (
 // string, and TestClientRowsCarriesActive covers that conversion.
 func activeClientRow() clientRowJSON {
 	return clientRowJSON{
-		Session:         "work",
-		PID:             4242,
-		Version:         "v0.4.1",
-		Stale:           false,
-		ReadOnly:        false,
-		AttachedAt:      "2023-11-14T14:13:20-08:00",
-		AttachedAtUnix:  1_700_000_000,
-		Active:          true,
-		LastInputAt:     "2023-11-14T14:15:00-08:00",
-		LastInputAtUnix: 1_700_000_100,
+		Session:  "work",
+		PID:      4242,
+		Version:  "v0.4.1",
+		Stale:    false,
+		ReadOnly: false,
+		// A fixed zone rather than the local one, because the rendering below is asserted verbatim: a
+		// timestamp built in the local zone formats differently per machine, which is a failure that gets
+		// blamed on the machine rather than on the test.
+		AttachedAt:  new(pinnedZone()),
+		Active:      true,
+		LastInputAt: new(pinnedZone().Add(100 * time.Second)),
 	}
 }
 
@@ -157,9 +159,9 @@ func TestClientRowJSONKeys(t *testing.T) {
 
 	want := []string{
 		"session", "pid", "version", "stale", "read_only",
-		"attached_at", "attached_at_unix",
+		"attached_at",
 		// Which client is being used, and when it last typed.
-		"active", "last_input_at", "last_input_at_unix",
+		"active", "last_input_at",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -191,40 +193,27 @@ func TestClientRowsCarriesActive(t *testing.T) {
 	want := []clientRowJSON{
 		{
 			Session: "work", PID: 100, Version: "current",
-			AttachedAtUnix: 1_700_000_000,
-			// Never typed, so no time and no mark. A blank rather than 1970, which is what rendering a
-			// zero would produce, and which would read as a client that typed decades ago.
-			LastInputAt: "", LastInputAtUnix: 0, Active: false,
+			AttachedAt: at(1_700_000_000),
+			// Never typed, so no time and no mark. Nil rather than an instant of zero, which would render
+			// as a client that typed decades ago.
+			LastInputAt: nil, Active: false,
 		},
 		{
 			Session: "work", PID: 101, Version: "current",
-			AttachedAtUnix: 1_700_000_050, LastInputAtUnix: 1_700_000_100, Active: true,
+			AttachedAt: at(1_700_000_050), LastInputAt: at(1_700_000_100), Active: true,
 		},
 	}
-	// The rendered timestamps are in the machine's zone, so they are copied across rather than pinned:
-	// hardcoding an offset passes where it was written and fails in CI, which gets blamed on CI. The
-	// values themselves are asserted below.
-	for i := range got {
-		if i < len(want) && got[i].LastInputAtUnix != 0 {
-			want[i].LastInputAt = got[i].LastInputAt
-		}
-		if i < len(want) {
-			want[i].AttachedAt = got[i].AttachedAt
-		}
-	}
+	// Pinned rather than copied out of the result. The string form could not be: it rendered in the
+	// machine's zone, so an expected literal passed where it was written and failed in CI, and the only
+	// portable want was "whatever we just produced" -- which a blank value also satisfies. An instant is
+	// the same number everywhere.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("clientRows() = %+v\nwant %+v", got, want)
 	}
-	// Asserted separately, since the wanted timestamps above came from the result and a blank would
-	// otherwise pass. The date can fall either side of midnight depending on the zone.
-	if !strings.HasPrefix(got[1].LastInputAt, "2023-11-14") &&
-		!strings.HasPrefix(got[1].LastInputAt, "2023-11-15") {
-		t.Errorf("LastInputAt = %q, want an RFC 3339 timestamp for the given instant",
-			got[1].LastInputAt)
-	}
-	// And a client that never typed renders nothing at all, which is the case a copied value would hide.
-	if got[0].LastInputAt != "" {
-		t.Errorf("LastInputAt = %q for a client that never typed, want empty", got[0].LastInputAt)
+	// Stated again on its own, because it is the case the compare above would have hidden while the
+	// timestamps were copied from the result, and it is the one a reader gets wrong.
+	if got[0].LastInputAt != nil {
+		t.Errorf("LastInputAt = %v for a client that never typed, want nil", got[0].LastInputAt)
 	}
 }
 
