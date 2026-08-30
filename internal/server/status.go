@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -34,6 +35,10 @@ func (s *Service) Status(
 		// A property of this server, not of the client asking: a server built without the emulator cannot
 		// restore a screen however capable the client is.
 		Terminal: s.mgr.newTerminal != nil,
+		// What this build's server can do, so a client can ask before it commits to something a server
+		// might never satisfy. Status rather than a probe of its own because this is already the cheapest
+		// call: the registry and one store query.
+		Capabilities: capability.Server().Strings(),
 	}
 
 	// Live clients from the registry, since only this process knows them. The store records sessions, not

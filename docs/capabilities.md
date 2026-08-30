@@ -74,10 +74,16 @@ before the server acts on any session.
 the server's capabilities. Stated so it does not get built speculatively; add it when there is a
 caller.
 
-**Server to client: `StatusResponse`, and `Opened` on the attach stream.** `Opened` matters because an
-attach is long-lived and cannot afford a second round trip to discover what it is talking to.
-`StatusResponse` covers the short-lived commands. A command in class 3 above pays one unary call
-before committing, which is 17.8us against the ~23ms a cm invocation costs anyway.
+**Server to client: `StatusResponse`, plus `DoctorResponse` for the diagnostics.** `Status` is the
+cheapest thing a client can ask, so a command in class 3 above pays one unary call before committing:
+17.8us against the ~23ms a cm invocation costs anyway. `DoctorResponse` carries the same list because
+`cm version` and `cm doctor` already call `Doctor` for the version, and asking two RPCs for what one
+build is would be silly.
+
+`Opened` on the attach stream was planned and is **not** in yet. The argument for it is real, that a
+long-lived attach cannot afford a round trip to discover what it is talking to, but no attach code reads
+a capability today, and a wire field with no reader is the same dead weight as a token with no gate. It
+goes in with the first attach behavior that needs it.
 
 **Client to server: the existing `client_version` pattern extended.** `Open` and `DoctorRequest`
 already carry the client's build; a client's capabilities belong beside it. The server uses this only
@@ -125,12 +131,17 @@ repo and fails on a token nothing outside the package asks about, and a second c
 that belongs to no role's set, which is the same dead weight from the other direction. Every gate names
 a declared constant, which the compiler enforces for free.
 
-Three mutations were run against the tests before believing them: collapsing `Unknown` into `Absent`
-(caught by three tests), removing the gate from `Session.Shutdown` (caught by five), and deleting the
-`Capabilities` line from `Service.State`. The third initially passed the *whole suite*, because every
-server-side test drives a fake shim and none of them can see the real one stop reporting. That gap is
-what `internal/shim`'s own capability test covers, and it is worth knowing about: a foundation that
-reports nothing while looking wired up is the failure this mechanism is most exposed to.
+Seven mutations were run against the tests before believing them. Collapsing `Unknown` into `Absent`
+(caught by three tests), removing the gate from `Session.Shutdown` (five), refusing on `Unknown` as well
+as `Absent` (one, the over-strict mistake that would break every wait against today's servers),
+comparing a client against `Server()` (two), dropping the capability clause from the shim finding (two),
+and removing a wait's dependency from `needsCapability` (one).
+
+The seventh is the one worth knowing about. Deleting the `Capabilities` line from `Service.State` passed
+the *whole suite*, because every server-side test drives a fake shim and none of them can see the real
+one stop reporting. `internal/shim` has its own capability test for that now. A foundation that reports
+nothing while looking wired up is the failure this mechanism is most exposed to, and the consumer-side
+tests cannot see it.
 
 ## Three answers, not two
 
@@ -194,7 +205,7 @@ the case that will need it.
 
 ## Staging
 
-Three commits. The first is done.
+Three commits. The first two are done.
 
 1. **The vocabulary and the shim hop**: `internal/capability`, `StateResponse.capabilities`, the server
    caching it per session, and the `shutdown.signal` gate. The shim hop first because it is where skew is
@@ -206,11 +217,31 @@ Three commits. The first is done.
    does not pass its own tests. That is the rule working rather than an obstacle, and it is worth knowing
    before planning the next capability: **a token and its gate are one commit**, because a registry
    entry with nothing behind it is exactly what the test refuses to let sit in the tree.
-2. **The client hop**: `StatusResponse.capabilities` and `Opened.capabilities`, and the two `wait` gates
-   refusing up front with a message naming the restart instead of hanging. `wait.reported-state` covers
-   the hang `checks.go` documents; `wait.match` is the same hang one field over.
-3. **Diagnostics**: `cm doctor` and `cm version --json` naming which capabilities a peer lacks rather
-   than only that versions differ, and using `Set.Unrecognized` to say which side is ahead.
+2. **The client hop and the diagnostics**, which turned out to be one commit rather than two: the
+   `wait` gates are what make the tokens legal to declare, and `cm doctor` reporting them is what makes
+   the client's own set worth sending. `wait.reported-state` covers the hang `checks.go` documents and
+   `wait.match` is the same hang one field over; `cm send --wait` runs the same wait through the same
+   server and goes through the same rule, from `waitTarget.needsCapability` rather than a second copy.
+3. **Still open**: `Opened.capabilities` with an attach behavior that reads it, and a client capability
+   with a server-side branch behind it, which is what makes `checkCapabilitySkew`'s older-client half
+   reachable.
+
+## Two mistakes worth not repeating
+
+**A role's set is only comparable with the same role's set.** `checkCapabilitySkew` first compared what
+the client reported against `capability.Server()`, found `wait.reported-state` and `wait.match` "missing
+from the client", and reported skew between a client and server built from the same commit. A client has
+no business declaring a server capability, so that was a category error rather than a strictness
+setting, and the symptom was the exact failure the whole check is meant to avoid: a diagnostic that
+fires on a healthy install. `TestDiagnoseFindsNothingWhenHealthy` caught it and
+`TestCapabilitySkewIsSilentForAClientOfThisBuild` now guards it.
+
+**A test that names its expected tokens stops testing when a token is added.** Three capability tests
+listed the two tokens that existed when they were written and passed unchanged when two more arrived,
+silently covering half of what they claimed to. They derive the expectation from `Declared()` now. The
+same trap in the other direction: the unrecognized-token test used `"wait.match"` as its stand-in for an
+unknown token, which became a real token in the next commit and would have quietly stopped testing
+anything.
 
 ## Not doing
 

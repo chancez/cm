@@ -62,6 +62,9 @@ type statusJSON struct {
 	// ClientVersion is this binary's build, so a mismatch is visible here too rather than only in
 	// `cm version`.
 	ClientVersion string `json:"client_version"`
+	// Capabilities is what the running server can do. Empty when no server is running and also when one
+	// predates capability reporting; Running above separates those.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 func runStatus(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -93,6 +96,7 @@ func runStatus(cmd *cobra.Command, g *globals, asJSON bool) error {
 			out.SessionsExited = resp.SessionsExited
 			out.SessionsDead = resp.SessionsDead
 			out.Clients = resp.Clients
+			out.Capabilities = resp.GetCapabilities()
 
 		case isUnimplemented(rerr):
 			// A server predating this command. Reported as running, since it is, with the version left to

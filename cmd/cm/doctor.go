@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -30,6 +31,9 @@ while to diagnose, because each fails silently rather than reporting an error.
   missing-shim          a session recorded as running whose shim is gone
   version-skew          client and server from different builds, where a feature
                         missing from one side waits forever instead of failing
+  capability-skew       client and server that disagree about what one of them
+                        can do, naming the feature rather than the build, and
+                        saying which side is the stale one
   server-errors         recent errors in the server and shim logs, which nothing
                         else surfaces
   log-warnings          recent warnings, which are the quieter and often more
@@ -107,9 +111,14 @@ directories the stranded server was started with.`,
 // doctorJSON is the JSON shape of a diagnosis.
 type doctorJSON struct {
 	// Versions of both sides, so a report pasted into an issue says which builds it came from.
-	ClientVersion string        `json:"client_version"`
-	ServerVersion string        `json:"server_version"`
-	Findings      []findingJSON `json:"findings"`
+	ClientVersion string `json:"client_version"`
+	ServerVersion string `json:"server_version"`
+	// What each side can do, which is the question two build strings cannot answer. Empty for the server
+	// when it predates capability reporting, and that emptiness is itself the explanation for a feature
+	// that appears not to work.
+	ClientCapabilities []string      `json:"client_capabilities"`
+	ServerCapabilities []string      `json:"server_capabilities"`
+	Findings           []findingJSON `json:"findings"`
 	// Repaired lists what --clean did, and is empty otherwise.
 	Repaired []string `json:"repaired"`
 }
@@ -132,6 +141,8 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		Repair: clean,
 		// Sent rather than derived server-side, because the server cannot tell which binary connected to it.
 		ClientVersion: paths.Version(),
+		// So the server can name what differs rather than only that builds differ.
+		ClientCapabilities: capability.Client().Strings(),
 	})
 	if err != nil {
 		// A server too old to know this method cannot report anything, which is itself the diagnosis: it is
@@ -150,8 +161,13 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		out := doctorJSON{
 			ClientVersion: paths.Version(),
 			ServerVersion: resp.ServerVersion,
-			Findings:      make([]findingJSON, 0, len(resp.Findings)),
-			Repaired:      resp.Repaired,
+			// Both sides' capabilities, so a script or a bug report carries what each can do rather than
+			// only two opaque build strings. Empty from a server predating the field, which is itself the
+			// answer to why a feature is missing.
+			ClientCapabilities: capability.Client().Strings(),
+			ServerCapabilities: resp.GetServerCapabilities(),
+			Findings:           make([]findingJSON, 0, len(resp.Findings)),
+			Repaired:           resp.Repaired,
 		}
 		for _, f := range resp.Findings {
 			out.Findings = append(out.Findings, findingJSON{

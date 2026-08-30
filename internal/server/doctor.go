@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -56,7 +57,12 @@ const (
 // shim whose runtime directory has been deleted, because there is nothing left to enumerate. The
 // alternative, scanning the process table for anything that looks like a shim, can be fooled and could kill
 // something that is not cm's, which is a worse failure than missing an orphan.
-func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding, error) {
+//
+// The client's capabilities are passed alongside its version because only the client knows either, and
+// because a version difference on its own cannot say what breaks. See checkCapabilitySkew.
+func (m *Manager) Diagnose(
+	ctx context.Context, clientVersion string, clientCaps capability.Set,
+) ([]Finding, error) {
 	records, err := m.store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
@@ -76,6 +82,7 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// Collected from the probes below rather than by probing again, since each shim is already being
 	// asked about itself here and a second round trip per session would double the cost of the command.
 	shimVersions := make(map[string]string, len(sockets))
+	shimCaps := make(map[string]capability.Set, len(sockets))
 
 	for _, sock := range sockets {
 		id := sessionIDFromSocket(sock)
@@ -86,6 +93,9 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 			// Recorded even when empty. A shim too old to report a version is itself skew of at least
 			// that much, and the check below says so rather than treating it as agreement.
 			shimVersions[id] = st.Version
+			// Empty parses to the zero Set, which answers Unknown rather than Absent, so a shim predating
+			// capability reporting is not mistaken for one that refused everything.
+			shimCaps[id] = capability.Parse(st.GetCapabilities())
 		}
 		switch {
 		case !alive:
@@ -132,7 +142,8 @@ func (m *Manager) Diagnose(ctx context.Context, clientVersion string) ([]Finding
 	// non-destructive, so they all run rather than stopping at the first thing found: a reader debugging a
 	// problem wants the whole picture, not the first item alphabetically.
 	findings = append(findings, m.checkVersionSkew(clientVersion)...)
-	findings = append(findings, m.checkShimVersionSkew(shimVersions)...)
+	findings = append(findings, m.checkCapabilitySkew(clientCaps)...)
+	findings = append(findings, m.checkShimVersionSkew(shimVersions, shimCaps)...)
 	findings = append(findings, m.checkTerminal()...)
 	findings = append(findings, m.checkEmulatorSpeed()...)
 	findings = append(findings, m.checkDeniedModes()...)
@@ -238,7 +249,7 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 func (s *Service) Doctor(
 	ctx context.Context, req *serverv1.DoctorRequest,
 ) (*serverv1.DoctorResponse, error) {
-	findings, err := s.mgr.Diagnose(ctx, req.ClientVersion)
+	findings, err := s.mgr.Diagnose(ctx, req.ClientVersion, capability.Parse(req.GetClientCapabilities()))
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +257,9 @@ func (s *Service) Doctor(
 	resp := &serverv1.DoctorResponse{
 		Findings:      make([]*serverv1.Finding, 0, len(findings)),
 		ServerVersion: s.mgr.Version(),
+		// So `cm version` can list them from the Doctor call it already makes for the version, rather than
+		// making a second call to Status for the same question.
+		ServerCapabilities: capability.Server().Strings(),
 	}
 	if req.Repair {
 		resp.Repaired = s.mgr.Repair(ctx, findings)

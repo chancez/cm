@@ -195,6 +195,17 @@ follower connects, which for a fast command can be all of it.`,
 				return sendAndFollow(cmd.Context(), dirs, name, data, enter, state, timeout, raw, logger)
 			}
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+				// The same wait `cm wait` issues, through the same server, so it is exposed the same way: a
+				// --wait blocked or a --match against a server predating either runs the whole timeout and
+				// reports nothing about why. One rule, in waitTarget.needsCapability, rather than a second
+				// copy here that would drift from it.
+				target := waitTarget{match: match, state: state, until: until}
+				note, cerr := checkWaitCapability(ctx, cl, target)
+				if cerr != nil {
+					return cerr
+				}
+				target.note = note
+
 				resp, err := cl.Send(ctx, &serverv1.SendRequest{
 					Session:       name,
 					Data:          []byte(data),
@@ -212,8 +223,7 @@ follower connects, which for a fast command can be all of it.`,
 				}
 				// Described by what was waited for, so a timeout message names the pattern rather than
 				// an empty state.
-				return reportWait(os.Stdout, os.Stderr, name,
-					waitTarget{match: match, until: until}.describe(), resp.GetWait(), asJSON)
+				return reportWait(os.Stdout, os.Stderr, name, target, resp.GetWait(), asJSON)
 			})
 		},
 	}

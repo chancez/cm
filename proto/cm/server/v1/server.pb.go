@@ -328,7 +328,18 @@ type StatusResponse struct {
 	Clients int32 `protobuf:"varint,9,opt,name=clients,proto3" json:"clients,omitempty"`
 	// Whether this server has the terminal emulator. A server without it cannot restore a screen, and
 	// that is a property of the server rather than of the client asking.
-	Terminal      bool `protobuf:"varint,10,opt,name=terminal,proto3" json:"terminal,omitempty"`
+	Terminal bool `protobuf:"varint,10,opt,name=terminal,proto3" json:"terminal,omitempty"`
+	// What this server can do, as capability tokens from internal/capability.
+	//
+	// Carried here because Status is the cheapest thing a client can ask, and a client that depends on a
+	// server behavior needs to know before it commits rather than after it has waited. `cm wait --until
+	// blocked` against a server predating state reporting waits out its whole timeout, since nothing
+	// else on the wire separates "not blocked yet" from "will never report blocked".
+	//
+	// Empty from a server predating this field, which is why every reporting build includes the
+	// "capabilities" token itself: an empty list then means "does not speak this" rather than "supports
+	// none of these". See capability.Support, whose three values exist for that distinction.
+	Capabilities  []string `protobuf:"bytes,11,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -431,6 +442,13 @@ func (x *StatusResponse) GetTerminal() bool {
 		return x.Terminal
 	}
 	return false
+}
+
+func (x *StatusResponse) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 type ReportRequest struct {
@@ -929,8 +947,18 @@ type DoctorRequest struct {
 	// server cannot tell which binary connected to it. Empty from a client that predates this field, which
 	// is itself a version difference worth reporting.
 	ClientVersion string `protobuf:"bytes,2,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// What the calling client can do, beside its version, for the same reason: only the client knows.
+	//
+	// This lets a diagnostic say what differs rather than only that builds differ, which is the gap the
+	// version fields leave. It also lets it say which side is *ahead*: a token the server does not
+	// recognize means the client is newer, and nothing else cm reports distinguishes a stale server from a
+	// stale client.
+	//
+	// Reported, never acted on. The server branches on no client capability, and if it ever needs to, the
+	// token for that gets added with the branch.
+	ClientCapabilities []string `protobuf:"bytes,3,rep,name=client_capabilities,json=clientCapabilities,proto3" json:"client_capabilities,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *DoctorRequest) Reset() {
@@ -977,6 +1005,13 @@ func (x *DoctorRequest) GetClientVersion() string {
 	return ""
 }
 
+func (x *DoctorRequest) GetClientCapabilities() []string {
+	if x != nil {
+		return x.ClientCapabilities
+	}
+	return nil
+}
+
 type DoctorResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Findings []*Finding             `protobuf:"bytes,1,rep,name=findings,proto3" json:"findings,omitempty"`
@@ -984,8 +1019,13 @@ type DoctorResponse struct {
 	Repaired []string `protobuf:"bytes,2,rep,name=repaired,proto3" json:"repaired,omitempty"`
 	// The server's own build, so a client can show both sides of a mismatch.
 	ServerVersion string `protobuf:"bytes,3,opt,name=server_version,json=serverVersion,proto3" json:"server_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// What this server can do, so `cm version` can list it from the call it already makes.
+	//
+	// Duplicated from StatusResponse deliberately: these are the two things a client asks when it wants to
+	// know what it is talking to, and a client should not have to make both calls to find out.
+	ServerCapabilities []string `protobuf:"bytes,4,rep,name=server_capabilities,json=serverCapabilities,proto3" json:"server_capabilities,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *DoctorResponse) Reset() {
@@ -1037,6 +1077,13 @@ func (x *DoctorResponse) GetServerVersion() string {
 		return x.ServerVersion
 	}
 	return ""
+}
+
+func (x *DoctorResponse) GetServerCapabilities() []string {
+	if x != nil {
+		return x.ServerCapabilities
+	}
+	return nil
 }
 
 // Finding is one thing wrong with an installation.
@@ -4409,7 +4456,7 @@ var File_cm_server_v1_server_proto protoreflect.FileDescriptor
 const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
 	"\x19cm/server/v1/server.proto\x12\fcm.server.v1\"\x0f\n" +
-	"\rStatusRequest\"\xd1\x02\n" +
+	"\rStatusRequest\"\xf5\x02\n" +
 	"\x0eStatusResponse\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12&\n" +
 	"\x0fstarted_at_unix\x18\x02 \x01(\x03R\rstartedAtUnix\x12\x18\n" +
@@ -4422,7 +4469,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rsessions_dead\x18\b \x01(\x05R\fsessionsDead\x12\x18\n" +
 	"\aclients\x18\t \x01(\x05R\aclients\x12\x1a\n" +
 	"\bterminal\x18\n" +
-	" \x01(\bR\bterminal\"\x8c\x01\n" +
+	" \x01(\bR\bterminal\x12\"\n" +
+	"\fcapabilities\x18\v \x03(\tR\fcapabilities\"\x8c\x01\n" +
 	"\rReportRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x121\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1b.cm.server.v1.ReportedStateR\x05state\x12\x16\n" +
@@ -4457,14 +4505,16 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
 	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x19\n" +
 	"\blast_seq\x18\n" +
-	" \x01(\x04R\alastSeq\"N\n" +
+	" \x01(\x04R\alastSeq\"\x7f\n" +
 	"\rDoctorRequest\x12\x16\n" +
 	"\x06repair\x18\x01 \x01(\bR\x06repair\x12%\n" +
-	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\"\x86\x01\n" +
+	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12/\n" +
+	"\x13client_capabilities\x18\x03 \x03(\tR\x12clientCapabilities\"\xb7\x01\n" +
 	"\x0eDoctorResponse\x121\n" +
 	"\bfindings\x18\x01 \x03(\v2\x15.cm.server.v1.FindingR\bfindings\x12\x1a\n" +
 	"\brepaired\x18\x02 \x03(\tR\brepaired\x12%\n" +
-	"\x0eserver_version\x18\x03 \x01(\tR\rserverVersion\"\xb9\x01\n" +
+	"\x0eserver_version\x18\x03 \x01(\tR\rserverVersion\x12/\n" +
+	"\x13server_capabilities\x18\x04 \x03(\tR\x12serverCapabilities\"\xb9\x01\n" +
 	"\aFinding\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x16\n" +

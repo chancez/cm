@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -152,6 +153,14 @@ to whichever finishes first instead of polling for it.`,
 			// session outlives its server, so a wait issued while the server is down should adopt the
 			// session and answer, not fail. That is the same path an upgrade takes.
 			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+				// Before the wait rather than after it, so a server that cannot satisfy this says so now
+				// instead of at the end of a timeout.
+				note, cerr := checkWaitCapability(ctx, cl, target)
+				if cerr != nil {
+					return cerr
+				}
+				target.note = note
+
 				names, _, err := sessionTargets(ctx, cl, args, tagArgs)
 				if err != nil {
 					return err
@@ -198,6 +207,12 @@ type waitTarget struct {
 	state serverv1.WaitState
 	// until is how the state was spelled, for messages. Empty when matching.
 	until string
+
+	// note explains on a failure that the capability could not be confirmed, and is empty when it was.
+	//
+	// Carried on the target rather than passed alongside it for the reason the struct exists at all: the
+	// alternative is another parameter threaded through two report functions in the right position.
+	note string
 }
 
 // describe names what is being waited for, for a diagnostic.
@@ -206,6 +221,49 @@ func (t waitTarget) describe() string {
 		return fmt.Sprintf("output matching %q", t.match)
 	}
 	return t.until
+}
+
+// needsCapability returns the server capability this wait cannot be satisfied without, with a phrase for
+// a refusal. An empty name means the wait depends on nothing a server might lack.
+//
+// Derived rather than stored, so the rule lives in one place: `cm send --wait` runs the same wait through
+// the same server and asks this too, and two copies of "which forms need what" would drift.
+//
+// Only two forms have a dependency. Blocked exists only when a program reports it, and match is a field an
+// older server reads as absent, so both can be asked of a server that will never answer. Idle, busy and
+// exited come from OSC 133 and the session's own state, which every server has always done.
+func (t waitTarget) needsCapability() (capability.Name, string) {
+	switch {
+	case t.match != "":
+		return capability.WaitMatch, "wait for text to appear in a session's output"
+	case t.state == serverv1.WaitState_WAIT_STATE_BLOCKED:
+		return capability.WaitReportedState, "wait for the blocked state"
+	}
+	return "", ""
+}
+
+// checkWaitCapability refuses a wait the server has said it cannot satisfy, and otherwise returns the note
+// to attach if the wait comes back unsatisfied.
+//
+// One round trip, and only for a wait that depends on something. A wait a server can never satisfy runs its
+// whole timeout and then reports the session as merely not there yet, which reads as a broken feature rather
+// than as an old server: checks.go records that costing a bad hour.
+//
+// Refuses only on a conclusive no. A server that reports nothing is every server predating capability
+// reporting, so refusing on silence would turn a working command into a failing one; that case gets the note
+// instead, which costs nothing unless the wait actually fails.
+func checkWaitCapability(
+	ctx context.Context, cl serverv1.ServerClient, target waitTarget,
+) (string, error) {
+	need, what := target.needsCapability()
+	if need == "" {
+		return "", nil
+	}
+	caps := serverCapabilities(ctx, cl)
+	if err := requireServerCapability(caps, need, what); err != nil {
+		return "", err
+	}
+	return explainUnsatisfied(caps, need), nil
 }
 
 // waitOne waits on a single session.
@@ -231,7 +289,7 @@ func waitOne(
 	if err != nil {
 		return err
 	}
-	return reportWait(stdout, stderr, name, target.describe(), resp, asJSON)
+	return reportWait(stdout, stderr, name, target, resp, asJSON)
 }
 
 // waitMany waits on several sessions at once, returning when all are satisfied or, with any, when the
@@ -297,7 +355,7 @@ func waitMany(
 		if any && res.resp.Satisfied {
 			// The first to reach the state ends the wait, reported in the single-session form: what the
 			// caller wants is which one, and what it was doing.
-			return reportWait(stdout, stderr, res.name, target.describe(), res.resp, asJSON)
+			return reportWait(stdout, stderr, res.name, target, res.resp, asJSON)
 		}
 	}
 	if firstErr != nil {
@@ -306,7 +364,7 @@ func waitMany(
 	// Either every session was required and they have all been collected, or --any ran out of sessions
 	// without one being satisfied. Both report the whole set, since the useful information on a failure
 	// is which sessions did not get there.
-	return reportWaitMany(stdout, stderr, names, got, target.describe(), asJSON)
+	return reportWaitMany(stdout, stderr, names, got, target, asJSON)
 }
 
 // waitJSON is the JSON shape of a wait result.
@@ -378,11 +436,13 @@ func toWaitJSON(name, until string, resp *serverv1.WaitResponse) waitJSON {
 }
 
 // reportWait prints the outcome and reports failure as an exit status.
+// Takes the whole target rather than its description, so the compatibility note travels with it. Threading
+// that as a separate parameter is what the target struct exists to avoid.
 func reportWait(
-	stdout, stderr io.Writer, name, until string, resp *serverv1.WaitResponse, asJSON bool,
+	stdout, stderr io.Writer, name string, target waitTarget, resp *serverv1.WaitResponse, asJSON bool,
 ) error {
 	if asJSON {
-		if err := writeJSON(stdout, toWaitJSON(name, until, resp)); err != nil {
+		if err := writeJSON(stdout, toWaitJSON(name, target.describe(), resp)); err != nil {
 			return err
 		}
 	}
@@ -393,9 +453,13 @@ func reportWait(
 
 	// A timeout exits non-zero so `cm wait ... && next` does the right thing, and the detail goes to
 	// stderr so it does not pollute a pipeline reading stdout.
+	//
+	// The note follows it, and only here: a wait that could not have been satisfied because the server
+	// predates the feature looks exactly like one that timed out honestly, and this is the only moment
+	// where saying so is useful rather than noise.
 	if !asJSON {
-		fmt.Fprintf(stderr, "%s: timed out waiting for %s to be %s; it is %s\n",
-			paths.Name, name, until, waitDoing(resp))
+		fmt.Fprintf(stderr, "%s: timed out waiting for %s to be %s; it is %s%s\n",
+			paths.Name, name, target.describe(), waitDoing(resp), target.note)
 	}
 	return &exitCodeError{code: 1, reported: true}
 }
@@ -417,9 +481,10 @@ func reportWaitMany(
 	stdout, stderr io.Writer,
 	names []string,
 	got map[string]*serverv1.WaitResponse,
-	until string,
+	target waitTarget,
 	asJSON bool,
 ) error {
+	until := target.describe()
 	if asJSON {
 		out := make([]waitJSON, 0, len(names))
 		for _, name := range names {
@@ -456,8 +521,10 @@ func reportWaitMany(
 			fmt.Fprintf(stderr, "%s: timed out waiting for %s to be %s; it is %s\n",
 				paths.Name, name, until, waitDoing(resp))
 		}
-		fmt.Fprintf(stderr, "%s: %d of %d sessions did not reach %s\n",
-			paths.Name, len(unsatisfied), len(names), until)
+		// Once for the set rather than once per session: the note is about the server, so repeating it
+		// against every session would say the same thing N times.
+		fmt.Fprintf(stderr, "%s: %d of %d sessions did not reach %s%s\n",
+			paths.Name, len(unsatisfied), len(names), until, target.note)
 	}
 	return &exitCodeError{code: 1, reported: true}
 }

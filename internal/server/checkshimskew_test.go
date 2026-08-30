@@ -48,7 +48,7 @@ func TestCheckShimVersionSkew(t *testing.T) {
 			mgr, _, _ := newTestManager(t, nil)
 			mgr.SetVersion("v-server")
 
-			got := mgr.checkShimVersionSkew(tc.shims)
+			got := mgr.checkShimVersionSkew(tc.shims, nil)
 			if (len(got) > 0) != tc.want {
 				t.Errorf("checkShimVersionSkew(%v) = %+v, want a finding = %v", tc.shims, got, tc.want)
 			}
@@ -88,7 +88,7 @@ func TestCheckShimVersionSkewDetailIsStable(t *testing.T) {
 		"f": "",
 	}
 
-	got := mgr.checkShimVersionSkew(shims)
+	got := mgr.checkShimVersionSkew(shims, nil)
 	if len(got) != 1 {
 		t.Fatalf("checkShimVersionSkew() = %+v, want exactly one finding", got)
 	}
@@ -106,7 +106,7 @@ func TestCheckShimVersionSkewDetailIsStable(t *testing.T) {
 	// Repeated calls agree. One call cannot catch an ordering bug that depends on map iteration, so this
 	// runs enough times that a randomized order would almost certainly differ at least once.
 	for range 20 {
-		again := mgr.checkShimVersionSkew(shims)
+		again := mgr.checkShimVersionSkew(shims, nil)
 		if len(again) != 1 || again[0].Detail != got[0].Detail {
 			t.Fatalf("detail changed between identical calls:\n%q\n%q", got[0].Detail, again[0].Detail)
 		}

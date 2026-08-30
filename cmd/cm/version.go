@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/vt"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -52,6 +53,13 @@ type versionJSON struct {
 	Terminal      bool   `json:"terminal"`
 	Go            string `json:"go"`
 	Platform      string `json:"platform"`
+	// What each side can do. The server's is empty when none is running and also when it predates
+	// capability reporting, which the running flag above separates.
+	//
+	// Listed because this is the command someone runs when a feature is not working, and "what can the
+	// thing I am talking to actually do" is the question underneath. Two build strings do not answer it.
+	ClientCapabilities []string `json:"client_capabilities"`
+	ServerCapabilities []string `json:"server_capabilities,omitempty"`
 }
 
 func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -60,9 +68,10 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Reported even though cgo is now required, so a client talking to a server built differently sees
 		// the answer rather than assuming it. A server without the emulator shows a blank screen on
 		// reattach, which looks like a bug in restore rather than a build problem.
-		Terminal: vt.Available,
-		Go:       runtime.Version(),
-		Platform: runtime.GOOS + "/" + runtime.GOARCH,
+		Terminal:           vt.Available,
+		Go:                 runtime.Version(),
+		Platform:           runtime.GOOS + "/" + runtime.GOARCH,
+		ClientCapabilities: capability.Client().Strings(),
 	}
 
 	// Asked only if a server is already there. Starting one to ask its version would make a diagnostic
@@ -75,11 +84,14 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 			// tidier and this avoids adding one for a field that is already on the wire.
 			resp, rerr := cl.Doctor(cmd.Context(), &serverv1.DoctorRequest{
 				ClientVersion: paths.Version(),
+				// So the server can name what differs rather than only that builds differ.
+				ClientCapabilities: capability.Client().Strings(),
 			})
 			switch {
 			case rerr == nil:
 				out.Server = resp.ServerVersion
 				out.ServerRunning = true
+				out.ServerCapabilities = resp.GetServerCapabilities()
 			case isUnimplemented(rerr):
 				// A server too old to answer. Saying so is the point: that is version skew, and it is the
 				// one case this command cannot report a number for.
@@ -114,6 +126,20 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 	}
 	fmt.Fprintf(os.Stdout, "go       %s\n", out.Go)
 	fmt.Fprintf(os.Stdout, "platform %s\n", out.Platform)
+	// Printed only when the server cannot say what it can do, which is the case that explains a feature
+	// appearing not to work. A running server of any current build is left silent.
+	//
+	// Deliberately not "when the two lists differ". They always differ: a client and a server are
+	// different roles declaring different things, so comparing the sets across roles is meaningless and
+	// printing on a difference means printing on every healthy install. That mistake was made twice, once
+	// here and once in checkCapabilitySkew, and here it survived the whole test suite and only showed up
+	// when the command was run. A role's set compares with the same role's set from another build, and
+	// with nothing else.
+	if out.ServerRunning && len(out.ServerCapabilities) == 0 {
+		fmt.Fprintln(os.Stdout,
+			"capabilities server reports none, so it predates capability reporting and what it implements "+
+				"cannot be established")
+	}
 	return nil
 }
 

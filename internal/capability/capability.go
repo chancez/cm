@@ -61,6 +61,21 @@ const (
 	// and no such log existed. A job deliberately trapping SIGTERM to finish writing a file is the case
 	// that cares.
 	ShutdownSignal Name = "shutdown.signal"
+
+	// WaitReportedState means the server understands Report and ReportedState, so a wait for the blocked
+	// state can be satisfied.
+	//
+	// The failure without it is a hang rather than an error, which is the whole reason this package
+	// exists. `cm wait --until blocked` against a server predating reporting waits out its timeout,
+	// because nothing on the wire separates "not blocked yet" from "will never report blocked". Recorded
+	// in checks.go as costing a bad hour, since it looks like a broken feature.
+	WaitReportedState Name = "wait.reported-state"
+
+	// WaitMatch means the server honors WaitRequest.match, so a wait for text can be satisfied.
+	//
+	// The same hang one field over, and worse in one respect: an older server reads the unknown field as
+	// absent and sees a wait with no condition at all, so it does not even fail loudly.
+	WaitMatch Name = "wait.match"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -229,13 +244,36 @@ func Shim() Set {
 	)
 }
 
+// Server is what this build's server can do.
+func Server() Set {
+	return New(
+		Reported,
+		WaitReportedState,
+		WaitMatch,
+	)
+}
+
+// Client is what this build's client can do.
+//
+// Only Reported so far, which is not a placeholder: a client's set exists so a server can *report* the
+// skew, and the server decides nothing on it. There is no client capability a server needs to branch on
+// yet, and adding one before there is would be the bookkeeping without the benefit.
+//
+// Worth stating because the asymmetry looks like an omission. A capability probe only ever helps the peer
+// that knows a capability exists, and the server is not the peer waiting on the client for anything.
+func Client() Set {
+	return New(
+		Reported,
+	)
+}
+
 // declared is every token this build knows, for Unrecognized.
 //
 // Derived from the role sets rather than listed again, so a token added to a role cannot be left out of
 // here and read back as a stranger.
 var declared = func() map[Name]struct{} {
 	all := make(map[Name]struct{})
-	for _, s := range []Set{Shim()} {
+	for _, s := range []Set{Shim(), Server(), Client()} {
 		for n := range s.have {
 			all[n] = struct{}{}
 		}

@@ -231,7 +231,7 @@ func TestReportWaitManyNamesWhatFailed(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := reportWaitMany(&stdout, &stderr, names, got, "idle", false)
+	err := reportWaitMany(&stdout, &stderr, names, got, waitTarget{until: "idle"}, false)
 	if err == nil {
 		t.Fatal("reportWaitMany() = nil with two unsatisfied, want an error")
 	}
@@ -267,7 +267,7 @@ func TestReportWaitManyJSONIsOrderedAndComplete(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	// Non-nil error, since one session timed out; the output is what is under test.
-	_ = reportWaitMany(&stdout, &stderr, names, got, "idle", true)
+	_ = reportWaitMany(&stdout, &stderr, names, got, waitTarget{until: "idle"}, true)
 
 	body := stdout.String()
 	if !strings.HasPrefix(strings.TrimSpace(body), "[") {
@@ -287,7 +287,7 @@ func TestReportWaitManySucceedsWhenAllSatisfied(t *testing.T) {
 	got := map[string]*serverv1.WaitResponse{"one": satisfied(), "two": satisfied()}
 
 	var stdout, stderr bytes.Buffer
-	if err := reportWaitMany(&stdout, &stderr, names, got, "idle", false); err != nil {
+	if err := reportWaitMany(&stdout, &stderr, names, got, waitTarget{until: "idle"}, false); err != nil {
 		t.Errorf("reportWaitMany() error = %v, want nil", err)
 	}
 	if stderr.Len() != 0 {
@@ -304,7 +304,7 @@ func TestReportWaitManyTreatsAMissingReplyAsFailure(t *testing.T) {
 	got := map[string]*serverv1.WaitResponse{"one": satisfied()}
 
 	var stdout, stderr bytes.Buffer
-	if err := reportWaitMany(&stdout, &stderr, names, got, "idle", false); err == nil {
+	if err := reportWaitMany(&stdout, &stderr, names, got, waitTarget{until: "idle"}, false); err == nil {
 		t.Error("reportWaitMany() = nil with a session missing its reply, want an error")
 	}
 }

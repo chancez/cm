@@ -655,6 +655,11 @@ type ShutdownRequest struct {
 	// entirely and honors force alone, so a newer server asking for a specific signal gets SIGHUP or
 	// SIGKILL from it instead. That is a degradation rather than a failure, and the server logs it
 	// rather than pretending the signal was delivered.
+	//
+	// It logs it by asking: the "shutdown.signal" capability in the field above is what makes the
+	// substitution visible before the shell is signalled. This comment claimed the log existed for a
+	// while before one did, which is the reason the capability exists at all -- a compat rule stated in
+	// prose and checked nowhere is a rule the next reader believes and the code does not follow.
 	Signal        int32 `protobuf:"varint,2,opt,name=signal,proto3" json:"signal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

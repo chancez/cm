@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
 )
@@ -30,7 +31,91 @@ const (
 	// FindingShimVersionSkew is running shims spanning several builds. Expected rather than broken, and
 	// reported because the consequences of a version difference are silent.
 	FindingShimVersionSkew = "shim-version-skew"
+	// FindingCapabilitySkew is a client and server that disagree about what one of them can do. Names the
+	// feature rather than the build, which is what version-skew cannot do.
+	FindingCapabilitySkew = "capability-skew"
 )
+
+// checkCapabilitySkew reports what a client and server disagree about being able to do.
+//
+// This is what checkVersionSkew cannot say. Two different build strings tell a reader that skew exists and
+// nothing about what breaks, so the next step is guesswork; this names the feature. `cm wait --until
+// blocked` against a server predating state reporting is the case it exists for, because that one hangs
+// rather than failing and so looks like a broken feature rather than an old server.
+//
+// It also reports the direction, which nothing else here can. A token the client sends that this server
+// has never heard of means the *client* is newer, so the remedy is to restart the server onto the new
+// build rather than to wonder why a client is misbehaving. Version strings are opaque: neither side can
+// order two hashes.
+//
+// Quiet on a healthy install by construction. A client and server from one build declare identical sets,
+// so there is nothing to report until they genuinely differ.
+func (m *Manager) checkCapabilitySkew(clientCaps capability.Set) []Finding {
+	// Compared against what this build's *client* declares, never against what its server declares.
+	//
+	// That distinction is not pedantry, it is the difference between this check being quiet and it firing
+	// on every healthy install. A client and a server are different roles with legitimately different
+	// capabilities: wait.reported-state is a thing a server implements and a client has no business
+	// declaring. Comparing a client's set against Server() found both wait tokens "missing from the
+	// client" and reported skew against a client and server from the same commit, which is exactly the
+	// noise shimSkewReportThreshold exists to avoid. Caught by TestDiagnoseFindsNothingWhenHealthy.
+	//
+	// A role's set is only ever comparable with the same role's set from another build.
+	expected := capability.Client()
+
+	// A client that reports nothing is already covered by checkVersionSkew, which fires on the empty
+	// version the same client sends. Repeating it here as a second finding about one cause would be noise,
+	// and two findings for one restart reads as two problems.
+	if !clientCaps.Reports() {
+		return nil
+	}
+
+	var parts []string
+	// What the client knows about and this server does not implement. The failing direction: the client is
+	// the newer side and may ask for something that silently never happens.
+	if ahead := clientCaps.Unrecognized(); len(ahead) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"the client reports %s, which this server does not implement, so the client is the newer side "+
+				"and restarting the server will pick the new build up", capabilityList(ahead)))
+	}
+	// The reverse: this server implements something the client is too old to ask for. Harmless, since a
+	// client that cannot ask cannot be disappointed, but it does say which side is stale.
+	//
+	// Not reachable yet, and kept rather than added later on purpose. capability.Client() holds Reported
+	// alone, so any client that reports at all is missing nothing from it; this fires from the first real
+	// client capability onwards. What it is doing here now is holding the *correct* comparison in place,
+	// against Client() rather than Server(), which is the mistake that made this check fire on every
+	// healthy install once already.
+	if behind := clientCaps.Missing(expected.Names()...); len(behind) > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"this server implements %s and the client does not report it, so the client is the older side",
+			capabilityList(behind)))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+
+	return []Finding{{
+		Kind: FindingCapabilitySkew,
+		Detail: strings.Join(parts, "; ") +
+			". A capability missing from one side does not error, it reads as a zero value, so the symptom " +
+			"is a feature that appears not to work rather than a version difference",
+		Fixable: false,
+	}}
+}
+
+// capabilityList renders capability tokens for a finding's detail.
+//
+// Not called `names`: this package's names.go is about session names, and two functions called names in
+// one package invites reading one for the other. Local variables called names already shadow it in
+// checkShimVersionSkew.
+func capabilityList(caps []capability.Name) string {
+	out := make([]string, len(caps))
+	for i, n := range caps {
+		out[i] = string(n)
+	}
+	return strings.Join(out, ", ")
+}
 
 // checkVersionSkew reports a client and server built from different sources.
 //
@@ -94,7 +179,9 @@ const shimSkewReportThreshold = 3
 // The remedy is deliberately not stated as "restart the server". Restarting adopts the same shims and
 // changes none of this; only ending a session and starting a new one replaces its shim, which costs the
 // shell. So the finding says what is true and leaves the trade to the reader.
-func (m *Manager) checkShimVersionSkew(shimVersions map[string]string) []Finding {
+func (m *Manager) checkShimVersionSkew(
+	shimVersions map[string]string, shimCaps map[string]capability.Set,
+) []Finding {
 	if len(shimVersions) == 0 {
 		return nil
 	}
@@ -134,6 +221,12 @@ func (m *Manager) checkShimVersionSkew(shimVersions map[string]string) []Finding
 		fmt.Fprintf(&b, "%s (%d)", v, counts[v])
 	}
 
+	// Named here rather than in a check of its own, and that placement is the decision. A finding for
+	// "some shim lacks a capability" would fire on every shim predating capability reporting, which today
+	// is all of them, and a diagnostic that fires on a healthy install teaches people to ignore
+	// diagnostics -- the same reason shimSkewReportThreshold is three rather than one. Reported only where
+	// something already justified a finding, and only to say *what* the spread costs, which is the
+	// question a build list cannot answer.
 	return []Finding{{
 		Kind: FindingShimVersionSkew,
 		Detail: fmt.Sprintf(
@@ -142,10 +235,64 @@ func (m *Manager) checkShimVersionSkew(shimVersions map[string]string) []Finding
 				"same shims rather than replacing them. It is reported because the effect is silent: a "+
 				"feature one side does not implement reads as a zero value rather than an error. Only "+
 				"ending a session replaces its shim, which costs the shell in it, so this is a trade "+
-				"rather than a repair. Server is %s",
-			len(shimVersions), len(counts), b.String(), m.Version()),
+				"rather than a repair. Server is %s%s",
+			len(shimVersions), len(counts), b.String(), m.Version(),
+			shimCapabilityNote(shimCaps)),
 		Fixable: false,
 	}}
+}
+
+// shimCapabilityNote describes what the shims cannot be relied on for, as a clause to append.
+//
+// Empty when every shim reports the same capabilities this build's shim has, which is the case worth
+// keeping quiet: a spread of builds that all implement the same things is a version difference with no
+// consequence, and saying so at length would bury the cases that have one.
+func shimCapabilityNote(shimCaps map[string]capability.Set) string {
+	want := capability.Shim().Names()
+
+	// Counted three ways because the three call for different words. A shim that reports nothing cannot be
+	// asked; one that reports and lacks something is a definite gap; one that reports something this build
+	// has never heard of is newer than the server managing it, which is the direction nothing else here can
+	// detect.
+	silent := 0
+	lacking := make(map[capability.Name]int)
+	ahead := 0
+	for _, caps := range shimCaps {
+		if !caps.Reports() {
+			silent++
+			continue
+		}
+		for _, n := range caps.Missing(want...) {
+			lacking[n]++
+		}
+		if len(caps.Unrecognized()) > 0 {
+			ahead++
+		}
+	}
+
+	var parts []string
+	if silent > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d of them predate capability reporting, so what they implement cannot be established",
+			silent))
+	}
+	if len(lacking) > 0 {
+		names := make([]string, 0, len(lacking))
+		for n := range lacking {
+			names = append(names, fmt.Sprintf("%s (%d)", n, lacking[n]))
+		}
+		sort.Strings(names)
+		parts = append(parts, "some do not implement "+strings.Join(names, ", "))
+	}
+	if ahead > 0 {
+		parts = append(parts, fmt.Sprintf(
+			"%d report a capability this build does not know, so they are newer than this server and it is "+
+				"the stale side", ahead))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ". On capabilities: " + strings.Join(parts, "; ")
 }
 
 // checkTerminal reports a build without the emulator.

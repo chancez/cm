@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/shim"
 	"github.com/chancez/cm/internal/store"
@@ -108,7 +109,7 @@ func TestDiagnoseFindsNothingWhenHealthy(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx, paths.Version())
+	got, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -134,7 +135,7 @@ func TestDiagnoseFindsAnOrphanedShim(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx, paths.Version())
+	got, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -180,7 +181,7 @@ func TestRepairStopsOrphansAndSparesHealthySessions(t *testing.T) {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 
-	found, err := mgr.Diagnose(ctx, paths.Version())
+	found, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -259,7 +260,7 @@ func TestRepairReportsAnOrphanItStoppedWhenTheReplyIsLost(t *testing.T) {
 	fake := &lostReplyShim{}
 	serveFakeShimOn(t, socket, fake)
 
-	found, err := mgr.Diagnose(ctx, paths.Version())
+	found, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -298,7 +299,7 @@ func TestDiagnoseFindsAStaleSocket(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx, paths.Version())
+	got, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -333,7 +334,7 @@ func TestDiagnoseReportsARecordWithNoShim(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx, paths.Version())
+	got, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v", err)
 	}
@@ -362,7 +363,7 @@ func TestDiagnoseHandlesAMissingRuntimeDir(t *testing.T) {
 		t.Fatalf("RemoveAll() error = %v", err)
 	}
 
-	got, err := mgr.Diagnose(ctx, paths.Version())
+	got, err := mgr.Diagnose(ctx, paths.Version(), capability.Client())
 	if err != nil {
 		t.Fatalf("Diagnose() error = %v, want a missing runtime dir to be fine", err)
 	}

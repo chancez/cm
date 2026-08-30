@@ -25,10 +25,7 @@ import (
 func TestAPeerReportingNothingIsUnknownRatherThanAbsent(t *testing.T) {
 	got := supportOfEach(Parse(nil))
 
-	want := map[Name]Support{
-		Reported:       Unknown,
-		ShutdownSignal: Unknown,
-	}
+	want := everyDeclared(Unknown)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("a peer that reported no tokens answers %v, want %v.\n"+
 			"Absent here would mean the server concludes an old shim refused a capability it was never "+
@@ -42,10 +39,7 @@ func TestTheZeroSetIsUnknownRatherThanAbsent(t *testing.T) {
 
 	got := supportOfEach(unasked)
 
-	want := map[Name]Support{
-		Reported:       Unknown,
-		ShutdownSignal: Unknown,
-	}
+	want := everyDeclared(Unknown)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the zero Set answers %v, want %v.\n"+
 			"Code that forgets to populate a set must degrade to cm's previous behavior rather than to a "+
@@ -57,10 +51,10 @@ func TestTheZeroSetIsUnknownRatherThanAbsent(t *testing.T) {
 func TestAPeerReportingTheMechanismWithoutACapabilitySaysAbsent(t *testing.T) {
 	got := supportOfEach(Parse([]string{string(Reported)}))
 
-	want := map[Name]Support{
-		Reported:       Present,
-		ShutdownSignal: Absent,
-	}
+	// Everything Absent except the one token that was reported, which is the shape that separates a
+	// conclusive no from silence.
+	want := everyDeclared(Absent)
+	want[Reported] = Present
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("a peer reporting only %q answers %v, want %v", Reported, got, want)
 	}
@@ -92,11 +86,14 @@ func TestThisBuildsShimSetSurvivesTheWire(t *testing.T) {
 // has never heard of does say: the peer is newer, so the reader's move is to rebuild this binary rather
 // than to restart that peer. Dropping unrecognized tokens at Parse would throw that away.
 func TestATokenThisBuildDoesNotKnowIsKeptAsEvidenceOfANewerPeer(t *testing.T) {
-	newer := Parse([]string{string(Reported), string(ShutdownSignal), "attach.teleport", "wait.match"})
+	// Tokens no role declares, so they stand in for a capability added after this build. Deliberately not
+	// real ones: a token that later becomes declared would silently stop testing anything, which is how a
+	// test that cannot fail gets written.
+	newer := Parse([]string{string(Reported), string(ShutdownSignal), "attach.teleport", "pty.warp"})
 
 	got := newer.Unrecognized()
 
-	want := []Name{"attach.teleport", "wait.match"}
+	want := []Name{"attach.teleport", "pty.warp"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Unrecognized() = %v, want %v", got, want)
 	}
@@ -117,6 +114,7 @@ func TestMissingCountsWhatCannotBeConfirmed(t *testing.T) {
 		{"a peer that reported nothing", Parse(nil), []Name{Reported, ShutdownSignal}},
 		{"a peer missing one", Parse([]string{string(Reported)}), []Name{ShutdownSignal}},
 		{"this build's shim", Shim(), nil},
+		{"a peer holding a superset", Parse(append(Shim().Strings(), "pty.warp")), nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -126,6 +124,19 @@ func TestMissingCountsWhatCannotBeConfirmed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// everyDeclared builds the expectation that every capability answers the same way.
+//
+// Derived from Declared() rather than written out, so adding a token does not silently leave a test
+// asserting a stale subset. Written out, the three tests using this passed for two tokens and stopped
+// covering the two added after them.
+func everyDeclared(s Support) map[Name]Support {
+	out := make(map[Name]Support)
+	for _, n := range Declared() {
+		out[n] = s
+	}
+	return out
 }
 
 // supportOfEach answers for every declared capability at once, so a test asserts the whole set rather

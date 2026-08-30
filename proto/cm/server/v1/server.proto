@@ -156,6 +156,18 @@ message StatusResponse {
   // Whether this server has the terminal emulator. A server without it cannot restore a screen, and
   // that is a property of the server rather than of the client asking.
   bool terminal = 10;
+
+  // What this server can do, as capability tokens from internal/capability.
+  //
+  // Carried here because Status is the cheapest thing a client can ask, and a client that depends on a
+  // server behavior needs to know before it commits rather than after it has waited. `cm wait --until
+  // blocked` against a server predating state reporting waits out its whole timeout, since nothing
+  // else on the wire separates "not blocked yet" from "will never report blocked".
+  //
+  // Empty from a server predating this field, which is why every reporting build includes the
+  // "capabilities" token itself: an empty list then means "does not speak this" rather than "supports
+  // none of these". See capability.Support, whose three values exist for that distinction.
+  repeated string capabilities = 11;
 }
 
 // ShutdownRequest asks the server to stop.
@@ -312,6 +324,17 @@ message DoctorRequest {
   // server cannot tell which binary connected to it. Empty from a client that predates this field, which
   // is itself a version difference worth reporting.
   string client_version = 2;
+
+  // What the calling client can do, beside its version, for the same reason: only the client knows.
+  //
+  // This lets a diagnostic say what differs rather than only that builds differ, which is the gap the
+  // version fields leave. It also lets it say which side is *ahead*: a token the server does not
+  // recognize means the client is newer, and nothing else cm reports distinguishes a stale server from a
+  // stale client.
+  //
+  // Reported, never acted on. The server branches on no client capability, and if it ever needs to, the
+  // token for that gets added with the branch.
+  repeated string client_capabilities = 3;
 }
 
 message DoctorResponse {
@@ -320,6 +343,11 @@ message DoctorResponse {
   repeated string repaired = 2;
   // The server's own build, so a client can show both sides of a mismatch.
   string server_version = 3;
+  // What this server can do, so `cm version` can list it from the call it already makes.
+  //
+  // Duplicated from StatusResponse deliberately: these are the two things a client asks when it wants to
+  // know what it is talking to, and a client should not have to make both calls to find out.
+  repeated string server_capabilities = 4;
 }
 
 // Finding is one thing wrong with an installation.
