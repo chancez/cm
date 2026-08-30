@@ -98,6 +98,12 @@ type Session struct {
 	// because the client redials from inside the same process. Only recorded when a stream ends *without* a
 	// deliberate detach: somebody who detaches on purpose has left, and should lose the earliest slot.
 	//
+	// It carries lastInputAt as well as the order, because the same entry holds both and both are lost the
+	// same way. activeClientLocked names the window someone is using from lastInputAt, and that drives the
+	// mark in `cm clients list`, `cm clients current`, and which window `cm clients upgrade --current` acts
+	// on. A client that reattached had never typed as far as the server knew, so the mark moved to another
+	// window: type in A, run vim in A, quit it, and the repaint hands the mark to B.
+	//
 	// An older client sends no pid, which reads as zero and is ignored, so it keeps the previous behaviour.
 	//
 	// A pid survives `cm clients upgrade` too, which is not obvious and was got wrong here first: the client
@@ -108,7 +114,7 @@ type Session struct {
 	// What a pid does not survive is being reused by an unrelated process after this client exited. An entry
 	// is consumed on first use and there are at most maxResumeOrders of them, so the window is small and the
 	// consequence is only a place in the attach order. Not worth an identity of its own.
-	resumeOrders map[int32]uint64
+	resumeOrders map[int32]resumeState
 
 	// outPartial holds the tail of a chunk that ends inside an unfinished escape sequence, and
 	// outPartialSeq is that tail's position in the shim's numbering.
@@ -489,6 +495,16 @@ type Terminal interface {
 	HTML() ([]byte, error)
 	// Close releases emulator resources.
 	Close() error
+}
+
+// resumeState is what a client gets back when it returns after a dropped stream.
+//
+// Both fields live on the per-attachment size entry, which is deleted on detach and rebuilt on attach, and
+// both describe the window rather than the connection: the same terminal is coming back, so it is still where
+// it was in the attach order and it is still the one somebody was typing in.
+type resumeState struct {
+	order       uint64
+	lastInputAt time.Time
 }
 
 // maxResumeOrders bounds how many dropped clients a session remembers a place for.
@@ -1603,14 +1619,14 @@ func (s *Session) rememberOrder(pid int32, tok *attachToken) {
 		return
 	}
 	if s.resumeOrders == nil {
-		s.resumeOrders = make(map[int32]uint64)
+		s.resumeOrders = make(map[int32]resumeState)
 	}
 	// Bounded, since an entry is consumed only if that client comes back, and a session whose clients keep
 	// dropping without returning would otherwise accumulate one per process forever.
 	if len(s.resumeOrders) >= maxResumeOrders {
 		return
 	}
-	s.resumeOrders[pid] = cs.order
+	s.resumeOrders[pid] = resumeState{order: cs.order, lastInputAt: cs.lastInputAt}
 }
 
 // adoptOrderLocked gives a returning client the order it had before its stream dropped.
@@ -1621,13 +1637,14 @@ func (s *Session) adoptOrderLocked(pid int32, tok *attachToken) {
 	if pid == 0 {
 		return
 	}
-	order, ok := s.resumeOrders[pid]
+	prev, ok := s.resumeOrders[pid]
 	if !ok {
 		return
 	}
 	delete(s.resumeOrders, pid)
 	if cs := s.clientSizes[tok]; cs != nil {
-		cs.order = order
+		cs.order = prev.order
+		cs.lastInputAt = prev.lastInputAt
 	}
 }
 
