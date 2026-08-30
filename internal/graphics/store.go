@@ -165,6 +165,9 @@ type Retransmission struct {
 // reason re-emission is safe: an image cm sends generates no reply, so nothing arrives on the input
 // path answering a question cm never asked. Forwarding a program's own transmission unchanged is what
 // produced the reported echo, and this is deliberately not that.
+//
+// Chunked back out at kitty's own limit rather than emitted as one command, because a retained payload is
+// a whole image and a single command that size is one a terminal may discard. See EncodeChunks.
 func (s *Store) Retransmissions() []Retransmission {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -195,7 +198,7 @@ func (s *Store) Retransmissions() []Retransmission {
 		out = append(out, Retransmission{
 			ID:       o.k.id,
 			ByNumber: o.k.byNumber,
-			Bytes:    Encode(WithQuiet(o.e.control, 2), o.e.payload),
+			Bytes:    EncodeChunks(WithQuiet(o.e.control, 2), o.e.payload),
 		})
 	}
 	return out

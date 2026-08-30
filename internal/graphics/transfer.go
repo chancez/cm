@@ -141,11 +141,16 @@ func ReadTransfer(cmd Command) (Command, error) {
 	// Rebuilt as a direct transmission carrying the bytes, since the file is now gone or at least
 	// already read. The t= key is dropped rather than rewritten to t=d, because direct is the default
 	// and leaving a stale medium would have the terminal look for a file again.
+	//
+	// Raw is chunked rather than one command, and holds several when the image is large. That is the one
+	// place a Command's Raw is not a single command, and it is required: a file names its data in a few
+	// dozen bytes and carries none, so inlining turns a small command into a payload the size of the
+	// image, and a single command that size is one a terminal may discard. See EncodeChunks.
 	out := cmd
 	out.Medium = MediumDirect
 	out.Control = withoutKeys(cmd.Control, "t")
 	out.Payload = []byte(base64.StdEncoding.EncodeToString(data))
-	out.Raw = Encode(out.Control, out.Payload)
+	out.Raw = EncodeChunks(out.Control, out.Payload)
 	return out, nil
 }
 

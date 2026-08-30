@@ -344,24 +344,106 @@ func Encode(control string, payload []byte) []byte {
 	return out
 }
 
+// MaxCommandPayload bounds the base64 payload cm puts in one command.
+//
+// 128 KiB, which is kitty's own chunk size in `tools/tui/graphics/command.go`, and it is measured against
+// kitty's parser rather than picked. MAX_ESCAPE_CODE_LENGTH in `kitty/vt-parser.c` is BUF_SZ/4, so 256
+// KiB, and kitty discards an escape code longer than that the moment a parser pass ends with the
+// terminator still missing: "APC escape code too long (%zu bytes), ignoring it". A complete code already
+// in the buffer is accepted however long it is, which is what makes an oversized command *sometimes*
+// work. It depends on whether the whole thing lands before kitty's input_delay expires, so the same
+// command with the same image displays or vanishes according to write timing.
+//
+// cm hit this by inlining a whole file into one command: the reported 565398 byte image is 753864 base64
+// characters, 2.9x the limit. kitty's own clients never exceed 128 KiB per chunk for exactly this reason,
+// so matching them means cm sends what a terminal already has to handle.
+const MaxCommandPayload = 128 << 10
+
+// EncodeChunks builds one or more commands carrying a payload, splitting it the way kitty's clients do.
+//
+// A single command when the payload fits, which is the common case and is byte-identical to Encode.
+// Beyond that the payload is split at MaxCommandPayload, the first command carrying the full control
+// section and each later one carrying only the keys kitty's own client repeats: a=, q=, and the m= that
+// says whether more follows. Every chunk boundary is a multiple of four, since MaxCommandPayload is, so
+// a terminal decoding incrementally never sees a partial base64 quantum: padding can only appear on the
+// last chunk.
+func EncodeChunks(control string, payload []byte) []byte {
+	if len(payload) <= MaxCommandPayload {
+		return Encode(control, payload)
+	}
+	// Only a= and q= are repeated, matching kitty's client, which rebuilds each later chunk from those two
+	// alone. Repeating the geometry or the medium instead would restate keys the terminal has already
+	// applied to the image it is loading.
+	continuation := keepKeys(control, "a", "q")
+	var out []byte
+	first := true
+	for len(payload) > 0 {
+		n := min(MaxCommandPayload, len(payload))
+		chunk := payload[:n]
+		payload = payload[n:]
+
+		section := continuation
+		if first {
+			section = control
+			first = false
+		}
+		// Stated explicitly on the last chunk too, m=0, because that is what terminates the transmission:
+		// leaving m off entirely would also do it, and kitty's client says m=0, so this says m=0.
+		out = append(out, Encode(withKey(section, "m", boolKey(len(payload) > 0)), chunk)...)
+	}
+	return out
+}
+
+// boolKey renders a protocol flag, which is "1" or "0" rather than a word.
+func boolKey(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
 // WithQuiet returns a control section with its q= key forced to the given level.
 //
 // Rewriting rather than appending, because a duplicate key is undefined by the protocol and a
 // terminal may honor either occurrence.
 func WithQuiet(control string, level uint8) string {
+	return withKey(control, "q", strconv.Itoa(int(level)))
+}
+
+// withKey sets a key in a control section, replacing it in place or appending it.
+//
+// In place rather than always appending, because a duplicate key is undefined by the protocol and a
+// terminal may honor either occurrence.
+func withKey(control, key, value string) string {
 	parts := strings.Split(control, ",")
 	out := make([]string, 0, len(parts)+1)
 	replaced := false
 	for _, kv := range parts {
-		if k, _, found := strings.Cut(kv, "="); found && k == "q" {
-			out = append(out, "q="+strconv.Itoa(int(level)))
+		if k, _, found := strings.Cut(kv, "="); found && k == key {
+			out = append(out, key+"="+value)
 			replaced = true
 			continue
 		}
 		out = append(out, kv)
 	}
 	if !replaced {
-		out = append(out, "q="+strconv.Itoa(int(level)))
+		out = append(out, key+"="+value)
+	}
+	return strings.Join(out, ",")
+}
+
+// keepKeys reduces a control section to the named keys, preserving their order.
+func keepKeys(control string, keys ...string) string {
+	keep := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		keep[k] = true
+	}
+	parts := strings.Split(control, ",")
+	out := make([]string, 0, len(keys))
+	for _, kv := range parts {
+		if k, _, found := strings.Cut(kv, "="); found && keep[k] {
+			out = append(out, kv)
+		}
 	}
 	return strings.Join(out, ",")
 }

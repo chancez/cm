@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -302,4 +303,86 @@ func TestEncodeOmitsEmptyPayload(t *testing.T) {
 	if _, _, ok := Parse(raw); !ok {
 		t.Error("Parse() rejected a payload-free command")
 	}
+}
+
+// A payload larger than one command is split the way kitty's own clients split it, because kitty
+// discards an escape code over MAX_ESCAPE_CODE_LENGTH.
+//
+// The bug this covers: cm inlined a whole file into a single command, so a transfer naming a 565398 byte
+// image became 753864 base64 characters in one APC, 2.9x kitty's 256 KiB limit. kitty accepts an
+// over-long code only when the terminator is already in its buffer, so the same image displayed or
+// vanished according to write timing, which is what made the report say "failed many times in a row,
+// then it worked, then it didn't again".
+//
+// Asserted by reassembling rather than by counting commands: what has to hold is that a terminal reading
+// these gets the original payload back, in order, with exactly one command carrying the geometry.
+func TestEncodeChunksSplitsAtKittysLimit(t *testing.T) {
+	// Two and a half chunks, so there is a first, a middle and a last, and the last is a different size.
+	payload := make([]byte, MaxCommandPayload*2+7)
+	for i := range payload {
+		payload[i] = byte('A' + i%26)
+	}
+
+	out := EncodeChunks("a=T,q=2,f=100,s=1712,v=1294,i=7", payload)
+
+	var (
+		got      []byte
+		controls []string
+		rest     = out
+	)
+	for len(rest) > 0 {
+		cmd, n, ok := Parse(rest)
+		if !ok {
+			t.Fatalf("Parse() ok = false with %d bytes left, so the emitted stream does not parse", len(rest))
+		}
+		got = append(got, cmd.Payload...)
+		controls = append(controls, cmd.Control)
+		rest = rest[n:]
+	}
+
+	if string(got) != string(payload) {
+		t.Errorf("reassembled %d bytes, want the original %d", len(got), len(payload))
+	}
+	wantControls := []string{
+		// The first chunk carries everything, with m= saying more follows.
+		"a=T,q=2,f=100,s=1712,v=1294,i=7,m=1",
+		// Later chunks carry only what kitty's client repeats, and the last says m=0.
+		"a=T,q=2,m=1",
+		"a=T,q=2,m=0",
+	}
+	if !reflect.DeepEqual(controls, wantControls) {
+		t.Errorf("controls = %q, want %q", controls, wantControls)
+	}
+	// Every command has to be inside kitty's per-code limit, which is the whole point. The slack is the
+	// introducer, the terminator and the control section, none of which the payload bound covers.
+	for _, part := range splitCommands(t, out) {
+		if len(part) > MaxCommandPayload+128 {
+			t.Errorf("a command is %d bytes, want at most the payload bound plus its framing", len(part))
+		}
+	}
+}
+
+// A payload that fits stays one command, byte-identical to Encode, since chunking a small transmission
+// would add commands a terminal has to reassemble for nothing.
+func TestEncodeChunksLeavesASmallPayloadAlone(t *testing.T) {
+	payload := []byte("QUJD")
+	got := EncodeChunks("a=T,i=1", payload)
+	if want := Encode("a=T,i=1", payload); string(got) != string(want) {
+		t.Errorf("EncodeChunks() = %q, want %q", got, want)
+	}
+}
+
+// splitCommands returns each command in an emitted stream, for size assertions.
+func splitCommands(t *testing.T, out []byte) [][]byte {
+	t.Helper()
+	var parts [][]byte
+	for len(out) > 0 {
+		_, n, ok := Parse(out)
+		if !ok {
+			t.Fatalf("Parse() ok = false with %d bytes left", len(out))
+		}
+		parts = append(parts, out[:n])
+		out = out[n:]
+	}
+	return parts
 }
