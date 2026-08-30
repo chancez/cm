@@ -16,7 +16,7 @@ func TestPlaceCommandsRebuildsAPlacement(t *testing.T) {
 		Columns:     10,
 		Rows:        5,
 		Z:           -1,
-	}})
+	}}, 20)
 
 	want := "\x1b7" + // save the cursor, so the restored screen keeps its own
 		"\x1b[3;5H" + // one-based CUP for the zero-based row 2, column 4
@@ -29,15 +29,15 @@ func TestPlaceCommandsRebuildsAPlacement(t *testing.T) {
 
 // Nothing placed emits nothing, which is the common case: no save, no restore, no bytes.
 func TestPlaceCommandsIsEmptyWithoutPlacements(t *testing.T) {
-	if got := PlaceCommands(nil); got != nil {
-		t.Errorf("PlaceCommands(nil) = %q, want nil", got)
+	if got := PlaceCommands(nil, 20); got != nil {
+		t.Errorf("PlaceCommands(nil, 20) = %q, want nil", got)
 	}
 }
 
 // The keys a placement does not carry are omitted rather than sent as zero. c=0 or r=0 would tell the
 // terminal the image covers no cells, and z=0 is the default.
 func TestPlaceCommandsOmitsAbsentKeys(t *testing.T) {
-	got := PlaceCommands([]Placement{{ImageID: 1}})
+	got := PlaceCommands([]Placement{{ImageID: 1}}, 20)
 	want := "\x1b7\x1b[1;1H\x1b_Ga=p,i=1,C=1,q=2\x1b\\\x1b8"
 	if string(got) != want {
 		t.Errorf("PlaceCommands() = %q, want %q", got, want)
@@ -47,7 +47,7 @@ func TestPlaceCommandsOmitsAbsentKeys(t *testing.T) {
 // C=1 is on every command, and it is not cosmetic: without it a placement on the last row advances the
 // cursor and scrolls the whole screen up to make room, which moves the content the restore just wrote.
 func TestPlaceCommandsNeverMovesTheCursor(t *testing.T) {
-	got := string(PlaceCommands([]Placement{{ImageID: 1, Row: 0}, {ImageID: 2, Row: 40}}))
+	got := string(PlaceCommands([]Placement{{ImageID: 1, Row: 0}, {ImageID: 2, Row: 40}}, 20))
 	for _, want := range []string{"i=1,C=1", "i=2,C=1"} {
 		if !contains(got, want) {
 			t.Errorf("PlaceCommands() = %q, missing %q", got, want)
@@ -55,26 +55,45 @@ func TestPlaceCommandsNeverMovesTheCursor(t *testing.T) {
 	}
 }
 
-// A placement whose top has scrolled above the viewport is skipped rather than drawn at row zero, which
-// would put the image somewhere it never was. Restoring it properly means cropping with a source
-// rectangle, which libghostty documents as the caller's job.
-func TestPlaceCommandsSkipsAPlacementScrolledAbove(t *testing.T) {
-	got := PlaceCommands([]Placement{{ImageID: 9, Row: -2, Col: 0}})
-	if got != nil {
-		t.Errorf("PlaceCommands() = %q, want nil for a placement above the viewport", got)
+// A placement scrolled partly above the viewport is cropped to what is visible, not skipped.
+//
+// This is the norm rather than an edge case: icat scales an image to nearly fill the window and the prompt
+// printed under it scrolls the top off, measured against a real model at row -1 after three newlines and
+// -7 after nine. Skipping those meant a realistic image was never restored while a tiny one was. The rows
+// above the screen come off the source with y=, in pixels, so what is drawn lines up with the text.
+func TestPlaceCommandsCropsAPlacementScrolledAbove(t *testing.T) {
+	got := string(PlaceCommands([]Placement{{ImageID: 9, Row: -2, Col: 0, Rows: 8}}, 20))
+
+	if !contains(got, "\x1b[1;1H") {
+		t.Errorf("PlaceCommands() = %q, want the placement drawn from the top row", got)
+	}
+	if !contains(got, "y=40") {
+		t.Errorf("PlaceCommands() = %q, want y=40 to crop the two rows above the viewport", got)
+	}
+	// r= describes the uncropped image, so restating it would stretch the remainder to full height.
+	if contains(got, "r=8") {
+		t.Errorf("PlaceCommands() = %q, restates the uncropped row count", got)
+	}
+}
+
+// Without cell metrics the crop cannot be computed, so a scrolled placement is skipped rather than drawn
+// somewhere it never was. That is the only case where an image is dropped.
+func TestPlaceCommandsSkipsScrolledWithoutCellHeight(t *testing.T) {
+	if got := PlaceCommands([]Placement{{ImageID: 9, Row: -2}}, 0); got != nil {
+		t.Errorf("PlaceCommands() = %q, want nil without a cell height", got)
 	}
 }
 
 // An unnamed image cannot be placed, since a=p resolves by id.
 func TestPlaceCommandsSkipsAnUnnamedImage(t *testing.T) {
-	if got := PlaceCommands([]Placement{{ImageID: 0, Row: 1}}); got != nil {
+	if got := PlaceCommands([]Placement{{ImageID: 0, Row: 1}}, 20); got != nil {
 		t.Errorf("PlaceCommands() = %q, want nil", got)
 	}
 }
 
 // Several placements share one save/restore pair, so the cursor is put back once at the end.
 func TestPlaceCommandsWrapsAllPlacementsOnce(t *testing.T) {
-	got := string(PlaceCommands([]Placement{{ImageID: 1}, {ImageID: 2}}))
+	got := string(PlaceCommands([]Placement{{ImageID: 1}, {ImageID: 2}}, 20))
 	if n := count(got, "\x1b7"); n != 1 {
 		t.Errorf("%d cursor saves, want 1", n)
 	}

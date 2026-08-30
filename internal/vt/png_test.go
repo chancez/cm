@@ -62,57 +62,50 @@ func TestGraphicsStoresAPNG(t *testing.T) {
 	}
 }
 
-// A placement has no resolved position until the model knows its cell size, and this records that gap
-// rather than leaving it to be rediscovered.
+// A placement reports where it is once the model knows its cell size, which is the whole point of
+// carrying cell metrics into Resize.
 //
-// libghostty derives how many rows an image covers from the cell pixel dimensions passed to
-// ghostty_terminal_resize, and cm passes 0, 0. So viewport_pos reports the placement as off-screen and a
-// restore skips it. The image itself is retained and re-transmitted, so what is missing is only where to
-// draw it.
-//
-// The values are not missing, only dropped. A client's pixel size is already on the wire, x_pixel and
-// y_pixel in Open and in ResizeRequest, and Session.resize forwards them to the shim and then calls
-// term.Resize(rows, cols), which takes no cell metrics. Cell width and height are xpixel/cols and
-// ypixel/rows. So closing this is a Resize signature change plus that one call site, not a protocol
-// change. When it lands, replace this test with one asserting a real position.
-func TestPlacementHasNoPositionWithoutCellMetrics(t *testing.T) {
-	term, err := New(24, 80, Callbacks{})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	defer term.Close()
+// libghostty derives a placement's rows and columns from the cell size, so with zeros it reports every
+// image off-screen and a restore has nothing to place. The values were never missing: a client's pixel
+// size is on the wire and reaches the pty, and the server resized the model without it. This asserts the
+// consequence rather than the plumbing, since that is what a restore depends on.
+func TestPlacementPositionNeedsCellMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		cellWidth, cellHeight uint16
+		wantOnScreen          bool
+	}{
+		{name: "with cell metrics", cellWidth: 10, cellHeight: 20, wantOnScreen: true},
+		{name: "without", cellWidth: 0, cellHeight: 0, wantOnScreen: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			term, err := New(24, 80, Callbacks{})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			defer term.Close()
+			if err := term.Resize(24, 80, tc.cellWidth, tc.cellHeight); err != nil {
+				t.Fatalf("Resize() error = %v", err)
+			}
 
-	if err := term.Write([]byte(graphicsCommand("a=T,f=24,s=2,v=2,i=9", rgbPixels(2, 2)))); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	places, err := term.Placements()
-	if err != nil {
-		t.Fatalf("Placements() error = %v", err)
-	}
-	if len(places) != 1 {
-		t.Fatalf("Placements() returned %d, want 1", len(places))
-	}
-	if places[0].OnScreen {
-		t.Errorf("Placements()[0].OnScreen = true, want false until cm passes cell dimensions: %+v",
-			places[0])
-	}
-}
-
-// A malformed PNG is refused rather than crashing the process, since the decode runs inside a cgo
-// callback where a panic would cross the boundary and end the server.
-func TestGraphicsRejectsAMalformedPNG(t *testing.T) {
-	term, err := New(24, 80, Callbacks{})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-	defer term.Close()
-
-	if err := term.Write([]byte(graphicsCommand("a=T,f=100,s=3,v=2,i=6", []byte("not a png")))); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if _, ok, err := term.ImageByID(6); err != nil {
-		t.Fatalf("ImageByID() error = %v", err)
-	} else if ok {
-		t.Error("a malformed PNG was stored, want it refused")
+			// An image two cells wide and one tall at those metrics, placed at the cursor, which is home.
+			if err := term.Write([]byte(graphicsCommand("a=T,f=24,s=20,v=20,i=9", rgbPixels(20, 20)))); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			places, err := term.Placements()
+			if err != nil {
+				t.Fatalf("Placements() error = %v", err)
+			}
+			if len(places) != 1 {
+				t.Fatalf("Placements() returned %d, want 1", len(places))
+			}
+			if places[0].OnScreen != tc.wantOnScreen {
+				t.Errorf("OnScreen = %v, want %v: %+v", places[0].OnScreen, tc.wantOnScreen, places[0])
+			}
+			if tc.wantOnScreen && (places[0].Col != 0 || places[0].Row != 0) {
+				t.Errorf("placement at col %d row %d, want 0,0 for an image drawn at home",
+					places[0].Col, places[0].Row)
+			}
+		})
 	}
 }

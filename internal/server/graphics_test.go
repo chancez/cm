@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -456,5 +457,63 @@ func TestGraphicsNamesOnlyTheFirstChunk(t *testing.T) {
 	defer sess.detach(att)
 	if !strings.Contains(string(att.restore), "QUJDREVG") {
 		t.Errorf("the chunks did not reassemble into one image; got %q", att.restore)
+	}
+}
+
+// The model is told its cell size, which is what lets a restore say where an image is.
+//
+// This is the line the pixel size used to die on. A client's window size in pixels is already on the wire
+// and already reaches the pty through the shim, and the server then resized the model without it, so
+// libghostty could not work out how many rows a placement covered and reported every image off-screen. An
+// image could be re-transmitted to a second client and never re-placed, which is the reported "the image
+// did not show up in my other client".
+func TestResizeTellsTheModelItsCellSize(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "gfxcell",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+	term := &fakeTerminal{restore: []byte("SCREEN")}
+	sess, err := newSession(rec, term, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// 80x24 cells in 800x480 pixels is a 10x20 cell, which is an ordinary terminal metric.
+	if err := sess.Resize(context.Background(), 24, 80, 800, 480); err != nil {
+		t.Fatalf("Resize() error = %v", err)
+	}
+
+	term.mu.Lock()
+	gotW, gotH := term.cellWidth, term.cellHeight
+	term.mu.Unlock()
+	if gotW != 10 || gotH != 20 {
+		t.Errorf("model resized with cell %dx%d, want 10x20", gotW, gotH)
+	}
+}
+
+// A client that reports no pixel size leaves the metrics at zero rather than dividing by nothing.
+func TestResizeWithoutPixelSizeLeavesCellSizeZero(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "gfxnocell",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+	term := &fakeTerminal{restore: []byte("SCREEN")}
+	sess, err := newSession(rec, term, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	if err := sess.Resize(context.Background(), 24, 80, 0, 0); err != nil {
+		t.Fatalf("Resize() error = %v", err)
+	}
+	term.mu.Lock()
+	gotW, gotH := term.cellWidth, term.cellHeight
+	term.mu.Unlock()
+	if gotW != 0 || gotH != 0 {
+		t.Errorf("model resized with cell %dx%d, want 0x0 when the client reported no pixels", gotW, gotH)
 	}
 }

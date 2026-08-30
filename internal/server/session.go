@@ -275,6 +275,10 @@ type Session struct {
 	// lock. Counted per session rather than globally: the ids only have to be unique within one terminal.
 	gfxNextID  uint32
 	gfxLoading bool
+	// gfxCellHeight is the cell height in pixels the model was last resized with, kept so a restore can
+	// crop an image that scrolled above the viewport: the offset is in pixels and the placement's row is
+	// in cells. Guarded by mu, unlike the two above, because attach reads it and resize writes it.
+	gfxCellHeight uint16
 	// gfxStore keeps the payloads those commands carried, so images can be re-sent on attach.
 	//
 	// Its own lock inside, because an attaching client reads it while the pump writes. Separate from
@@ -480,7 +484,11 @@ type Terminal interface {
 	// Restore returns bytes that reproduce the current screen on a fresh terminal.
 	Restore() ([]byte, error)
 	// Resize changes the model's size so a restore matches the terminal showing it.
-	Resize(rows, cols uint16) error
+	//
+	// cellWidth and cellHeight are one cell in pixels, and they are what lets the model say where an
+	// image is: libghostty derives a placement's rows and columns from them. Zero means unknown, which
+	// is what a client that reported no pixel size leaves.
+	Resize(rows, cols, cellWidth, cellHeight uint16) error
 	// SizeReport returns the in-band size report owed to the program for a resize to this size, or
 	// nil when the program has not asked to be told about resizes in band (mode 2048).
 	//
@@ -2072,7 +2080,8 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 			s.log.Warn("reading image placements for a restore failed, images will be missing",
 				"session", s.label, "error", placeErr)
 		} else {
-			restore = append(restore, graphics.PlaceCommands(placements)...)
+			// mu is already held by attach, so the field is read directly.
+			restore = append(restore, graphics.PlaceCommands(placements, s.gfxCellHeight)...)
 		}
 
 		// State is replayed, so streaming starts where the replayed screen ends rather than repeating
@@ -2448,6 +2457,22 @@ func (s *Session) SetResizePolicy(p ResizePolicy) {
 	s.mu.Unlock()
 }
 
+// cellSize converts a window's pixel size into one cell's, which is what the terminal model wants.
+//
+// Zero for either axis when the client reported no pixel size, since a client is not obliged to: only a
+// terminal knows its cell metrics, and cm has to work without them. Integer division matches what a
+// terminal does, and the remainder is the padding a window carries when its size is not a whole number
+// of cells.
+func cellSize(rows, cols, xpixel, ypixel uint32) (cellWidth, cellHeight uint16) {
+	if cols > 0 && xpixel > 0 {
+		cellWidth = uint16(xpixel / cols)
+	}
+	if rows > 0 && ypixel > 0 {
+		cellHeight = uint16(ypixel / rows)
+	}
+	return cellWidth, cellHeight
+}
+
 // setRestored records a screen replayed from a previous incarnation's saved log.
 func (s *Session) setRestored(blob []byte) {
 	s.mu.Lock()
@@ -2746,7 +2771,19 @@ func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32,
 	term := s.term
 	s.mu.Unlock()
 	if term != nil && rows > 0 && cols > 0 {
-		if err := term.Resize(uint16(rows), uint16(cols)); err != nil {
+		// The pixel size the client sent is for the whole window, and libghostty wants one cell, so it is
+		// divided here. This is the line the values used to die on: they arrived on the wire, were passed
+		// to the shim for the pty ioctl, and then the model was resized without them, so every kitty
+		// graphics placement reported itself off-screen and an image could be re-transmitted but never
+		// re-placed.
+		//
+		// Zero when the client reported no pixel size, which stays the previous behavior rather than
+		// dividing by nothing.
+		cellWidth, cellHeight := cellSize(rows, cols, xpixel, ypixel)
+		s.mu.Lock()
+		s.gfxCellHeight = cellHeight
+		s.mu.Unlock()
+		if err := term.Resize(uint16(rows), uint16(cols), cellWidth, cellHeight); err != nil {
 			return fmt.Errorf("resizing terminal model: %w", err)
 		}
 		s.reportSize(uint16(rows), uint16(cols))

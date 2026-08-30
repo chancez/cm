@@ -1411,12 +1411,18 @@ blob 4.3 MB and wedged the session. And a placement whose top has scrolled above
 rather than clamped to row zero, since restoring it correctly needs a source rectangle; libghostty's API
 documents that clipping as the caller's job.
 
-A placement's position is the one part not yet restored. libghostty derives it from the cell pixel
-dimensions given to `ghostty_terminal_resize`, and cm passes zeros, so `viewport_pos` reports every
-placement as off-screen and a restore emits none. The values are already on the wire, `x_pixel` and
-`y_pixel` in `Open` and `ResizeRequest`: `Session.resize` forwards them to the shim and then calls
-`term.Resize(rows, cols)`, which takes no cell metrics, so they are dropped at that call. Cell width and
-height are `xpixel/cols` and `ypixel/rows`.
+A placement's position comes from the cell pixel dimensions, which the model has to be told. They were
+already on the wire, `x_pixel` and `y_pixel` in `Open` and `ResizeRequest`, and already reached the pty
+through the shim; what dropped them was `Session.resize` calling `term.Resize(rows, cols)`, which took no
+cell metrics. Cell width and height are `xpixel/cols` and `ypixel/rows`, computed in the server and passed
+down, and zero still means a client that reported no pixel size.
+
+An image that has scrolled partly above the viewport is the normal case rather than an edge one, because
+`icat` scales an image to nearly fill the window and the prompt printed under it scrolls the top off:
+measured at row -1 after three newlines and -7 after nine. Such a placement is cropped rather than skipped,
+with `y=` removing the lost rows from the source in pixels, which is the clipping libghostty's API
+documents as the caller's job. `r=` is not restated for a cropped placement, since it describes the
+uncropped image and would stretch the remainder back to full height.
 
 The sizing consequence is in `DefaultRecentBytes`. cm inlines a transfer that named a file, so a command of
 a few dozen bytes becomes a payload the size of the image: `kitten icat` on a 565398 byte screenshot sends

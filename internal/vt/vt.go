@@ -193,12 +193,19 @@ func (t *Terminal) Write(p []byte) error {
 //
 // Reflow moves the cursor, which is why a screen snapshot must be taken before resizing
 // rather than after.
-func (t *Terminal) Resize(rows, cols uint16) error {
+//
+// cellWidth and cellHeight are one cell in pixels, and they are what makes an image's position
+// knowable: libghostty derives how many rows and columns a kitty graphics placement covers from them, so
+// with zeros every placement reports itself off-screen and a restore has nothing to put back. Zero is
+// still allowed and still means unknown, because a client that never reported a pixel size is a real
+// case and text does not need the metrics.
+func (t *Terminal) Resize(rows, cols, cellWidth, cellHeight uint16) error {
 	if t.closed {
 		return errors.New("terminal is closed")
 	}
 	return check(
-		C.ghostty_terminal_resize(t.ptr, C.uint16_t(cols), C.uint16_t(rows), 0, 0),
+		C.ghostty_terminal_resize(t.ptr, C.uint16_t(cols), C.uint16_t(rows),
+			C.uint32_t(cellWidth), C.uint32_t(cellHeight)),
 		"resizing terminal",
 	)
 }

@@ -16,7 +16,7 @@ func replayTerminal(t *testing.T) (NewTerminalFunc, *fakeTerminal) {
 	t.Helper()
 	term := &fakeTerminal{restore: []byte("REPLAYED_SCREEN")}
 	return func(rows, cols uint16) (Terminal, error) {
-		term.Resize(rows, cols)
+		term.Resize(rows, cols, 0, 0)
 		return term, nil
 	}, term
 }

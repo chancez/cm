@@ -48,6 +48,9 @@ type fakeTerminal struct {
 	onAltScreen bool
 	// kittyKeyboard stands in for a program having pushed kitty keyboard protocol flags.
 	kittyKeyboard bool
+	// cellWidth and cellHeight are the last cell metrics the model was resized with.
+	cellWidth  uint16
+	cellHeight uint16
 	// placements stands in for the images a real terminal holds on its active screen, and
 	// placementsErr for reading them failing, which must cost the pictures and not the attach.
 	placements    []graphics.Placement
@@ -121,10 +124,13 @@ func (f *fakeTerminal) Close() error {
 	return nil
 }
 
-func (f *fakeTerminal) Resize(rows, cols uint16) error {
+func (f *fakeTerminal) Resize(rows, cols, cellWidth, cellHeight uint16) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rows, f.cols = rows, cols
+	// Recorded so a test can assert the model was told its cell metrics, which is what lets it place an
+	// image. A fake that dropped them would hide the bug this pair of arguments exists to fix.
+	f.cellWidth, f.cellHeight = cellWidth, cellHeight
 	return nil
 }
 

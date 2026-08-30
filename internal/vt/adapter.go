@@ -119,11 +119,14 @@ func (s *SessionTerminal) Restore() (out []byte, err error) {
 }
 
 // Resize changes the model's size to match the terminal showing it.
-func (s *SessionTerminal) Resize(rows, cols uint16) (err error) {
+//
+// cellWidth and cellHeight are one cell in pixels, which the model needs to place kitty graphics. Zero
+// means unknown and is allowed.
+func (s *SessionTerminal) Resize(rows, cols, cellWidth, cellHeight uint16) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { err = recovered(recover(), err, "resizing the terminal model") }()
-	return s.term.Resize(rows, cols)
+	return s.term.Resize(rows, cols, cellWidth, cellHeight)
 }
 
 // SizeReport returns the in-band size report owed for a resize to this size, or nil when none is.

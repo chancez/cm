@@ -356,7 +356,7 @@ func TestResizeReflowsContent(t *testing.T) {
 		t.Fatalf("Write() error = %v", err)
 	}
 
-	if err := term.Resize(30, 40); err != nil {
+	if err := term.Resize(30, 40, 0, 0); err != nil {
 		t.Fatalf("Resize() error = %v", err)
 	}
 	rows, cols, err := term.Size()
@@ -592,7 +592,7 @@ func TestSessionTerminalOperationsFailSafelyAfterClose(t *testing.T) {
 	if _, err := st.Restore(); err == nil {
 		t.Error("Restore() after Close = nil error, want failure")
 	}
-	if err := st.Resize(40, 100); err == nil {
+	if err := st.Resize(40, 100, 0, 0); err == nil {
 		t.Error("Resize() after Close = nil error, want failure")
 	}
 	if _, err := st.Plain(); err == nil {

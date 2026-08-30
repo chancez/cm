@@ -111,7 +111,7 @@ func TestSessionTerminalResizeSendsNoSizeReport(t *testing.T) {
 	}
 	st.TakePending()
 
-	if err := st.Resize(40, 100); err != nil {
+	if err := st.Resize(40, 100, 0, 0); err != nil {
 		t.Fatalf("Resize() error = %v", err)
 	}
 
