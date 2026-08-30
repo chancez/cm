@@ -1203,10 +1203,23 @@ demonstrably open. `TestConcurrentPtyWritesDoNotInterleave` holds that measureme
 amount to, fails it immediately. That is the point at which the pty would need an ordering point of its
 own.
 
-One loose end this turned up: `server.Session.Write` discards the `WriteResponse`, so `Written` is never
-checked. A short write would truncate input silently. It does not happen today, because `os.File.Write`
-loops over `write(2)` until the buffer is consumed, and the test asserts the full count. It is a silent
-failure mode rather than a live bug.
+One loose end this turned up, since closed: `server.Session.Write` discarded the `WriteResponse`, so `Written`
+was never checked and a partial write looked like a complete one. The bytes that did not make it were gone with
+nothing saying so, which is a client's typing silently dropped or a program left waiting for a reply cm believed
+it had delivered. The shim reports a short write and declines to retry, deferring the decision to its caller,
+and that caller was not deciding anything.
+
+It now returns an error naming how much of how much was written. Reported rather than retried on purpose:
+retrying needs a policy and there is nothing to calibrate one against, because a pty write goes through
+`os.File.Write`, which loops over `write(2)` until the buffer is consumed, so a short count with no error does
+not arise from one. That is also why it went unnoticed. What was wrong was the silence, and an error turns an
+impossible case into a loud one if it ever stops being impossible.
+
+A zero count is trusted rather than treated as short. `Written` is a wire field, so a shim built before it
+existed reports nothing, which is indistinguishable from having written nothing, and a shim is re-exec'd from
+the binary on disk: a new server paired with older shims is the ordinary state after installing a build, so
+failing every write to one would break those sessions outright. Tested at the seam in all three directions,
+since a real pty cannot produce the case.
 
 **Why tmux and zellij do not have this class of bug, and why copying them is not the answer.** Both keep
 their own screen and re-render it, so every byte is theirs by construction. That is also why they cap

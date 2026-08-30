@@ -372,6 +372,12 @@ func (s *Session) Log() *seqlog.Log[seq.Shim] { return s.outputLog }
 //
 // Short writes are reported rather than retried internally: the caller holds the RPC and
 // can decide, and a blocking retry here would stall the whole shim on a wedged shell.
+//
+// The caller does decide now, which it did not for a long time. server.Session.Write discarded the response,
+// so a partial write looked like a complete one and the bytes that did not make it were gone silently. It
+// checks the count and returns an error, which is loud rather than a retry policy calibrated against a case
+// nobody has seen: a pty write goes through os.File.Write, which loops over write(2) until the buffer is
+// consumed, so a short count with no error does not arise here in practice.
 func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	exited := s.exited

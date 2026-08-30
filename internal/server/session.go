@@ -2559,8 +2559,34 @@ func (s *Session) Write(ctx context.Context, data []byte) error {
 	if err := fault.Err(fault.BeforeShimWrite); err != nil {
 		return err
 	}
-	_, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data})
-	return err
+	resp, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data})
+	if err != nil {
+		return err
+	}
+
+	// The count is checked rather than discarded, which it used to be.
+	//
+	// The shim reports a short write and declines to retry, deferring the decision to its caller: "the caller
+	// holds the RPC and can decide, and a blocking retry here would stall the whole shim on a wedged shell."
+	// That caller is here, and it was not deciding anything. A partial write looked like a complete one, so
+	// the bytes that did not make it were gone and nothing said so: a client's typing silently dropped, or a
+	// program left waiting for a reply cm believed it had delivered.
+	//
+	// Reported rather than retried, and that is a deliberate stopping point rather than laziness. Retrying
+	// needs a policy, and there is nothing to calibrate one against because this does not happen: a pty write
+	// goes through os.File.Write, which loops over write(2) until the buffer is consumed, so a short count
+	// with no error does not arise from one. What was wrong was the silence, and an error is what turns an
+	// impossible case into a loud one if it ever stops being impossible. Whoever sees it in a log can then
+	// decide what a retry should look like, with a real case to look at.
+	//
+	// Zero is trusted, which is the compatibility case rather than an oversight. Written is a wire field, so a
+	// shim built before it existed reports nothing, and that is indistinguishable from having written nothing.
+	// A shim is re-exec'd from the binary on disk, so a new server paired with older shims is the ordinary
+	// state after installing a build; failing every write to one would break those sessions outright.
+	if n := resp.GetWritten(); n > 0 && n < uint64(len(data)) {
+		return fmt.Errorf("short write to session %s: the pty took %d of %d bytes", s.id, n, len(data))
+	}
+	return nil
 }
 
 // Signal delivers a signal to the session's shell, and to its process group unless processOnly.
