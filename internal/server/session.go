@@ -2126,10 +2126,12 @@ func (s *Session) newAttachmentLocked(from seq.Log, restore []byte, tok *attachT
 // markReadOnly records that an attachment is a follower, so it is not mistaken for a client that
 // can answer a terminal query.
 //
-// Separate from registerClientSize, which learns the same flag, because that is skipped entirely for
-// a resuming client: a read-only follower that reconnected would otherwise look like an answerer and
-// leave a querying program waiting forever. Called immediately after attach, before any output is
-// pumped, so drainPending never sees a follower counted as an answerer.
+// Separate from registerClientSize, which learns the same flag, and the reason has changed: that used to
+// be skipped entirely for a resuming client, so a read-only follower that reconnected was never recorded
+// as one and looked like an answerer, leaving a querying program waiting forever. A resume now registers
+// its size too, so the flag arrives by both routes. This one stays because of *when* it runs: immediately
+// after reserving, before sizing and before any output is pumped, so nothing can elect a follower as an
+// answerer in between.
 func (s *Session) markReadOnly(tok *attachToken) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2145,6 +2147,34 @@ func (s *Session) markReadOnly(tok *attachToken) {
 // RPC layer to do the call, which is where the context and error handling belong.
 func (s *Session) registerClientSize(
 	tok *attachToken, rows, cols, xpixel, ypixel uint16, readOnly bool,
+) (wantRows, wantCols, wantX, wantY uint16, resize bool) {
+	return s.registerSize(tok, rows, cols, xpixel, ypixel, readOnly, false)
+}
+
+// registerResumedClientSize is registerClientSize for a client that is coming back rather than
+// arriving: an upgrade that re-exec'd in place, or a reconnect after the server went away.
+//
+// It records the size and declines to *acquire* sizing the window did not already hold. The size still
+// has to be recorded, because registerSize is the only writer of it and a client left at 0x0 reads as
+// "has not reported one" to every policy. But a session can legitimately be sitting at a size no
+// attached client asked for: releaseClientSize leaves leadership unclaimed when the leader detaches
+// rather than transferring it, precisely so a window nobody touched is not reflowed. An upgrade is not a
+// touch, so it must not be what finally applies that pending change.
+//
+// Reported as "terminals sometimes resize after an upgrade", on a session that had had several clients
+// and had one left. Introduced by the fix for the 0x0 entry, which called this path unconditionally and
+// let a resume claim leadership.
+//
+// A separate entry point rather than a bool argument, because the call site reads better for it and the
+// existing callers do not have to grow a parameter that means nothing to them.
+func (s *Session) registerResumedClientSize(
+	tok *attachToken, rows, cols, xpixel, ypixel uint16, readOnly bool,
+) (wantRows, wantCols, wantX, wantY uint16, resize bool) {
+	return s.registerSize(tok, rows, cols, xpixel, ypixel, readOnly, true)
+}
+
+func (s *Session) registerSize(
+	tok *attachToken, rows, cols, xpixel, ypixel uint16, readOnly, resuming bool,
 ) (wantRows, wantCols, wantX, wantY uint16, resize bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2170,6 +2200,12 @@ func (s *Session) registerClientSize(
 	case ResizeLastAttach:
 		// The newest attach wins, which is what a single-client setup wants and what cm did before
 		// this was configurable.
+		//
+		// A resume is not a new attach. It is the same window returning, so it does not take sizing off
+		// whichever window holds it, and with one client there is nothing to take.
+		if resuming {
+			return 0, 0, 0, 0, false
+		}
 		return rows, cols, xpixel, ypixel, true
 
 	case ResizeFirstAttach:
@@ -2184,6 +2220,18 @@ func (s *Session) registerClientSize(
 		return r, c, xpixel, ypixel, ok
 
 	default: // ResizeLeader
+		// A returning window takes no leadership it did not have. The session may be holding a size its
+		// departed leader set, waiting for somebody to type, and an upgrade must not be the thing that
+		// finally reflows it. See registerResumedClientSize.
+		//
+		// If this window somehow still holds leadership, its own size is what the session should be, so
+		// reapplying it is right rather than surprising. detach clears the token, so this is defensive.
+		if resuming {
+			if s.leader == tok {
+				return rows, cols, xpixel, ypixel, true
+			}
+			return 0, 0, 0, 0, false
+		}
 		// Leadership belongs to the window most recently used, when that is knowable.
 		//
 		// It became knowable only when lastInputAt started surviving a dropped stream: before that a

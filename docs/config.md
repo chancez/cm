@@ -117,13 +117,24 @@ This picks which client's size wins. For a single client every policy behaves id
 
 A read-only follower never owns sizing under any policy.
 
-A client that upgrades in place counts the same as any other. It resumes rather than reattaching, and a
-resume used to skip sizing entirely on the reasoning that the pty already matched the terminal coming
-back. That holds for one window and not for a size computed across several: the upgraded client was left
-recorded as 0x0, which every policy reads as "has not reported a size", so under `smallest` a window
-dropped out of the calculation on upgrade and the session grew to another window's size. A resume now
-registers its size and applies it without the forced SIGWINCH a fresh attach uses, so an upgrade at an
-unchanged size still costs no redraw.
+A client that upgrades in place, or reconnects after the server went away, is a window returning rather
+than arriving, and that distinction is load-bearing in two directions.
+
+Its size is recorded, which it has to be. A resume used to skip sizing entirely, on the reasoning that
+the pty already matched the terminal coming back, and that left the client recorded as 0x0. Every policy
+reads zero as "has not reported a size", so under `smallest` a window silently dropped out of the
+calculation on upgrade and the session grew to another window's size.
+
+But a resume acquires no sizing the window did not already hold. Under `leader` and `last-attach` a
+returning window does not become the one that sizes the session, because the session may deliberately be
+holding a size its departed leader set: leadership is unclaimed rather than transferred when a leader
+detaches, so that a window nobody touched is not reflowed, and an upgrade is not a touch. Typing still
+takes leadership as usual. Under `smallest` the size is a function of every attached client, so a
+returning window's constraint applies immediately, and under `first-attach` sizing follows attach order,
+which returning does not change.
+
+When a resume does resize, it uses a plain resize rather than the forced SIGWINCH a fresh attach sends,
+so an upgrade at an unchanged size costs the shell no redraw.
 
 ### detach_key
 

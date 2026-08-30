@@ -654,6 +654,15 @@ shell".
 
 ## Operational
 
+**Let leadership follow a window across a re-exec.** `resumeState` already carries a returning window's
+attach order and `lastInputAt` so it keeps its place and can be recognized as the one in use. Leadership
+is not carried: `releaseClientSize` clears the token on detach, so a window that owned sizing comes back
+from an upgrade owning nothing, and a resume deliberately acquires none. The gap that leaves is narrow -
+a leader whose terminal was resized during the exec gap does not bring the session to its new size, and
+waits for the next keystroke or SIGWINCH. Carrying a `leader bool` on `resumeState` would close it, and
+the reason to be careful is that leadership is the one piece of this state whose restoration is visible:
+restoring it wrongly reflows a window, which is the bug that made a resume stop acquiring sizing at all.
+
 **Delete `--resume-from-seq`.** The position crosses an upgrade in `CM_RESUME_FROM_SEQ` now, and the flag is
 accepted and ignored only so that a client re-exec'd by a build that still writes it into the argv does not
 exit on an unknown flag. It has to survive one upgrade from a pre-change binary; after that it is three

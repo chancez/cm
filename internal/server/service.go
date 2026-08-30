@@ -579,7 +579,11 @@ func (s *Service) sizeForAttach(
 	open *serverv1.Open,
 ) error {
 	resuming := open.ResumeFromSeq != nil
-	rows, cols, x, y, resize := sess.registerClientSize(
+	register := sess.registerClientSize
+	if resuming {
+		register = sess.registerResumedClientSize
+	}
+	rows, cols, x, y, resize := register(
 		tok, uint16(open.Rows), uint16(open.Cols),
 		uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
 	)
