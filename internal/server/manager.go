@@ -17,6 +17,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/graphics"
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
@@ -376,12 +377,20 @@ func (m *Manager) adopt(
 	if err != nil {
 		return nil, err
 	}
-	// Filled by the replay below and handed to the session afterwards, so an adopted session knows the images
-	// its screen refers to. newSession builds an empty one, which is right for a session being created and
-	// wrong for one being adopted.
-	var gfx *graphics.Store
+	// Filled by the replay below and handed to the session afterwards.
+	//
+	// The graphics store is only useful with a model to go with it, so it is built only when there is
+	// one: an adopted session has to know the images its screen refers to, and newSession builds an
+	// empty store, which is right for a session being created and wrong for one being adopted.
+	//
+	// The OSC trackers are recovered either way, which is why the replay is no longer conditional on a
+	// terminal. They read the same bytes but need nothing from the emulator, and what they carry is what
+	// `cm list` prints: the command the shell reported running, its last exit status, and any report a
+	// shell integration wrote into the stream. All of it went blank on every restart while the evidence
+	// sat in the shim's log unread.
+	rp := replayed{}
 	if term != nil {
-		gfx = graphics.NewStore(0)
+		rp.gfx = graphics.NewStore(0)
 		if restoreFrom != "" {
 			limits := seqlog.FileLimits{}
 			if m.persist != nil {
@@ -390,7 +399,7 @@ func (m *Manager) adopt(
 			// Not fatal, but the user asked for their content back and did not get it, so this is exactly
 			// the kind of silent degradation the log exists for. ErrNothingToRestore is the ordinary case
 			// for a session that never persisted and is not worth a line.
-			if err := seedFromPersistedLog(restoreFrom, term, gfx, limits); err != nil {
+			if err := seedFromPersistedLog(restoreFrom, term, rp.gfx, limits); err != nil {
 				if !errors.Is(err, ErrNothingToRestore) {
 					m.log.Warn("replaying persisted session failed",
 						"session", rec.ID, "path", restoreFrom, "error", err)
@@ -399,12 +408,14 @@ func (m *Manager) adopt(
 				m.log.Info("restored session from disk", "session", rec.ID, "path", restoreFrom)
 			}
 		}
-		if err := m.replayShimHistory(ctx, rec, fromSeq, term, gfx); err != nil {
-			// A screen that could not be rebuilt is worth reporting, but the session works without
-			// it: only restore and history are affected, which is where this started.
-			m.log.Warn("rebuilding the screen for an adopted session failed",
-				"session", rec.ID, "error", err)
-		}
+	}
+	// Outside the block above, and after the seed from disk rather than instead of it: the persisted log
+	// rebuilds a screen from before this shim, and this replays what the shim itself still holds on top.
+	if err := m.replayShimHistory(ctx, rec, fromSeq, term, &rp); err != nil {
+		// A screen that could not be rebuilt is worth reporting, but the session works without
+		// it: only restore and history are affected, which is where this started.
+		m.log.Warn("rebuilding the screen for an adopted session failed",
+			"session", rec.ID, "error", err)
 	}
 	// A record written before client_seq existed has zero there, which is indistinguishable from a
 	// session that genuinely served nothing. Falling back to fromSeq is what an upgrade wants: it
@@ -416,7 +427,14 @@ func (m *Manager) adopt(
 		// restart, and far better than starting the log at zero.
 		clientSeq = seq.Log(fromSeq)
 	}
-	sess, err := newSession(rec, term, fromSeq, clientSeq)
+	// Drained here rather than inside the option, so the report that survives is the one this function
+	// decided on: see withRecoveredCommands on why leaving it in the tracker would republish it.
+	var reported Reported
+	if r, ok := rp.reports.Take(); ok {
+		reported = Reported{State: r.State, Detail: r.Detail, Source: r.Source}
+	}
+	sess, err := newSession(rec, term, fromSeq, clientSeq,
+		withRecoveredCommands(rp.commands, rp.reports, reported))
 	if err != nil {
 		if term != nil {
 			term.Close()
@@ -433,7 +451,7 @@ func (m *Manager) adopt(
 	sess.SetResizePolicy(m.resizePolicy)
 	// The images the replay found, so a client attaching to this adopted session receives the transmissions
 	// its screen's placements refer to. See recordGraphics.
-	sess.setGraphicsStore(gfx)
+	sess.setGraphicsStore(rp.gfx)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.
@@ -443,7 +461,23 @@ func (m *Manager) adopt(
 	return sess, nil
 }
 
-// replayShimHistory feeds a shim's retained output into a terminal model, up to fromSeq.
+// replayed is what a replay of a shim's retained output recovered.
+//
+// A struct rather than more parameters because these are all answers to the same question -- what did the
+// previous server know that this one has to rebuild -- and they are filled from a single pass over the
+// bytes.
+type replayed struct {
+	// gfx holds the image transmissions the replay found, nil when there is no terminal model to go
+	// with them.
+	gfx *graphics.Store
+	// commands and reports are the OSC trackers, left holding both the state the markers described and
+	// any fragment of a sequence that was still arriving at the replay's end.
+	commands osc.CommandTracker
+	reports  osc.ReportTracker
+}
+
+// replayShimHistory feeds a shim's retained output into a terminal model and the OSC trackers, up to
+// fromSeq.
 //
 // Stops at fromSeq because that is where the session's own pump takes over. Replaying past it would
 // write the same bytes twice, and a terminal fed duplicate output shows duplicated lines.
@@ -451,8 +485,11 @@ func (m *Manager) adopt(
 // Writes only to the model, never to the session's client log: these bytes are history that clients
 // either already saw or will receive as part of a restored screen. Appending them would replay old
 // output to an attached client as though it were new.
+//
+// term may be nil, in which case only rp is filled. What the trackers derive needs no emulator, and a
+// session's state column should not depend on whether this build has one.
 func (m *Manager) replayShimHistory(
-	ctx context.Context, rec store.Session, fromSeq seq.Shim, term Terminal, gfx *graphics.Store,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, term Terminal, rp *replayed,
 ) error {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
@@ -508,7 +545,7 @@ func (m *Manager) replayShimHistory(
 		// Bookkeeping only: the segments are not re-emitted anywhere, so a transfer resolved here goes into
 		// the store and nothing else. That is why this uses recordGraphics rather than handleGraphics, which
 		// also builds the byte stream for clients.
-		if gfx != nil {
+		if rp.gfx != nil {
 			for _, seg := range replayScanner.Scan(data) {
 				if !seg.Graphics {
 					continue
@@ -519,11 +556,18 @@ func (m *Manager) replayShimHistory(
 					// report either: the image was already on the model's screen or it was not.
 					continue
 				}
-				recordGraphics(gfx, resolved)
+				recordGraphics(rp.gfx, resolved)
 			}
 		}
-		if err := term.Write(data); err != nil {
-			return fmt.Errorf("replaying output: %w", err)
+		// Fed the same bytes the pump would have, in the same order and before the graphics handling and
+		// the prompt rewrite, so the markers are read exactly as the shell wrote them. See feedTerminal,
+		// which does this for live output; this is the same two lines against history.
+		rp.commands.Feed(data)
+		rp.reports.Feed(data)
+		if term != nil {
+			if err := term.Write(data); err != nil {
+				return fmt.Errorf("replaying output: %w", err)
+			}
 		}
 		if chunkStart+seq.Shim(len(data)) >= fromSeq {
 			break
@@ -532,7 +576,9 @@ func (m *Manager) replayShimHistory(
 
 	// Discard anything the emulator generated in response: those answer queries from a program that
 	// asked before this server existed, and nothing is waiting for the replies.
-	term.TakePending()
+	if term != nil {
+		term.TakePending()
+	}
 	return nil
 }
 

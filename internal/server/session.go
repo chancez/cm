@@ -561,6 +561,36 @@ const maxResumeOrders = 32
 // worse than it was, and it keeps a pathological stream from stalling a session.
 const maxHeldTail = 256
 
+// sessionOpt sets up state a session cannot derive for itself.
+//
+// Only adoption uses these. A session created from scratch has nothing to recover: its shell has not
+// run yet, so every derived value is genuinely zero.
+type sessionOpt func(*Session)
+
+// withRecoveredCommands seeds the OSC trackers from a previous server's output.
+//
+// Two things are being handed over, and the trackers carry both. The state is what `cm list` shows, so a
+// session that was running `make` still says so after a restart instead of going blank. The trackers'
+// held-back fragments are the subtler half: the pump resumes at a position the shim chose, which can
+// fall inside a sequence, and a tracker starting empty there reads the tail of that sequence as ordinary
+// output and misses the next real marker with it.
+//
+// reported is taken from the report tracker by the caller rather than read here, because Take drains: a
+// report left in the tracker would be published again by the first chunk of live output, restating a
+// state the program had moved on from.
+func withRecoveredCommands(cmds osc.CommandTracker, reports osc.ReportTracker, reported Reported) sessionOpt {
+	return func(s *Session) {
+		s.commands = cmds
+		s.reports = reports
+		// Both, and equal: command is what callers read, baseCommand is what the next marker is measured
+		// against. Seeding only the first would make the next change look like it had already been
+		// published, and seeding only the second would leave `list` blank until the shell said something.
+		s.command = cmds.State()
+		s.baseCommand = s.command
+		s.reported = reported
+	}
+}
+
 // dialShim connects to a shim's socket.
 func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 	conn, cl, err := transport.DialShim(socket)
@@ -581,7 +611,14 @@ func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 // position to number the client log from are different numbers describing the same instant. Conflating
 // them is what let a resuming client ask its new server for a position past the end of that server's
 // log, where seqlog clamps forward and the bytes in between are lost.
-func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq seq.Log) (*Session, error) {
+//
+// opts carry what only adoption has: state a previous server had derived and this one recovered. They
+// are applied before the pump starts, which is why they are constructor arguments rather than setters:
+// a session whose pump is already running is being fed the live stream, and writing derived state into
+// it from another goroutine would race the writer that owns it.
+func newSession(
+	rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq seq.Log, opts ...sessionOpt,
+) (*Session, error) {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
 		return nil, err
@@ -636,6 +673,11 @@ func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq se
 		modelCols: uint16(rec.Cols),
 		done:      make(chan struct{}),
 		stopPump:  stopPump,
+	}
+
+	// Before the subscription, so nothing derived can land after the live stream has started.
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: uint64(fromSeq)})
