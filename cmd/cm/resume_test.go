@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
@@ -191,21 +195,50 @@ func TestResumeVariableIsNotInherited(t *testing.T) {
 	}
 }
 
-// The handover must not be bound to the flag it is named after.
+// No variable cm sets for its own processes may be bound to a flag.
 //
-// bindEnv derives a CM_-prefixed variable from every flag name, and this variable is named after
-// --resume-from-seq on purpose, so the convention derives exactly it. Bound, the handover reaches the
-// flag as its value: "<pid>:<seq>" is not a uint64, so every re-exec'd client exited with
-// `invalid argument "78714:37"` before attaching and left the window holding a dead terminal. Caught by
-// an existing e2e test rather than by review, which is why it is pinned here at the level where the
-// collision is visible.
-func TestResumeVariableIsNotBoundToTheFlag(t *testing.T) {
-	// Derived the way bindEnv derives it, so this notices if either name moves.
-	key := paths.Env(strings.ToUpper(strings.ReplaceAll(resumeFromFlag, "-", "_")))
-	if key == resumeEnvVar && !noEnvFlags[resumeFromFlag] {
-		t.Errorf("%s is the variable bindEnv derives from --%s, and the flag is not in noEnvFlags, so the "+
-			"handover is parsed as the flag's value and every upgraded client dies on it",
-			resumeEnvVar, resumeFromFlag)
+// bindEnv derives a CM_-prefixed name from every flag, which is useful for the variables a *user* sets:
+// CM_RUNTIME_DIR is meant to fill --runtime-dir. It is a trap for the ones cm writes for itself, because
+// the collision is not a warning, the value is parsed as the flag. CM_SESSION bound itself to --session,
+// so `cm run` typed its command into the calling session instead of creating one. CM_RESUME_FROM_SEQ was
+// named after --resume-from-seq, and "<pid>:<seq>" is not a uint64, so every re-exec'd client exited on
+// `invalid argument "78714:37"` before attaching and left a window holding a dead terminal.
+//
+// Stated over the whole command tree rather than for one pairing, because the flag that collided has been
+// deleted and the next variable will not have one to delete. noEnvFlags is the escape hatch, and using it
+// is the fix a failure here asks for.
+func TestNoSelfExportedVariableBindsToAFlag(t *testing.T) {
+	// The variables cm writes for another cm process to read, as opposed to the ones it reads from the
+	// user. Only these are hazards: a user-facing variable binding to its flag is the point.
+	selfExported := map[string]string{
+		paths.SessionEnv(): "exported into every session's shell",
+		resumeEnvVar:       "handed to the process replacing an upgrading client",
+	}
+
+	var offenders []string
+	var walk func(cmd *cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		check := func(f *pflag.Flag) {
+			key := paths.Env(strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_")))
+			why, self := selfExported[key]
+			if self && !noEnvFlags[f.Name] {
+				offenders = append(offenders, fmt.Sprintf(
+					"%s --%s derives %s, which cm sets itself (%s)", cmd.Name(), f.Name, key, why))
+			}
+		}
+		cmd.Flags().VisitAll(check)
+		cmd.PersistentFlags().VisitAll(check)
+		for _, sub := range cmd.Commands() {
+			walk(sub)
+		}
+	}
+	walk(newRootCommand())
+
+	if len(offenders) > 0 {
+		t.Errorf("flags bound to variables cm sets for itself:\n  %s\n"+
+			"bindEnv will parse the variable as the flag's value, so a value of the wrong shape makes the "+
+			"command exit before doing anything. Add the flag to noEnvFlags, or name the variable so the "+
+			"convention does not derive it", strings.Join(offenders, "\n  "))
 	}
 }
 

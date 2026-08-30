@@ -24,9 +24,6 @@ func newAttachCommand(g *globals) *cobra.Command {
 		detachKeyArg string
 		noAttach     bool
 		tagArgs      []string
-		// Bound to the vestigial --resume-from-seq and never read. Named for what it is so a reader
-		// looking for where the position comes from does not stop here.
-		ignoredResumeFrom uint64
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -186,24 +183,14 @@ receives it and the window closes instead of detaching.`,
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
-	// Accepted and ignored, and both halves are deliberate.
+	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,
+	// because an argv survives the exec as the process's reported command line while a position is true
+	// for one instant. See resumeEnvVar.
 	//
-	// Honoring it is the bug: a position from a stream this process never saw suppresses the screen
-	// repaint, so the window comes back blank. See resumeEnvVar, which is where a position travels now.
-	//
-	// Still parsed because an older build puts it in the argv it re-execs, so the first upgrade after
-	// this change hands it to a binary that has to accept it. `unknown flag` there means the client
-	// exits instead of attaching and the window is left holding a dead terminal, which is worse than the
-	// bug, and it would happen to every attached client at once. It also covers a command line recorded
-	// by something that watched a live process. Once one upgrade has been through, the flag is dead
-	// weight and can go; see docs/ideas.md.
-	//
-	// The cost of ignoring it is that that first upgrade repaints once, since the old process hands over
-	// in the argv and the new one only reads the environment. One clear plus a snapshot, which is what a
-	// fresh attach does anyway.
-	f.Uint64Var(&ignoredResumeFrom, resumeFromFlag, 0,
-		"ignored; kept so an argv recorded by an older build still parses")
-	_ = f.MarkHidden(resumeFromFlag)
+	// One existed, accepted and ignored, so that a client re-exec'd by a build that still wrote it into
+	// the argv did not exit on an unknown flag. Removed once every live client was running a build that
+	// writes none: checked by comparing each client's running image against the installed binary, and by
+	// ps showing no positions left in any argv.
 	return cmd
 }
 

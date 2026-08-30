@@ -18,13 +18,12 @@ func upgradeCmd(t *testing.T, argv ...string) (*cobra.Command, []string) {
 	t.Helper()
 
 	var (
-		readOnly   bool
-		setTitle   bool
-		dir        string
-		detachKey  string
-		env        []string
-		tagArgs    []string
-		resumeFrom uint64
+		readOnly  bool
+		setTitle  bool
+		dir       string
+		detachKey string
+		env       []string
+		tagArgs   []string
 	)
 	var got []string
 	cmd := &cobra.Command{
@@ -41,7 +40,6 @@ func upgradeCmd(t *testing.T, argv ...string) (*cobra.Command, []string) {
 	f.StringVar(&detachKey, "detach-key", "", "")
 	f.StringArrayVar(&env, "env", nil, "")
 	f.StringArrayVar(&tagArgs, "tag", nil, "")
-	f.Uint64Var(&resumeFrom, resumeFromFlag, 0, "")
 
 	cmd.SetArgs(argv)
 	cmd.SetOut(nil)
@@ -119,14 +117,6 @@ func TestUpgradeArgv(t *testing.T) {
 			// the recorded command line describes one moment in one window's life forever.
 			name: "a position never appears in the argv",
 			argv: []string{"work"},
-			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "work"},
-		},
-		{
-			// A position an older build put in the argv, or one replayed from a saved session file, is
-			// dropped rather than passed on, so it stops spreading at the first upgrade.
-			name: "a position left by an older build is dropped",
-			argv: []string{"work", "--resume-from-seq=11"},
 			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{"cm", "attach", "work"},
 		},

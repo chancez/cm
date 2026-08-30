@@ -7,58 +7,6 @@ import (
 	"time"
 )
 
-// A resume position recorded in an argv must not suppress the repaint or the sizing.
-//
-// `cm clients upgrade` used to hand the position over by appending --resume-from-seq to the argv it
-// exec'd, and exec makes that argv the process's reported command line. Anything that records a live
-// command line then holds a position that was true for one instant: kitty does it under
-// save_as_session --use-foreground-process, for a window it started with the shell, so a window where
-// `cm attach` was run by hand gets it written into the saved session and replayed at the next startup,
-// against a stream that window has never seen.
-//
-// Both halves of the symptom are asserted, because a resume suppresses two different things. The server
-// sends no serialized screen, so the window is blank, and it used to skip sizing entirely, so the shell
-// kept the size it had. The blank half heals on the next output chunk's Gap flag, but a restored window
-// is a shell idle at a prompt.
-//
-// The flag still parses, deliberately, so the first upgrade from an older build does not exit on it. It
-// is ignored instead. See resumeEnvVar.
-func TestAReplayedResumeFlagStillRepaintsAndSizes(t *testing.T) {
-	skipIfShort(t)
-	e := newEnv(t)
-
-	c := attachOnPtySized(t, e, 24, 80, "replayed", "--", "/bin/sh")
-	c.waitReady()
-	c.typeLine("echo SCREEN_MARKER")
-	c.waitForOutput("SCREEN_MARKER", 15*time.Second)
-
-	c.detachKey()
-	e.waitFor("the client to detach", 10*time.Second, func() bool {
-		s, ok := e.session("replayed")
-		return ok && s.Clients == 0
-	})
-
-	// A window coming back from a saved session file: the same command line, at whatever size the
-	// restored window happens to be, carrying a position from before the terminal quit. Larger than
-	// anything this session has produced, which is the out-of-range case and the one where a resume
-	// leaves the client with nothing to paint and no gap to notice.
-	c2 := attachOnPtySized(t, e, 30, 100, "replayed", "--resume-from-seq=999999")
-
-	// The screen has to come back. Honoring the position means no snapshot is sent at all, so this is
-	// where the blank window shows up.
-	c2.waitForOutput("SCREEN_MARKER", 15*time.Second)
-
-	// And the session has to be resized to this window. Asked of the shell rather than of cm, because
-	// the failure is what a program inside the session believes: a resume skips registering the client's
-	// size, so the pty keeps the 24x80 the first window set.
-	c2.typeLine("stty size")
-	got := c2.waitForOutput("100", 15*time.Second)
-	if !strings.Contains(got, "30 100") {
-		t.Errorf("stty size in the session reported %q, want 30 100: the replayed position suppressed "+
-			"sizing, so the shell is still running at the size the previous window had", lastLines(got, 3))
-	}
-}
-
 // The upgrade handover works, and leaves nothing in the process's command line.
 //
 // The other half of the same change, and the reason it needs a test at all: moving the position out of
@@ -127,13 +75,4 @@ func processArgv(t *testing.T, pid int) string {
 		t.Fatalf("reading the command line of pid %d: %v", pid, err)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// lastLines returns the tail of s, so a failure message shows the relevant part of a whole screen.
-func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\r\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
 }

@@ -34,16 +34,6 @@ type ptyClient struct {
 // exactly like the detach key being ignored.
 func attachOnPty(t *testing.T, e *env, args ...string) *ptyClient {
 	t.Helper()
-	// A definite size, so a restored screen has a known geometry rather than the pty's default.
-	return attachOnPtySized(t, e, 24, 80, args...)
-}
-
-// attachOnPtySized is attachOnPty with the terminal's geometry chosen by the caller.
-//
-// Separate because a test about sizing needs two clients that disagree: whether a session took a
-// client's size cannot be observed from one window that already matches.
-func attachOnPtySized(t *testing.T, e *env, rows, cols uint16, args ...string) *ptyClient {
-	t.Helper()
 
 	cmd := exec.Command(e.bin, append([]string{"attach"}, args...)...)
 	cmd.Env = e.environ()
@@ -53,7 +43,8 @@ func attachOnPtySized(t *testing.T, e *env, rows, cols uint16, args ...string) *
 	if err != nil {
 		t.Fatalf("pty.Start() error = %v", err)
 	}
-	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols}); err != nil {
+	// A definite size, so a restored screen has a known geometry rather than the pty's default.
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
 		t.Fatalf("Setsize() error = %v", err)
 	}
 

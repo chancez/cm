@@ -723,8 +723,12 @@ parsed as `--resume-from-seq`'s value, `<pid>:<seq>` is not a uint64, and every 
 `invalid argument "78714:37"` before attaching. `noEnvFlags` exists for this, from `CM_SESSION` binding
 itself to `--session`. That is the second instance.
 
-The flag is still accepted and ignored, because an older build hands it over in the argv and a binary that
-rejects it leaves every attached client dead at once. One upgrade later it is dead weight.
+The flag it replaced is gone. It was accepted and ignored for one release, so that a client re-exec'd by a
+build still writing it into the argv did not exit on an unknown flag, which would have left every attached
+window holding a dead terminal at once. Removed once every live client was verified to be running a build
+that writes none, by comparing each client's running image against the installed binary and by `ps` showing
+no positions left in any argv. Deleting it also removed the `noEnvFlags` entry, so the collision above
+cannot recur through that name.
 
 ### Replacing the session a name came off
 

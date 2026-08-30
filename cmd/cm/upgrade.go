@@ -12,11 +12,6 @@ import (
 	"github.com/chancez/cm/internal/paths"
 )
 
-// resumeFromFlag is the flag older builds used to hand a position to a replacement, kept only so the
-// argv they left behind still parses. See resumeEnvVar for where the position travels now, and
-// newAttachCommand for why the flag is accepted and ignored rather than removed.
-const resumeFromFlag = "resume-from-seq"
-
 // reexecForUpgrade replaces this process with the binary currently on disk, resuming where it left off.
 //
 // syscall.Exec rather than spawning a child and exiting, and that is the point of the whole approach.
@@ -121,14 +116,9 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 		argv = append(argv, res.Session)
 	}
 
+	// Nothing here can carry a position: there is no flag holding one, and one never goes in an argv.
+	// See resumeEnvVar.
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		// A position never goes in the argv, and one this process was started with does not get carried
-		// forward. See resumeEnvVar: the argv outlives the exec as the process's reported command line, so
-		// a position written here is recorded by whatever reads that and replayed later against a session
-		// it does not describe.
-		if f.Name == resumeFromFlag {
-			return
-		}
 		// Repeatable flags carry several values, each of which has to be emitted separately. A
 		// StringArray renders as "[a,b]" through Value.String(), which would be passed through as one
 		// literal value containing brackets.

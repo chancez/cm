@@ -177,9 +177,12 @@ func bindEnv(cmd *cobra.Command) error {
 //
 // A deny list rather than dropping the convention, because filling flags from the environment is useful for
 // the rest, and rather than special-casing inside the loop, so the reason lives in one place and the next
-// exported variable has an obvious home. Only variables cm itself exports belong here, which now includes
-// the ones it exports to *itself*: a process-to-process handover named after a flag is derived from it by
-// this very convention.
+// exported variable has an obvious home. Only variables cm itself exports belong here, and that includes
+// the ones it exports to *itself*: CM_RESUME_FROM_SEQ was named after a --resume-from-seq flag, so this
+// convention derived exactly it, the handover was parsed as the flag's value, and every re-exec'd client
+// exited on `invalid argument "78714:37"` before attaching. That flag is gone, so the entry is too, and
+// TestNoSelfExportedVariableBindsToAFlag guards the general case: the next such variable will not have a
+// flag anybody can remove.
 //
 // This bans binding the variable to a *flag*, not reading it at all. Taking CM_SESSION as a default target
 // stays deliberate where a command acts on the surrounding session rather than creating or retargeting one:
@@ -188,14 +191,6 @@ var noEnvFlags = map[string]bool{
 	// Exported by paths.SessionEnv() into every session's shell. Also covers `cm shim --session`, which the
 	// server spawns with the name passed explicitly, so the two spellings of the flag cannot diverge.
 	"session": true,
-
-	// Set by an upgrading client for the process replacing it, and deliberately named after the flag it
-	// replaced, so the convention derives exactly this variable from it. Left bound, the handover was
-	// parsed as the flag's value: "<pid>:<seq>" is not a uint64, so every re-exec'd client died on
-	// `invalid argument "78714:37"` before it could attach, and the window was left holding a dead
-	// terminal. The flag itself is vestigial anyway, and honoring a position from the argv is the bug
-	// resumeEnvVar exists to fix, so binding it to anything is wrong twice over.
-	resumeFromFlag: true,
 }
 
 // filledFromEnv records which flags bindEnv set, and from which variable.

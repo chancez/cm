@@ -319,7 +319,9 @@ Three places, by kind:
   upgrade handover `CM_RESUME_FROM_SEQ` bound it to `--resume-from-seq`, and `<pid>:<seq>` is not a
   uint64, so every re-exec'd client died on `invalid argument "78714:37"` and left a window holding a dead
   terminal. `noEnvFlags` is the deny list, and it covers variables cm exports to *itself* as well as into
-  a session.
+  a session. `TestNoSelfExportedVariableBindsToAFlag` walks the whole command tree and fails on the next
+  one, which is the guard that matters: the flag that collided has since been deleted, and the next
+  variable will not have a flag anybody can remove.
 - **Nothing true for only an instant belongs in an argv that is re-exec'd.** `syscall.Exec` makes it the
   process's reported command line for good, so `ps` shows it and anything recording a live command line
   replays it later. The resume position was a flag; it is `CM_RESUME_FROM_SEQ` now. See
