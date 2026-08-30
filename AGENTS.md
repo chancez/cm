@@ -312,3 +312,15 @@ Three places, by kind:
   See `docs/architecture.md`.
 - **`os.MkdirAll(dir, 0700)` over an existing directory leaves its mode alone**, so pointing
   `CM_RUNTIME_DIR` at a shared path can yield world-readable session logs. Hence `loose-dir-perms`.
+- **Every flag has a `CM_<FLAG>` variable, so a new `CM_` variable can collide with one.** `bindEnv`
+  derives the name from the flag, and a collision is not a warning: the value is *parsed as the flag*, and
+  a value of the wrong shape makes the command exit before doing anything. `CM_SESSION` bound itself to
+  `--session`, so `cm run` typed its command into the calling session instead of creating one. Naming an
+  upgrade handover `CM_RESUME_FROM_SEQ` bound it to `--resume-from-seq`, and `<pid>:<seq>` is not a
+  uint64, so every re-exec'd client died on `invalid argument "78714:37"` and left a window holding a dead
+  terminal. `noEnvFlags` is the deny list, and it covers variables cm exports to *itself* as well as into
+  a session.
+- **Nothing true for only an instant belongs in an argv that is re-exec'd.** `syscall.Exec` makes it the
+  process's reported command line for good, so `ps` shows it and anything recording a live command line
+  replays it later. The resume position was a flag; it is `CM_RESUME_FROM_SEQ` now. See
+  `docs/architecture.md` on handing a position to a replacement.

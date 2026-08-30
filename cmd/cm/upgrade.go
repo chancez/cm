@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -13,11 +12,9 @@ import (
 	"github.com/chancez/cm/internal/paths"
 )
 
-// resumeFromFlag is the hidden flag one client uses to hand its position to its replacement.
-//
-// Named here rather than repeated as a literal in the flag definition and in the argv below, which is
-// the sort of duplication that turns "the upgrade repainted the screen" into a bug with no obvious
-// cause: the flag would simply not be recognised and the replacement would do a fresh attach.
+// resumeFromFlag is the flag older builds used to hand a position to a replacement, kept only so the
+// argv they left behind still parses. See resumeEnvVar for where the position travels now, and
+// newAttachCommand for why the flag is accepted and ignored rather than removed.
 const resumeFromFlag = "resume-from-seq"
 
 // reexecForUpgrade replaces this process with the binary currently on disk, resuming where it left off.
@@ -31,9 +28,13 @@ const resumeFromFlag = "resume-from-seq"
 // The terminal is deliberately *not* restored before this. See runAttach: restoring writes a reset that
 // clears the session off the screen, which is exactly the seam upgrading in place exists to avoid.
 //
+// resumeFrom is where this client's output had reached, handed over in the environment rather than in
+// argv. See resumeEnvVar: the argv survives the exec as the process's reported command line, and an
+// emulator that saves it replays a position from a stream the restored window never saw.
+//
 // Returns only on failure. A successful exec never comes back, so a caller reaching the next line knows
 // it is still holding a raw terminal and has to put it back.
-func reexecForUpgrade(argv []string) error {
+func reexecForUpgrade(argv []string, resumeFrom *uint64) error {
 	// Resolved through the kernel rather than from argv[0], so this works when cm was invoked by a
 	// relative path or through a shell function, and picks up a binary replaced at the same path since
 	// this process started. That replacement is the ordinary case here: `mise run install` renames a new
@@ -43,9 +44,17 @@ func reexecForUpgrade(argv []string) error {
 		return fmt.Errorf("resolving the cm binary: %w", err)
 	}
 
+	env := os.Environ()
+	// Only for a real position. Zero would ask for the whole retained log rather than resuming from
+	// here. os.Getpid is the same number after the exec, which is what makes the guard on the far side
+	// work at all.
+	if resumeFrom != nil && *resumeFrom > 0 {
+		env = resumeEnviron(env, os.Getpid(), *resumeFrom)
+	}
+
 	// Nothing is buffered on this path, which exec would otherwise discard: the client writes to the
 	// terminal unbuffered, and the log is closed by the caller's defer.
-	if err := syscall.Exec(exe, argv, os.Environ()); err != nil {
+	if err := syscall.Exec(exe, argv, env); err != nil {
 		return fmt.Errorf("re-executing %s: %w", exe, err)
 	}
 	// Unreachable: a successful Exec does not return.
@@ -113,8 +122,10 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 	}
 
 	cmd.Flags().Visit(func(f *pflag.Flag) {
-		// The old position is dropped rather than carried: this process's own is appended below, and two
-		// copies would leave the wrong one in play depending on parse order.
+		// A position never goes in the argv, and one this process was started with does not get carried
+		// forward. See resumeEnvVar: the argv outlives the exec as the process's reported command line, so
+		// a position written here is recorded by whatever reads that and replayed later against a session
+		// it does not describe.
 		if f.Name == resumeFromFlag {
 			return
 		}
@@ -129,12 +140,6 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 		}
 		argv = append(argv, "--"+f.Name+"="+f.Value.String())
 	})
-
-	// Appended after the flags and only for a real position. Zero would ask for the whole retained log
-	// rather than resuming from here.
-	if res.ResumeFrom != nil && *res.ResumeFrom > 0 {
-		argv = append(argv, "--"+resumeFromFlag+"="+strconv.FormatUint(*res.ResumeFrom, 10))
-	}
 
 	// The command to run, which only matters when this attach creates the session. Preserved because a
 	// replacement that reattaches never uses it, and one that finds the session gone recreates it the

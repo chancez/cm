@@ -51,12 +51,17 @@ func upgradeCmd(t *testing.T, argv ...string) (*cobra.Command, []string) {
 	return cmd, got
 }
 
-// The argv for a replacement client must name the resolved session and carry the resume position.
+// The argv for a replacement client must name the resolved session and must not carry a position.
 //
 // The resolved name matters most. A client started with no name had one allocated by the server, so
 // re-execing `cm attach` with no name would allocate a *second* session and leave the first orphaned
 // with the user's shell still in it. That is the worst outcome this feature could produce, so it is the
 // first case here.
+//
+// The position is the other half, and it is an absence rather than a value. exec makes this argv the
+// process's reported command line, and a position is true for one instant, so anything that records a
+// live command line ends up replaying one against a stream it does not describe. See resumeEnvVar. Every
+// case below therefore sets ResumeFrom and expects no trace of it.
 func TestUpgradeArgv(t *testing.T) {
 	seq := uint64(4242)
 
@@ -71,7 +76,7 @@ func TestUpgradeArgv(t *testing.T) {
 			name: "server-allocated name is made explicit",
 			argv: nil,
 			res:  client.Result{Session: "s7", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "@aaaa2222", "--resume-from-seq=4242"},
+			want: []string{"cm", "attach", "@aaaa2222"},
 		},
 		{
 			// The case this exists for now: the ID is known and the name still wins, so `ps` keeps
@@ -80,7 +85,7 @@ func TestUpgradeArgv(t *testing.T) {
 			name: "a typed name is preserved",
 			argv: []string{"work"},
 			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "work", "--resume-from-seq=4242"},
+			want: []string{"cm", "attach", "work"},
 		},
 		{
 			// A flag taking a value is the case that broke the first implementation. Editing the original
@@ -88,7 +93,7 @@ func TestUpgradeArgv(t *testing.T) {
 			name: "a flag value is not mistaken for the session name",
 			argv: []string{"--dir", "/tmp"},
 			res:  client.Result{Session: "s7", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "@aaaa2222", "--dir=/tmp", "--resume-from-seq=4242"},
+			want: []string{"cm", "attach", "@aaaa2222", "--dir=/tmp"},
 		},
 		{
 			// Repeatable flags render as "[a,b]" through Value.String(), which would be passed on as one
@@ -99,7 +104,6 @@ func TestUpgradeArgv(t *testing.T) {
 			want: []string{
 				"cm", "attach", "work",
 				"--env=A=1", "--env=B=2",
-				"--resume-from-seq=4242",
 			},
 		},
 		{
@@ -108,23 +112,23 @@ func TestUpgradeArgv(t *testing.T) {
 			name: "unset flags are omitted",
 			argv: []string{"work", "--read-only"},
 			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "work", "--read-only=true", "--resume-from-seq=4242"},
+			want: []string{"cm", "attach", "work", "--read-only=true"},
 		},
 		{
-			// A position of zero is not a resume point: it would ask for the whole retained log, which is
-			// the opposite of resuming, so the flag is left off and the replacement repaints.
-			name: "no position means no flag",
+			// The position goes in the environment, so a live position leaves the argv alone. Without this
+			// the recorded command line describes one moment in one window's life forever.
+			name: "a position never appears in the argv",
 			argv: []string{"work"},
-			res:  client.Result{Session: "work", SessionID: "aaaa2222"},
+			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{"cm", "attach", "work"},
 		},
 		{
-			// An old position must not be carried through, or two copies would be in play and which one
-			// won would depend on parse order.
-			name: "a previous position is replaced rather than repeated",
+			// A position an older build put in the argv, or one replayed from a saved session file, is
+			// dropped rather than passed on, so it stops spreading at the first upgrade.
+			name: "a position left by an older build is dropped",
 			argv: []string{"work", "--resume-from-seq=11"},
 			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
-			want: []string{"cm", "attach", "work", "--resume-from-seq=4242"},
+			want: []string{"cm", "attach", "work"},
 		},
 		{
 			// The command after "--" only matters if the session has to be recreated, and it must stay
@@ -133,7 +137,7 @@ func TestUpgradeArgv(t *testing.T) {
 			argv: []string{"work", "--", "/bin/sh", "-l"},
 			res:  client.Result{Session: "work", SessionID: "aaaa2222", ResumeFrom: &seq},
 			want: []string{
-				"cm", "attach", "work", "--resume-from-seq=4242",
+				"cm", "attach", "work",
 				"--", "/bin/sh", "-l",
 			},
 		},

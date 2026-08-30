@@ -69,7 +69,7 @@ var DefaultCapture = []string{
 // This decides what a shell is *born with*, which is not recorded anywhere, and where the useful
 // default is "what the creating client had" for the same reason a subshell inherits everything.
 //
-// Only the dynamic linker variables are excluded, and the reason is borrowed rather than invented.
+// Two kinds are excluded. The dynamic linker variables, for a reason borrowed rather than invented.
 // sshd defaults PermitUserEnvironment to no, and says why: it "may enable users to bypass access
 // restrictions in some configurations using mechanisms such as LD_PRELOAD". These choose what code a
 // process loads rather than how it behaves, which is the one category worth treating differently.
@@ -80,6 +80,10 @@ var DefaultCapture = []string{
 // ARTIFACTORY_CLOUD_AUTH and HUBBLE_CLIENT_SECRET match a *_AUTH and *_SECRET pattern, and the next
 // one would not.
 //
+// And cm's own process-to-process handovers, which describe one client rather than a machine or a
+// preference. A shell born with one keeps it for its whole life, and every cm command run inside that
+// session then reads it as if it had been handed something.
+//
 // A trailing "*" matches by prefix.
 var NoInherit = []string{
 	"LD_PRELOAD",
@@ -88,6 +92,13 @@ var NoInherit = []string{
 	// macOS spells them differently and has more of them, and DYLD_INSERT_LIBRARIES is the direct
 	// LD_PRELOAD equivalent.
 	"DYLD_*",
+
+	// Where an upgrading client leaves its output position for the process replacing it. Consumed and
+	// unset by the client that reads it, so this is the second of two guards, and the cheaper one to
+	// keep correct: it holds however the calling code is later reordered. A session that inherited one
+	// would export a resume position to every cm command inside it, and a resume suppresses both the
+	// screen repaint and the sizing.
+	"CM_RESUME_FROM_SEQ",
 }
 
 // Inherit returns the environment a newly created session takes from its client: everything the

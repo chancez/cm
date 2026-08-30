@@ -654,6 +654,14 @@ shell".
 
 ## Operational
 
+**Delete `--resume-from-seq`.** The position crosses an upgrade in `CM_RESUME_FROM_SEQ` now, and the flag is
+accepted and ignored only so that a client re-exec'd by a build that still writes it into the argv does not
+exit on an unknown flag. It has to survive one upgrade from a pre-change binary; after that it is three
+lines in `newAttachCommand`, one entry in `noEnvFlags`, one const, and two tests. Removing it also removes
+the `CM_<FLAG>` collision that entry exists for. Cost is checking that no recorded command line in reach
+still carries it: a real saved kitty session file had none, because those record the launcher rather than
+the live process.
+
 **A supervised server.** The server is started on demand by whichever command needs it. That is what makes
 cm need no setup, and it means the server's own lifetime is not managed: a crash is recovered by the next
 command, which is fine, but there is no way to say "keep one running". A launchd/systemd unit would suit

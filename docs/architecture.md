@@ -677,15 +677,54 @@ The reference written is the one that was *typed*, unchanged, and an ID only whe
 built the other way first -- always the ID, so that a name pointed elsewhere in the meantime could not send
 the replacement to a session other than the one on screen -- and the trade was wrong.
 
-A re-exec replaces the process image, so the new argv is what the kernel reports from then on: `ps` shows
-it, and so does a terminal emulator that saves a session file from the *foreground process* rather than
-from the command it launched. Writing the ID always therefore rewrote every window's recorded command into
-one that attaches by identity, and an ID never creates a session. A window restored after its session had
-gone then came back dead, where a name would have recreated it. Upgrading is casual and losing a session to
-a reboot is ordinary, so those two meet often, while a name being rebound under a live window is rare. What
-is given up is that such a window follows its name on the next upgrade rather than staying where it was,
-which is defensible on its own terms: the name means the other session now, and following a binding is what
-every other attach does.
+A re-exec replaces the process image, so the new argv is what the kernel reports from then on. `ps` shows
+it, and so does anything that records a live command line. kitty does under `save_as_session
+--use-foreground-process`, but only for a window it started with the shell: a window launched with a
+program of its own, which is how cm's terminal integration works, is recorded as that program and never
+sees the re-exec'd argv at all. So the exposure is a window where `cm attach` was typed by hand, and
+measured against a real saved session file the launch lines are the launcher, with no cm flags in them.
+
+Writing the ID always would still rewrite what `ps` reports and what such a window recorded, into a
+command that attaches by identity, and an ID never creates a session. A window restored after its session
+had gone would come back dead where a name recreates it. Upgrading is casual and losing a session to a
+reboot is ordinary, while a name being rebound under a live window is rare. What is given up is that such
+a window follows its name on the next upgrade rather than staying where it was, which is defensible on its
+own terms: the name means the other session now, and following a binding is what every other attach does.
+
+**Nothing that is true for only one instant goes in that argv.** The resume position did, and that is the
+rule it produced. See "Handing a position to a replacement" below.
+
+### Handing a position to a replacement
+
+An upgrade is seamless because the replacement resumes: it tells the server how far output had reached and
+gets the bytes it missed, instead of a serialized screen it would have to clear the terminal to paint. One
+number has to cross the exec, and where it crosses is the whole decision.
+
+It was a hidden `--resume-from-seq` flag, and the argv is the wrong carrier for anything true only for an
+instant. `ps` showed it on every upgraded client, and a replayed position is worse than untidy: the server
+reads a resume as "this client already has the screen", sends no snapshot, and the window is blank. The
+recovery cannot fire, because a clamped position is flagged on the *next output chunk* and a restored
+window is a shell idle at a prompt. And a stale position is usually in range, not out of it: 1 MiB is
+retained per session, so one from the last upgrade is still inside the log unless a megabyte has been
+produced since.
+
+It travels in `CM_RESUME_FROM_SEQ` as `<pid>:<seq>`, read and unset before the client captures the
+environment it forwards to a session it creates. Two guards, because the variable could become the same
+bug through a different door:
+
+- **The pid.** exec preserves it, so only a process that re-exec'd itself matches, and a value from a
+  shell profile or a copied environment is ignored rather than making a fresh attach paint nothing.
+- **`sessionenv.NoInherit`.** A session that inherited one would export it to every cm command run inside
+  it. Unsetting on read covers this too; the list is the guard that holds however the calling code is
+  reordered.
+
+Naming it after the flag cost a bug immediately: cm derives `CM_<FLAG>` for every flag, so the handover was
+parsed as `--resume-from-seq`'s value, `<pid>:<seq>` is not a uint64, and every re-exec'd client exited on
+`invalid argument "78714:37"` before attaching. `noEnvFlags` exists for this, from `CM_SESSION` binding
+itself to `--session`. That is the second instance.
+
+The flag is still accepted and ignored, because an older build hands it over in the argv and a binary that
+rejects it leaves every attached client dead at once. One upgrade later it is dead weight.
 
 ### Replacing the session a name came off
 

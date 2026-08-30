@@ -24,7 +24,9 @@ func newAttachCommand(g *globals) *cobra.Command {
 		detachKeyArg string
 		noAttach     bool
 		tagArgs      []string
-		resumeFrom   uint64
+		// Bound to the vestigial --resume-from-seq and never read. Named for what it is so a reader
+		// looking for where the position comes from does not stop here.
+		ignoredResumeFrom uint64
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -101,6 +103,10 @@ receives it and the window closes instead of detaching.`,
 				return err
 			}
 
+			// Taken before anything reads the environment, because Env below forwards this process's
+			// whole environment to a session this call creates. See takeResumeFrom.
+			resumeFrom := takeResumeFrom(os.Getpid())
+
 			opts := client.Options{
 				SocketPath: dirs.ServerSocket(),
 				// Recovery for a window whose server died. Every cm command already starts one when none is
@@ -135,12 +141,9 @@ receives it and the window closes instead of detaching.`,
 				// reading the bytes passing through it as reports about itself.
 				InsideSession: insideCmSession(),
 			}
-			// Set only when a previous client handed over a position, so an ordinary attach still
-			// repaints. Zero is not a usable resume point: it would ask for the whole retained log,
-			// which is the opposite of resuming.
-			if resumeFrom > 0 {
-				opts.ResumeFrom = &resumeFrom
-			}
+			// Nil unless this process replaced one that was already attached, so an ordinary attach
+			// still repaints.
+			opts.ResumeFrom = resumeFrom
 			logger, closeLog := newClientLogger(dirs, cfg)
 			if closeLog != nil {
 				defer closeLog.Close()
@@ -183,12 +186,24 @@ receives it and the window closes instead of detaching.`,
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
-	// Hidden, because it is how one client hands its position to the process replacing it rather than
-	// something a person has a reason to type. A human passing the wrong value here gets a screen that
-	// resumes from the wrong place, which looks like corrupted output.
-	f.Uint64Var(&resumeFrom, "resume-from-seq", 0,
-		"resume output from this position instead of repainting (used by cm clients upgrade)")
-	_ = f.MarkHidden("resume-from-seq")
+	// Accepted and ignored, and both halves are deliberate.
+	//
+	// Honoring it is the bug: a position from a stream this process never saw suppresses the screen
+	// repaint, so the window comes back blank. See resumeEnvVar, which is where a position travels now.
+	//
+	// Still parsed because an older build puts it in the argv it re-execs, so the first upgrade after
+	// this change hands it to a binary that has to accept it. `unknown flag` there means the client
+	// exits instead of attaching and the window is left holding a dead terminal, which is worse than the
+	// bug, and it would happen to every attached client at once. It also covers a command line recorded
+	// by something that watched a live process. Once one upgrade has been through, the flag is dead
+	// weight and can go; see docs/ideas.md.
+	//
+	// The cost of ignoring it is that that first upgrade repaints once, since the old process hands over
+	// in the argv and the new one only reads the environment. One clear plus a snapshot, which is what a
+	// fresh attach does anyway.
+	f.Uint64Var(&ignoredResumeFrom, resumeFromFlag, 0,
+		"ignored; kept so an argv recorded by an older build still parses")
+	_ = f.MarkHidden(resumeFromFlag)
 	return cmd
 }
 
@@ -227,7 +242,7 @@ func runAttach(
 	// here holding a terminal in raw mode, so it has to restore it and report, rather than leaving a
 	// window that looks alive and answers nothing.
 	if res.Upgrade && attachErr == nil && upgradeArgv != nil {
-		if err := reexecForUpgrade(upgradeArgv(res)); err != nil {
+		if err := reexecForUpgrade(upgradeArgv(res), res.ResumeFrom); err != nil {
 			// Restored first, for the reason above: the message must be readable and the shell that
 			// regains this terminal must not inherit raw mode.
 			_ = tty.Close()
