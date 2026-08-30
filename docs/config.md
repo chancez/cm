@@ -117,6 +117,14 @@ This picks which client's size wins. For a single client every policy behaves id
 
 A read-only follower never owns sizing under any policy.
 
+A client that upgrades in place counts the same as any other. It resumes rather than reattaching, and a
+resume used to skip sizing entirely on the reasoning that the pty already matched the terminal coming
+back. That holds for one window and not for a size computed across several: the upgraded client was left
+recorded as 0x0, which every policy reads as "has not reported a size", so under `smallest` a window
+dropped out of the calculation on upgrade and the session grew to another window's size. A resume now
+registers its size and applies it without the forced SIGWINCH a fresh attach uses, so an upgrade at an
+unchanged size still costs no redraw.
+
 ### detach_key
 
 Accepts `ctrl-<key>` for a letter or one of the characters that have a control code (`[`, `\`, `]`,

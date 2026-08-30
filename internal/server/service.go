@@ -209,13 +209,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 
 	// Sized before the screen is taken, so the snapshot below describes this client's width. Whether
 	// this client's size wins depends on the configured policy, which only matters once several
-	// clients are attached. On resume the client already matches, so nothing is resized and the shell
-	// is not made to redraw for no reason.
-	if open.ResumeFromSeq == nil {
-		if err := s.sizeForAttach(ctx, sess, tok, open); err != nil {
-			sess.releaseClient(tok)
-			return err
-		}
+	// clients are attached.
+	if err := s.sizeForAttach(ctx, sess, tok, open); err != nil {
+		sess.releaseClient(tok)
+		return err
 	}
 
 	// The wire carries a plain uint64. A resume position is in the log's numbering, since it is what
@@ -547,18 +544,41 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	}
 }
 
-// sizeForAttach settles the session's size for a freshly attaching client, before its screen is
-// serialized.
+// sizeForAttach settles the session's size for an attaching client, before its screen is serialized.
 //
 // Called with a reserved token rather than an attachment, which is what lets it run ahead of the
 // snapshot. Returns an error only when the attach itself should fail; a shim that has gone away is
 // reported to the log and left to the streaming loop, which has the exit status.
+//
+// A resuming client is sized too, and this whole call used to be skipped for one. Two bugs came of
+// that, both invisible with a single client, which is why it survived.
+//
+// registerClientSize is the only writer of a client's rows and cols, so a client that upgraded in place
+// was left recorded as 0x0, and both policies that read a size treat zero as "has not reported one".
+// smallestLocked skips the entry, so an upgraded window stopped constraining resize_policy = smallest.
+// claimLeadership hands leadership over but returns no size to apply, so a window that took leadership
+// by typing could not bring the session to its own size.
+//
+// And the reasoning for skipping was itself wrong: "on a resume the pty already matches" holds for one
+// window, not for a session whose size is computed across several. releaseClientSize grows the session
+// when the smallest window detaches, so by the time that window's replacement arrives the size it needs
+// is no longer current and has to be asked for again.
+//
+// What a resume does skip is the forced signal below. Plain Resize is a pty.Setsize, and the kernel
+// raises SIGWINCH only when the size actually differs, so an upgrade at an unchanged size still costs
+// the shell no redraw while one that really did change gets a real signal.
+//
+// Whether this is a resume is read from the request here rather than decided by the caller, which is
+// where it was. That is what makes the behavior testable: a caller that branches around the whole call
+// leaves nothing for a test of this function to catch, and the first version of its test passed against
+// the bug for exactly that reason.
 func (s *Service) sizeForAttach(
 	ctx context.Context,
 	sess *Session,
 	tok *attachToken,
 	open *serverv1.Open,
 ) error {
+	resuming := open.ResumeFromSeq != nil
 	rows, cols, x, y, resize := sess.registerClientSize(
 		tok, uint16(open.Rows), uint16(open.Cols),
 		uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
@@ -573,8 +593,13 @@ func (s *Service) sizeForAttach(
 	//
 	// The redraw this provokes is also why the ordering here matters beyond wrapping. Whatever the
 	// shell emits in response is generated now, ahead of the snapshot, so it is part of the screen
-	// being serialized instead of arriving interleaved with the replay of it.
-	if err := sess.ResizeSignal(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
+	// being serialized instead of arriving interleaved with the replay of it. A resume has no snapshot
+	// to order against, and wants no redraw it does not need, so it takes the plain form.
+	sizeIt := sess.ResizeSignal
+	if resuming {
+		sizeIt = sess.Resize
+	}
+	if err := sizeIt(ctx, uint32(rows), uint32(cols), uint32(x), uint32(y)); err != nil {
 		// A shim that has gone away is not a sizing failure, it is the session ending: the attach
 		// succeeded, then the shell exited before this resize reached the shim. Sizing a session that
 		// no longer exists is moot, so the attach continues and the streaming loop reports the exit
