@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bytes"
-	"compress/zlib"
 	"context"
 	"encoding/base64"
 	"strings"
@@ -41,27 +39,38 @@ func TestTwoClientsBothGetTheLiveImage(t *testing.T) {
 	}
 	defer sess.detach(first)
 
-	// 20x20 RGB, chunked the way icat chunks: control keys and payload on the first, payload alone after.
-	var px []byte
-	for i := 0; i < 20*20; i++ {
-		px = append(px, 1, 2, 3)
+	// Sized like a real screenshot and chunked at 4096 the way kitty's client chunks. Scale is the whole
+	// point: a small image goes out in one command and a real one in hundreds, and only the small case
+	// was ever tested.
+	const iw, ih = 800, 600
+	px := make([]byte, iw*ih*3)
+	for i := range px {
+		px[i] = byte(i % 251)
 	}
-	// Compressed, because icat compresses: the captured command is a=T,q=2,f=24,o=z,m=1,s=800,v=503.
-	var zbuf bytes.Buffer
-	zw := zlib.NewWriter(&zbuf)
-	zw.Write(px)
-	zw.Close()
-	enc := kittyEnc(zbuf.Bytes())
-	// At a multiple of four, which is what a real client does: base64 chunks are concatenated by the
-	// receiver, so a split inside a quantum would corrupt the image.
-	half := len(enc) / 2 / 4 * 4
+	enc := kittyEnc(px)
 	feed := func(chunk string) {
 		before := sess.recent.Next()
 		out := feedGraphics(t, sess, chunk)
 		sess.feedTerminal([]byte(out), before+seq.Log(len(out)))
 	}
-	feed("\x1b_Ga=T,q=2,f=24,o=z,m=1,s=20,v=20;" + enc[:half] + "\x1b\\")
-	feed("\x1b_Ga=T,q=2,m=0;" + enc[half:] + "\x1b\\")
+	const step = 4096
+	firstChunk := true
+	chunks := 0
+	for i := 0; i < len(enc); i += step {
+		end := min(i+step, len(enc))
+		more := "1"
+		if end == len(enc) {
+			more = "0"
+		}
+		control := "a=T,q=2,m=" + more
+		if firstChunk {
+			control = "a=T,q=2,f=24,s=800,v=600,i=7,m=" + more
+			firstChunk = false
+		}
+		feed("\x1b_G" + control + ";" + enc[i:end] + "\x1b\\")
+		chunks++
+	}
+	t.Logf("fed %d chunks, %d bytes of base64", chunks, len(enc))
 
 	// What the model and the store each hold, reported before the assertion so a failure says which
 	// half is missing rather than only that the restore is wrong.
