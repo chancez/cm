@@ -77,6 +77,10 @@ func TestOptionsOpenSetsEveryWireField(t *testing.T) {
 		// Set per call site rather than from Options: `cm run` always captures so its output outlives
 		// the command, while an interactive attach never should.
 		"CaptureOutput": "decided by the command, not by the attachment",
+		// Carried from the client's own memory of what it was asked rather than from a caller: a first
+		// attach has none, and a reconnect has whatever the server handed it before the stream dropped.
+		// See pendingQueries.
+		"OutstandingQueries": "from what this client was asked, not from Options",
 	}
 
 	// Every field set to something non-zero, so a field the mapping forgets stays zero and is caught.

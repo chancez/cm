@@ -227,6 +227,60 @@ func (s *Session) answerFromClient(tok *attachToken, data []byte) {
 	s.writeReplies(ready)
 }
 
+// reofferQueries records questions a reconnecting client says it was asked and has not answered.
+//
+// The server's record of an outstanding question is in memory, and adoption resubscribes from where the old
+// server stopped rather than re-reading the bytes that carried the query, so a restart forgets it and does not
+// re-ask it. The reply then matches nothing, answerFromClient discards it, and the asking program gets no
+// answer. The client is the only thing that still knows, so it re-offers and this records it again.
+//
+// Recorded as freshly asked, and that is a change to the answer budget rather than a repair, so it is worth
+// being explicit. requestTimeout is 500ms and a restart takes seconds, so a question carried across one has
+// already blown its budget: preserving the record without resetting the clock would change nothing, because
+// sweepRequests would abandon it immediately. Measured both ways, and a reply arriving 2s late is discarded
+// with no restart involved at all. So the budget now means "500ms from when this client was last asked", and
+// the reply the terminal produced during the restart arrives within microseconds of the reconnect.
+//
+// This does not let a client answer for itself, which is the invariant that matters. cm is still the only
+// writer of a reply to the pty, still matches a reply against a recorded question, and still asks one client
+// at a time. What a client gains is having bytes it sends treated as a reply rather than as typing, and it can
+// already send typing, which reaches the pty verbatim.
+//
+// A question re-offered that was in fact answered before the restart costs one requestTimeout of queue delay
+// and then expires, which is the same outcome as a client that never answers. The client cannot tell the
+// difference, because which question a reply settles is decided here against the query's bytes and never
+// reported back.
+//
+// Called after attach rather than beside noteClientIdentity. The channel a question is asked on is created
+// inside attach, so an earlier call found none and this dropped the re-offer by its own guard: the log said
+// one question was re-offered and the reply still matched nothing, which reads as the wire being broken
+// rather than as an ordering mistake.
+func (s *Session) reofferQueries(tok *attachToken, queries [][]byte) {
+	if tok == nil || len(queries) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.queries[tok] == nil {
+		// No channel to ask on, so this client cannot be the answerer and recording a question against it
+		// would hold the queue for nothing.
+		return
+	}
+	for _, q := range queries {
+		if len(q) == 0 {
+			continue
+		}
+		s.requests = append(s.requests, &pendingRequest{
+			proxied: true,
+			tok:     tok,
+			seq:     append([]byte(nil), q...),
+			asked:   s.now(),
+		})
+	}
+	s.log.Debug("re-registered questions a reconnecting client had not answered",
+		"session", s.label, "count", len(queries))
+}
+
 // awaitingReply reports whether cm has asked this client a question it has not answered.
 //
 // Read by the input framer, which treats an incomplete sequence at the end of a read differently depending

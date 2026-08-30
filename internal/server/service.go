@@ -301,6 +301,16 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			sess.ReportFocus(ctx, false)
 		}
 	}()
+	// Questions this client was handed before its stream dropped, which this server has no record of.
+	//
+	// After attach rather than beside noteClientIdentity, which was the first attempt: the channel a question
+	// is asked on is created inside attach, so a re-offer arriving earlier found none and was dropped by its
+	// own guard. The diagnostic said "re-offered 1" and the reply then matched nothing, which read as the wire
+	// being broken rather than the ordering.
+	//
+	// Before any input is framed, so a reply arriving immediately after the reconnect has something to match.
+	sess.reofferQueries(att.token, open.OutstandingQueries)
+
 	startSeq := reader.Position()
 
 	// And when one arrives.

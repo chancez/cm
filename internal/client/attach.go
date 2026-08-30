@@ -75,6 +75,9 @@ func (o Options) Open(session string) *serverv1.Open {
 		// --no-attach. Every client describes itself the same way as a result.
 		ClientVersion: paths.Version(),
 		ClientPid:     int32(os.Getpid()),
+		// Questions handed to this client that it has not answered, so a reconnect does not lose them. Empty
+		// on a first attach, and empty from a caller that never received one. See pendingQueries.
+		OutstandingQueries: o.outstandingQueries(),
 	}
 }
 
@@ -216,6 +219,25 @@ type Options struct {
 	// not reset when a stream does. Nil means one is built on the spot, which is what a test calling
 	// runSession directly gets.
 	screen *screen
+
+	// pending remembers questions the server handed this client, so a reconnect can re-offer them and the
+	// reply that comes back can still be matched.
+	//
+	// On Options and outliving one connection for the same reasons screen is, and here the second reason is
+	// the whole point: a memory rebuilt per stream would forget exactly what it exists to carry. Nil means one
+	// is built on the spot, which is what a test calling runSession directly gets.
+	pending *pendingQueries
+}
+
+// outstandingQueries returns questions to re-offer, consuming them.
+//
+// A method on Options so Open stays the one place that describes this client, which is what keeps a field from
+// being added to one Open and missed on another.
+func (o Options) outstandingQueries() [][]byte {
+	if o.pending == nil {
+		return nil
+	}
+	return o.pending.take()
 }
 
 // SessionMetadata is what a session reports about itself.
@@ -330,6 +352,11 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// stream does.
 	if opts.screen == nil {
 		opts.screen = newScreen(screenDest(tty, opts), opts.Output == nil && tty.IsTerminal(), opts.Log)
+	}
+	// Built here for the same reason the screen is: it has to outlive a reconnect. Its whole purpose is to
+	// carry questions across one, so a memory created per stream would forget exactly what it exists to keep.
+	if opts.pending == nil {
+		opts.pending = &pendingQueries{}
 	}
 
 	notice := opts.notice
@@ -776,6 +803,10 @@ func runSession(
 				// question written into that stream would corrupt what it is collecting and could never be
 				// answered. The server's request then expires, which is the same outcome as today.
 				if opts.Output == nil && !opts.ReadOnly {
+					// Remembered before it is written, so a stream that drops between the two still re-offers
+					// it: the terminal may already have answered, and that reply is what arrives after the
+					// reconnect.
+					opts.pending.add(q.Data)
 					// Injected, so a question cannot be asked in the middle of the program's own sequence.
 					if err := scr.inject(q.Data); err != nil {
 						return outcomeDone, err

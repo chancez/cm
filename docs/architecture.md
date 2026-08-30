@@ -933,6 +933,30 @@ query on the session, which is much worse than the single unanswered query it re
 client's outstanding questions immediately rather than waiting, since nothing can answer them once it has
 gone.
 
+**The 500ms is measured from when the client was last asked, which matters across a restart.** The record of an
+outstanding question lives in the server's memory, and adoption resubscribes from where the old server stopped
+rather than re-reading the bytes that carried the query, so a restart forgot the question and did not re-ask
+it. The reply then matched nothing and was discarded as unsolicited, and the asking program got no answer.
+
+The client is the only thing that still knows, because it was handed the bytes and wrote them to its terminal,
+so it re-offers them in `Open` on reconnect and the server records them again. Measured: without a restart the
+program reads `rgb:2828/2c2c/3434`, and before this it read nothing across one.
+
+Re-recording them as *freshly asked* is a change to the budget rather than a repair, and it is the part worth
+understanding. A restart takes seconds and the budget is 500ms, so preserving the record without resetting the
+clock would change nothing: the sweep would abandon it immediately. That was measured too, and a reply arriving
+2s late is discarded with no restart involved at all, which is `TestASlowAnswerIsDiscardedWithoutAnyRestart`.
+The reply a terminal produced during the restart arrives within microseconds of the reconnect, so the reset
+budget is not generous in practice.
+
+What this does not do is let a client answer for itself. cm is still the only writer of a reply to the pty,
+still matches a reply against a recorded question, and still asks one client at a time. What a client gains is
+having bytes it sends treated as a reply rather than as typing, and it can already send typing, which reaches
+the pty verbatim. A question re-offered that was in fact answered before the restart costs one expiry of queue
+delay and then goes, which is the same outcome as a client that never answers; the client cannot tell the
+difference, since which question a reply settles is decided server-side against the query's bytes and never
+reported back.
+
 ### What is deliberately not suppressed
 
 Every attached terminal still *sees* every query, both the proxied ones and the ones cm answers itself,

@@ -1414,8 +1414,25 @@ type Open struct {
 	// neither, and empty is reported as unknown rather than guessed at.
 	ClientVersion string `protobuf:"bytes,19,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
 	ClientPid     int32  `protobuf:"varint,20,opt,name=client_pid,json=clientPid,proto3" json:"client_pid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Questions this client was handed and has not answered, re-offered when it reconnects.
+	//
+	// cm proxies a terminal-only query to one client and records it as outstanding, so the reply coming back
+	// can be matched to the question that asked. Those records live in the server's memory, and adoption
+	// resubscribes from where the old server stopped, so a restart forgets the question and does not re-ask
+	// it: the reply then matches nothing and is discarded, and the asking program gets no answer.
+	//
+	// The client is the only thing that still knows, because it was handed the bytes and wrote them to its
+	// terminal. So it re-offers them here and the server records them again.
+	//
+	// This does not let a client answer for itself, which is the invariant that matters: cm remains the only
+	// writer of a reply to the pty, still matches a reply against a recorded question, and still asks one
+	// client at a time. What a client gains is the ability to have bytes it sends treated as a reply rather
+	// than as typing, and it can already send typing, which reaches the pty verbatim.
+	//
+	// Advisory. An older client sends none and behaves as it did.
+	OutstandingQueries [][]byte `protobuf:"bytes,22,rep,name=outstanding_queries,json=outstandingQueries,proto3" json:"outstanding_queries,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Open) Reset() {
@@ -1579,6 +1596,13 @@ func (x *Open) GetClientPid() int32 {
 		return x.ClientPid
 	}
 	return 0
+}
+
+func (x *Open) GetOutstandingQueries() [][]byte {
+	if x != nil {
+		return x.OutstandingQueries
+	}
+	return nil
 }
 
 // AttachedClient describes one client attached to a session.
@@ -4441,7 +4465,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xf3\x05\n" +
+	"\x05event\"\xa4\x06\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -4466,7 +4490,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x0einside_session\x18\x12 \x01(\tR\rinsideSession\x12%\n" +
 	"\x0eclient_version\x18\x13 \x01(\tR\rclientVersion\x12\x1d\n" +
 	"\n" +
-	"client_pid\x18\x14 \x01(\x05R\tclientPid\x1a<\n" +
+	"client_pid\x18\x14 \x01(\x05R\tclientPid\x12/\n" +
+	"\x13outstanding_queries\x18\x16 \x03(\fR\x12outstandingQueries\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

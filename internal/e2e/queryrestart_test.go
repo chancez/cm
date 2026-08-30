@@ -88,27 +88,18 @@ func TestAQueryOutstandingAcrossARestartIsStillAnswered(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		// Recorded as current behaviour rather than asserted as correct, because the fix is a decision about
-		// the query-reply invariant rather than a local repair.
+		// The answer has to arrive. The client re-offers the question it was handed on its reconnect and the
+		// server records it again, so the reply the terminal produced during the restart matches.
 		//
-		// AGENTS.md is explicit that when a fix is another branch in the reply routing, the thing to check
-		// first is whether the bug is a symptom of cm not holding a consistent position on what it presents
-		// itself as. This is one of those: cm discards a reply it cannot match *on purpose*, because
-		// forwarding unsolicited replies is what produced the duplicate-answer and garbage-at-the-prompt
-		// bugs, and after a restart it cannot tell an answer it forgot from one nobody asked for.
-		//
-		// The options, none local. The client already knows which query it was handed and has not answered,
-		// so it could re-register that on reconnect and let the server match the reply again; that needs a
-		// proto field and client state. Or the requests could be persisted, which is a database write for a
-		// window measured in milliseconds. Or this is accepted, in which case a program without its own
-		// timeout hangs when a restart lands on its question, and that belongs in docs rather than in
-		// silence.
-		//
-		// Written as an assertion on the gap so a fix fails here and has to update it deliberately.
-		if got := c.output(); strings.Contains(got, "rgb:") {
-			t.Errorf("the program received its answer across the restart, so the gap this test pins has been "+
-				"closed. That is an improvement: update this test to assert the reply arrives, and check that "+
-				"an unsolicited reply is still discarded.\npty:\n%s", got)
+		// The budget this rests on is deliberate rather than incidental: requestTimeout is 500ms and a restart
+		// takes seconds, so a re-offered question is recorded as freshly asked. Without that, preserving the
+		// record would change nothing, because the sweep would abandon it immediately. See
+		// TestASlowAnswerIsDiscardedWithoutAnyRestart, which is the measurement that the budget still applies
+		// on a connection that never dropped.
+		if got := c.output(); !strings.Contains(got, "rgb:") {
+			t.Errorf("the program read an empty answer after the restart, so its question was lost: the "+
+				"reply reached a server with nothing outstanding and was discarded as unsolicited.\npty:\n%s",
+				got)
 		}
 	})
 }
@@ -123,4 +114,50 @@ func answerBackgroundColour(t *testing.T, c *ptyClient) {
 	c.write([]byte("\x1b]11;rgb:2828/2c2c/3434\x07"))
 	time.Sleep(200 * time.Millisecond)
 	c.write([]byte("\r"))
+}
+
+// TestASlowAnswerIsDiscardedWithoutAnyRestart isolates what actually governs a lost answer.
+//
+// requestTimeout is 500ms, and sweepRequests abandons a question older than that: the reply then matches
+// nothing and is discarded exactly as it is after a restart. A restart takes seconds, so a query in flight when
+// one happens was going to lose its answer to expiry regardless of whether the record survived.
+//
+// That matters for what "fix the restart case" would mean. Preserving the record across a restart changes
+// nothing on its own; the question would have to be treated as fresh again, which is a change to the timeout
+// policy rather than a repair. This test is the measurement that says so, and it is deliberately next to the
+// restart one so the two are read together.
+func TestASlowAnswerIsDiscardedWithoutAnyRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a server, a shell and a pty")
+	}
+
+	const script = `printf 'ASKING\r\n'; sleep 1; printf '\033]11;?\007'; IFS= read -r reply; ` +
+		`printf 'GOT[%s]\r\n' "$reply"`
+
+	e := newEnv(t)
+	c := attachOnPty(t, e, "qslow", "--", "/bin/sh", "-c", script)
+	waitForOnPty(t, c, "ASKING")
+	waitForOnPty(t, c, "\x1b]11;?")
+
+	// Well past requestTimeout, and nothing else has gone wrong: no restart, no reconnect, one client that
+	// simply took its time.
+	time.Sleep(2 * time.Second)
+	answerBackgroundColour(t, c)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(c.output(), "GOT[") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the program never got past its read:\npty:\n%s", c.output())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Recorded as current behaviour. A reply later than requestTimeout is discarded, which the constant's own
+	// comment defends: the asking program gets no answer to that query, which is what happened for every
+	// terminal-only query before the proxy existed.
+	if strings.Contains(c.output(), "rgb:") {
+		t.Errorf("a reply arriving %s after the question was still delivered, so requestTimeout is not what "+
+			"governs this and the restart case needs looking at on its own terms.\npty:\n%s",
+			2*time.Second, c.output())
+	}
 }

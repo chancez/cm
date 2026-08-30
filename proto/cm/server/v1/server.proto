@@ -460,6 +460,24 @@ message Open {
   // neither, and empty is reported as unknown rather than guessed at.
   string client_version = 19;
   int32 client_pid = 20;
+
+  // Questions this client was handed and has not answered, re-offered when it reconnects.
+  //
+  // cm proxies a terminal-only query to one client and records it as outstanding, so the reply coming back
+  // can be matched to the question that asked. Those records live in the server's memory, and adoption
+  // resubscribes from where the old server stopped, so a restart forgets the question and does not re-ask
+  // it: the reply then matches nothing and is discarded, and the asking program gets no answer.
+  //
+  // The client is the only thing that still knows, because it was handed the bytes and wrote them to its
+  // terminal. So it re-offers them here and the server records them again.
+  //
+  // This does not let a client answer for itself, which is the invariant that matters: cm remains the only
+  // writer of a reply to the pty, still matches a reply against a recorded question, and still asks one
+  // client at a time. What a client gains is the ability to have bytes it sends treated as a reply rather
+  // than as typing, and it can already send typing, which reaches the pty verbatim.
+  //
+  // Advisory. An older client sends none and behaves as it did.
+  repeated bytes outstanding_queries = 22;
 }
 
 // AttachedClient describes one client attached to a session.
