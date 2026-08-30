@@ -1783,9 +1783,36 @@ four days before this was written. Asking the program is a fixed cost; recognizi
 That is the one place cm reads the variable, and it does not weaken the rule about `attach` above: using it
 as the default target of a report moves nothing and retargets nothing, and an explicit name overrides it.
 
-Reports are deliberately not persisted, for the same reason busy state is not: they describe a running
-program. A value restored after a server restart would claim something needs input when it finished long
-ago, and anything waiting on that state would be released for no reason.
+Reports survive a server restart, and how they do is the part worth knowing.
+
+A report arrives two ways. A shell integration writes cm's own OSC 25453 into the output, which the shim
+retains and adoption replays, so that half needs no storage at all: it is recovered from the same bytes
+that rebuild the screen. `cm report` is an RPC, reaches the server, and touches no stream, so a server that
+forgets it destroys the only copy. That half is stored, in four columns beside the session record.
+
+Storing it was reversed from the opposite decision, which was that a report describes a running program and
+a restored one would claim something needs input long after it finished. The objection is real and the
+conclusion was wrong, because the program is usually still there: a coding agent reports blocked once and
+then waits, so what a restart forgot was exactly the state worth seeing, and it stayed forgotten for as
+long as the agent kept waiting.
+
+Two things make keeping it honest rather than a lie waiting to happen.
+
+The report carries the time it was made, through the wire and into `cm list --json`, and the STATE column
+appends an age once it is over an hour old: `running(blocked: needs approval, 3h)`. Below an hour the age
+says nothing a reader does not assume, and the column is width-constrained because CWD sits last.
+
+And adoption drops the report outright when the replayed OSC 133 markers show the shell back at a prompt
+with nothing running, since no program that is genuinely blocked can be. The guard reads whether *any*
+marker was seen as well as the state, and that distinction is the whole of it: a shell with no integration
+loaded also leaves the tracker saying "not running", and treating the two alike would drop every report
+from a session without shell integration, which is the session a program's own report is most needed for.
+`osc.CommandTracker.Seen` exists for this, because `Feed` cannot answer it -- an A marker arriving at a
+prompt changes nothing, so it reports no change.
+
+Busy state and the running command are *not* stored, and never were. They come back the other way, from
+the replay, which is why a restart now shows the command a session has been running for an hour instead of
+a bare "running".
 
 See `contrib/hooks/` for how to wire this to a program, including a Claude Code example.
 
@@ -1821,9 +1848,10 @@ unfiltered anyway, so a join and a cascade delete would make a linear scan over 
 better and practically slower. Filtering happens in Go for the same reason. Revisit if sessions ever number
 in the thousands.
 
-**Persisted, unlike a report.** A report describes a running program, so restoring one would claim
-something needs input long after it finished. A tag describes the session, so it survives a server restart
-and is carried across a session being recreated. That inheritance sits *above* the persistence gate in
+**Persisted unconditionally, unlike a report.** A report is stored too, but only as a handover between
+servers: it describes a program, so adoption drops it once the replayed markers say that program has gone.
+A tag describes the session, so it survives a server restart with nothing to check and is carried across a
+session being recreated. That inheritance sits *above* the persistence gate in
 `inheritForRestore`, which matters: the old record is deleted whether or not it had a saved log, so gating
 tags on persistence would drop them silently on an install with persistence off, and on any session whose
 shell exited and was attached to again. Recorded tags merge with what the caller asks for, caller winning
