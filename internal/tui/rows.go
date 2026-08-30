@@ -82,17 +82,18 @@ func (i item) state() string {
 // detail is what the session is doing, in words the session supplied.
 //
 // The reported detail first, because a program that bothered to say "needs approval" is answering the
-// question the list is being read to answer. Then the running command, then the terminal title, which
-// is what a shell with nothing running still says about itself.
+// question the list is being read to answer. Then the running command.
+//
+// The title is deliberately not a third fallback here. A shell with nothing running sets its title from
+// its own prompt, which is usually the directory again: the first version of this row printed
+// "~/projects/cm/.worktrees/tui  ~/p/c/.w/tui (pr/chancez/tui)", the same path twice in two spellings.
+// See delegate.Render for the one place a title is worth showing.
 func (i item) detail() string {
 	s := i.session
-	switch {
-	case s.ReportedDetail != "":
+	if s.ReportedDetail != "" {
 		return s.ReportedDetail
-	case s.Command != "":
-		return s.Command
 	}
-	return s.Title
+	return s.Command
 }
 
 // where is the session's directory, abbreviated the way a prompt does.
@@ -201,6 +202,11 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, listItem list.Ite
 	// session: a shell sitting somewhere is identified by where it is, and a session running something
 	// is identified by what. Neither is worth a fixed column that is usually empty.
 	rest := it.where(d.home)
+	if rest == "" {
+		// No local directory to show, which means the shell reported one on another host. Its title is
+		// then the only thing left that says anything about where it is.
+		rest = s.Title
+	}
 	if detail := it.detail(); detail != "" {
 		if rest != "" {
 			rest += "  "

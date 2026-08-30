@@ -82,7 +82,9 @@ func newModel(ctx context.Context, opts Options) model {
 	home, _ := os.UserHomeDir()
 
 	input := textinput.New()
-	input.Prompt = "name: "
+	// No prompt of its own: the footer already says "rename work to" and the field follows it, so a
+	// prompt here rendered "rename work to name: notebook".
+	input.Prompt = ""
 	// A name is capped at this by paths.ValidateSessionName, so the field refuses what the server
 	// would refuse anyway, before a request is spent learning it.
 	input.CharLimit = 24
@@ -504,21 +506,15 @@ func describeAttachment(msg attachedMsg) string {
 	switch {
 	case msg.err != nil:
 		return ""
-	case msg.attachment.Stale:
-		// Said in full rather than as "upgrade available", because the user has to act and the action
-		// is not obvious: this process is the old build and only restarting it replaces one.
-		return fmt.Sprintf("detached from %s. the server is newer than this picker: quit and reopen it",
-			msg.attachment.Session)
-	case msg.attachment.Exited && msg.attachment.ExitCode < 0:
-		// A negative code means the shim became unreachable rather than the shell reporting a status,
-		// so there is no exit code worth showing.
-		return fmt.Sprintf("session %s ended unexpectedly", msg.attachment.Session)
-	case msg.attachment.Exited:
-		return fmt.Sprintf("session %s ended (exit %d)", msg.attachment.Session, msg.attachment.ExitCode)
-	case msg.attachment.Detached:
-		return "detached from " + msg.attachment.Session
+	case msg.attachment.Note != "":
+		// What the attachment itself said, rather than a sentence built here from flags. It already
+		// distinguishes a detach from a session that ended and from one that ended unexpectedly, and
+		// saying it twice in two wordings is how the two drift apart.
+		return msg.attachment.Note
 	}
-	return ""
+	// A child that printed nothing still came back, which is worth confirming: the list reappearing on
+	// its own is otherwise indistinguishable from an attachment that never started.
+	return "left " + msg.ref
 }
 
 // lineCount counts the lines a rendered string occupies.

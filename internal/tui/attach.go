@@ -71,7 +71,14 @@ type attachedMsg struct {
 func (m model) handOff(ref string) (model, tea.Cmd) {
 	cmd := &attachCommand{ctx: m.ctx, attach: m.attach, ref: ref}
 	m.handoff = cmd
-	return m, tea.Exec(cmd, func(error) tea.Msg {
-		return attachedMsg{ref: ref, attachment: cmd.result, err: cmd.err}
+	return m, tea.Exec(cmd, func(err error) tea.Msg {
+		// The error bubbletea passes is the attachment's when that failed, and otherwise whatever went
+		// wrong taking the terminal back: it re-enters raw mode and restarts its input reader here, and a
+		// failure there leaves a list on screen that answers no keys. Reporting the attachment's own error
+		// first, since it is the one with something to say about the session.
+		if cmd.err != nil {
+			err = cmd.err
+		}
+		return attachedMsg{ref: ref, attachment: cmd.result, err: err}
 	})
 }

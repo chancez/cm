@@ -1,18 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"log/slog"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
-	"github.com/chancez/cm/internal/sessionenv"
-	"github.com/chancez/cm/internal/tags"
 	"github.com/chancez/cm/internal/tui"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -20,7 +20,6 @@ import (
 func newTUICommand(g *globals) *cobra.Command {
 	var (
 		readOnly bool
-		setTitle bool
 		tagArgs  []string
 	)
 	cmd := &cobra.Command{
@@ -44,7 +43,7 @@ client, so detaching from a session picked here detaches the window instead.
 'cm switch' is the command for moving a window that is already on a session.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := tags.ParseSelector(tagArgs); err != nil {
+			if err := validateSelectors(tagArgs); err != nil {
 				return err
 			}
 			// Checked before a server is started, since a picker with nothing to draw on has nothing to
@@ -57,28 +56,15 @@ client, so detaching from a session picked here detaches the window instead.
 			if err != nil {
 				return err
 			}
-			cfg, err := g.config()
-			if err != nil {
-				return err
-			}
-			detachKey, err := client.ParseDetachKey(cfg.DetachKey)
-			if err != nil {
-				return err
-			}
 
-			// One connection for the whole session of the picker, unlike every other command's
-			// withServer. A refresh a second through a fresh connection would pay for the dial each
-			// time, and the picker is the one caller that outlives its first request.
+			// One connection for the whole life of the picker, unlike every other command's withServer. A
+			// refresh a second through a fresh connection would pay for the dial each time, and this is the
+			// one caller that outlives its first request.
 			conn, cl, err := connectServer(cmd.Context(), dirs)
 			if err != nil {
 				return err
 			}
 			defer conn.Close()
-
-			logger, closeLog := newClientLogger(dirs, cfg)
-			if closeLog != nil {
-				defer closeLog.Close()
-			}
 
 			// Stated once at startup rather than refused, because a nested attach works and is
 			// occasionally what someone wants: it is the detach key that goes to the wrong client, and
@@ -93,100 +79,119 @@ client, so detaching from a session picked here detaches the window instead.
 				Sessions: cl,
 				Tags:     tagArgs,
 				Notice:   notice,
-				Attach: attachFromPicker(dirs, cfg.EnvMatcher(), attachSettings{
-					detachKey: detachKey,
-					readOnly:  readOnly,
-					setTitle:  setTitle,
-					log:       logger,
-				}),
+				Attach:   attachFromPicker(attachArgv(g, readOnly), runAttachChild),
 			})
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&readOnly, "read-only", false,
 		"follow sessions without sending input")
-	f.BoolVar(&setTitle, "set-title", true,
-		"forward the attached session's title to the terminal")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
 	return cmd
 }
 
-// attachSettings are the parts of an attachment the picker does not vary per session.
-type attachSettings struct {
-	detachKey client.DetachKeySpec
-	readOnly  bool
-	setTitle  bool
-	log       *slog.Logger
+// attachArgv builds the argv for attaching to ref, for the picker to run as a child.
+//
+// The directories and the config file are passed on rather than left to the child's own defaults, so it
+// talks to the same server this picker is listing. A sandboxed picker whose child read the real
+// configuration would attach to the developer's own sessions, which is the failure AGENTS.md's
+// isolation rule exists to prevent, and it would look like the sandbox working.
+//
+// Only the flags this process was actually given are forwarded. Passing the resolved values instead
+// would write a default into the child's argv as though it had been asked for, and that argv is what
+// `ps` reports for as long as the attachment lasts.
+//
+// A closure over the flags rather than a slice built once, because ref changes per attachment and
+// nothing else does.
+func attachArgv(g *globals, readOnly bool) func(ref string) []string {
+	return func(ref string) []string {
+		var argv []string
+		if g.runtimeDir != "" {
+			argv = append(argv, "--runtime-dir", g.runtimeDir)
+		}
+		if g.stateDir != "" {
+			argv = append(argv, "--state-dir", g.stateDir)
+		}
+		if g.configPath != "" {
+			argv = append(argv, "--config", g.configPath)
+		}
+		argv = append(argv, "attach")
+		if readOnly {
+			argv = append(argv, "--read-only")
+		}
+		// Last, and only when there is one: `cm attach` with no name asks the server to allocate one,
+		// which is what the picker's "new session" means.
+		if ref != "" {
+			argv = append(argv, ref)
+		}
+		return argv
+	}
 }
 
 // attachFromPicker builds the picker's way of attaching.
 //
-// Deliberately not runAttach, which the `cm attach` command uses. Two of the things runAttach does are
-// wrong from inside a picker, and both would show as a corrupted screen rather than as an error:
+// Deliberately a child process rather than a call into internal/client, which is what this did first.
+// That package's input reader is left blocked in the kernel on purpose, because a blocked read cannot
+// be cancelled, and `cm attach` gets away with it by exiting immediately afterwards. A picker does not
+// exit, so the leftover reader sat on the terminal and stole exactly one keystroke per attachment:
+// attach, detach, then a single "/" did nothing while every key after it worked. Closing the descriptor
+// did not help, because Go defers the real close until the outstanding read finishes. A child takes its
+// leftovers with it. See docs/tui.md.
 //
-// It prints how the attachment ended. That write lands on a terminal bubbletea is about to repaint
-// from its own model, so the message is either erased or spliced into the frame. The picker puts the
-// same wording in its status line instead.
+// It also gets the upgrade path for nothing, which the in-process version could not have had: an
+// upgrade re-execs the client, and a client that is its own process can be replaced without touching
+// the picker.
 //
-// It re-execs the process when the server asks the client to upgrade. That is right for a command
-// whose whole job was this attachment and wrong here, because the process is also the picker: exec
-// would replace the list the user is about to come back to. Reported as Stale instead.
+// Both halves are parameters so a test can check what argv was built and what the picker does with what
+// the child printed, without a terminal or a server.
 func attachFromPicker(
-	dirs paths.Dirs, envMatcher *sessionenv.Matcher, settings attachSettings,
+	argv func(ref string) []string,
+	run func(ctx context.Context, argv []string) (string, error),
 ) tui.AttachFunc {
 	return func(ctx context.Context, ref string) (tui.Attachment, error) {
-		// The directory is taken per attachment rather than once, since a session created later should
-		// start where the user is now. It only applies when this call creates the session.
-		dir, _ := os.Getwd()
-
-		opts := client.Options{
-			SocketPath: dirs.ServerSocket(),
-			StartServer: func(ctx context.Context) error {
-				return ensureServer(ctx, dirs)
-			},
-			ServerStopped: func() bool {
-				_, err := os.Stat(dirs.ServerStopped())
-				return err == nil
-			},
-			Session:   ref,
-			ReadOnly:  settings.readOnly,
-			Dir:       dir,
-			DetachKey: settings.detachKey,
-			// Captured per attachment for the same reason `cm attach` captures it: these describe the
-			// terminal, and a shell already running in the session may need to refresh them.
-			ClientEnv:     sessionenv.Capture(os.Environ(), envMatcher),
-			Env:           sessionEnv(nil),
-			SetTitle:      settings.setTitle,
-			InsideSession: insideCmSession(),
-			Log:           settings.log,
-		}
-
-		// A fresh TTY per attachment, opened here rather than held across the picker's life. Raw mode
-		// must not be on while bubbletea is running, since bubbletea sets its own mode and restores what
-		// it found; a descriptor left in raw mode by the picker would be what it "found" and would be
-		// restored to that on exit, leaving the shell without echo.
-		tty, err := client.OpenTTY(os.Stdin, os.Stdout)
+		note, err := run(ctx, argv(ref))
 		if err != nil {
 			return tui.Attachment{}, err
 		}
-		res, attachErr := client.Attach(ctx, tty, opts)
-		// Closed before returning so the terminal is out of raw mode when bubbletea takes it back, and
-		// so the full reset has already been written: the picker repaints its whole frame anyway, so the
-		// repaint that reset costs is one it was going to do.
-		closeErr := tty.Close()
-		if attachErr != nil {
-			return tui.Attachment{}, attachErr
-		}
-
-		return tui.Attachment{
-			Session:  res.Session,
-			Detached: res.Detached,
-			Exited:   res.Exited,
-			ExitCode: res.ExitCode,
-			Stale:    res.Upgrade,
-		}, closeErr
+		return tui.Attachment{Note: note}, nil
 	}
+}
+
+// runAttachChild runs one attachment as a child process and returns what it printed.
+//
+// stdin and stdout are this process's own, which is what makes the child a real client: bubbletea has
+// released the terminal by now, so the child finds it exactly as a shell would hand it over, and takes
+// it over completely.
+//
+// stderr is captured instead. It is where `cm attach` reports how the attachment ended, and those bytes
+// would otherwise land on a screen bubbletea is about to repaint from its own model, which either
+// erases the message or splices it into the frame. Captured, the same text becomes the status line.
+func runAttachChild(ctx context.Context, argv []string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolving own path to attach: %w", err)
+	}
+
+	// Deliberately not exec.CommandContext, whose cancellation kills the child. A client killed
+	// mid-attachment leaves the terminal in raw mode with a session's screen on it, and the context is
+	// cancelled exactly when the picker is being asked to stop, which is when a clean detach matters
+	// most. A signal reaches the child through the process group anyway, and it detaches on that.
+	_ = ctx
+	child := exec.Command(exe, argv...)
+	child.Stdin, child.Stdout = os.Stdin, os.Stdout
+	var said bytes.Buffer
+	child.Stderr = &said
+
+	// A failure is reported as the text rather than the status, since `cm attach` says why it could not
+	// attach on stderr while the exit status says only that it did not.
+	if err := child.Run(); err != nil {
+		if note := strings.TrimSpace(said.String()); note != "" {
+			return "", errors.New(note)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(said.String()), nil
 }
 
 // The generated client is what the picker talks to, and tui.Sessions names the four RPCs it uses. This

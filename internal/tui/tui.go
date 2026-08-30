@@ -15,15 +15,23 @@
 // cmd/cm.TestCommandLayerWritesNoEscapeSequences exists to prevent.
 //
 // They are kept apart in time rather than merged. While the list is up, this package owns the
-// terminal and internal/client holds nothing. While an attachment is live, bubbletea has released
-// the terminal, stopped reading input, and is not rendering, and internal/client owns every byte.
-// tea.Exec is what makes the handoff strict: it pauses the program, runs the attachment to
-// completion, and resumes. See attachCommand.
+// terminal and no client holds it. While an attachment is live, bubbletea has released the terminal,
+// stopped reading input, and is not rendering, and the client owns every byte. tea.Exec is what makes
+// the handoff strict: it pauses the program, runs the attachment to completion, and resumes. See
+// attachCommand.
 //
-// The consequence for anything added here: an attachment must not print. A message written to
-// stderr as the attachment ends lands on a screen bubbletea is about to repaint from its own model,
-// so it either flickers away or corrupts the frame. Anything worth saying goes in the status line,
-// which is part of the frame.
+// The attachment is a `cm attach` child process rather than a call into internal/client, and that is
+// not a matter of taste. internal/client.readInput leaves its reader blocked in the kernel on purpose,
+// because a blocked read cannot be cancelled; `cm attach` exits immediately afterwards so nothing
+// notices. In-process, that leftover reader stays on the terminal and steals exactly one keystroke
+// from the picker per attachment, measured: attach, detach, then a single "/" does nothing while every
+// key after it works. Closing the descriptor does not help, since Go defers the real close until the
+// outstanding read finishes. A child process takes its leftovers with it when it exits.
+//
+// The consequence for anything added here: nothing in this process may print. A message written to
+// stderr as the attachment ends lands on a screen bubbletea is about to repaint from its own model, so
+// it either flickers away or corrupts the frame. The child's own output is captured and shown in the
+// status line, which is part of the frame. See Attachment.Note.
 package tui
 
 import (
@@ -62,41 +70,30 @@ type Sessions interface {
 	Unbind(context.Context, *serverv1.UnbindRequest) (*serverv1.UnbindResponse, error)
 }
 
-// AttachFunc attaches this terminal to a session and returns when the attachment ends.
+// AttachFunc gives this terminal to a session and returns when the attachment ends.
 //
 // ref is a session reference, or empty to create a session the server names, which is what `cm
 // attach` with no argument does.
 //
-// Called while bubbletea has released the terminal, so the implementation is free to put it in raw
-// mode and paint a session. It must not print anything: see the package comment.
+// Called while bubbletea has released the terminal, so the implementation is free to run something
+// that takes it over completely. See the package comment for why that is a child process.
 //
-// A function rather than internal/client.Attach directly, for two reasons. It keeps this package
-// clear of terminal ownership, so its tests need no pty. And it keeps the dependency pointing one
-// way: the command layer knows how to build a client's options from flags and config, and this
-// package should not learn that.
+// A function rather than the command built here, so this package needs no view on how a client is
+// configured: which flags were set and what the config file says belong to the command layer, and a
+// test needs neither.
 type AttachFunc func(ctx context.Context, ref string) (Attachment, error)
 
-// Attachment is how an attachment ended, in the terms the picker has something to say about.
+// Attachment is what an attachment left behind.
 //
-// Its own type rather than internal/client.Result, which carries an upgrade request and a resume
-// position that mean nothing here. See Options.Attach for what the picker does with an upgrade.
+// One field, because the picker has one thing to do with the outcome: say it. The attachment is a
+// child process, so what it has to say arrives as the text it printed rather than as fields to
+// re-render. `cm attach` already distinguishes a detach from a session that ended and from one that
+// ended unexpectedly, and saying the same things again in this package's own wording is how the two
+// drift apart.
 type Attachment struct {
-	// Session is what to call the session in a message: the name it was attached by, or its ID
-	// reference when it has no name.
-	Session string
-	// Detached is true when the user detached rather than the session ending.
-	Detached bool
-	// Exited is true when the session's shell exited.
-	Exited bool
-	// ExitCode is the shell's status, and is meaningless unless Exited.
-	ExitCode int
-	// Stale is true when the server asked this client to come back on a newer build.
-	//
-	// `cm attach` answers that by replacing its own process, which keeps the window on the session
-	// with the screen untouched. The picker cannot: exec would replace the picker too, and the list
-	// this attachment came back to would be gone. So it is reported instead, and quitting and
-	// reopening is what picks up the new build. See docs/tui.md.
-	Stale bool
+	// Note is what the attachment printed on the way out, shown verbatim in the status line, or empty
+	// when it said nothing.
+	Note string
 }
 
 // Options configures a picker.

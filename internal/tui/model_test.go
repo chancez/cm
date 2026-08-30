@@ -206,7 +206,7 @@ func TestDetachingReportsAndRefreshes(t *testing.T) {
 
 	h.run(h.send(attachedMsg{
 		ref:        "@a7k2m9x4",
-		attachment: Attachment{Session: "work", Detached: true},
+		attachment: Attachment{Note: "detached from work"},
 	}))
 
 	if got, want := h.model.status, "detached from work"; got != want {
@@ -217,19 +217,17 @@ func TestDetachingReportsAndRefreshes(t *testing.T) {
 	}
 }
 
-// TestAStaleClientSaysSoAfterDetaching records the one outcome the picker handles differently from
-// `cm attach`: an upgrade cannot be taken here, because exec would replace the list too.
-func TestAStaleClientSaysSoAfterDetaching(t *testing.T) {
+// TestAnAttachmentThatSaidNothingIsStillConfirmed covers a child that printed nothing at all.
+//
+// The list reappearing on its own is otherwise indistinguishable from an attachment that never started,
+// which is the case a stale reference produces, so silence needs a line of its own.
+func TestAnAttachmentThatSaidNothingIsStillConfirmed(t *testing.T) {
 	h := newHarness(t, session("work", "a7k2m9x4", 100))
 	h.list()
 
-	h.send(attachedMsg{
-		ref:        "@a7k2m9x4",
-		attachment: Attachment{Session: "work", Detached: true, Stale: true},
-	})
+	h.send(attachedMsg{ref: "@a7k2m9x4", attachment: Attachment{}})
 
-	want := "detached from work. the server is newer than this picker: quit and reopen it"
-	if got := h.model.status; got != want {
+	if got, want := h.model.status, "left @a7k2m9x4"; got != want {
 		t.Errorf("status %q, want %q", got, want)
 	}
 }
