@@ -1318,10 +1318,11 @@ answers, and each of cm's neighbours picks one and holds it.
   `kitten icat` checks for a tmux socket and stops probing, setting file and memory transfer to
   unsupported without asking (`kittens/icat/main.go:305-308`).
 
-cm currently occupies none of these positions, and that is the finding. It forwards graphics APC verbatim,
-which is transparent. It routes client input through a reply classifier, which is not. It delivers an
-unmatched non-reply to the pty, which is neither zellij nor tmux. And it holds a full terminal model that
-it does not use for graphics, so it pays zellij's cost without getting zellij's benefit.
+cm has since taken zellij's position for graphics, and only for graphics: an interceptor pulls the APC out
+of the stream, reads any transfer file itself, keeps the payload, and re-emits. It still routes client input
+through a reply classifier, and still delivers an unmatched non-reply to the pty, which is neither zellij
+nor tmux. What it no longer does is hold a terminal model it does not use for graphics: the model is now
+where a restore learns *where* an image is. See "Restoring an image" below.
 
 Each of those choices was locally correct when it was made, which is exactly why the position drifted:
 every one of them was a bug fix with a test. The consequence is only visible from outside, in what a
@@ -1379,6 +1380,43 @@ this section is here to interrupt.
 Being the terminal for graphics has since been built, and the section below is what it turned into. The
 prediction above held: intercepting the protocol is what fixed the file-medium failure and the reply echo,
 and it is also what restore-on-reattach needed.
+
+## Restoring an image
+
+An image on a session's screen is two facts, and cm keeps them in two places. *What* the image is lives in
+`internal/graphics.Store`, the bytes the program sent, because libghostty stores decoded pixels and
+re-encoding them measured 90x the inbound size. *Where* it is lives in the terminal model, which tracks
+each placement as a pin that moves with scrolling and reports it through
+`ghostty_kitty_graphics_placement_viewport_pos`.
+
+Both are needed, and conflating them was a family of bugs rather than one. cm used to restore an image by
+re-emitting the command that transmitted it, which is usually `a=T`: transmit *and display at the cursor*.
+Where the picture landed was then decided by whatever the cursor happened to be when those bytes arrived,
+which is not a position anybody chose. Measured in a real kitty:
+
+- Sent ahead of the screen blob, the image was drawn and then erased, because the blob begins by clearing
+  and a clear deletes the placements on the cells it erases. A client attaching to a session with an image
+  on screen received the whole image and displayed nothing.
+- Sent while a full-screen program was running, the same bytes drew the image *on top of* the program. The
+  report that named fzf was this: an image over the picker, and a second `icat` drawing over the first.
+
+So a restore now has three parts in a fixed order. The transmissions come first, rewritten to `a=t` so they
+store without drawing. The screen content comes next. The placements come last, as `a=p` positioned with
+CUP, wrapped in DECSC/DECRC so the cursor the content left is preserved, and carrying `C=1` so a placement
+on the last row cannot scroll the screen to make room.
+
+Two limits are deliberate. A transmission that named no image is not retained at all: the receiving
+terminal assigns its own id, so no later `a=p` would resolve against it, and retaining them made a restore
+blob 4.3 MB and wedged the session. And a placement whose top has scrolled above the viewport is skipped
+rather than clamped to row zero, since restoring it correctly needs a source rectangle; libghostty's API
+documents that clipping as the caller's job.
+
+The sizing consequence is in `DefaultRecentBytes`. cm inlines a transfer that named a file, so a command of
+a few dozen bytes becomes a payload the size of the image: `kitten icat` on a 565398 byte screenshot sends
+1207200 bytes of RGB, which cm emits as 1609600 base64 characters in one append. `seqlog` truncates any
+single append past its bound, so an append larger than the retained window is a guaranteed gap for every
+client rather than a slow-client race, and the repaint that follows erases the image. The window is 16 MiB
+for that reason, grown on demand, so a text-only session still holds only what it printed.
 
 ## Kitty graphics: cm consumes the protocol, and its queries have two answerers
 
