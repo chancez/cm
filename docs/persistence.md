@@ -122,11 +122,30 @@ The shim mirrors pty output to a file (`internal/seqlog/file.go`). The file reco
 number its first retained byte carries, since trimming means the first byte is not sequence zero;
 without that a replay would number output from zero and disagree with every stored position.
 
-On attach to a dead session, the server reads the record before deleting it, carries the log path
-and directory into the options that recreate the session, and replays the log through libghostty to
-produce a restore blob (`internal/server/restore.go`). That blob goes to the first client and is then
-discarded, since the session has started producing its own output and a later client showing a
-pre-reboot screen would be wrong.
+On attach to a dead session, the server reads the record before deleting it and carries the log path
+and directory into the options that recreate the session. The log is then replayed into the new
+session's own terminal model before the output pump starts (`seedFromPersistedLog` in
+`internal/server/restore.go`), and the images it contains are recorded in the session's graphics store
+on the way past.
+
+Revival is deliberately the same operation as adoption after a server restart, differing only in where
+the history comes from: a living shim holds it in memory, a rebooted one left it on disk. `Manager.adopt`
+seeds from the log in the same place it replays a shim's retained history, so both arrive as a model that
+already holds the screen.
+
+Seeding the model rather than producing a blob is what makes the rest of cm work on a revived session
+without being taught about persistence. Every client is served from the model, so a second one sees the
+pre-reboot screen too; `cm read` and `cm history` see it; and the images travel the ordinary restore
+path, which re-transmits with `a=t` and places with `a=p` after the screen.
+
+Rejected: replay into a throwaway terminal, serialize it, hand the bytes to the first client to attach,
+discard them. It breaks all three. A later client gets a session with no history, a read sees only what
+the new shell has printed, and the blob bypasses the transmit-then-place split, so a restored image is
+drawn wherever the cursor happens to be and then erased by the screen that follows it.
+
+The seeded content carries no sequence position. Those numbers belonged to the dead incarnation and the
+new shim numbers from zero, so the model holds history with no position plus, once the pump runs,
+everything the new log does account for. That is the pairing attach already relies on.
 
 Query responses the emulator generates during replay are dropped. They answer questions a program
 asked before the reboot, and that program no longer exists, so delivering them would inject stray

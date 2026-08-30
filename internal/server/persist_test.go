@@ -12,6 +12,7 @@ import (
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/vt"
 )
 
 // testPolicy returns a policy that persists everything, which most cases here want.
@@ -255,50 +256,16 @@ func TestPersistsSessionRespectsPolicy(t *testing.T) {
 	}
 }
 
-// The screen replayed from a previous incarnation must reach the first client, and only the first:
-// a later client would otherwise be shown a screen from before the reboot.
-func TestRestoredScreenGoesToFirstClientOnly(t *testing.T) {
-	rec := startShimFor(t, shimConfigFor("restored", "sleep 5"))
-
-	sess, err := newSession(rec, nil, 0, 0)
-	if err != nil {
-		t.Fatalf("newSession() error = %v", err)
-	}
-	defer sess.Close()
-
-	sess.setRestored([]byte("SCREEN_FROM_BEFORE"))
-
-	first, err := sess.attach(nil, nil)
-	if err != nil {
-		t.Fatalf("first attach() error = %v", err)
-	}
-	if string(first.restore) != "SCREEN_FROM_BEFORE" {
-		t.Errorf("first attach restore = %q, want the replayed screen", first.restore)
-	}
-	sess.detach(first)
-
-	second, err := sess.attach(nil, nil)
-	if err != nil {
-		t.Fatalf("second attach() error = %v", err)
-	}
-	defer sess.detach(second)
-	if strings.Contains(string(second.restore), "SCREEN_FROM_BEFORE") {
-		t.Error("the replayed screen was delivered twice; the second client would see pre-reboot state")
-	}
-}
-
-// A resuming client must not receive the replayed screen: it already has the session displayed, and
-// repainting would show it a screen from before the reboot.
+// A resuming client must not be repainted, whatever the model holds: it already has the session
+// displayed, and a restore would show it the screen from before the reboot.
 func TestRestoredScreenSkippedOnResume(t *testing.T) {
 	rec := startShimFor(t, shimConfigFor("resumed", "sleep 5"))
 
-	sess, err := newSession(rec, nil, 0, 0)
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("SCREEN_FROM_BEFORE")}, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
 	defer sess.Close()
-
-	sess.setRestored([]byte("SCREEN_FROM_BEFORE"))
 
 	from := seq.Log(0)
 	att, err := sess.attach(&from, nil)
@@ -311,32 +278,101 @@ func TestRestoredScreenSkippedOnResume(t *testing.T) {
 	}
 }
 
-// The stream must start at the log's end when a replayed screen is delivered, or the client would
-// receive output the screen already accounts for.
-func TestRestoredScreenStreamStartsAtPresent(t *testing.T) {
-	rec := startShimFor(t, shimConfigFor("streamstart", "echo SOMETHING; sleep 5"))
+// Revival goes through adopt, so the seeding has to be wired into it and not merely implemented.
+//
+// Adoption and revival are the same operation on different sources: a shim that is still alive holds the
+// history in memory, a rebooted one left it on disk. Both feed the session's model before the pump starts,
+// which is why this is one code path with one extra argument rather than a second flow.
+func TestAdoptSeedsFromAPersistedLog(t *testing.T) {
+	newTerm, term := replayTerminal(t)
+	mgr, st, _ := newTestManager(t, newTerm)
+	mgr.SetPersistPolicy(testPolicy())
+	ctx := context.Background()
 
-	sess, err := newSession(rec, nil, 0, 0)
+	rec := startShimFor(t, shimConfigFor("adoptseed", "sleep 5"))
+	recordSession(t, st, rec)
+	path := seedLog(t, "adoptseed.log", "OUTPUT_FROM_BEFORE\r\n", seqlog.FileLimits{})
+
+	sess, err := mgr.adopt(ctx, rec, 0, 0, path)
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer sess.Close()
+
+	if got := term.Written(); !strings.Contains(got, "OUTPUT_FROM_BEFORE") {
+		t.Errorf("the persisted log did not reach the model; emulator saw %q", got)
+	}
+}
+
+// An ordinary adoption must not touch a persisted log, or the pre-restart content is fed twice: once
+// from disk and again from the shim's own retained history, which still holds it.
+func TestAdoptWithoutARestoreDoesNotReadTheLog(t *testing.T) {
+	newTerm, term := replayTerminal(t)
+	mgr, st, _ := newTestManager(t, newTerm)
+	mgr.SetPersistPolicy(testPolicy())
+	ctx := context.Background()
+
+	rec := startShimFor(t, shimConfigFor("adoptplain", "sleep 5"))
+	rec.LogPath = seedLog(t, "adoptplain.log", "OUTPUT_FROM_BEFORE\r\n", seqlog.FileLimits{})
+	recordSession(t, st, rec)
+
+	sess, err := mgr.adopt(ctx, rec, 0, 0, "")
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer sess.Close()
+
+	if got := term.Written(); strings.Contains(got, "OUTPUT_FROM_BEFORE") {
+		t.Errorf("a plain adoption replayed the persisted log; emulator saw %q", got)
+	}
+}
+
+// The pre-reboot content lands in the session's own model, so everything that reads a session sees it
+// rather than only a client attaching.
+//
+// This is what seeding the model buys over the shape it replaced. Persistence used to hold the replayed
+// screen as a blob outside the model and hand it to the first client, so `cm read` and `cm history` on a
+// revived session showed only what the replacement shell had printed since. The model now holds the old
+// content and the new output as one screen, which is the same state an adopted session is in.
+func TestRevivedSessionModelHoldsBothIncarnations(t *testing.T) {
+	rec := startShimFor(t, shimConfigFor("readafterrevive", "echo SOMETHING; sleep 5"))
+
+	path := seedLog(t, "session.log", "OUTPUT_FROM_BEFORE\r\n", seqlog.FileLimits{})
+	term, err := vt.NewSessionTerminal(24, 80, 0)
+	if err != nil {
+		t.Fatalf("NewSessionTerminal() error = %v", err)
+	}
+	if err := seedFromPersistedLog(path, term, nil, seqlog.FileLimits{}); err != nil {
+		t.Fatalf("seedFromPersistedLog() error = %v", err)
+	}
+
+	sess, err := newSession(rec, term, 0, 0)
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
 	defer sess.Close()
 
-	// Let output accumulate, so the log's start and end differ.
-	warm := sess.recent.Subscribe(0)
-	readUntil(t, warm, "SOMETHING")
-	warm.Close()
-
-	sess.setRestored([]byte("SCREEN"))
-
-	att, err := sess.attach(nil, nil)
-	if err != nil {
-		t.Fatalf("attach() error = %v", err)
+	// The model lags the log by design, so this waits for what the new shell printed to be consumed
+	// rather than for the bytes to arrive.
+	deadline := time.Now().Add(5 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		out, err := sess.Read(0, false)
+		if err != nil {
+			t.Fatalf("Read() error = %v", err)
+		}
+		got = string(out)
+		if strings.Contains(got, "SOMETHING") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	defer sess.detach(att)
 
-	if got, want := att.reader.Position(), sess.recent.Next(); got != want {
-		t.Errorf("stream starts at %d, want the log's end %d", got, want)
+	if !strings.Contains(got, "SOMETHING") {
+		t.Fatalf("the new shell's output never reached the model; read = %q", got)
+	}
+	if !strings.Contains(got, "OUTPUT_FROM_BEFORE") {
+		t.Errorf("the pre-reboot content is not in the model; read = %q", got)
 	}
 }
 
@@ -384,11 +420,10 @@ func TestReplayFailureDoesNotBlockSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newTerm, _ := replayTerminal(t)
 	// A corrupt file resets to empty, so there is nothing to restore rather than an error.
-	_, _, err := replayPersisted(path, newTerm, 24, 80, seqlog.FileLimits{})
+	err := seedFromPersistedLog(path, &fakeTerminal{restore: []byte("SCREEN")}, nil, seqlog.FileLimits{})
 	if err == nil {
-		t.Error("replayPersisted() = nil error for a reset log, want ErrNothingToRestore")
+		t.Error("seedFromPersistedLog() = nil error for a reset log, want ErrNothingToRestore")
 	}
 }
 
@@ -397,11 +432,9 @@ func TestReplayReportsTerminalFailure(t *testing.T) {
 	path := filepath.Join(shortTempDir(t), "log")
 	writeSavedLog(t, path, "content\r\n")
 
-	failing := func(rows, cols uint16) (Terminal, error) {
-		return &fakeTerminal{writeErr: errWriteFailed}, nil
-	}
-	if _, _, err := replayPersisted(path, failing, 24, 80, seqlog.FileLimits{}); err == nil {
-		t.Error("replayPersisted() = nil error when the emulator failed, want an error")
+	failing := &fakeTerminal{writeErr: errWriteFailed}
+	if err := seedFromPersistedLog(path, failing, nil, seqlog.FileLimits{}); err == nil {
+		t.Error("seedFromPersistedLog() = nil error when the emulator failed, want an error")
 	}
 }
 
@@ -483,7 +516,7 @@ func TestExpireSkipsLiveSessions(t *testing.T) {
 	rec.State = store.StateDead // deliberately wrong, as a lagging record would be
 	recordSession(t, st, rec)
 
-	sess, err := mgr.adopt(ctx, rec, 0, 0)
+	sess, err := mgr.adopt(ctx, rec, 0, 0, "")
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}

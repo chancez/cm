@@ -341,14 +341,6 @@ type Session struct {
 	// attached only to create it or to stream its bytes. See EverWatched.
 	watched bool
 
-	// restored holds a screen replayed from a previous incarnation's saved log, handed to the first
-	// client that attaches and then discarded.
-	//
-	// Discarded after one use because it describes a session that has since started producing its
-	// own output; replaying it to a later client would show that client a screen from before the
-	// reboot.
-	restored []byte
-
 	// metaSubs are notified when the title or directory changes: the manager persists them, and
 	// each attached client forwards them on so a terminal emulator can react. Keyed by pointer
 	// so a client can remove its own.
@@ -626,8 +618,8 @@ func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq se
 		lastSeq:     fromSeq,
 		// The model has consumed nothing, and where "nothing" is depends on where the log starts: an
 		// adopted session resumes partway in. Leaving this at zero would make the first fresh attach
-		// stream from the very beginning of the numbering, replaying output the restored screen already
-		// shows.
+		// stream from the very beginning of the numbering, replaying output the serialized screen
+		// already shows.
 		//
 		// clientSeq, because this is a position in the client log: attach streams from it after replaying
 		// a screen, and the log numbers rewritten bytes.
@@ -976,10 +968,11 @@ func recordGraphics(store *graphics.Store, resolved graphics.Command) {
 	}
 }
 
-// setGraphicsStore replaces the store, for a session being adopted after a restart.
+// setGraphicsStore replaces the store, for a session whose screen was rebuilt before it existed.
 //
-// Follows setRestored: adoption is the one caller that knows something the constructor cannot, and the
-// alternative was another parameter on newSession threaded through every call site that never needs it.
+// Both revivals need it: an adopted session's images come from replaying the shim's retained history, and
+// one restored from disk from replaying its persisted log. A setter rather than a parameter on newSession,
+// which would be threaded through every call site that never needs it.
 func (s *Session) setGraphicsStore(store *graphics.Store) {
 	if store == nil {
 		return
@@ -2017,14 +2010,6 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 	from := s.recent.Oldest()
 	var restore []byte
 
-	// A screen replayed from a previous incarnation takes precedence, since the live model holds
-	// only what this session has produced since it started, which is nothing yet.
-	if resumeFrom == nil && len(s.restored) > 0 {
-		restore = s.restored
-		s.restored = nil
-		return s.newAttachmentLocked(s.recent.Next(), restore, tok), nil
-	}
-
 	if resumeFrom != nil {
 		from = *resumeFrom
 	} else if s.term != nil {
@@ -2471,13 +2456,6 @@ func cellSize(rows, cols, xpixel, ypixel uint32) (cellWidth, cellHeight uint16) 
 		cellHeight = uint16(ypixel / rows)
 	}
 	return cellWidth, cellHeight
-}
-
-// setRestored records a screen replayed from a previous incarnation's saved log.
-func (s *Session) setRestored(blob []byte) {
-	s.mu.Lock()
-	s.restored = blob
-	s.mu.Unlock()
 }
 
 // EvictClients asks every attached client to detach, returning how many were asked.

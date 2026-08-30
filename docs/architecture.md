@@ -1424,6 +1424,16 @@ with `y=` removing the lost rows from the source in pixels, which is the clippin
 documents as the caller's job. `r=` is not restated for a cropped placement, since it describes the
 uncropped image and would stretch the remainder back to full height.
 
+A session revived from disk after a reboot takes this same path rather than one of its own.
+`seedFromPersistedLog` writes the log into the new session's model before the pump starts and records its
+images in the session's graphics store, so what a client attaches to is a model holding the pre-reboot
+screen. Everything above then applies unchanged, including that every client is served, not only the
+first. See `docs/persistence.md` for what the rejected blob broke.
+
+The payloads come from scanning the log rather than from the model, for the same reason the live path
+replays what the program sent: the log holds what cm forwarded, so a transfer in it is already inlined and
+already named, while re-encoding libghostty's decoded pixels was measured at 90x the inbound size.
+
 The sizing consequence is in `DefaultRecentBytes`. cm inlines a transfer that named a file, so a command of
 a few dozen bytes becomes a payload the size of the image: `kitten icat` on a 565398 byte screenshot sends
 1207200 bytes of RGB, which cm emits as 1609600 base64 characters in one append. `seqlog` truncates any

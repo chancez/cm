@@ -252,7 +252,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 
 		// Resume from where the previous server stopped consuming.
-		sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+		sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
 		if err != nil {
 			// The shim answered a moment ago, so this is worth reporting but not fatal:
 			// the remaining sessions should still come back.
@@ -364,8 +364,13 @@ const socketRefusalGrace = 250 * time.Millisecond
 // its new server's log did not have, and the bytes in between were dropped without a word. Zero means
 // "same as fromSeq", which is right for a brand new session, where nothing has been rewritten yet and
 // both spaces start together.
+// restoreFrom is a persisted log to seed the model from, for a session being revived after a reboot, and
+// empty for an ordinary adoption. The two are alternatives rather than additions: an adopted session's
+// history lives in a shim that is still running, a revived one's is on disk because its shim died with the
+// machine. Both are seeded here, before newSession starts the pump, because content written to the model
+// after that lands after whatever the new shell has already printed.
 func (m *Manager) adopt(
-	ctx context.Context, rec store.Session, fromSeq seq.Shim, clientSeq seq.Log,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, clientSeq seq.Log, restoreFrom string,
 ) (*Session, error) {
 	term, err := m.buildTerminal(uint16(rec.Rows), uint16(rec.Cols))
 	if err != nil {
@@ -377,6 +382,23 @@ func (m *Manager) adopt(
 	var gfx *graphics.Store
 	if term != nil {
 		gfx = graphics.NewStore(0)
+		if restoreFrom != "" {
+			limits := seqlog.FileLimits{}
+			if m.persist != nil {
+				limits = m.persist.Limits
+			}
+			// Not fatal, but the user asked for their content back and did not get it, so this is exactly
+			// the kind of silent degradation the log exists for. ErrNothingToRestore is the ordinary case
+			// for a session that never persisted and is not worth a line.
+			if err := seedFromPersistedLog(restoreFrom, term, gfx, limits); err != nil {
+				if !errors.Is(err, ErrNothingToRestore) {
+					m.log.Warn("replaying persisted session failed",
+						"session", rec.ID, "path", restoreFrom, "error", err)
+				}
+			} else {
+				m.log.Info("restored session from disk", "session", rec.ID, "path", restoreFrom)
+			}
+		}
 		if err := m.replayShimHistory(ctx, rec, fromSeq, term, gfx); err != nil {
 			// A screen that could not be rebuilt is worth reporting, but the session works without
 			// it: only restore and history are affected, which is where this started.
@@ -849,7 +871,7 @@ func (m *Manager) openExisting(
 		// Try once more before giving up: only ENOENT is conclusive, and a shim that was merely busy is
 		// still holding a live shell.
 		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
-			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
 			if err == nil {
 				sess.setLabel(opts.name)
 				m.mu.Lock()
@@ -1091,36 +1113,10 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
-	sess, err := m.adopt(ctx, rec, 0, 0)
+	sess, err := m.adopt(ctx, rec, 0, 0, opts.restoreFrom)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.id)
 		return nil, err
-	}
-
-	// Replay a previous incarnation's screen, so the first client sees what was there before the
-	// reboot rather than a bare prompt.
-	//
-	// A failed replay is not fatal: the session works, it simply starts empty, which is strictly
-	// better than refusing to open it because a cache could not be read.
-	if opts.restoreFrom != "" {
-		limits := seqlog.FileLimits{}
-		if m.persist != nil {
-			limits = m.persist.Limits
-		}
-		blob, _, rerr := replayPersisted(
-			opts.restoreFrom, m.newTerminal, opts.Rows, opts.Cols, limits,
-		)
-		switch {
-		case rerr != nil:
-			// Not fatal, but the user asked for their content back and did not get it, so this is
-			// exactly the kind of silent degradation the log exists for.
-			m.log.Warn("replaying persisted session failed",
-				"session", opts.id, "path", opts.restoreFrom, "error", rerr)
-		case len(blob) > 0:
-			sess.setRestored(blob)
-			m.log.Info("restored session from disk",
-				"session", opts.id, "restore_bytes", len(blob))
-		}
 	}
 
 	// Record the shell's pid for reporting. Inline first, so a listing run immediately after this shows

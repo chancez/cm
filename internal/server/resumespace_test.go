@@ -117,7 +117,7 @@ func TestAdoptedSessionServesAResumingClient(t *testing.T) {
 
 	// The second server adopts from the stored pair, which is what a restart does.
 	rec.LastSeq, rec.ClientSeq = shimSeq, clientSeq
-	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAdoptFallsBackWhenClientSeqIsUnset(t *testing.T) {
 	rec.LastSeq = 4096
 	rec.ClientSeq = 0 // an upgraded database
 
-	sess, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq)
+	sess, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
