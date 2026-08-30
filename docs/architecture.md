@@ -1394,22 +1394,32 @@ re-emitting the command that transmitted it, which is usually `a=T`: transmit *a
 Where the picture landed was then decided by whatever the cursor happened to be when those bytes arrived,
 which is not a position anybody chose. Measured in a real kitty:
 
-- Sent ahead of the screen blob, the image was drawn and then erased, because the blob begins by clearing
-  and a clear deletes the placements on the cells it erases. A client attaching to a session with an image
-  on screen received the whole image and displayed nothing.
+- Sent ahead of the screen blob, the image was drawn and then lost, because the blob begins by clearing.
+  A client attaching to a session with an image on screen received the whole image and displayed nothing.
 - Sent while a full-screen program was running, the same bytes drew the image *on top of* the program. The
   report that named fzf was this: an image over the picker, and a second `icat` drawing over the first.
 
-So a restore now has three parts in a fixed order. The transmissions come first, rewritten to `a=t` so they
-store without drawing. The screen content comes next. The placements come last, as `a=p` positioned with
-CUP, wrapped in DECSC/DECRC so the cursor the content left is preserved, and carrying `C=1` so a placement
-on the last row cannot scroll the screen to make room.
+So a restore has three parts in a fixed order: the screen content, then the transmissions rewritten to
+`a=t` so they store without drawing, then the placements as `a=p` positioned with CUP, wrapped in
+DECSC/DECRC so the cursor the content left is preserved, and carrying `C=1` so a placement on the last row
+cannot scroll the screen to make room.
 
-Two limits are deliberate. A transmission that named no image is not retained at all: the receiving
-terminal assigns its own id, so no later `a=p` would resolve against it, and retaining them made a restore
-blob 4.3 MB and wedged the session. And a placement whose top has scrolled above the viewport is skipped
-rather than clamped to row zero, since restoring it correctly needs a source rectangle; libghostty's API
-documents that clipping as the caller's job.
+Both image halves follow the screen because `ESC [ 2J` discards the stored *image*, not merely the
+placements on the cells it erases. Measured against libghostty: transmit, ED, place leaves zero placements,
+while ED, transmit, place leaves the image on screen, and a bare cursor move between them is harmless.
+`TestEraseDisplayDiscardsAStoredImage` pins it, because nothing else would notice a change: the bytes stay
+well formed either way and the only symptom is a missing picture. Putting the transmissions first looks
+right, since an id must exist before a placement names it, and that ordering shipped and reached a user as
+images missing on every client but the first.
+
+A re-emission must also not inherit the `m=` of the chunk its control keys came from. A chunked
+transmission carries its geometry on the first chunk, which says `m=1`, so re-sending that section verbatim
+tells the receiving terminal to expect chunks that never arrive: the image never completes and the `a=p`
+draws nothing. The store strips it, since that key describes how the bytes arrived rather than the image.
+
+One limit is deliberate: a transmission that named no image is not retained at all. The receiving terminal
+assigns its own id, so no later `a=p` would resolve against it, and retaining them made a restore blob
+4.3 MB and wedged the session.
 
 A placement's position comes from the cell pixel dimensions, which the model has to be told. They were
 already on the wire, `x_pixel` and `y_pixel` in `Open` and `ResizeRequest`, and already reached the pty

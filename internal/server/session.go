@@ -2036,17 +2036,21 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
 
-		// Images are re-transmitted ahead of the screen and *placed after it*, and that split is the
-		// whole of getting this right.
+		// Screen, then transmissions, then placements, in that order, and every step of it is load
+		// bearing.
 		//
-		// Ahead, because a placement names an image by id and one the terminal has never received draws
-		// nothing. After, because the screen blob begins by clearing, and a clear deletes the placements
-		// on the cells it erases: an image placed before the content was wiped by the content. Both
-		// halves were observed in a real kitty, the second as a client attaching to a session with an
-		// image on screen and receiving the image, then the clear, and showing nothing.
+		// Both image halves go *after* the screen because the screen begins by clearing and `ESC [ 2J`
+		// discards the stored image itself, not merely the placements on the cells it erases. Measured
+		// against libghostty: transmit, ED, place leaves zero placements, while ED, transmit, place
+		// leaves the image on screen, and a bare cursor move between them is harmless. So a transmission
+		// sent ahead of the screen is one the placements can no longer name, which reached a user as an
+		// image that never appeared on a second client while every byte of it arrived.
+		//
+		// Transmissions before placements because a placement names an image by id, and one the terminal
+		// has not received draws nothing.
 		//
 		// The transmissions are a=t, store without displaying, so they draw nothing by themselves and it
-		// no longer matters where the cursor is when they land. That is what stopped a restored image
+		// does not matter where the cursor is when they land. That is what stopped a restored image
 		// appearing on top of a full-screen program. See graphics.PlaceCommands.
 		//
 		// The payloads are the ones the program sent, replayed verbatim, so this costs what the original
@@ -2057,7 +2061,7 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// Every command is forced to q=2 by the store, so a re-transmission generates no response. That
 		// is what keeps this off the reply path: an image cm sends asks the terminal nothing, so nothing
 		// comes back to be mistaken for an answer to a question cm never asked.
-		restore = append(s.graphicsRestore(), b...)
+		restore = append(b, s.graphicsRestore()...)
 		// A failure to read placements costs the images on this restore and nothing else, so it is logged
 		// rather than failing the attach: a client with a correct screen and no pictures is far better
 		// than a client that cannot attach.

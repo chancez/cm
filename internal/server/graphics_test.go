@@ -190,12 +190,12 @@ func TestGraphicsImagesAreResentOnAttach(t *testing.T) {
 		t.Errorf("the restore blob does not identify the image; got %q", restore)
 	}
 
-	// Images must come before the screen, or a placement referring to one draws nothing because the
-	// terminal has never seen that id.
+	// Images must come *after* the screen, because the screen begins by clearing and an erase discards
+	// the stored image itself. See TestEraseDisplayDiscardsAStoredImage in internal/vt.
 	img := strings.Index(restore, "AQID")
 	screen := strings.Index(restore, "SCREEN")
-	if img < 0 || screen < 0 || img > screen {
-		t.Errorf("images must precede the screen: image at %d, screen at %d in %q",
+	if img < 0 || screen < 0 || img < screen {
+		t.Errorf("images must follow the screen: image at %d, screen at %d in %q",
 			img, screen, restore)
 	}
 
@@ -289,17 +289,17 @@ func parseAll(t *testing.T, chunk string) []graphics.Segment {
 	return segs
 }
 
-// The restore transmits an image without displaying it and places it after the screen, and both halves
-// of that ordering were bugs.
+// The restore order: screen, then a quiet a=t transmission, then a positioned a=p. Every step of it was
+// a bug at some point.
 //
-// cm used to re-emit a stored a=T, transmit *and display at the cursor*, ahead of the screen blob. Two
-// things went wrong, both measured in a real kitty. The blob begins by clearing, and a clear deletes the
-// placements on the cells it erases, so the image was drawn and then wiped: a client attaching to a
-// session with an image on screen saw no image. And where a=T draws is wherever the cursor is when the
-// bytes land, so with a full-screen program running the same restore drew the image on top of the
-// program, which is the reported picture sitting over fzf.
+// Re-emitting the stored a=T, transmit *and display at the cursor*, drew the image wherever the cursor
+// happened to be, so with a full-screen program up the restore drew it on top of the program. That is the
+// reported picture sitting over fzf, and a=t plus a separate placement is what fixed it.
 //
-// So: transmission first and a=t, placement last and a=p.
+// Both image halves then have to follow the screen, because the screen begins by clearing and an erase
+// discards the stored image rather than only the placements on the erased cells, so a transmission ahead
+// of it is one the placement can no longer name. Measured in internal/vt by
+// TestEraseDisplayDiscardsAStoredImage; it reached a user as an image missing on a second client.
 func TestGraphicsRestorePlacesImagesAfterTheScreen(t *testing.T) {
 	rec := startShimFor(t, shim.Config{
 		Session: "gfxplace",
@@ -334,7 +334,7 @@ func TestGraphicsRestorePlacesImagesAfterTheScreen(t *testing.T) {
 		t.Errorf("the restore does not transmit the image; got %q", restore)
 	}
 
-	// And the placement has to follow the screen, or the screen's clear erases it.
+	// The screen first, then the transmission, then the placement.
 	payload := strings.Index(restore, "AQID")
 	screen := strings.Index(restore, "SCREEN")
 	place := strings.Index(restore, "a=p")
@@ -342,9 +342,9 @@ func TestGraphicsRestorePlacesImagesAfterTheScreen(t *testing.T) {
 		t.Fatalf("restore is missing a piece: payload=%d screen=%d placement=%d in %q",
 			payload, screen, place, restore)
 	}
-	if !(payload < screen && screen < place) {
-		t.Errorf("restore order is payload=%d screen=%d placement=%d, want payload < screen < placement "+
-			"in %q", payload, screen, place, restore)
+	if !(screen < payload && payload < place) {
+		t.Errorf("restore order is screen=%d payload=%d placement=%d, want screen < payload < placement "+
+			"in %q", screen, payload, place, restore)
 	}
 	// At the position the model reported, one-based.
 	if !strings.Contains(restore, "\x1b[6;3H") {

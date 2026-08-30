@@ -136,7 +136,7 @@ already holds the screen.
 Seeding the model rather than producing a blob is what makes the rest of cm work on a revived session
 without being taught about persistence. Every client is served from the model, so a second one sees the
 pre-reboot screen too; `cm read` and `cm history` see it; and the images travel the ordinary restore
-path, which re-transmits with `a=t` and places with `a=p` after the screen.
+path, which re-transmits with `a=t` after the screen and then places with `a=p`.
 
 Rejected: replay into a throwaway terminal, serialize it, hand the bytes to the first client to attach,
 discard them. It breaks all three. A later client gets a session with no history, a read sees only what
