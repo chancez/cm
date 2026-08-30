@@ -103,7 +103,22 @@ type StateResponse struct {
 	// Reported so `cm doctor` can say that rather than leaving it to be reconstructed from process
 	// listings and binary inodes. Empty from a shim predating this field, which is itself a skew of at
 	// least that much and is reported as unknown rather than guessed at.
-	Version       string `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
+	Version string `protobuf:"bytes,10,opt,name=version,proto3" json:"version,omitempty"`
+	// What this shim can do, as capability tokens from internal/capability.
+	//
+	// A version string says two builds differ without saying what differs, which leaves every caller to
+	// work out for itself what an old shim's silence means. This says it directly, because the rules at
+	// the top of this file are not enough on their own: they ask a caller to read absence as "predates
+	// this", and protobuf gives it no way to tell that from a shim that meant no.
+	//
+	// Empty from a shim predating this field, and that is why every build reporting capabilities includes
+	// the "capabilities" token itself. An empty list is then conclusive -- the shim does not speak this
+	// mechanism -- rather than ambiguous with a shim that supports none of them. See capability.Support:
+	// the answer has three values, and only two of them are facts.
+	//
+	// Additive and advisory, like version above. A server that finds a capability missing degrades or says
+	// so; it does not refuse to talk to the shim, which holds a live shell.
+	Capabilities  []string `protobuf:"bytes,11,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -206,6 +221,13 @@ func (x *StateResponse) GetVersion() string {
 		return x.Version
 	}
 	return ""
+}
+
+func (x *StateResponse) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 type SubscribeRequest struct {
@@ -750,7 +772,7 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\n" +
 	"\x15cm/shim/v1/shim.proto\x12\n" +
 	"cm.shim.v1\"\x0e\n" +
-	"\fStateRequest\"\x92\x02\n" +
+	"\fStateRequest\"\xb6\x02\n" +
 	"\rStateResponse\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x19\n" +
 	"\bshim_pid\x18\x02 \x01(\x05R\ashimPid\x12\x1b\n" +
@@ -763,7 +785,8 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\x04rows\x18\b \x01(\rR\x04rows\x12\x12\n" +
 	"\x04cols\x18\t \x01(\rR\x04cols\x12\x18\n" +
 	"\aversion\x18\n" +
-	" \x01(\tR\aversion\"-\n" +
+	" \x01(\tR\aversion\x12\"\n" +
+	"\fcapabilities\x18\v \x03(\tR\fcapabilities\"-\n" +
 	"\x10SubscribeRequest\x12\x19\n" +
 	"\bfrom_seq\x18\x01 \x01(\x04R\afromSeq\"@\n" +
 	"\x06Output\x12\x10\n" +

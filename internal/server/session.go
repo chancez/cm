@@ -14,9 +14,11 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/chancez/cm/internal/ansi"
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/graphics"
@@ -74,6 +76,15 @@ type Session struct {
 	// is what keeps the transport swappable without every holder naming it.
 	conn transport.Conn
 	shim shimv1.ShimClient
+
+	// capsMu guards what the shim reported it can do, and whether it has been asked.
+	//
+	// Its own mutex rather than mu, which already has a documented order against termMu. Nothing else
+	// needs to be consistent with this: a shim is one process running one binary for its whole life, so
+	// its capabilities are fixed from the moment it starts and cached rather than re-queried.
+	capsMu    sync.Mutex
+	shimCaps  capability.Set
+	capsAsked bool
 
 	// term accumulates terminal state so a reattaching client can be restored. Nil until
 	// the VT layer lands; the fanout below does not depend on it.
@@ -2986,6 +2997,9 @@ const (
 
 // Shutdown terminates the session's shell and its shim.
 func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) (surviving []int32, err error) {
+	if sig > 0 {
+		s.warnIfSignalMaySubstitute(ctx, force, sig)
+	}
 	resp, err := s.shim.Shutdown(ctx, &shimv1.ShutdownRequest{Force: force, Signal: sig})
 	if err != nil {
 		return nil, err
@@ -2999,9 +3013,73 @@ func (s *Session) Shutdown(ctx context.Context, force bool, sig int32) (survivin
 	return resp.SurvivingPids, nil
 }
 
+// warnIfSignalMaySubstitute records that a shim may not send the signal it was asked for.
+//
+// ShutdownRequest.signal is additive, so a shim predating it ignores the field and derives the signal
+// from force alone: SIGHUP, or SIGKILL when forced. shim.proto has always said the server "logs it rather
+// than pretending the signal was delivered", and no such log existed. `cm kill --signal TERM` against
+// such a shim sent SIGHUP and reported success, which matters because the reason to name a signal is that
+// the job traps it: something deliberately catching SIGTERM to finish writing a file got hung up on
+// instead, and nothing anywhere recorded the substitution.
+//
+// Three outcomes, and all three are reachable, which is why capability.Support is not a bool:
+//
+//   - Present: the shim honors it. Silent, and this is the only case where nothing needs saying.
+//   - Absent: the shim reports capabilities and not this one. Conclusive, so the log says what happened.
+//   - Unknown: the shim predates capability reporting, which today is every running shim. The log has to
+//     hedge, and it stops hedging on its own as sessions turn over onto builds that report.
+//
+// Before the RPC rather than after, matching Manager.Kill: this is the record that survives a shim dying
+// mid-shutdown, and after the shell is signalled there may be nothing left to ask.
+func (s *Session) warnIfSignalMaySubstitute(ctx context.Context, force bool, sig int32) {
+	instead := syscall.SIGHUP
+	if force {
+		instead = syscall.SIGKILL
+	}
+
+	switch s.ShimCapabilities(ctx).Supports(capability.ShutdownSignal) {
+	case capability.Present:
+	case capability.Absent:
+		s.log.Warn("the session's shim does not honor an explicit shutdown signal, so it sent a different one",
+			"session", s.id, "asked", syscall.Signal(sig), "sent", instead)
+	case capability.Unknown:
+		s.log.Warn("cannot confirm the session's shim honors an explicit shutdown signal, since it predates "+
+			"capability reporting; if it also predates the signal field it sent a different one",
+			"session", s.id, "asked", syscall.Signal(sig), "would_send", instead)
+	}
+}
+
 // State queries the shim directly, which is the authority on whether a session is alive.
 func (s *Session) State(ctx context.Context) (*shimv1.StateResponse, error) {
-	return s.shim.State(ctx, &shimv1.StateRequest{})
+	st, err := s.shim.State(ctx, &shimv1.StateRequest{})
+	if err != nil {
+		return nil, err
+	}
+	// Recorded on the way past, so a caller asking about capabilities later usually needs no round trip
+	// of its own. Every reply carries them and they cannot change.
+	s.capsMu.Lock()
+	s.shimCaps, s.capsAsked = capability.Parse(st.GetCapabilities()), true
+	s.capsMu.Unlock()
+	return st, nil
+}
+
+// ShimCapabilities reports what this session's shim can do, asking it once if nothing has yet.
+//
+// The zero Set when the shim cannot be reached, which answers capability.Unknown to everything. That is
+// the right degradation: an unreachable shim has told us nothing, and concluding a capability is absent
+// from a failed call would make a network problem look like an old build.
+func (s *Session) ShimCapabilities(ctx context.Context) capability.Set {
+	s.capsMu.Lock()
+	asked, caps := s.capsAsked, s.shimCaps
+	s.capsMu.Unlock()
+	if asked {
+		return caps
+	}
+	st, err := s.State(ctx)
+	if err != nil {
+		return capability.Set{}
+	}
+	return capability.Parse(st.GetCapabilities())
 }
 
 // setLabel records a name to call this session by in messages and logs.

@@ -77,6 +77,22 @@ message StateResponse {
   // listings and binary inodes. Empty from a shim predating this field, which is itself a skew of at
   // least that much and is reported as unknown rather than guessed at.
   string version = 10;
+
+  // What this shim can do, as capability tokens from internal/capability.
+  //
+  // A version string says two builds differ without saying what differs, which leaves every caller to
+  // work out for itself what an old shim's silence means. This says it directly, because the rules at
+  // the top of this file are not enough on their own: they ask a caller to read absence as "predates
+  // this", and protobuf gives it no way to tell that from a shim that meant no.
+  //
+  // Empty from a shim predating this field, and that is why every build reporting capabilities includes
+  // the "capabilities" token itself. An empty list is then conclusive -- the shim does not speak this
+  // mechanism -- rather than ambiguous with a shim that supports none of them. See capability.Support:
+  // the answer has three values, and only two of them are facts.
+  //
+  // Additive and advisory, like version above. A server that finds a capability missing degrades or says
+  // so; it does not refuse to talk to the shim, which holds a live shell.
+  repeated string capabilities = 11;
 }
 
 message SubscribeRequest {
@@ -147,6 +163,11 @@ message ShutdownRequest {
   // entirely and honors force alone, so a newer server asking for a specific signal gets SIGHUP or
   // SIGKILL from it instead. That is a degradation rather than a failure, and the server logs it
   // rather than pretending the signal was delivered.
+  //
+  // It logs it by asking: the "shutdown.signal" capability in the field above is what makes the
+  // substitution visible before the shell is signalled. This comment claimed the log existed for a
+  // while before one did, which is the reason the capability exists at all -- a compat rule stated in
+  // prose and checked nowhere is a rule the next reader believes and the code does not follow.
   int32 signal = 2;
 }
 

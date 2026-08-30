@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
@@ -74,6 +75,9 @@ func (s *Service) State(context.Context, *shimv1.StateRequest) (*shimv1.StateRes
 		// The build this shim is running, which is not necessarily the server's: a shim keeps its pty
 		// across restarts and upgrades, so it outlives the binary that spawned it by design.
 		Version: paths.Version(),
+		// What this build's shim can do, so the server does not have to infer it from Version above. A
+		// version tells it two builds differ; this tells it what differs.
+		Capabilities: capability.Shim().Strings(),
 	}, nil
 }
 
