@@ -1320,6 +1320,24 @@ that are load-bearing and each was found by a failure rather than by design:
   input path answering a question cm never asked. That is what keeps the restore path out of the reply
   routing entirely.
 
+**The store has to be rebuilt on adoption, and was not.** A client attaching gets the images re-sent ahead of
+the screen, because a restored screen carries placements referring to images by id and libghostty's formatter
+does not re-emit the images themselves. So what a client receives comes from cm's own store of the payloads,
+not from the model.
+
+Adoption rebuilds the model by replaying the shim's retained history, and that replay went straight to the
+model without passing the graphics interception. The model therefore regained its images and cm's store did
+not, so a client attaching after a server restart received placements with nothing to resolve them: the image
+was blank and nothing said why. The code said this was fine, on the reasoning that an adopted session "starts
+with no images and regains them as the program transmits, which is the same bound the model has on its own
+storage". The model does not have that bound, which is the part that made the claim wrong rather than merely
+pessimistic.
+
+The replay now records into a store as well as feeding the model, using the same bookkeeping the live path uses
+(`recordGraphics`) rather than a second copy of it. One scanner spans the whole replay, because a
+transmission's payload is chunked and reassembles across calls; a scanner per chunk sees fragments and records
+nothing.
+
 ### The part that is not understood, so do not repeat the attempt
 
 A graphics query has **two** answerers, and the interaction between them is unresolved.

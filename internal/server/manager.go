@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
@@ -370,8 +371,13 @@ func (m *Manager) adopt(
 	if err != nil {
 		return nil, err
 	}
+	// Filled by the replay below and handed to the session afterwards, so an adopted session knows the images
+	// its screen refers to. newSession builds an empty one, which is right for a session being created and
+	// wrong for one being adopted.
+	var gfx *graphics.Store
 	if term != nil {
-		if err := m.replayShimHistory(ctx, rec, fromSeq, term); err != nil {
+		gfx = graphics.NewStore(0)
+		if err := m.replayShimHistory(ctx, rec, fromSeq, term, gfx); err != nil {
 			// A screen that could not be rebuilt is worth reporting, but the session works without
 			// it: only restore and history are affected, which is where this started.
 			m.log.Warn("rebuilding the screen for an adopted session failed",
@@ -403,6 +409,9 @@ func (m *Manager) adopt(
 		sess.setLabel(names[0])
 	}
 	sess.SetResizePolicy(m.resizePolicy)
+	// The images the replay found, so a client attaching to this adopted session receives the transmissions
+	// its screen's placements refer to. See recordGraphics.
+	sess.setGraphicsStore(gfx)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.
@@ -421,7 +430,7 @@ func (m *Manager) adopt(
 // either already saw or will receive as part of a restored screen. Appending them would replay old
 // output to an attached client as though it were new.
 func (m *Manager) replayShimHistory(
-	ctx context.Context, rec store.Session, fromSeq seq.Shim, term Terminal,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, term Terminal, gfx *graphics.Store,
 ) error {
 	conn, shim, err := dialShim(rec.ShimSocket)
 	if err != nil {
@@ -448,6 +457,10 @@ func (m *Manager) replayShimHistory(
 		return fmt.Errorf("subscribing for history: %w", err)
 	}
 
+	// One scanner across the whole replay, because a transmission's payload is chunked and it reassembles
+	// across calls. A scanner per chunk would see fragments and record nothing.
+	var replayScanner graphics.Scanner
+
 	for {
 		out, err := sub.Recv()
 		if err != nil {
@@ -463,6 +476,29 @@ func (m *Manager) replayShimHistory(
 				break
 			}
 			data = data[:fromSeq-chunkStart]
+		}
+		// Recorded into cm's own image store as well as fed to the model, and the second half is not
+		// optional. The model regains its images from this replay, but libghostty's formatter does not
+		// re-emit them, so what a client actually receives on attach comes from this store. Without it a
+		// client attaching after a restart got a screen of placements with nothing to resolve, and the image
+		// was blank.
+		//
+		// Bookkeeping only: the segments are not re-emitted anywhere, so a transfer resolved here goes into
+		// the store and nothing else. That is why this uses recordGraphics rather than handleGraphics, which
+		// also builds the byte stream for clients.
+		if gfx != nil {
+			for _, seg := range replayScanner.Scan(data) {
+				if !seg.Graphics {
+					continue
+				}
+				resolved, err := graphics.ReadTransfer(seg.Cmd)
+				if err != nil {
+					// A file-backed transfer whose file has gone since. Nothing to record, and nothing to
+					// report either: the image was already on the model's screen or it was not.
+					continue
+				}
+				recordGraphics(gfx, resolved)
+			}
 		}
 		if err := term.Write(data); err != nil {
 			return fmt.Errorf("replaying output: %w", err)

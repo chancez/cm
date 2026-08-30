@@ -576,9 +576,15 @@ func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq se
 		// the log numbers, so a boundary stored in the shim's numbering would be off by the rewrite.
 		boundaries: newBoundaryTrackerAt(clientSeq),
 		// Not positioned like the boundary tracker above, because an image is addressed by the id the
-		// program chose rather than by a position in the stream. A session adopted after a restart
-		// therefore starts with no images and regains them as the program transmits, which is the same
-		// bound the model has on its own storage.
+		// program chose rather than by a position in the stream.
+		//
+		// Empty here, and adoption replaces it: see setGraphicsStore. This used to say that an adopted
+		// session starts with no images and regains them as the program transmits, "the same bound the model
+		// has on its own storage", and that was wrong in the part that mattered. The model does *not* have
+		// that bound, because adoption rebuilds it by replaying the shim's retained history. So the model had
+		// the images and this store did not, and since libghostty's formatter does not re-emit them, a client
+		// attaching after a restart received a screen of placements with nothing to resolve. The image was
+		// blank and nothing said why.
 		gfxStore:    graphics.NewStore(0),
 		log:         cmlog.Discard(),
 		clientSizes: make(map[*attachToken]*clientSize),
@@ -884,19 +890,49 @@ func (s *Session) handleGraphics(segs []graphics.Segment) []byte {
 			continue
 		}
 
-		if store != nil {
-			if resolved.IsTransmission() {
-				store.Add(resolved)
-			} else if id, byNumber, ok := resolved.Key(); ok {
-				// A command that places or otherwise uses an image counts as touching it, so eviction
-				// does not drop what is currently on screen.
-				store.Touch(id, byNumber)
-			}
-		}
+		recordGraphics(store, resolved)
 
 		out = append(out, resolved.Raw...)
 	}
 	return out
+}
+
+// recordGraphics is the bookkeeping half of handling one graphics command.
+//
+// Split out so adoption can do it too. A restarting server rebuilds the terminal model by replaying the shim's
+// retained history, and the model regains its images from that; cm's own store of the payloads did not, because
+// the replay goes straight to the model and never past the interception. A client attaching after a restart
+// then got a screen of placements with nothing to resolve them, so the image was blank. libghostty's formatter
+// does not re-emit images, which is why this store exists at all.
+//
+// Nil-tolerant for the reason graphicsRestore is: a Session built field by field in a test has no store, and
+// dropping the bookkeeping is better than panicking on the output path.
+func recordGraphics(store *graphics.Store, resolved graphics.Command) {
+	if store == nil {
+		return
+	}
+	if resolved.IsTransmission() {
+		store.Add(resolved)
+		return
+	}
+	if id, byNumber, ok := resolved.Key(); ok {
+		// A command that places or otherwise uses an image counts as touching it, so eviction does not drop
+		// what is currently on screen.
+		store.Touch(id, byNumber)
+	}
+}
+
+// setGraphicsStore replaces the store, for a session being adopted after a restart.
+//
+// Follows setRestored: adoption is the one caller that knows something the constructor cannot, and the
+// alternative was another parameter on newSession threaded through every call site that never needs it.
+func (s *Session) setGraphicsStore(store *graphics.Store) {
+	if store == nil {
+		return
+	}
+	s.mu.Lock()
+	s.gfxStore = store
+	s.mu.Unlock()
 }
 
 // feedTerminal advances the terminal model, recording how far into the log it has consumed.
