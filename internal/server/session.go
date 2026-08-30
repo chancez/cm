@@ -41,7 +41,20 @@ var ErrSessionGone = errors.New("session has ended")
 // after a brief outage can resume from its own position. Once the terminal model lands, a
 // fresh attach is served by replaying screen state instead, and this only has to cover the
 // reconnect case.
-const DefaultRecentBytes = 1 << 20 // 1 MiB
+//
+// 16 MiB rather than the 1 MiB it was, and the reason is images rather than text. cm inlines a graphics
+// transfer that named a file, so a command of a few dozen bytes becomes a payload the size of the
+// image: `kitten icat` on a 565398 byte screenshot converts it to 1207200 bytes of RGB, which cm emits
+// as 1609600 base64 characters in one append. seqlog truncates any single append past its bound to the
+// bound's last bytes, so an append larger than the window is a *guaranteed* gap for every client, not a
+// slow-client race: the front of the image is evicted before any client is even woken. The client then
+// repaints, and a repaint erases what the image just drew. Measured in a real kitty as an image that
+// appears and vanishes, every time, for any image over the old bound.
+//
+// The memory is not spent up front. seqlog grows its buffer on demand up to the bound, so a session that
+// only ever prints text holds what it printed; a session that displays a screenshot holds one. 16 MiB
+// covers a 2560x1440 RGB inline, which is 11059200 bytes of pixels and 14745600 of base64.
+const DefaultRecentBytes = 16 << 20 // 16 MiB
 
 // Session is one live session as the server sees it: a connection to its shim, the
 // terminal state derived from its output, and the set of attached clients.
@@ -480,6 +493,10 @@ type Terminal interface {
 	// OnAltScreen reports whether the model is on the alternate screen, so the server can notice a
 	// full-screen program leaving it. A client that attached during one holds no main-screen content.
 	OnAltScreen() (bool, error)
+	// Placements reports the images drawn on the active screen and where each one sits, so a restore
+	// can put them back rather than re-displaying them at the cursor. Read together with Restore,
+	// under the same lock, or the screen and the images on it disagree.
+	Placements() ([]graphics.Placement, error)
 	// KittyKeyboardProtocol reports whether a program has the kitty keyboard protocol enabled, so an
 	// event in that encoding is one something asked for rather than one left over from a program that
 	// has exited.
@@ -1981,6 +1998,10 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// mu before acquiring termMu so this cannot deadlock against it.
 		s.termMu.Lock()
 		b, err := s.term.Restore()
+		// Read inside the same critical section as the screen, so the images and the screen they sit on
+		// describe one instant. A placement read after the pump advanced the model would name a row the
+		// restored screen does not have.
+		placements, placeErr := s.term.Placements()
 		// Backed off to the last complete sequence, so a partial one is replayed rather than lost. Clamped
 		// at the log's start, which matters only for a session whose very first bytes are a partial
 		// sequence, where the backlog can be the whole of what the model has seen.
@@ -1993,9 +2014,18 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
 		}
 
-		// Images are re-transmitted ahead of the screen, and the order is the whole of it: the restored
-		// screen may contain placements referring to images by id, and a placement whose image the
-		// terminal has never seen draws nothing. Sending the images first means the ids resolve.
+		// Images are re-transmitted ahead of the screen and *placed after it*, and that split is the
+		// whole of getting this right.
+		//
+		// Ahead, because a placement names an image by id and one the terminal has never received draws
+		// nothing. After, because the screen blob begins by clearing, and a clear deletes the placements
+		// on the cells it erases: an image placed before the content was wiped by the content. Both
+		// halves were observed in a real kitty, the second as a client attaching to a session with an
+		// image on screen and receiving the image, then the clear, and showing nothing.
+		//
+		// The transmissions are a=t, store without displaying, so they draw nothing by themselves and it
+		// no longer matters where the cursor is when they land. That is what stopped a restored image
+		// appearing on top of a full-screen program. See graphics.PlaceCommands.
 		//
 		// The payloads are the ones the program sent, replayed verbatim, so this costs what the original
 		// transmission cost. Rebuilding them from libghostty's storage instead would mean re-encoding
@@ -2006,6 +2036,15 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// is what keeps this off the reply path: an image cm sends asks the terminal nothing, so nothing
 		// comes back to be mistaken for an answer to a question cm never asked.
 		restore = append(s.graphicsRestore(), b...)
+		// A failure to read placements costs the images on this restore and nothing else, so it is logged
+		// rather than failing the attach: a client with a correct screen and no pictures is far better
+		// than a client that cannot attach.
+		if placeErr != nil {
+			s.log.Warn("reading image placements for a restore failed, images will be missing",
+				"session", s.label, "error", placeErr)
+		} else {
+			restore = append(restore, graphics.PlaceCommands(placements)...)
+		}
 
 		// State is replayed, so streaming starts where the replayed screen ends rather than repeating
 		// history the snapshot already covers.

@@ -103,6 +103,23 @@ type Placement struct {
 	Columns, Rows uint32
 	// Z is the stacking order against text and other placements.
 	Z int32
+	// Col and Row are where the placement's top-left corner sits in the viewport, zero-based.
+	//
+	// Row can be negative, for an image whose top has scrolled above the viewport while its lower
+	// rows are still visible. A caller re-emitting a placement has to clamp that itself: a cursor
+	// cannot be positioned above row zero, so the image would have to be cropped with a source
+	// rectangle to land correctly.
+	//
+	// Only meaningful when OnScreen is true.
+	Col, Row int32
+	// OnScreen reports whether the placement is at least partly visible in the viewport.
+	//
+	// False for one that has scrolled entirely away and for a virtual placement, which has no cursor
+	// position at all because unicode placeholders put it where the cells are. Both are ordinary
+	// outcomes rather than errors, which is why this is a bool and not an error return: a screen
+	// holding a placement that scrolled off is normal, and a caller restoring a screen wants to skip
+	// it rather than fail.
+	OnScreen bool
 }
 
 // GraphicsEnabled reports whether this terminal is storing kitty graphics images.
@@ -215,9 +232,53 @@ func (t *Terminal) Placements() ([]Placement, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := t.placementPos(it, g, &p); err != nil {
+			return nil, err
+		}
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// placementPos fills in where a placement sits in the viewport.
+//
+// Separate from placementAt because it needs three handles rather than the iterator alone: the
+// position lives in the placement's pin, and libghostty resolves it against the image's geometry and
+// the terminal's viewport.
+//
+// This is the whole reason a restore can put an image back where it belongs. Without it cm knew what
+// was placed but not where, so a re-emission had to use a=T and display at whatever the cursor
+// happened to be, which is how a restored image landed on top of a full-screen program instead of in
+// its own row.
+func (t *Terminal) placementPos(
+	it C.GhosttyKittyGraphicsPlacementIterator,
+	g C.GhosttyKittyGraphics,
+	p *Placement,
+) error {
+	// A virtual placement has no cursor position at all, so libghostty declines it and there is
+	// nothing to ask for.
+	if p.Virtual {
+		return nil
+	}
+	img := C.ghostty_kitty_graphics_image(g, C.uint32_t(p.ImageID))
+	if img == nil {
+		// A placement whose image storage evicted. Nothing to place, and the caller already has to
+		// cope with this: ImageByID documents the same outcome.
+		return nil
+	}
+
+	var col, row C.int32_t
+	rc := C.ghostty_kitty_graphics_placement_viewport_pos(it, img, t.ptr, &col, &row)
+	if rc == C.GHOSTTY_NO_VALUE {
+		// Scrolled entirely out of the viewport, or virtual. Not an error: a screen holding one is
+		// normal and a caller restoring a screen wants to skip it.
+		return nil
+	}
+	if err := check(rc, "reading placement viewport position"); err != nil {
+		return err
+	}
+	p.Col, p.Row, p.OnScreen = int32(col), int32(row), true
+	return nil
 }
 
 // placementAt reads the iterator's current placement.

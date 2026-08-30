@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/paths"
 )
 
@@ -269,6 +270,38 @@ func (s *SessionTerminal) OnAltScreen() (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.term.OnAltScreen()
+}
+
+// Placements reports the images on the active screen and where each one sits.
+//
+// Converted to the graphics package's own type rather than handed out as vt.Placement, so the server
+// and the re-emission code work in one vocabulary and neither has to import a cgo package to talk
+// about a picture's position. Only placements actually on screen are returned: one that has scrolled
+// away, or a virtual placement positioned by unicode placeholders, has no cursor position to restore
+// it at.
+func (s *SessionTerminal) Placements() ([]graphics.Placement, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps, err := s.term.Placements()
+	if err != nil {
+		return nil, err
+	}
+	var out []graphics.Placement
+	for _, p := range ps {
+		if !p.OnScreen {
+			continue
+		}
+		out = append(out, graphics.Placement{
+			ImageID:     p.ImageID,
+			PlacementID: p.PlacementID,
+			Col:         p.Col,
+			Row:         p.Row,
+			Columns:     p.Columns,
+			Rows:        p.Rows,
+			Z:           p.Z,
+		})
+	}
+	return out, nil
 }
 
 func (s *SessionTerminal) KittyKeyboardProtocol() bool {

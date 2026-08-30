@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
@@ -47,6 +48,10 @@ type fakeTerminal struct {
 	onAltScreen bool
 	// kittyKeyboard stands in for a program having pushed kitty keyboard protocol flags.
 	kittyKeyboard bool
+	// placements stands in for the images a real terminal holds on its active screen, and
+	// placementsErr for reading them failing, which must cost the pictures and not the attach.
+	placements    []graphics.Placement
+	placementsErr error
 
 	// answers maps a query to the reply the emulator would generate for it, so a test can exercise
 	// the path where output triggers a write back to the pty. Real libghostty answers CSI 6n and
@@ -164,6 +169,14 @@ func (f *fakeTerminal) OnAltScreen() (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.onAltScreen, nil
+}
+
+// Placements is what a real terminal reports about the images on its screen. The fake holds a list a
+// test sets, so the restore path can be exercised without building a terminal or an image.
+func (f *fakeTerminal) Placements() ([]graphics.Placement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.placements, f.placementsErr
 }
 
 func (f *fakeTerminal) KittyKeyboardProtocol() bool {

@@ -214,6 +214,15 @@ type Retransmission struct {
 // path answering a question cm never asked. Forwarding a program's own transmission unchanged is what
 // produced the reported echo, and this is deliberately not that.
 //
+// Each is also forced to a=t, store without displaying, and that is the correctness half rather than a
+// tidy-up. A stored command is usually a=T, transmit *and display at the cursor*, so re-emitting it
+// verbatim drew the image wherever the cursor happened to be at that instant in the restore. Measured in
+// a real kitty: a client attaching while a full-screen program was running received
+// "ESC[2J", the image as a=T, then "ESC[?1049l ESC[2J", then "ESC[?1049h" and the program's screen, so
+// the image was placed on the main screen and then erased by the clear behind it. Land the same bytes a
+// moment later and it is drawn *on top of* the program instead, which is the reported image sitting over
+// fzf. Where an image belongs is a placement, and a placement is restored separately from the model.
+//
 // Chunked back out at kitty's own limit rather than emitted as one command, because a retained payload is
 // a whole image and a single command that size is one a terminal may discard. See EncodeChunks.
 func (s *Store) Retransmissions() []Retransmission {
@@ -246,7 +255,7 @@ func (s *Store) Retransmissions() []Retransmission {
 		out = append(out, Retransmission{
 			ID:       o.k.id,
 			ByNumber: o.k.byNumber,
-			Bytes:    EncodeChunks(WithQuiet(o.e.control, 2), o.e.payload),
+			Bytes:    EncodeChunks(WithQuiet(withKey(o.e.control, "a", "t"), 2), o.e.payload),
 		})
 	}
 	return out
