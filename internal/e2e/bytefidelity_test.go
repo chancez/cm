@@ -12,6 +12,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/chancez/cm/internal/ansi"
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/paths"
 )
 
@@ -54,7 +55,9 @@ func TestClientTerminalReceivesTheProgramsBytesIntact(t *testing.T) {
 		apc             = "\x1b_Gf=100;abc\x1b\\"
 		tail            = "FIDELITY-DONE"
 	)
-	want := titleAndOpenSGR + closeSGR + openOSC7 + closeOSC7 + dcs + apc + tail
+	// Everything except the graphics APC has to arrive byte for byte. The APC is the one shape cm
+	// deliberately does not forward unchanged, and it is checked separately below.
+	want := titleAndOpenSGR + closeSGR + openOSC7 + closeOSC7 + dcs
 
 	// Sleeps rather than a single write, so each sequence really is split across two pty reads: cm can
 	// only deliver what it read, and a sequence that arrived whole is not the case under test. 0.3s is
@@ -115,7 +118,42 @@ func TestClientTerminalReceivesTheProgramsBytesIntact(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Errorf("the program's bytes did not survive the trip.\nwant to find: %q\nin: %q", want, got)
 	}
+	if !strings.Contains(got, tail) {
+		t.Errorf("the program's output after the graphics command is missing.\nwant: %q\nin: %q", tail, got)
+	}
+
+	// The graphics command is the exception, and the exception is deliberate rather than a regression.
+	//
+	// cm consumes the kitty graphics protocol instead of forwarding it: a transfer naming a file is read
+	// and re-emitted inline, because the file is single-use and two readers cannot both have it, and a
+	// transmission naming no image is given one, because an image cm cannot name is one it cannot restore
+	// to a client that was not there when it was drawn. The program's own bytes are preserved in every way
+	// that reaches it: same action, same format, same payload, and an id the terminal would have assigned
+	// anyway.
+	//
+	// So this asserts the semantics rather than the bytes. What it must never do is assert nothing: an
+	// empty payload or a lost format key is the corruption this whole test exists to catch.
+	i := strings.Index(got, apcIntro)
+	if i < 0 {
+		t.Fatalf("the graphics command did not arrive at all; got %q", got)
+	}
+	cmd, _, ok := graphics.Parse([]byte(got[i:]))
+	if !ok {
+		t.Fatalf("the graphics command did not parse: %q", got[i:])
+	}
+	if string(cmd.Payload) != "abc" {
+		t.Errorf("graphics payload = %q, want %q", cmd.Payload, "abc")
+	}
+	if cmd.Format != 100 {
+		t.Errorf("graphics f= = %d, want 100 preserved from the program", cmd.Format)
+	}
+	if cmd.ImageID == 0 {
+		t.Errorf("cm forwarded an unnamed image, so nothing can place it later: %q", cmd.Raw)
+	}
 }
+
+// apcIntro is the introducer for a kitty graphics command.
+const apcIntro = "\x1b_G"
 
 // cmHooksBinary is cm built with the test-hooks tag, which is what records a transcript.
 //
