@@ -41,3 +41,10 @@ GhosttyMode cm_mode_alt_screen_save(void);
 GhosttyMode cm_mode_in_band_resize(void);
 
 #endif
+
+// cm_install_png_decoder points libghostty's PNG decode hook at cm's Go implementation.
+//
+// In C rather than in a cgo preamble because the preamble cannot see the declaration cgo generates for
+// an exported Go function, and declaring it by hand conflicts with the generated one. The .c file
+// includes _cgo_export.h, which is where that declaration lives.
+void cm_install_png_decoder(void);

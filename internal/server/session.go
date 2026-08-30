@@ -268,6 +268,13 @@ type Session struct {
 	// numbering being computed from the shortened bytes, and it is not: lastSeq comes from the pump's
 	// `data`, which is out.Data minus only a held-back partial marker, both of which are shim bytes.
 	gfxScan graphics.Scanner
+	// gfxNextID numbers the images a program transmitted without naming, and gfxLoading says whether a
+	// transmission is still arriving so its continuation chunks are not each given a name of their own.
+	//
+	// Both live on the pump's goroutine, like gfxScan and the OSC trackers beside it, so neither takes a
+	// lock. Counted per session rather than globally: the ids only have to be unique within one terminal.
+	gfxNextID  uint32
+	gfxLoading bool
 	// gfxStore keeps the payloads those commands carried, so images can be re-sent on attach.
 	//
 	// Its own lock inside, because an attaching client reads it while the pump writes. Separate from
@@ -894,7 +901,29 @@ func (s *Session) handleGraphics(segs []graphics.Segment) []byte {
 			continue
 		}
 
-		resolved, err := graphics.ReadTransfer(seg.Cmd)
+		// Named before anything else sees it, when the program named nothing.
+		//
+		// icat's transfers carry no i= at all, so without this the terminal picks the id and cm cannot
+		// speak about the image afterwards: a restore needs an id for a=p, and a second terminal
+		// attaching later would have picked a different one. Measured against the reported command,
+		// which is why this is here rather than a nicety: the image displayed live and then could not
+		// be replayed to any other client, because cm had nothing to call it.
+		//
+		// Only the first chunk of a transmission gets one. A continuation carries no identity by design
+		// and the terminal appends it to the image it is loading, which is the same rule cm's own store
+		// follows.
+		cmd := seg.Cmd
+		if cmd.IsTransmission() && !s.gfxLoading {
+			if _, _, named := cmd.Key(); !named {
+				s.gfxNextID++
+				cmd = graphics.WithImageID(cmd, graphics.FirstUnclaimedID+s.gfxNextID)
+			}
+		}
+		if cmd.IsTransmission() {
+			s.gfxLoading = cmd.More
+		}
+
+		resolved, err := graphics.ReadTransfer(cmd)
 		if err != nil {
 			// Dropped, and the whole command goes with it. Emitting any part of it is what produced the
 			// leak above, and forwarding all of it would put the program and the terminal back in the

@@ -140,6 +140,11 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 		return nil, fmt.Errorf("terminal size %dx%d: %w", rows, cols, ErrInvalid)
 	}
 
+	// Installed here rather than by a caller, because every terminal wants it and forgetting is silent:
+	// PNG transmissions are simply rejected and the model's screen quietly lacks the images on it. Once
+	// per process, and libghostty's sys options are process-wide, so this is the right granularity.
+	InstallPNGDecoder()
+
 	t := &Terminal{cb: cb}
 	if err := check(C.ghostty_terminal_new(nil, &t.ptr, C.uint16_t(cols), C.uint16_t(rows)),
 		"creating terminal"); err != nil {

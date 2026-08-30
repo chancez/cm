@@ -447,3 +447,34 @@ func keepKeys(control string, keys ...string) string {
 	}
 	return strings.Join(out, ",")
 }
+
+// FirstUnclaimedID is where cm starts numbering images a program left unnamed.
+//
+// High on purpose. A program that names its own images picks small ids, icat uses the low hundreds, and
+// kitty's own id space is 32 bit, so starting here keeps cm's numbering clear of anything a program is
+// likely to choose. A collision would not be a crash: it would silently replace a program's image with
+// cm's, which is far worse than a number that looks odd in a log.
+const FirstUnclaimedID = 1 << 30
+
+// WithImageID returns the command with an i= key, for a transmission that named no image.
+//
+// This is what makes an unnamed image restorable, and the reason it has to exist is icat: its transfers
+// carry no i= at all, so the terminal assigns one. That leaves cm unable to say anything about the image
+// later, because the id it would have to use in a=p is one only the terminal knows, and a second terminal
+// attaching later would assign a different one. So cm names the image before anyone else sees it, and then
+// every terminal, cm's model included, agrees on which image a placement refers to.
+//
+// Safe for exactly the commands it is used on, and no others. A transmission that names nothing has no
+// handle the program can refer to either, since a display-immediately command needs none and a q=2 command
+// is not even told the id, so adding one takes nothing away. A command that already names an image or a
+// number is returned unchanged.
+func WithImageID(cmd Command, id uint32) Command {
+	if _, _, named := cmd.Key(); named {
+		return cmd
+	}
+	out := cmd
+	out.ImageID = id
+	out.Control = withKey(cmd.Control, "i", strconv.FormatUint(uint64(id), 10))
+	out.Raw = EncodeChunks(out.Control, out.Payload)
+	return out
+}

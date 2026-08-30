@@ -91,3 +91,12 @@ GhosttyMode cm_mode_focus_event(void) { return GHOSTTY_MODE_FOCUS_EVENT; }
 GhosttyMode cm_mode_alt_screen_save(void) { return GHOSTTY_MODE_ALT_SCREEN_SAVE; }
 
 GhosttyMode cm_mode_in_band_resize(void) { return GHOSTTY_MODE_IN_BAND_RESIZE; }
+
+// Installs cm's PNG decoder, defined in Go as cmDecodePNG.
+//
+// Cast through void* because ghostty_sys_set takes an untyped value, and because the generated
+// declaration drops the const qualifiers the typedef carries. The signature is otherwise identical:
+// (void*, const GhosttyAllocator*, const uint8_t*, size_t, GhosttySysImage*) -> bool.
+void cm_install_png_decoder(void) {
+  ghostty_sys_set(GHOSTTY_SYS_OPT_DECODE_PNG, (void *)cmDecodePNG);
+}

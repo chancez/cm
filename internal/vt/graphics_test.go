@@ -264,7 +264,7 @@ func TestGraphicsMissingImageIsNotAnError(t *testing.T) {
 //
 // This pins the boundary the next step moves: installing a decoder is what makes this case work, and
 // until then a PNG payload has to fail visibly rather than appear as an empty or mis-sized image.
-func TestGraphicsPNGWithoutDecoderIsNotStored(t *testing.T) {
+func TestGraphicsMalformedPNGIsNotStored(t *testing.T) {
 	term, err := New(24, 80, Callbacks{})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -275,7 +275,10 @@ func TestGraphicsPNGWithoutDecoderIsNotStored(t *testing.T) {
 		t.Fatalf("SetGraphicsStorageLimit() error = %v", err)
 	}
 
-	// A PNG header is enough: it is rejected before the pixel data matters.
+	// A PNG header followed by zeroes, which is not a decodable image. It used to be rejected because no
+	// decoder was installed at all; cm installs one now, so what this proves is that a payload the
+	// decoder cannot read is refused rather than stored as something. The distinction matters: the old
+	// name said "without a decoder" and would have kept passing for the wrong reason.
 	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
 	if err := term.Write([]byte(graphicsCommand("a=T,f=100,i=21", png))); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -290,6 +293,6 @@ func TestGraphicsPNGWithoutDecoderIsNotStored(t *testing.T) {
 		t.Fatalf("ImageByID() error = %v", err)
 	}
 	if ok {
-		t.Errorf("a PNG payload was stored without a decoder installed: %+v", img)
+		t.Errorf("an undecodable PNG payload was stored: %+v", img)
 	}
 }

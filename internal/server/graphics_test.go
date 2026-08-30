@@ -385,3 +385,76 @@ func TestGraphicsRestoreSurvivesAPlacementReadFailure(t *testing.T) {
 		t.Errorf("placements were emitted despite the read failing; got %q", restore)
 	}
 }
+
+// An image a program transmitted without naming is named by cm, so a restore can speak about it.
+//
+// icat names nothing: its transfers carry no i= and no I=, so the terminal picks the id. That left cm
+// unable to replay the image to any other client, because a=p needs an id and the only id was one the
+// first terminal invented. Measured against the reported command: the image displayed live and no second
+// client ever saw it.
+//
+// The name goes on before the command is forwarded, so every terminal and cm's own model agree on it.
+func TestGraphicsNamesAnUnnamedImage(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "gfxname",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("SCREEN")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	// icat's shape: a transmission with geometry and no identity at all.
+	out := sess.handleGraphics(parseAll(t, "\x1b_Ga=T,q=2,f=24,s=2,v=2;QUJD\x1b\\"))
+
+	// Forwarded carrying the name, so the client's terminal stores it under the id cm chose.
+	if !strings.Contains(string(out), "i=") {
+		t.Errorf("the forwarded command carries no image id; got %q", out)
+	}
+	// And retained, which it was not before: an unnamed image could not be stored.
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+	if !strings.Contains(string(att.restore), "QUJD") {
+		t.Errorf("the image was not retained for a restore; got %q", att.restore)
+	}
+}
+
+// Continuation chunks are not each given a name of their own: a transmission is one image, and the
+// terminal appends later chunks to the one it is loading.
+func TestGraphicsNamesOnlyTheFirstChunk(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "gfxnamechunk",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24, Cols: 80,
+	})
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("SCREEN")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	first := string(sess.handleGraphics(parseAll(t, "\x1b_Ga=T,q=2,f=24,s=2,v=2,m=1;QUJD\x1b\\")))
+	rest := string(sess.handleGraphics(parseAll(t, "\x1b_Ga=T,q=2,m=0;REVG\x1b\\")))
+
+	if !strings.Contains(first, "i=") {
+		t.Errorf("the first chunk carries no id; got %q", first)
+	}
+	if strings.Contains(rest, "i=") {
+		t.Errorf("a continuation chunk was given its own id, which makes it a second image; got %q", rest)
+	}
+
+	// One image, both halves of the payload.
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+	if !strings.Contains(string(att.restore), "QUJDREVG") {
+		t.Errorf("the chunks did not reassemble into one image; got %q", att.restore)
+	}
+}
