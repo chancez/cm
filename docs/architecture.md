@@ -784,7 +784,23 @@ arrived. The client that typed is the client that ran the command. `clientSize.l
 
 Recorded separately from `Session.leader`, which is the tempting shortcut. Leadership is a decision about
 the pty's *size*, gated on `resize_policy` and refused to a follower; this is a record of who is being
-used, wanted under every policy. Since `claimLeadership` returns early for three of the four policies,
+used, wanted under every policy.
+
+The two are related in one direction now: **leadership defers to it.** Under `leader`, an attaching client
+used to claim sizing whenever nothing else held it, which is right for the first window on a session and
+wrong after every client dropped at once. A server restart does exactly that, so each client reconnected and
+the first one in took leadership and the session's size with it, on an order that says nothing about which
+window anybody was using. It was observed as a session coming back at the second window's size.
+
+So `registerClientSize` prefers the most recently used attached window over the arriving one. That became
+possible only when `lastInputAt` started surviving a dropped stream: before, a returning client had never
+typed as far as the server knew, so there was nothing to compare against.
+
+What it does not promise is that no intermediate resize happens. Clients reconnect one at a time, and the
+first one back is legitimately the most recently used window at that moment because it is the only one
+attached, so it takes leadership and the window that was really in use takes it back on its own return.
+Avoiding that flicker means waiting for reconnects to settle, which is a timer and a guess at how long. The
+end state is what is guaranteed. Since `claimLeadership` returns early for three of the four policies,
 reading the leader would have left anyone running `smallest` or `first-attach` with nothing marked, and
 the failure would be silent, because a session with one client looks identical either way.
 

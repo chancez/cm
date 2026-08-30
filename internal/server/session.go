@@ -2148,8 +2148,31 @@ func (s *Session) registerClientSize(
 		return r, c, xpixel, ypixel, ok
 
 	default: // ResizeLeader
-		// An attaching client claims sizing only when nothing else holds it. Otherwise the window
-		// someone is working in keeps its size until they type somewhere else.
+		// Leadership belongs to the window most recently used, when that is knowable.
+		//
+		// It became knowable only when lastInputAt started surviving a dropped stream: before that a
+		// returning client had never typed as far as the server knew. See resumeState.
+		//
+		// The rule this replaces was "an attaching client claims sizing whenever nothing else holds it",
+		// which is right for the first window on a session and wrong after every client dropped at once. A
+		// server restart does exactly that: each reconnects, the first one in took leadership and the
+		// session's size with it, and reconnect order says nothing about which window anybody was using.
+		// Observed as a session coming back at the second window's size after a restart.
+		//
+		// What this does *not* promise is that no intermediate resize happens. When clients reconnect one at
+		// a time, the first one back is the only window attached and is legitimately the most recently used
+		// one at that moment, so it takes leadership; the window that was really in use takes it back when it
+		// returns. Avoiding that flicker would mean waiting for reconnects to settle, which is a timer and a
+		// guess at how long. The end state is what is guaranteed.
+		if used := s.activeClientLocked(); used != nil {
+			if used != tok {
+				return 0, 0, 0, 0, false
+			}
+			s.leader = tok
+			return rows, cols, xpixel, ypixel, true
+		}
+		// Nobody has typed anywhere, so there is no window in use to defer to and the old rule stands: claim
+		// only when leadership is unheld, or the window someone is working in would lose it to a new one.
 		if s.leader == nil || s.clientSizes[s.leader] == nil {
 			s.leader = tok
 			return rows, cols, xpixel, ypixel, true

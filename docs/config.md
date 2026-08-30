@@ -23,6 +23,10 @@ scrollback_lines = 10000
 
 # Which of several attached clients sets the session's size:
 # "leader" (default), "last-attach", "first-attach", or "smallest".
+#
+# Under "leader" the window you are typing in owns the size. That survives a reconnect: a client whose
+# stream dropped, which includes a repaint and a server restart, keeps its place rather than handing the
+# size to whichever window reconnects first.
 resize_policy = "leader"
 
 # The key that detaches a client. "none" disables detaching by key.
