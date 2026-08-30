@@ -1421,6 +1421,19 @@ One limit is deliberate: a transmission that named no image is not retained at a
 assigns its own id, so no later `a=p` would resolve against it, and retaining them made a restore blob
 4.3 MB and wedged the session.
 
+A placement's position comes from the cell pixel dimensions, which the model has to be told, and it is told
+on every attach rather than on every resize. Those are separate facts: only a size change reflows a session,
+and `sizeForAttach` returns early whenever nothing reflows, which is the normal case for a resuming client
+and for any client that does not own sizing. Recording the metrics there meant a session could serve clients
+for its whole life without the model knowing a cell size. `Session.NoteCellSize` changes the model's cell
+scale while keeping its rows and columns, because reflowing to the attaching client's size instead is the
+surprise `releaseClientSize` exists to avoid.
+
+The cost of missing metrics is images, and only some of them, which is what made it read as a size bug: a
+placement that scrolled above the viewport is cropped in pixels and is dropped without a cell height, while
+an unscrolled one needs no conversion and is emitted anyway. So small images appeared on every client and
+large ones, which scroll because they nearly fill the window, silently did not.
+
 A placement's position comes from the cell pixel dimensions, which the model has to be told. They were
 already on the wire, `x_pixel` and `y_pixel` in `Open` and `ResizeRequest`, and already reached the pty
 through the shim; what dropped them was `Session.resize` calling `term.Resize(rows, cols)`, which took no

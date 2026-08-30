@@ -279,6 +279,12 @@ type Session struct {
 	// crop an image that scrolled above the viewport: the offset is in pixels and the placement's row is
 	// in cells. Guarded by mu, unlike the two above, because attach reads it and resize writes it.
 	gfxCellHeight uint16
+	// modelRows and modelCols are the size the model currently holds, tracked because the Terminal
+	// interface has no getter and NoteCellSize has to change a model's cell scale without changing its
+	// layout. Passing a client's own size there instead would reflow the session to whichever window
+	// attached last, which is the surprise releaseClientSize exists to avoid. Guarded by mu.
+	modelRows uint16
+	modelCols uint16
 	// gfxStore keeps the payloads those commands carried, so images can be re-sent on attach.
 	//
 	// Its own lock inside, because an attaching client reads it while the pump writes. Separate from
@@ -624,8 +630,12 @@ func newSession(rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq se
 		// clientSeq, because this is a position in the client log: attach streams from it after replaying
 		// a screen, and the log numbers rewritten bytes.
 		modelSeq: clientSeq,
-		done:     make(chan struct{}),
-		stopPump: stopPump,
+		// The size buildTerminal made the model, so NoteCellSize has a layout to preserve before any
+		// resize has happened.
+		modelRows: uint16(rec.Rows),
+		modelCols: uint16(rec.Cols),
+		done:      make(chan struct{}),
+		stopPump:  stopPump,
 	}
 
 	sub, err := shim.Subscribe(pumpCtx, &shimv1.SubscribeRequest{FromSeq: uint64(fromSeq)})
@@ -2764,6 +2774,7 @@ func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32,
 		cellWidth, cellHeight := cellSize(rows, cols, xpixel, ypixel)
 		s.mu.Lock()
 		s.gfxCellHeight = cellHeight
+		s.modelRows, s.modelCols = uint16(rows), uint16(cols)
 		s.mu.Unlock()
 		if err := term.Resize(uint16(rows), uint16(cols), cellWidth, cellHeight); err != nil {
 			return fmt.Errorf("resizing terminal model: %w", err)
@@ -2771,6 +2782,56 @@ func (s *Session) resize(ctx context.Context, rows, cols, xpixel, ypixel uint32,
 		s.reportSize(uint16(rows), uint16(cols))
 	}
 	return nil
+}
+
+// NoteCellSize records the pixel size of one cell, without reflowing anything.
+//
+// Needed because a client's cell metrics and the session's *size* are separate facts, and only the second
+// one produces a resize. sizeForAttach returns early whenever the session is not reflowing, which is the
+// normal case for a resuming client and for any client that does not own sizing, so a session could serve
+// clients for its whole life without the model ever being told a cell size.
+//
+// What that costs is images, and only some of them, which is what made it hard to see. A placement whose
+// top has scrolled above the viewport is restored by cropping the source in *pixels*, so it needs a cell
+// height and is dropped without one. An unscrolled placement needs no conversion and is emitted anyway. So
+// a small image displayed correctly on every client while a large one, which scrolls because it nearly
+// fills the window, silently vanished. Reported as images missing on a second client after a server
+// restart, where the surviving client resumes and a resume deliberately does not resize.
+//
+// Same rows and cols as the model already holds, so this changes no layout and reflows no text: the only
+// new information is the pixel scale libghostty needs to answer where a placement is.
+func (s *Session) NoteCellSize(rows, cols, xpixel, ypixel uint32) {
+	if rows == 0 || cols == 0 || xpixel == 0 || ypixel == 0 {
+		return
+	}
+	cellWidth, cellHeight := cellSize(rows, cols, xpixel, ypixel)
+	if cellHeight == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	term := s.term
+	unchanged := s.gfxCellHeight == cellHeight
+	s.gfxCellHeight = cellHeight
+	// The model's own layout, not the caller's. A client reporting a size the session is not at must not
+	// reflow it here: that is the resize path's decision, and making it a side effect of noting a cell
+	// size would reintroduce the reflow-on-upgrade bug.
+	modelRows, modelCols := s.modelRows, s.modelCols
+	s.mu.Unlock()
+	if term == nil || unchanged || modelRows == 0 || modelCols == 0 {
+		return
+	}
+
+	// Under termMu for the same reason every other model call is: the pump writes to it concurrently.
+	s.termMu.Lock()
+	err := term.Resize(modelRows, modelCols, cellWidth, cellHeight)
+	s.termMu.Unlock()
+	if err != nil {
+		// Costs the images on a restore and nothing else, so it is logged rather than failed: the client
+		// still gets a correct screen.
+		s.log.Warn("telling the model its cell size failed, restored images may be missing",
+			"session", s.label, "error", err)
+	}
 }
 
 // reportSize tells a program that asked for in-band size reports that the size changed.

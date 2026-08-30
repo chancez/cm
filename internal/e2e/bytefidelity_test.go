@@ -180,7 +180,10 @@ func attachOnPtyWithEnv(t *testing.T, e *env, extraEnv []string, args ...string)
 	if err != nil {
 		t.Fatalf("pty.Start() error = %v", err)
 	}
-	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
+	// Pixel dimensions as well as cells, because a real terminal reports both and cm needs them: the cell
+	// size is what lets the model say where an image is, so a pty without them cannot exercise the image
+	// restore at all. 80x24 cells at 10x20 pixels.
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80, X: 800, Y: 480}); err != nil {
 		t.Fatalf("Setsize() error = %v", err)
 	}
 

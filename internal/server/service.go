@@ -587,6 +587,15 @@ func (s *Service) sizeForAttach(
 		tok, uint16(open.Rows), uint16(open.Cols),
 		uint16(open.XPixel), uint16(open.YPixel), open.ReadOnly,
 	)
+	// Recorded whether or not the session reflows, because a cell size is not a size. Most attaches do not
+	// resize -- a resume never does, and neither does a client that does not own sizing -- and the model
+	// needs the pixel scale regardless to say where an image is. See Session.NoteCellSize: without it a
+	// scrolled image is dropped from every restore while an unscrolled one still appears, so large images
+	// vanished and small ones did not.
+	//
+	// The attaching client's own metrics, since it is the one about to be sent a screen, and reported before
+	// the snapshot is taken for the same reason sizing is.
+	sess.NoteCellSize(open.Rows, open.Cols, open.XPixel, open.YPixel)
 	if !resize {
 		return nil
 	}
