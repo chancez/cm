@@ -1411,6 +1411,13 @@ blob 4.3 MB and wedged the session. And a placement whose top has scrolled above
 rather than clamped to row zero, since restoring it correctly needs a source rectangle; libghostty's API
 documents that clipping as the caller's job.
 
+A placement's position is the one part not yet restored. libghostty derives it from the cell pixel
+dimensions given to `ghostty_terminal_resize`, and cm passes zeros, so `viewport_pos` reports every
+placement as off-screen and a restore emits none. The values are already on the wire, `x_pixel` and
+`y_pixel` in `Open` and `ResizeRequest`: `Session.resize` forwards them to the shim and then calls
+`term.Resize(rows, cols)`, which takes no cell metrics, so they are dropped at that call. Cell width and
+height are `xpixel/cols` and `ypixel/rows`.
+
 The sizing consequence is in `DefaultRecentBytes`. cm inlines a transfer that named a file, so a command of
 a few dozen bytes becomes a payload the size of the image: `kitten icat` on a 565398 byte screenshot sends
 1207200 bytes of RGB, which cm emits as 1609600 base64 characters in one append. `seqlog` truncates any

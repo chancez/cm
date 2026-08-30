@@ -66,13 +66,15 @@ func TestGraphicsStoresAPNG(t *testing.T) {
 // rather than leaving it to be rediscovered.
 //
 // libghostty derives how many rows an image covers from the cell pixel dimensions passed to
-// ghostty_terminal_resize, and cm passes 0, 0 because only a client knows them: they come from the pty's
-// ws_xpixel and ws_ypixel, which cm's size protocol does not carry. So viewport_pos reports the
-// placement as off-screen and a restore skips it. The image itself is retained and re-transmitted, so
-// what is missing is only where to draw it.
+// ghostty_terminal_resize, and cm passes 0, 0. So viewport_pos reports the placement as off-screen and a
+// restore skips it. The image itself is retained and re-transmitted, so what is missing is only where to
+// draw it.
 //
-// Fixing it means carrying pixel dimensions from client to server, which is a wire change. When that
-// lands, this test should be replaced by one asserting a real position.
+// The values are not missing, only dropped. A client's pixel size is already on the wire, x_pixel and
+// y_pixel in Open and in ResizeRequest, and Session.resize forwards them to the shim and then calls
+// term.Resize(rows, cols), which takes no cell metrics. Cell width and height are xpixel/cols and
+// ypixel/rows. So closing this is a Resize signature change plus that one call site, not a protocol
+// change. When it lands, replace this test with one asserting a real position.
 func TestPlacementHasNoPositionWithoutCellMetrics(t *testing.T) {
 	term, err := New(24, 80, Callbacks{})
 	if err != nil {
