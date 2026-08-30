@@ -66,11 +66,16 @@ func TestStoreRetransmissionsAreAlwaysQuiet(t *testing.T) {
 
 // A chunked transmission is the normal case, not an edge one: the captured icat run sent one image as
 // m=1 chunks. The pieces have to reassemble into one image whose payload is the concatenation.
+//
+// The continuation chunks here carry no i=, which is what a real client sends and what this test used to
+// get wrong. kitty rebuilds every chunk after the first from a= and q= alone
+// (tools/tui/graphics/command.go), so repeating the id, as this test did, described a stream no client
+// produces: keying each chunk by its own identity dropped all of them and the test still passed.
 func TestStoreReassemblesChunks(t *testing.T) {
 	s := NewStore(0)
 	s.Add(mustParse(t, "\x1b_Ga=T,f=100,s=4,v=3,i=1,m=1;AAAA\x1b\\"))
-	s.Add(mustParse(t, "\x1b_Ga=T,i=1,m=1;BBBB\x1b\\"))
-	s.Add(mustParse(t, "\x1b_Ga=T,i=1,m=0;CCCC\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,m=1;BBBB\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,m=0;CCCC\x1b\\"))
 
 	if s.Len() != 1 {
 		t.Fatalf("Len() = %d, want 1: the chunks describe one image", s.Len())
@@ -132,16 +137,46 @@ func TestStoreKeepsIDAndNumberApart(t *testing.T) {
 	}
 }
 
-// A command cm cannot name is one it could never re-emit, so it is not worth the bytes.
-func TestStoreIgnoresUnidentifiableAndNonTransmissions(t *testing.T) {
+// Only a transmission carries image data, so nothing else is worth the bytes.
+func TestStoreIgnoresNonTransmissions(t *testing.T) {
 	s := NewStore(0)
-	s.Add(mustParse(t, "\x1b_Ga=T;AAAA\x1b\\"))     // no id and no number
 	s.Add(mustParse(t, "\x1b_Ga=q,i=1;AAAA\x1b\\")) // a query, not a transmission
 	s.Add(mustParse(t, "\x1b_Ga=p,i=1\x1b\\"))      // a placement of something already stored
 	s.Add(mustParse(t, "\x1b_Ga=d,d=i,i=1\x1b\\"))  // a delete
 
 	if s.Len() != 0 {
-		t.Errorf("Len() = %d, want 0: none of those commands transmits a nameable image", s.Len())
+		t.Errorf("Len() = %d, want 0: none of those commands transmits an image", s.Len())
+	}
+}
+
+// A transmission that names no image at all is not retained, and the whole of that decision is measured.
+//
+// icat's default transfer names none: the captured commands are `a=T,q=2,f=24,o=z,m=1,s=800,v=503`, then
+// `a=T,q=2,m=1`, then `a=T,q=2`, so the terminal assigns the id. cm cannot re-emit one usefully, since a
+// re-emission gets a fresh id from whatever terminal receives it and no later `a=p` resolves against it.
+// Retaining them made the restore blob 4.3 MB for one screenshot, measured in a real kitty: the image is
+// 1207200 bytes of RGB and cm inlines it as 1609600 base64 characters, so every attach re-sent megabytes
+// that could not draw anything, because a restored screen carries no placement. That wedged the session.
+//
+// The chunks must not leak into a neighbouring image either, which is what makes this more than an early
+// return: the named image before them stays exactly as it was.
+func TestStoreIgnoresAnonymousTransmissions(t *testing.T) {
+	s := NewStore(0)
+	s.Add(mustParse(t, "\x1b_Ga=T,f=100,i=1;AAAA\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,q=2,f=24,o=z,m=1,s=800,v=503;BBBB\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,q=2,m=1;CCCC\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,q=2;DDDD\x1b\\"))
+
+	if s.Len() != 1 {
+		t.Fatalf("Len() = %d, want 1: only the named image is retained", s.Len())
+	}
+	got := s.Retransmissions()
+	if len(got) != 1 {
+		t.Fatalf("Retransmissions() returned %d, want 1", len(got))
+	}
+	if payload := string(mustParse(t, string(got[0].Bytes)).Payload); payload != "AAAA" {
+		t.Errorf("payload = %q, want %q: the anonymous chunks must not append to a named image",
+			payload, "AAAA")
 	}
 }
 

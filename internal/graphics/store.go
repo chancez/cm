@@ -34,6 +34,15 @@ type Store struct {
 	bytes    int
 	images   map[key]*entry
 	sequence uint64
+	// loading is the key of the transmission whose chunks are still arriving, and whether there is one.
+	//
+	// Required because a continuation chunk does not say which image it belongs to. kitty's own client
+	// rebuilds each chunk after the first from the a= and q= keys alone
+	// (tools/tui/graphics/command.go), so an i= appears once, on the first chunk, and everything after it
+	// is anonymous payload. Keying each chunk by its own identity therefore dropped every continuation and
+	// left the image permanently incomplete, so it was never re-sent to an attaching client.
+	loading    key
+	hasLoading bool
 }
 
 // key identifies an image by the addressing scheme the program used.
@@ -77,25 +86,31 @@ func NewStore(max int) *Store {
 // control section is taken from the first chunk, since later ones legitimately carry only `m=` and
 // `q=`.
 //
-// Ignores a command with no identity, since an image cm cannot name is one it could never re-emit.
+// A transmission naming no image is still ignored, and that is a decision rather than an oversight. icat's
+// default transfer names none at all: the captured commands are `a=T,q=2,f=24,o=z,m=1,s=800,v=503`, then
+// `a=T,q=2,m=1`, then `a=T,q=2`, so the terminal assigns the id. cm cannot re-emit one usefully, because a
+// re-emission would be given a fresh id by whatever terminal received it and no later `a=p` from the
+// program would resolve against it. Retaining them was measured to be actively harmful: the icat image
+// above is 1207200 bytes of RGB, which cm inlines as 1609600 base64 characters, and re-sending it on every
+// attach made the restore blob 4.3 MB. That wedged the session, since a client re-attaching for any reason
+// received megabytes it could not draw, and it drew nothing because a restored screen carries no placement.
 func (s *Store) Add(cmd Command) {
 	if !cmd.IsTransmission() {
-		return
-	}
-	id, byNumber, ok := cmd.Key()
-	if !ok {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	k := key{id: id, byNumber: byNumber}
+	k, continuing, ok := s.keyForLocked(cmd)
+	if !ok {
+		return
+	}
 	e := s.images[k]
 	if e == nil {
 		e = &entry{control: cmd.Control}
 		s.images[k] = e
-	} else if e.complete {
+	} else if e.complete && !continuing {
 		// A new transmission for an id that already had one replaces it. The protocol allows reusing
 		// an id, and keeping the old bytes would have a restore draw the previous image.
 		s.bytes -= len(e.payload)
@@ -108,8 +123,34 @@ func (s *Store) Add(cmd Command) {
 	e.used = s.sequence
 	// m=1 says more chunks follow, so anything else completes the image, including its absence.
 	e.complete = !cmd.More
+	// Remembered so the chunks behind it, which carry no identity of their own, reach this same entry.
+	s.loading, s.hasLoading = k, cmd.More
 
 	s.evictLocked()
+}
+
+// keyForLocked decides which entry a transmission belongs to, and whether it continues one.
+//
+// Three cases, in the order they have to be tried. A command naming an image is that image, which covers
+// the first chunk of a transmission and any unchunked one. A command naming none while a transmission is
+// still arriving is the next chunk of it, and that is the case keying by identity alone got wrong: kitty's
+// client repeats only a= and q= after the first chunk, so every continuation looked unidentifiable and was
+// dropped. A command naming none with nothing arriving is one cm cannot recall, and reports ok=false.
+//
+// A new transmission and a continuation chunk are indistinguishable when neither names an image, so this
+// treats one as the other. That is what a terminal does too: kitty tracks the image it is loading and
+// appends to it, and the protocol does not interleave transmissions.
+//
+// Callers must hold mu.
+func (s *Store) keyForLocked(cmd Command) (k key, continuing, ok bool) {
+	if id, byNumber, named := cmd.Key(); named {
+		k = key{id: id, byNumber: byNumber}
+		return k, s.hasLoading && s.loading == k, true
+	}
+	if s.hasLoading {
+		return s.loading, true, true
+	}
+	return key{}, false, false
 }
 
 // Touch marks an image as recently used without changing it.
@@ -135,6 +176,12 @@ func (s *Store) Delete(id uint32, byNumber bool) {
 		s.bytes -= len(e.payload)
 		delete(s.images, k)
 	}
+	// A transmission cannot continue into an entry that is gone: its chunks would rebuild the image under
+	// the key the program just deleted, with a control section taken from a continuation chunk and so
+	// carrying no geometry at all.
+	if s.hasLoading && s.loading == k {
+		s.hasLoading = false
+	}
 }
 
 // Reset forgets everything, for a program that clears all images.
@@ -143,6 +190,7 @@ func (s *Store) Reset() {
 	defer s.mu.Unlock()
 	s.images = make(map[key]*entry)
 	s.bytes = 0
+	s.hasLoading = false
 }
 
 // Retransmission is a command that re-sends one stored image.
