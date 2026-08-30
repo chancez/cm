@@ -933,6 +933,28 @@ query on the session, which is much worse than the single unanswered query it re
 client's outstanding questions immediately rather than waiting, since nothing can answer them once it has
 gone.
 
+**A question with nobody to ask is parked, not dropped.** A session created by an attach starts its program
+while that attach is still completing, so a program that queries immediately arrives before any client is
+eligible to answer. That question used to be discarded, and discarding loses it entirely: the bytes predate the
+client's attachment and a restore blob carries a screen rather than a query, so the client never sees them
+either and cannot answer of its own accord. A TUI asking for the background colour on startup lands in exactly
+that window, and it is how the gap was found, by a test that had to sleep before querying to stop losing the
+query at all.
+
+It is held with no client against it, which the queue already understands: `takeReadyLocked` stops at any
+proxied entry, so later replies wait behind it and a program's answers stay in the order it asked.
+`askParkedQueries` assigns it to the first client that becomes eligible, restarting the budget, since the client
+is only then in a position to answer.
+
+This reverses an earlier decision, and the reasoning is worth keeping because half of it was right. Recording a
+request nobody can answer does stall the reply queue, which is why the count is bounded by `maxParkedQueries`
+and each one expires on the ordinary sweep. What the earlier reasoning missed is that the alternative was not
+"no stall and no answer" but "no stall and a lost answer in the case the proxy exists for". The trade is now
+500ms of queue delay when nobody ever attaches, against an answer that arrives when one does.
+
+A reservation is still never *elected* as the answerer. That is a different question and the old distinction
+holds: a reservation has no stream to carry a question, so asking it leaves the question answered by nobody.
+
 **The 500ms is measured from when the client was last asked, which matters across a restart.** The record of an
 outstanding question lives in the server's memory, and adoption resubscribes from where the old server stopped
 rather than re-reading the bytes that carried the query, so a restart forgot the question and did not re-ask

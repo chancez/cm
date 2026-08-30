@@ -45,6 +45,19 @@ const (
 	// window, by accident.
 	AfterAttachOpened Point = "after-attach-opened"
 
+	// BeforeClientCanAnswer is in the Attach handler, after the client has a token and before attach makes it
+	// eligible to answer a question.
+	//
+	// A session created by an attach starts its program while that attach is still completing, so a program
+	// that queries immediately can find no client to ask: proxyQuery returns silently and the question is
+	// gone. The window is milliseconds wide and a TUI asking for the background colour on startup lands in it,
+	// which is how it was found, by a test that had to sleep before querying to stop losing the query
+	// altogether.
+	//
+	// A pause here holds the client outside the answerer set for as long as a test needs, so the race becomes
+	// an ordering the test controls rather than one it has to win.
+	BeforeClientCanAnswer Point = "before-client-can-answer"
+
 	// BeforeShimReady is in the shim's startup, before it binds its socket.
 	//
 	// The server waits ten seconds for a shim to become ready and then gives up. That timeout was measured
@@ -60,9 +73,10 @@ const (
 // spec naming an unknown point is reported, because the alternative is a test that configures a fault
 // against a typo and passes while injecting nothing.
 var points = map[Point]bool{
-	AfterLogAppend:    true,
-	BeforeModelFeed:   true,
-	BeforeShimWrite:   true,
-	AfterAttachOpened: true,
-	BeforeShimReady:   true,
+	AfterLogAppend:        true,
+	BeforeModelFeed:       true,
+	BeforeShimWrite:       true,
+	AfterAttachOpened:     true,
+	BeforeShimReady:       true,
+	BeforeClientCanAnswer: true,
 }

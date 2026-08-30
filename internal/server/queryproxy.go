@@ -95,6 +95,22 @@ func (s *Session) proxyQuery(seq []byte) {
 	s.mu.Lock()
 	tok := s.queryTargetLocked()
 	if tok == nil {
+		// Parked rather than dropped, for the window at session creation.
+		//
+		// A session created by an attach starts its program while that attach is still completing, so a
+		// program that queries immediately arrives before any client is eligible to answer. Dropping it there
+		// loses the question entirely: the bytes predate the client's attachment, and a restore blob carries a
+		// screen rather than a query, so the client never sees them either and cannot answer of its own
+		// accord. A TUI asking for the background colour on startup lands in exactly that window.
+		//
+		// Held with no client against it, which the queue already understands: takeReadyLocked stops at any
+		// proxied entry, so later replies still wait behind this one and a program's answers stay in the order
+		// it asked. askParkedQueries assigns it to the first client that becomes eligible.
+		//
+		// Bounded, and it expires on the ordinary sweep if no client arrives, so a session nobody ever
+		// attaches to does not accumulate questions. That is the case dropping was right for, and it is still
+		// the outcome there.
+		s.parkQueryLocked(seq)
 		s.mu.Unlock()
 		return
 	}
@@ -123,6 +139,76 @@ func (s *Session) proxyQuery(seq []byte) {
 		s.log.Debug("dropping a proxied query, the client's queue is full",
 			"session", s.label, "bytes", len(seq))
 	}
+}
+
+// parkQueryLocked records a question with no client to ask yet. Callers must hold mu.
+func (s *Session) parkQueryLocked(seq []byte) {
+	parked := 0
+	for _, r := range s.requests {
+		if r.proxied && r.tok == nil {
+			parked++
+		}
+	}
+	if parked >= maxParkedQueries {
+		s.log.Debug("dropping a query with nobody to ask, too many already waiting",
+			"session", s.label, "parked", parked)
+		return
+	}
+	s.requests = append(s.requests, &pendingRequest{
+		proxied: true,
+		seq:     append([]byte(nil), seq...),
+		asked:   s.now(),
+	})
+}
+
+// maxParkedQueries bounds how many unaskable questions wait for a client.
+//
+// A session nobody attaches to would otherwise hold one per query until each expired, and every one of them
+// holds the reply queue behind it. Four is more than a program asks during startup, and past it the question is
+// dropped, which is what happened to all of them before parking existed.
+const maxParkedQueries = 4
+
+// askParkedQueries hands questions that had nobody to ask to a client that can now answer.
+//
+// Called after attach, once the client has a channel to be asked on. The budget is restarted here rather than
+// running from when the program asked: the client is only now in a position to answer, and expiring a question
+// it has not been shown yet would abandon it for a delay it had no part in.
+func (s *Session) askParkedQueries(tok *attachToken) {
+	if tok == nil {
+		return
+	}
+	s.mu.Lock()
+	ch := s.queries[tok]
+	if ch == nil {
+		s.mu.Unlock()
+		return
+	}
+	var send [][]byte
+	for _, r := range s.requests {
+		if !r.proxied || r.tok != nil {
+			continue
+		}
+		r.tok = tok
+		r.asked = s.now()
+		send = append(send, append([]byte(nil), r.seq...))
+	}
+	s.mu.Unlock()
+
+	if len(send) == 0 {
+		return
+	}
+	// Outside mu, and dropped rather than waited on when the buffer is full, for the same reasons proxyQuery
+	// sends that way.
+	for _, q := range send {
+		select {
+		case ch <- q:
+		default:
+			s.log.Debug("dropping a parked query, the client's queue is full",
+				"session", s.label, "bytes", len(q))
+		}
+	}
+	s.log.Debug("asked a newly attached client the questions that had nobody to answer them",
+		"session", s.label, "count", len(send))
 }
 
 // queryTargetLocked picks the client to ask, or nil when none can answer.

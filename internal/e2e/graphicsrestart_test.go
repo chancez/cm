@@ -31,11 +31,14 @@ func TestImagesSurviveAServerRestart(t *testing.T) {
 
 	// A one-pixel inline transmission that is also placed, which is the shape `kitten icat` produces: a=T
 	// transmits and displays in one command. The payload is recognisable so it can be looked for in a stream.
-	const payload = "QUJDQUJD"
+	// Exactly the byte count the geometry implies: s=2,v=2,f=24 is 2*2*3 = 12 bytes, which base64 to 16
+	// characters. An oversized payload is rejected by the emulator with EINVAL, and the first version of this
+	// test used one: it passed while the image was invalid, then failed once the reply arrived earlier.
+	const payload = "QUJDQUJDQUJDQUJD"
 	const marker = "IMAGE-SENT"
 	script := strings.Join([]string{
 		`printf '\033[2J\033[H'`,
-		`printf '\033_Ga=T,f=24,s=1,v=1,i=7;` + payload + `\033\\'`,
+		`printf '\033_Ga=T,f=24,s=2,v=2,i=7;` + payload + `\033\\'`,
 		`printf '` + marker + `\r\n'`,
 		"sleep 60",
 	}, "; ")

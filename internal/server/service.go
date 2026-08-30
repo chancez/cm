@@ -224,6 +224,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	if open.ResumeFromSeq != nil {
 		resumeFrom = new(seq.Log(*open.ResumeFromSeq))
 	}
+	// The window where the session is running but this client cannot yet be asked anything. A program that
+	// queries here finds no answerer, and a pause makes that ordering testable rather than raced.
+	fault.At(fault.BeforeClientCanAnswer)
+
 	att, err := sess.attach(resumeFrom, tok)
 	if err != nil {
 		sess.releaseClient(tok)
@@ -310,6 +314,9 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	//
 	// Before any input is framed, so a reply arriving immediately after the reconnect has something to match.
 	sess.reofferQueries(att.token, open.OutstandingQueries)
+	// Questions the program asked before any client could answer them, which is the window at session
+	// creation: the shim starts the program as soon as the session exists, and this attach is what created it.
+	sess.askParkedQueries(att.token)
 
 	startSeq := reader.Position()
 

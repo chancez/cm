@@ -278,16 +278,45 @@ func TestReservationIsNeverAsked(t *testing.T) {
 	sess.registerClientSize(tok, 40, 120, 0, 0, false)
 	defer sess.releaseClient(tok)
 
-	// No client can answer, so nothing is asked and nothing is recorded as outstanding. Recording a
-	// request nobody can answer would stall the reply queue for the timeout and achieve nothing.
+	// No client can answer, so the question is not *asked*: a reservation has no stream to carry one, and
+	// electing it as the answerer leaves the question answered by nobody.
+	//
+	// It is now parked rather than dropped, which is a change from what this test used to assert. The old
+	// reasoning was that recording a request nobody can answer stalls the reply queue for the timeout and
+	// achieves nothing. The first half is true and is now bounded; the second half was wrong, because a
+	// session created by an attach starts its program while that attach is still completing, so a program
+	// that queries at startup asked into exactly this state and its question was thrown away. The bytes
+	// predate the client's attachment and a restore blob carries a screen rather than a query, so the client
+	// never saw them either and could not answer of its own accord.
+	//
+	// So the trade moved: 500ms of queue delay in the case where nobody ever attaches, against losing the
+	// answer entirely in the case where a client is milliseconds away. The delay is bounded by the ordinary
+	// sweep and covered by TestAParkedQueryExpiresIfNobodyAttaches; the count is bounded by
+	// maxParkedQueries.
 	sess.noteQueries([]byte("\x1b]11;?\x07"))
 
 	sess.mu.Lock()
-	n := len(sess.requests)
+	asked := 0
+	parked := 0
+	for _, r := range sess.requests {
+		if !r.proxied {
+			continue
+		}
+		if r.tok == nil {
+			parked++
+			continue
+		}
+		asked++
+	}
 	sess.mu.Unlock()
-	if n != 0 {
-		t.Errorf("%d requests outstanding with only a reservation present, want 0.\n"+
-			"A reservation has no stream to carry a question, so registering one holds every later "+
-			"reply behind a question that can never be answered.", n)
+
+	if asked != 0 {
+		t.Errorf("%d questions were asked with only a reservation present, want 0.\n"+
+			"A reservation has no stream to carry a question, so electing it as the answerer leaves the "+
+			"question answered by nobody.", asked)
+	}
+	if parked != 1 {
+		t.Errorf("%d questions are parked, want 1: a question asked before any client can answer has to "+
+			"wait for one, or a program that queries at startup never hears back", parked)
 	}
 }
