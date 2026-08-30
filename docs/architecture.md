@@ -1412,6 +1412,21 @@ well formed either way and the only symptom is a missing picture. Putting the tr
 right, since an id must exist before a placement names it, and that ordering shipped and reached a user as
 images missing on every client but the first.
 
+The interception withholds a command until it is whole, and "withheld" has to be distinguishable from
+"nothing to intercept". `graphics.Scanner.Scan` reports the second as nil, meaning forward the chunk
+unchanged, and the first as an empty result. Conflating them sent the bytes of a partial command out twice,
+once raw and once inside the command that completed, and the transmission that reached the terminal was then
+longer than its geometry allowed and drew nothing. It hit the *first* image of a session only, because the
+result slice is nil just once, which is why images sometimes appeared and sometimes did not in the same
+session.
+
+The scanner also must not compact its buffer over the segments it is returning. A graphics payload is not
+copied out, deliberately, since copying every image is what the accumulating buffer avoids: measured at
+8.6 MB copied to reassemble a 132 KB image. So the leftovers go to a second buffer and the two swap, which
+keeps the promise that a result stays valid until the next call. Compacting in place overwrote an `i=1` with
+the `m=1` of the next command's introducer, character for character, so the model could not place an image
+it had received in full.
+
 A re-emission must also not inherit the `m=` of the chunk its control keys came from. A chunked
 transmission carries its geometry on the first chunk, which says `m=1`, so re-sending that section verbatim
 tells the receiving terminal to expect chunks that never arrive: the image never completes and the `a=p`

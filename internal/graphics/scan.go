@@ -50,6 +50,19 @@ type Scanner struct {
 	// hypothetical -- it turned "text" into "\x1b_Gt" the first time this was written without it, since
 	// the held introducer was copied over the emitted text.
 	out []byte
+	// spare receives the leftovers instead of the front of held, and the two swap.
+	//
+	// A graphics command's payload and raw bytes are *not* copied out the way ordinary output is: they
+	// point into held, because copying every image payload is what this buffer exists to avoid. Compacting
+	// into the front of held therefore overwrote the command the same call was about to return, and it
+	// reached a user as images that never appeared on a second client. Measured: an `i=1` read back as
+	// `m=1`, the held introducer of the next command written character for character over the id of the
+	// one being returned, so the model could not place an image it had otherwise received in full.
+	//
+	// Swapping keeps the promise the doc comment on Scan makes and no more, which is that a result stays
+	// valid until the next call: after the swap the returned segments alias what is now spare, and nothing
+	// touches it until the next Scan compacts into it.
+	spare []byte
 	// searched is how far into the current command's body the terminator scan has already looked.
 	//
 	// Without this the scan is quadratic in a second place, and profiling put 92.77% of the time in
@@ -88,7 +101,20 @@ func (s *Scanner) Pending() int { return len(s.held) }
 // the introducer.
 //
 // Segment data may alias the scanner's buffer, so a caller must use the result before calling Scan again.
+//
+// A nil result means "forward the input unchanged" and is returned only when nothing was held from it. That
+// distinction is the whole contract with the caller, and an empty *non-nil* result is not the same answer:
+// it means the bytes were consumed and there is nothing to forward yet. Returning nil while holding part of
+// a command made the caller forward those bytes and the scanner emit them again once the command completed,
+// so the first image of every session went out with its first chunk duplicated. The model then had a
+// transmission longer than its geometry allowed and drew nothing, which reached a user as an image missing
+// on every client but the one that watched it arrive.
 func (s *Scanner) Scan(p []byte) []Segment {
+	// Non-nil from here on, so an empty result can be told apart from nil. s.segs[:0] of a nil slice is
+	// still nil, which is how the two answers became one.
+	if s.segs == nil {
+		s.segs = make([]Segment, 0, 8)
+	}
 	// Fast path. The trailing-prefix check is the part that is easy to omit and wrong to omit, because a
 	// chunk ending in ESC or ESC _ holds no complete introducer, and passing it through makes the command
 	// unrecognizable once the rest arrives.
@@ -157,8 +183,9 @@ func (s *Scanner) Scan(p []byte) []Segment {
 		s.searched = 0
 	}
 
-	// Whatever was not consumed is held for the next chunk, moved to the front of the same buffer. copy
-	// handles the overlap, since the destination never starts after the source.
+	// Whatever was not consumed is held for the next chunk, in the spare buffer rather than over the front
+	// of this one. See spare: the segments about to be returned point into buf, so compacting into it
+	// destroys them before the caller ever sees them.
 	remaining := buf[read:]
 	if len(remaining) > maxHeld {
 		// Dropped rather than truncated: a truncated fragment would parse as a malformed command later,
@@ -167,9 +194,13 @@ func (s *Scanner) Scan(p []byte) []Segment {
 		// that never terminates its sequence.
 		remaining = nil
 	}
-	n := copy(s.held, remaining)
-	s.held = s.held[:n]
-	if n == 0 {
+	if cap(s.spare) < len(remaining) {
+		s.spare = make([]byte, len(remaining), max(len(remaining), 2*cap(s.spare)))
+	}
+	s.spare = s.spare[:len(remaining)]
+	copy(s.spare, remaining)
+	s.held, s.spare = s.spare, s.held
+	if len(s.held) == 0 {
 		s.searched = 0
 	}
 

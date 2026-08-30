@@ -31,16 +31,6 @@ func TestALargeImageReachesASecondClient(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a server, a shell and two ptys, and moves megabytes")
 	}
-	// Skipped because it currently fails, and it fails on a bug that is not fixed rather than on anything
-	// this test gets wrong. Kept because it is the reproduction: measured on this branch as a restore of
-	// 1920311 bytes carrying the image payload with no a=p anywhere in it, so the receiving terminal has
-	// the picture and never draws it.
-	//
-	// The fault is upstream of the restore: the *model* holds no placement for an image that arrived as
-	// hundreds of chunks through the live pump, while the identical chunk sequence fed directly in a unit
-	// test does produce one (TestTwoClientsBothGetTheLiveImage). So what cm forwards to the model diverges
-	// from what it stores somewhere in that path. Delete this skip when that is found.
-	t.Skip("known failure: the model holds no placement for a chunked image fed through the pump")
 
 	e := newEnvWith(t, cmHooksBinary(t), "")
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/chancez/cm/internal/osc"
@@ -153,9 +154,25 @@ func TestALargePartialSequenceIsNotHeld(t *testing.T) {
 		t.Errorf("held %d bytes of a %d-byte partial APC, want 0: holding a graphics payload delays every "+
 			"image, and the graphics scanner already reassembles one across chunks", held, len(chunk))
 	}
-	if got := sess.recent.Next(); got != seq.Log(len(chunk)) {
-		t.Errorf("the log advanced to %d after a %d-byte chunk, want all of it: bytes withheld past the "+
-			"bound never reach a client", got, len(chunk))
+	// The graphics scanner holds the payload instead, which is the division of labour this bound exists to
+	// create, so the log does not advance yet. Nothing is lost by that: the bytes arrive when the command
+	// does, and this used to read as "the log advanced by the whole chunk" only because Scan reported a held
+	// partial as "no graphics here" and the caller forwarded it -- then emitted it again on completion. See
+	// TestScanHoldingAPartialCommandReturnsEmptyNotNil.
+	if got := sess.recent.Next(); got != 0 {
+		t.Errorf("the log advanced to %d while the graphics scanner was still reassembling, want 0", got)
+	}
+	if sess.gfxScan.Pending() != len(chunk) {
+		t.Errorf("the graphics scanner holds %d of %d bytes, want all of them",
+			sess.gfxScan.Pending(), len(chunk))
+	}
+
+	// And once the command completes the payload reaches clients, so the holdback delays an image rather
+	// than losing one.
+	sess.processChunk([]byte("\x1b\\"), seq.Shim(len(chunk)))
+	got, _ := sess.SnapshotFrom(0)
+	if !strings.Contains(string(got), strings.Repeat("A", maxHeldTail+64)) {
+		t.Errorf("the payload never reached the log after the command completed; log = %d bytes", len(got))
 	}
 }
 
