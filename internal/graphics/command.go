@@ -361,7 +361,11 @@ const MaxCommandPayload = 128 << 10
 
 // EncodeChunks builds one or more commands carrying a payload, splitting it the way kitty's clients do.
 //
-// A single command when the payload fits, which is the common case and is byte-identical to Encode.
+// A single command when the payload fits, which is the common case and is byte-identical to Encode. The
+// control section is passed through untouched there, which matters because this is also on the live
+// forward path: rewriting a program's m= would turn its first chunk into a complete transmission and
+// truncate the image at whatever had arrived. See DropChunking for the caller that must strip it instead.
+//
 // Beyond that the payload is split at MaxCommandPayload, the first command carrying the full control
 // section and each later one carrying only the keys kitty's own client repeats: a=, q=, and the m= that
 // says whether more follows. Every chunk boundary is a multiple of four, since MaxCommandPayload is, so
@@ -428,6 +432,31 @@ func withKey(control, key, value string) string {
 	}
 	if !replaced {
 		out = append(out, key+"="+value)
+	}
+	return strings.Join(out, ",")
+}
+
+// DropChunking removes m= from a control section, leaving everything that describes the image.
+//
+// For anything that retains a transmission to re-emit later. A chunked transmission's control keys arrive
+// on its *first* chunk, so that is the section worth keeping, and it says m=1: how the program split the
+// bytes on the way in, which has nothing to do with how they go out. Re-emitting it verbatim tells the
+// receiving terminal that more chunks are coming when none are, so the image never completes and the a=p
+// naming it draws nothing. That reached a user as "no images on the second client": every byte arrived and
+// the space was blank. Absent m= means the same as m=0, so this strips rather than rewrites.
+func DropChunking(control string) string {
+	return dropKey(control, "m")
+}
+
+// dropKey removes a key from a control section, preserving the order of the rest.
+func dropKey(control, key string) string {
+	parts := strings.Split(control, ",")
+	out := make([]string, 0, len(parts))
+	for _, kv := range parts {
+		if k, _, found := strings.Cut(kv, "="); found && k == key {
+			continue
+		}
+		out = append(out, kv)
 	}
 	return strings.Join(out, ",")
 }

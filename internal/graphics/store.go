@@ -106,15 +106,19 @@ func (s *Store) Add(cmd Command) {
 	if !ok {
 		return
 	}
+	// Stored without m=, because the section kept here describes the *image* while m= describes how the
+	// program happened to split it. See DropChunking: keeping it re-emitted a first chunk's m=1 with no
+	// chunks behind it, so the image never completed at the far end.
+	control := DropChunking(cmd.Control)
 	e := s.images[k]
 	if e == nil {
-		e = &entry{control: cmd.Control}
+		e = &entry{control: control}
 		s.images[k] = e
 	} else if e.complete && !continuing {
 		// A new transmission for an id that already had one replaces it. The protocol allows reusing
 		// an id, and keeping the old bytes would have a restore draw the previous image.
 		s.bytes -= len(e.payload)
-		*e = entry{control: cmd.Control}
+		*e = entry{control: control}
 	}
 
 	e.payload = append(e.payload, cmd.Payload...)

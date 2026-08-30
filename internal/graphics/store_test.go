@@ -96,6 +96,39 @@ func TestStoreReassemblesChunks(t *testing.T) {
 	}
 }
 
+// A re-emitted image must not claim more chunks are coming.
+//
+// The control keys of a chunked transmission arrive on its first chunk, so that is the section the store
+// keeps, and it says m=1. Re-emitting it verbatim leaves the receiving terminal waiting for chunks that
+// never come: the image never completes, the a=p naming it draws nothing, and a client attaching to a
+// session with an image on screen gets every byte and shows a blank space. That is the reported "no images
+// on the second client".
+func TestStoreRetransmissionDoesNotClaimMoreChunks(t *testing.T) {
+	s := NewStore(0)
+	s.Add(mustParse(t, "\x1b_Ga=T,f=100,s=4,v=3,i=1,m=1;AAAA\x1b\\"))
+	s.Add(mustParse(t, "\x1b_Ga=T,m=0;BBBB\x1b\\"))
+
+	got := s.Retransmissions()
+	if len(got) != 1 {
+		t.Fatalf("Retransmissions() returned %d, want 1", len(got))
+	}
+	cmd := mustParse(t, string(got[0].Bytes))
+	if cmd.More {
+		t.Errorf("the retransmission says more chunks follow, so the image never completes: control = %q",
+			cmd.Control)
+	}
+	// Stated as absence rather than m=0, since the two mean the same thing and nothing should depend on
+	// which. The geometry has to survive either way, or the terminal cannot decode the payload.
+	if strings.Contains(cmd.Control, "m=") {
+		t.Errorf("control %q still carries an m= key", cmd.Control)
+	}
+	for _, want := range []string{"s=4", "v=3", "f=100", "i=1"} {
+		if !strings.Contains(cmd.Control, want) {
+			t.Errorf("control %q lost %q, which the image needs to decode", cmd.Control, want)
+		}
+	}
+}
+
 // An image still arriving must not be re-emitted. Half a picture is worse than none: a terminal would
 // draw something corrupt rather than nothing.
 func TestStoreWithholdsIncompleteImages(t *testing.T) {
