@@ -179,33 +179,30 @@ func decodePayload(payload []byte) ([]byte, error) {
 
 // allowTransferPath decides whether cm will read a path a program named.
 //
-// A program inside a session is already running as the user, so this is not a privilege boundary: it
-// cannot reach anything the program could not open itself. What it does prevent is cm being used as a
-// confused reader, turning a path into base64 on a terminal's screen for a file the program chose. So
-// the rule matches what a graphics transfer legitimately looks like: a temp file, or something under a
-// temp directory.
+// Only the path's shape is checked, and that is a reversal worth stating with its evidence. This used to
+// require a temp directory, on the reasoning that cm should not be a confused reader turning an arbitrary
+// path into base64 on someone's screen. The measurement that overturned it: `kitten icat
+// ~/screenshots/hsa_contribution.png` names the user's own file directly with t=f, because for a local
+// file icat has no reason to copy it first. cm refused it as "not under a temporary directory", dropped
+// the command, and no image appeared. The allow-list was therefore not protecting against a hostile case,
+// it was breaking the ordinary one, and it broke it for every file a person is likely to look at.
 //
-// Kitty applies the same shape of check before deleting, and asks its own permission hook before reading
-// (`is_ok_to_read_image_file`). cm has no such hook, so the allow-list is the whole of it.
+// The reasoning it rested on does not hold either, and the previous comment said so in its own first
+// sentence: a program inside a session already runs as the user, so it can open the file itself and send
+// the bytes inline. `icat --transfer-mode=stream` does exactly that. Refusing to *read* what a program
+// could hand over anyway buys nothing, and kitty itself reads whatever path its client names.
+//
+// What is still enforced is elsewhere and unchanged: a non-regular file is refused, since a fifo would
+// block the output pump forever, the read is bounded by MaxTransferBytes, and deletion stays limited to
+// t=t paths carrying kitty's own naming convention plus shared memory. That last one is the property that
+// actually matters, because it is the only one that could destroy something.
 func allowTransferPath(path string) error {
 	if !filepath.IsAbs(path) {
 		// A relative path would resolve against the server's working directory, which is not the
 		// program's, so it would name a different file than the program meant.
 		return fmt.Errorf("%w: %s is not an absolute path", ErrTransferRefused, path)
 	}
-	clean := filepath.Clean(path)
-	if isTempTransferPath(clean) {
-		return nil
-	}
-	for _, dir := range transferDirs() {
-		if dir == "" {
-			continue
-		}
-		if rel, err := filepath.Rel(dir, clean); err == nil && !strings.HasPrefix(rel, "..") {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: %s is not under a temporary directory", ErrTransferRefused, clean)
+	return nil
 }
 
 // isTempTransferPath reports whether a path is one a graphics client created for a transfer.

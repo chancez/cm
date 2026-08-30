@@ -145,21 +145,47 @@ func TestReadTransferLeavesDirectAlone(t *testing.T) {
 	}
 }
 
-// cm refuses paths that do not look like a graphics transfer, so it cannot be used as a confused reader
-// turning an arbitrary file into base64 on someone's screen.
-func TestReadTransferRefusesPathsOutsideTemp(t *testing.T) {
-	for _, tc := range []struct{ name, path string }{
-		{"absolute elsewhere", "/etc/passwd"},
-		{"home", filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")},
-		{"relative", "some/relative/path"},
-		{"traversal out of temp", filepath.Join(os.TempDir(), "..", "..", "etc", "passwd")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := ReadTransfer(transferCommand(t, MediumFile, tc.path, 0))
-			if !errors.Is(err, ErrTransferRefused) {
-				t.Errorf("ReadTransfer(%q) error = %v, want ErrTransferRefused", tc.path, err)
-			}
-		})
+// A relative path is refused, since it would resolve against the server's working directory rather than
+// the program's and so name a different file than the program meant.
+//
+// Everything absolute is now read, which is a reversal: this used to require a temp directory. `kitten
+// icat ~/screenshots/hsa_contribution.png` names the user's own file with t=f, because for a local file
+// icat has no reason to copy it first, and cm refused it as "not under a temporary directory" and dropped
+// the image. The restriction was breaking the ordinary case rather than preventing a hostile one, and a
+// program inside a session can hand cm the same bytes inline anyway. See allowTransferPath.
+func TestReadTransferRefusesRelativePaths(t *testing.T) {
+	_, err := ReadTransfer(transferCommand(t, MediumFile, "some/relative/path", 0))
+	if !errors.Is(err, ErrTransferRefused) {
+		t.Errorf("ReadTransfer(relative) error = %v, want ErrTransferRefused", err)
+	}
+}
+
+// A file the user named outside a temp directory is read, which is the reported case.
+func TestReadTransferReadsAFileTheUserNamed(t *testing.T) {
+	// Under the test's own directory, which is not a temp transfer path and not under os.TempDir on a
+	// machine where those differ. What matters is that it is somewhere a person keeps files.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "holiday.png")
+	want := []byte{9, 9, 9, 1}
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := ReadTransfer(mustParse(t, "\x1b_Ga=T,t=f,i=1;"+kittyEncode([]byte(path))+"\x1b\\"))
+	if err != nil {
+		t.Fatalf("ReadTransfer() error = %v, want the file read", err)
+	}
+	decoded, err := base64Decode(string(got.Payload))
+	if err != nil {
+		t.Fatalf("payload is not base64: %v", err)
+	}
+	if string(decoded) != string(want) {
+		t.Errorf("payload = %v, want the file's bytes %v", decoded, want)
+	}
+	// And it must still be there afterwards. This is the property the old allow-list was really
+	// protecting, and it is enforced where it belongs: only t=t with kitty's naming, or shm, is removed.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("a t=f file the user named was deleted (stat err = %v)", err)
 	}
 }
 
