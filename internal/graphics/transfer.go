@@ -40,7 +40,7 @@ func ReadTransfer(cmd Command) (Command, error) {
 	}
 
 	// The payload is the path, base64 encoded like any other payload.
-	decoded, err := base64.StdEncoding.DecodeString(string(cmd.Payload))
+	decoded, err := decodePayload(cmd.Payload)
 	if err != nil {
 		return cmd, fmt.Errorf("%w: undecodable path: %w", ErrTransferRefused, err)
 	}
@@ -147,6 +147,29 @@ func ReadTransfer(cmd Command) (Command, error) {
 	out.Payload = []byte(base64.StdEncoding.EncodeToString(data))
 	out.Raw = Encode(out.Control, out.Payload)
 	return out, nil
+}
+
+// decodePayload decodes a command's payload, accepting it padded or not.
+//
+// Required rather than defensive, and the reason is the whole of a reported breakage. kitty's own clients
+// encode payloads *unpadded*: `tools/tui/graphics/command.go` uses base64.RawStdEncoding, so a path whose
+// length is not a multiple of three arrives without the trailing "=" that base64.StdEncoding demands.
+// Decoding such a payload with StdEncoding fails, cm declines the transfer, the whole command is dropped,
+// and no image ever reaches the terminal. `kitten icat` reports nothing and exits 0, so the only trace is
+// cm's own "declined a graphics transfer" line.
+//
+// Measured from a real session's log against a real icat capture. The path
+// /Users/chancez/screenshots/hsa_contribution.png is 47 bytes, its unpadded base64 is 63 characters, and
+// StdEncoding rejects that at byte 60, which is exactly what the log said. A t=t temp path of 87 bytes
+// encodes to 116 characters and decoded fine. That is what made this look intermittent rather than
+// deterministic: only a path whose length is divisible by three survives, so a fixed filename fails every
+// time while kitty's own temp names, which end in a random number of varying digit count, fail about two
+// invocations in three.
+//
+// Padding is stripped rather than the two encodings tried in turn, so a program that does pad is still
+// understood: RawStdEncoding is strict about a "=" it does not expect.
+func decodePayload(payload []byte) ([]byte, error) {
+	return base64.RawStdEncoding.DecodeString(strings.TrimRight(string(payload), "="))
 }
 
 // allowTransferPath decides whether cm will read a path a program named.

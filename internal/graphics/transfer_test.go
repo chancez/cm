@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,10 +26,33 @@ func transferCommand(t *testing.T, medium Medium, path string, size int) Command
 	if size > 0 {
 		control += ",S=" + strconv.Itoa(size)
 	}
-	raw := "\x1b_G" + control + ";" +
-		base64.StdEncoding.EncodeToString([]byte(path)) + "\x1b\\"
+	raw := "\x1b_G" + control + ";" + kittyEncode([]byte(path)) + "\x1b\\"
 	return mustParse(t, raw)
 }
+
+// inlined is the command ReadTransfer must produce for a resolved `a=T,t=t,i=1` transfer of data.
+//
+// Spelled once so the whole returned value can be asserted rather than a field at a time: a field-by-field
+// check passes while the rest of the struct is wrong, and what matters here is that the t= key is gone and
+// the payload carries the bytes.
+func inlined(data []byte) Command {
+	payload := []byte(base64.StdEncoding.EncodeToString(data))
+	return Command{
+		Action:  ActionTransmitAndDisplay,
+		Medium:  MediumDirect,
+		ImageID: 1,
+		Control: "a=T,i=1",
+		Payload: payload,
+		Raw:     Encode("a=T,i=1", payload),
+	}
+}
+
+// kittyEncode encodes a payload the way kitty's own clients do: base64 with no padding.
+//
+// Every helper here used to pad, which is why the whole package passed while `kitten icat` was refused in a
+// real session. A test that encodes the way the code under test decodes cannot fail, and this one did not
+// for as long as it disagreed with kitty. See decodePayload.
+func kittyEncode(b []byte) string { return base64.RawStdEncoding.EncodeToString(b) }
 
 // writeTransferFile creates a file with kitty's own transfer naming, under the temp directory.
 func writeTransferFile(t *testing.T, data []byte) string {
@@ -222,6 +246,64 @@ func TestReadTransferRefusesAnOversizedFile(t *testing.T) {
 	}
 }
 
+// A path arrives unpadded, because that is how kitty's own clients encode it, and every path length must
+// resolve rather than only the ones divisible by three.
+//
+// The reported breakage. cm decoded with base64.StdEncoding, which demands padding, so a path of 47 bytes
+// (unpadded base64 is 63 characters) was refused at byte 60 and the image never reached the terminal.
+// icat exits 0 with nothing printed, so the only symptom was a missing image. A path length divisible by
+// three encodes to a multiple of four and needed no padding, which is why the same command worked
+// occasionally and made this look like a race: kitty's temp names end in a random number, so their length
+// varies, while the user's own filename failed every single time.
+//
+// The three residues are the whole test. Only len%3 == 0 passed before the fix, so a single fixture would
+// have had a two in three chance of catching it.
+func TestReadTransferAcceptsAnUnpaddedPath(t *testing.T) {
+	for _, residue := range []int{0, 1, 2} {
+		t.Run("path length %3 == "+strconv.Itoa(residue), func(t *testing.T) {
+			want := []byte{1, 2, 3, 4, 5}
+			path := writeTransferFile(t, want)
+			// Lengthened by renaming rather than by padding the name blindly, so the file the command
+			// names is the file on disk.
+			for len(path)%3 != residue {
+				next := path + "x"
+				if err := os.Rename(path, next); err != nil {
+					t.Fatalf("Rename() error = %v", err)
+				}
+				path = next
+			}
+			t.Cleanup(func() { os.Remove(path) })
+
+			cmd := mustParse(t, "\x1b_Ga=T,t=t,i=1;"+kittyEncode([]byte(path))+"\x1b\\")
+			got, err := ReadTransfer(cmd)
+			if err != nil {
+				t.Fatalf("ReadTransfer() error = %v, for a %d byte path encoding to %d characters",
+					err, len(path), len(kittyEncode([]byte(path))))
+			}
+			if wantCmd := inlined(want); !reflect.DeepEqual(got, wantCmd) {
+				t.Errorf("ReadTransfer() = %+v, want %+v", got, wantCmd)
+			}
+		})
+	}
+}
+
+// A program that does pad is still understood, so accepting the unpadded form is an addition rather than a
+// swap: RawStdEncoding on its own rejects a "=" it did not expect.
+func TestReadTransferAcceptsAPaddedPath(t *testing.T) {
+	want := []byte{1, 2, 3}
+	path := writeTransferFile(t, want)
+
+	cmd := mustParse(t, "\x1b_Ga=T,t=t,i=1;"+
+		base64.StdEncoding.EncodeToString([]byte(path))+"\x1b\\")
+	got, err := ReadTransfer(cmd)
+	if err != nil {
+		t.Fatalf("ReadTransfer() error = %v", err)
+	}
+	if wantCmd := inlined(want); !reflect.DeepEqual(got, wantCmd) {
+		t.Errorf("ReadTransfer() = %+v, want %+v", got, wantCmd)
+	}
+}
+
 // An undecodable path is refused rather than treated as a filename, since base64 is how every payload
 // arrives.
 func TestReadTransferRefusesAnUndecodablePath(t *testing.T) {
@@ -324,6 +406,8 @@ func optS(n int) string {
 	return ",S=" + strconv.Itoa(n)
 }
 
-func base64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+// base64Encode builds a payload as a program would, so unpadded like kitty. See kittyEncode.
+func base64Encode(b []byte) string { return kittyEncode(b) }
 
+// base64Decode reads a payload cm produced, which is padded, so this one is StdEncoding on purpose.
 func base64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
