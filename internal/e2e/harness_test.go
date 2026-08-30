@@ -538,9 +538,15 @@ type sessionJSON struct {
 	// there was one. Separate from ExitCode, which is the session's own.
 	LastCommandExitCode int  `json:"last_command_exit_code"`
 	CommandFinished     bool `json:"command_finished"`
-	// ReportedState and ReportedDetail are what a program in the session reported about itself.
+	// ReportedState and ReportedDetail are what a program in the session reported about itself, and
+	// ReportedAtUnix when it said so.
+	//
+	// The time matters because a report survives a server restart: it is the program's last word, not a
+	// live reading, so a test asserting a report came back has to be able to tell that its timestamp came
+	// with it rather than being stamped at the restart.
 	ReportedState  string `json:"reported_state"`
 	ReportedDetail string `json:"reported_detail"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 	// Tags are the caller's own labels for the session.
 	Tags map[string]string `json:"tags"`
 }

@@ -13,7 +13,8 @@ import (
 
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
-	persist_requested, tags, client_seq`
+	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
+	reported_at`
 
 // Create inserts a session record.
 //
@@ -31,12 +32,14 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
+		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
+		unixMilliOrZero(sess.Reported.At),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -120,6 +123,35 @@ type Update struct {
 	// decide what the new set is, and two callers merging concurrently into the same row would lose
 	// one of the edits either way.
 	Tags map[string]string
+	// Reported is what a program in the session last said about itself, with the time it said it.
+	//
+	// One field for all four columns, because they are one statement: a state without its detail, or
+	// with the timestamp of a different report, describes something nobody said. A non-nil pointer to
+	// the zero value clears them, which is what withdrawing a report does.
+	Reported *ReportedState
+}
+
+// ReportedState is a program's own statement about itself, as stored.
+//
+// At is when the report was made rather than when the row was written. It is the difference between "a
+// program says it is blocked" and "a program said it was blocked, three hours ago", and the second is
+// what a report recovered across a server restart actually is.
+type ReportedState struct {
+	State  string
+	Detail string
+	Source string
+	At     time.Time
+}
+
+// unixMilliOrZero renders a time for storage, keeping the zero time as zero.
+//
+// Necessary because UnixMilli of the zero time is a large negative number, which reads back as a real
+// instant in 1754 rather than as "unset".
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 // Apply writes the update, returning ErrNotFound if the session is gone.
@@ -168,6 +200,14 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	}
 	if u.Tags != nil {
 		add("tags", encodeStringMap(u.Tags))
+	}
+	if u.Reported != nil {
+		// All four together, always. Setting the state without the time would leave the previous
+		// report's timestamp beside a new state, which reads as a report older than it is.
+		add("reported_state", u.Reported.State)
+		add("reported_detail", u.Reported.Detail)
+		add("reported_source", u.Reported.Source)
+		add("reported_at", unixMilliOrZero(u.Reported.At))
 	}
 	if len(sets) == 0 {
 		return nil
@@ -228,24 +268,32 @@ type scanner interface {
 
 func scanSession(sc scanner) (Session, error) {
 	var (
-		sess      Session
-		lastSeq   int64
-		clientSeq int64
-		state     string
-		created   int64
-		updated   int64
-		envJSON   string
-		requested bool
-		tagsJSON  string
+		sess       Session
+		lastSeq    int64
+		clientSeq  int64
+		state      string
+		created    int64
+		updated    int64
+		envJSON    string
+		requested  bool
+		tagsJSON   string
+		reportedAt int64
 	)
 	err := sc.Scan(
 		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
-		&tagsJSON, &clientSeq,
+		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
+		&sess.Reported.Source, &reportedAt,
 	)
 	if err != nil {
 		return Session{}, err
+	}
+	// Left zero rather than turned into 1970, so "no report has been recorded" stays distinguishable
+	// from one made at the epoch. Every caller checks the state first, and this keeps the pair
+	// consistent for one that reads the time.
+	if reportedAt != 0 {
+		sess.Reported.At = time.UnixMilli(reportedAt)
 	}
 	sess.Env = decodeStringMap(envJSON)
 	sess.Tags = decodeStringMap(tagsJSON)

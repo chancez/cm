@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/store"
@@ -109,8 +110,15 @@ func TestAdoptionRecoversAReportedState(t *testing.T) {
 			"printf 'MARK\\r\\n'; sleep 0.5; printf 'MARK2\\r\\n'; sleep 5",
 		"MARK")
 
-	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent"}
-	if got := sess.Reported(); got != want {
+	got := sess.Reported()
+	// The timestamp is the moment cm read the sequence, which no fixture can predict: the shell wrote it
+	// at a time nothing recorded. Checked for being set, then folded into the expected value so the rest
+	// is still asserted whole rather than field by field.
+	if got.At.IsZero() {
+		t.Errorf("Reported() = %+v with no timestamp, so its age can never be shown", got)
+	}
+	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", At: got.At}
+	if got != want {
 		t.Errorf("Reported() = %+v, want %+v.\n"+
 			"A blocked program is still blocked after a server restart: nothing about the restart tells it "+
 			"to report again, so forgetting the report leaves the session looking idle while it waits.",
@@ -130,5 +138,182 @@ func TestAdoptionRecoversAReportedState(t *testing.T) {
 		t.Errorf("reportRuns = %d after adoption and live output, want 0.\n"+
 			"A recovered report is state this session inherited, not an event it observed. Counting it "+
 			"satisfies a wait that was issued afterwards, which is the already-in-state bug.", runs)
+	}
+}
+
+// A report from `cm report` survives a restart, because nothing else can recover it.
+//
+// The distinction from the OSC case above is the whole reason this is persisted. An RPC report reaches
+// the server and touches no byte stream, so there is nothing in the shim's log to replay: a server that
+// forgets it has destroyed the only copy. The program that sent it is still there, still blocked, and
+// will not report again until its own state changes.
+func TestARPCReportSurvivesARestart(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// Running a command, so the guard below has no reason to fire: a shell with something running is a
+	// shell that can still hold a blocked program.
+	rec := startShimFor(t, shimConfigFor("rpcreport",
+		"printf '\\033]133;A\\007$ '; printf '\\033]133;C;cmdline=agent\\007'; "+
+			"printf 'MARK\\r\\n'; sleep 5"))
+	rec.State = store.StateRunning
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	first, ok := mgr.Get(rec.ID)
+	if !ok {
+		t.Fatal("session was not adopted by the first server")
+	}
+
+	sub := first.recent.Subscribe(0)
+	readUntil(t, sub, "MARK")
+	sub.Close()
+
+	// What `cm report --state blocked` does, one layer below the RPC.
+	first.setReported(Reported{State: "blocked", Detail: "needs approval", Source: "agent"})
+	// Persisted by the metadata watcher, which is asynchronous, so the row is waited for rather than
+	// assumed. A poll rather than a sleep: the write happens within milliseconds and a fixed sleep
+	// would either be flaky or slow.
+	stored := waitForStoredReport(t, st, rec.ID)
+
+	shimSeq, clientSeq := first.resumePoints()
+	first.Close()
+
+	// The record as the next server reads it, report included.
+	rec.LastSeq, rec.ClientSeq = shimSeq, clientSeq
+	rec.Reported = stored
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer second.Close()
+
+	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", At: stored.At}
+	if got := second.Reported(); got != want {
+		t.Errorf("Reported() = %+v, want %+v.\n"+
+			"An RPC report is in no byte stream, so adoption has to read it from the record. The "+
+			"timestamp has to be the one the report was made at, not the restart: a restored report is "+
+			"a claim nobody retracted, and its age is what says so.", got, want)
+	}
+}
+
+// A report is dropped when the replayed markers show the shell back at a prompt.
+//
+// The guard against the cost of persisting one. A program that reported blocked, got its answer, and
+// exited during the restart leaves a record saying blocked and a shell sitting at a prompt. Presenting
+// the report then is worse than forgetting it: nothing is waiting, and a listing that says otherwise
+// sends someone to a session that does not need them.
+func TestAStaleReportIsDroppedWhenTheShellIsIdle(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// The program ran and finished: C then D, then a fresh prompt. That is the evidence no program is
+	// there to be blocked.
+	rec := startShimFor(t, shimConfigFor("stalereport",
+		"printf '\\033]133;A\\007$ '; printf '\\033]133;C;cmdline=agent\\007'; "+
+			"printf '\\033]133;D;0\\007'; printf '\\033]133;A\\007$ '; printf 'MARK\\r\\n'; sleep 5"))
+	rec.State = store.StateRunning
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	first, ok := mgr.Get(rec.ID)
+	if !ok {
+		t.Fatal("session was not adopted by the first server")
+	}
+	sub := first.recent.Subscribe(0)
+	readUntil(t, sub, "MARK")
+	sub.Close()
+
+	first.setReported(Reported{State: "blocked", Detail: "needs approval", Source: "agent"})
+	stored := waitForStoredReport(t, st, rec.ID)
+
+	rec.LastSeq, rec.ClientSeq = first.resumePoints()
+	rec.Reported = stored
+	first.Close()
+
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer second.Close()
+
+	if got := second.Reported(); got != (Reported{}) {
+		t.Errorf("Reported() = %+v, want it dropped.\n"+
+			"The replayed markers end at a prompt with nothing running, so no program is left in the "+
+			"session to be blocked. Restoring the report there is cm asserting something it can see is "+
+			"no longer true.", got)
+	}
+}
+
+// A shell that reports no OSC 133 at all keeps its report.
+//
+// The pair to the test above, and the reason the guard reads Seen rather than only Running. Both leave
+// the tracker saying "not running", and treating them alike would drop every report from a session
+// without shell integration, which is exactly the session a program's own report is most needed for.
+func TestAReportSurvivesWhenTheShellReportsNoMarkers(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	ctx := context.Background()
+
+	rec := startShimFor(t, shimConfigFor("nomarkers", "printf 'MARK\\r\\n'; sleep 5"))
+	rec.State = store.StateRunning
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	first, ok := mgr.Get(rec.ID)
+	if !ok {
+		t.Fatal("session was not adopted by the first server")
+	}
+	sub := first.recent.Subscribe(0)
+	readUntil(t, sub, "MARK")
+	sub.Close()
+
+	first.setReported(Reported{State: "busy", Detail: "building", Source: "agent"})
+	stored := waitForStoredReport(t, st, rec.ID)
+
+	rec.LastSeq, rec.ClientSeq = first.resumePoints()
+	rec.Reported = stored
+	first.Close()
+
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer second.Close()
+
+	want := Reported{State: "busy", Detail: "building", Source: "agent", At: stored.At}
+	if got := second.Reported(); got != want {
+		t.Errorf("Reported() = %+v, want %+v.\n"+
+			"No markers is not the same as at a prompt. A shell with no integration loaded says nothing "+
+			"about whether a program is running, so there is no evidence the report is stale.", got, want)
+	}
+}
+
+// waitForStoredReport returns the report recorded for a session, waiting for the write to land.
+//
+// The write is done by the metadata watcher rather than by setReported, so it is asynchronous by design:
+// the pump must never block on sqlite. Polling rather than sleeping keeps the test fast and keeps it from
+// depending on how long the write takes.
+func waitForStoredReport(t *testing.T, st *store.Store, id string) store.ReportedState {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rec, err := st.Get(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Get(%q) error = %v", id, err)
+		}
+		if rec.Reported.State != "" {
+			if rec.Reported.At.IsZero() {
+				t.Fatalf("stored report %+v has no timestamp, so its age can never be shown",
+					rec.Reported)
+			}
+			return rec.Reported
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no report was recorded for the session, so nothing could survive a restart")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

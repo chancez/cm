@@ -429,10 +429,8 @@ func (m *Manager) adopt(
 	}
 	// Drained here rather than inside the option, so the report that survives is the one this function
 	// decided on: see withRecoveredCommands on why leaving it in the tracker would republish it.
-	var reported Reported
-	if r, ok := rp.reports.Take(); ok {
-		reported = Reported{State: r.State, Detail: r.Detail, Source: r.Source}
-	}
+	fromLog, inLog := rp.reports.Take()
+	reported := recoveredReport(rec, rp.commands, fromLog, inLog)
 	sess, err := newSession(rec, term, fromSeq, clientSeq,
 		withRecoveredCommands(rp.commands, rp.reports, reported))
 	if err != nil {
@@ -459,6 +457,55 @@ func (m *Manager) adopt(
 
 	go m.watch(sess)
 	return sess, nil
+}
+
+// recoveredReport decides what a session being adopted last said about itself.
+//
+// Two sources, and they are not equivalent. A report in the retained output is cm's own OSC 25453,
+// written by a shell integration; a stored one came from `cm report`, which is an RPC and leaves no trace
+// in any stream. The log wins when it has one, because it is at least as new: the stored value was written
+// while the previous server read that same stream, so anything still retained either produced it or came
+// after it.
+//
+// The guard is the interesting part. A stored report is a claim nobody retracted, which is right for a
+// program still sitting there blocked and wrong for one that finished during the restart. The replayed
+// OSC 133 markers settle it: a shell back at a prompt with nothing running has no program in it to be
+// blocked or busy, so a report about one is stale and is dropped rather than shown. Seen matters as much
+// as the state, because "no markers at all" is not "at a prompt" -- it is a shell with no integration
+// loaded, or a window whose markers scrolled out, and dropping a report on that evidence would forget
+// every session that does not report OSC 133.
+func recoveredReport(rec store.Session, cmds osc.CommandTracker, fromLog osc.Report, inLog bool) Reported {
+	if inLog {
+		r := Reported{State: fromLog.State, Detail: fromLog.Detail, Source: fromLog.Source}
+		// The stored timestamp when it describes the same statement, since that is the accurate one. A
+		// different statement is one nothing recorded the time of, so now is used: it is the moment cm
+		// learned of it, and the only bound available for a sequence whose write time was never kept.
+		if r.sameStatement(reportedFromStore(rec)) {
+			r.At = rec.Reported.At
+		} else {
+			r.At = time.Now()
+		}
+		return r
+	}
+
+	stored := reportedFromStore(rec)
+	if stored.State == "" {
+		return Reported{}
+	}
+	if cmds.Seen() && !cmds.State().Running {
+		return Reported{}
+	}
+	return stored
+}
+
+// reportedFromStore converts a stored report into the server's own shape.
+func reportedFromStore(rec store.Session) Reported {
+	return Reported{
+		State:  rec.Reported.State,
+		Detail: rec.Reported.Detail,
+		Source: rec.Reported.Source,
+		At:     rec.Reported.At,
+	}
 }
 
 // replayed is what a replay of a shim's retained output recovered.
@@ -607,6 +654,19 @@ func (m *Manager) persistMetadata(sess *Session) {
 			// that does not exist locally.
 			if meta.Cwd.IsLocal && meta.Cwd.Path != "" {
 				upd.Cwd = &meta.Cwd.Path
+			}
+			// Written on every publish rather than only when it changed, which costs nothing: the row is
+			// already being updated, and the report carries its own timestamp, so re-writing the same
+			// values cannot make it look fresher than it is.
+			//
+			// This is the only copy. A report from `cm report` arrives as an RPC and never touches the
+			// output stream, so unlike everything else in this struct it cannot be replayed from the
+			// shim's log. See store.Session.Reported.
+			upd.Reported = &store.ReportedState{
+				State:  meta.Reported.State,
+				Detail: meta.Reported.Detail,
+				Source: meta.Reported.Source,
+				At:     meta.Reported.At,
 			}
 			if err := m.store.Apply(ctx, sess.id, upd); err != nil {
 				// Advisory, so the session continues. Logged because a `list` showing a stale

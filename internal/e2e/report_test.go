@@ -135,11 +135,18 @@ func TestReportDefaultsToTheSurroundingSession(t *testing.T) {
 	}
 }
 
-// Reported state is not persisted, since it describes a running program.
+// A reported state survives a server restart, because nothing else can recover it.
 //
-// A stored value would come back after a restart claiming a program needs input when it finished long ago,
-// and anything waiting on it would be released for no reason.
-func TestReportedStateIsNotPersisted(t *testing.T) {
+// `cm report` is an RPC: it reaches the server and touches no byte stream, so unlike the OSC 133 state
+// beside it there is nothing in the shim's log to replay. A server that forgot it destroyed the only copy,
+// and the program that sent it says nothing more until its own state changes, so a coding agent blocked
+// on an approval looked idle for as long as it waited.
+//
+// The report is dropped rather than restored when the replayed markers show the shell back at a prompt
+// with nothing running, which is the case a stored value would otherwise lie about. This session runs
+// /bin/sh with no shell integration, so there are no markers at all, and no markers is not evidence of a
+// prompt: see recoveredReport.
+func TestAReportedStateSurvivesARestart(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 
@@ -152,13 +159,25 @@ func TestReportedStateIsNotPersisted(t *testing.T) {
 
 	e.restartServer()
 
+	// Waited for, because adoption is not synchronous with the restart returning.
+	e.waitFor("the adopted session to carry its report", 15*time.Second, func() bool {
+		s, ok := e.session("transient")
+		return ok && s.ReportedState == "blocked"
+	})
 	s, ok := e.session("transient")
 	if !ok {
 		t.Fatal("the session did not survive the restart")
 	}
-	if s.ReportedState != "" {
-		t.Errorf("session = %+v after a restart, want no reported state: it describes a running "+
-			"program, so restoring it would claim something is blocked that is not", s)
+	if s.ReportedState != "blocked" || s.ReportedDetail != "waiting" {
+		t.Errorf("session = %+v after a restart, want the report it was given.\n"+
+			"An RPC report is in no byte stream, so the record is the only place it can come from.", s)
+	}
+	// With the time it was made, not the time of the restart. That is what lets a listing show a stale
+	// "blocked" as hours old rather than presenting it as current.
+	if s.ReportedAtUnix == 0 {
+		t.Errorf("session = %+v after a restart, want the report's timestamp carried with it.\n"+
+			"Without it a restored report is indistinguishable from one made a second ago, which is the "+
+			"whole risk of keeping it.", s)
 	}
 }
 

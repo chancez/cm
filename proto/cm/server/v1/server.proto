@@ -853,6 +853,13 @@ message Session {
   // The note that came with the report, and who sent it. Both optional and free-form.
   string reported_detail = 15;
   string reported_source = 16;
+  // When the report was made, in seconds since the epoch. Zero when nothing has reported, and zero
+  // from a server that predates this field.
+  //
+  // Worth sending because a report is the program's last word rather than a live reading: it stands
+  // until the program says otherwise, and it survives a server restart, so "blocked" alone cannot
+  // distinguish a program waiting on an answer now from one that said so hours ago.
+  int64 reported_at_unix = 24;
 
   // Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
   //
@@ -881,8 +888,9 @@ message Session {
 
   // The caller's own key/value labels for this session.
   //
-  // Persisted, unlike the reported state above: a report describes a running program, while a tag
-  // describes the session, so it must survive a server restart and a reboot restore.
+  // Persisted for the session's whole life, including across a reboot restore. A report is persisted
+  // too, but only as a handover between servers: it describes a program, so it is dropped once the
+  // evidence says that program has gone, while a tag describes the session and always survives.
   //
   // cm never interprets a key. There is no tag that changes how a session is treated, because
   // inferring meaning from one would be the same mistake as scraping a screen to work out what is

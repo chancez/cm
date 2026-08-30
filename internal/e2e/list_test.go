@@ -166,11 +166,17 @@ func TestBusyTracksTheRunningCommand(t *testing.T) {
 	})
 }
 
-// Busy state must not be persisted: it describes a process, not a record.
+// A running command is still reported as running after a server restart.
 //
-// A stored value would come back after a server restart claiming a command is running when it finished
-// long ago, and a close confirmation built on it would fire for every window forever.
-func TestBusyIsNotPersistedAcrossARestart(t *testing.T) {
+// Nothing is stored: the value is derived from OSC 133 markers in the output, and adoption replays the
+// shim's retained log through the same tracker the live pump uses. That distinction is the whole design.
+// A stored "busy" would come back claiming a command is running when it finished long ago, and a close
+// confirmation built on it would fire for every window forever; a replayed one is evidence the shell
+// wrote and the shim still holds.
+//
+// End to end because it is the only place all three processes are real: the shell writing markers, the
+// shim retaining them, and a second server reading them back.
+func TestBusyIsRecoveredAcrossARestart(t *testing.T) {
 	skipIfShort(t)
 	e := newEnv(t)
 	requireShell(t, "/bin/zsh")
@@ -191,15 +197,22 @@ func TestBusyIsNotPersistedAcrossARestart(t *testing.T) {
 
 	e.restartServer()
 
-	// The command is still genuinely running, and the new server has not seen its start marker, so it
-	// reports idle. That is the correct answer for a value derived from a live stream: claiming to know
-	// would mean having stored it, which is the thing being avoided.
+	// The command is still genuinely running, and the new server can say so: the start marker is in the
+	// shim's retained log, which adoption replays.
+	//
+	// Waited for rather than read once, because adoption's replay is not synchronous with the restart
+	// returning: the server accepts clients as soon as it is listening.
+	e.waitFor("the adopted session to report the command it is running", 15*time.Second, func() bool {
+		s, ok := e.session("notstored")
+		return ok && s.Busy && s.Command == "sleep 60"
+	})
 	s, ok := e.session("notstored")
 	if !ok {
 		t.Fatal("the session did not survive the restart")
 	}
-	if s.Busy {
-		t.Errorf("busy = true after a restart, want false: state describing a process must not be "+
-			"restored from a record (%+v)", s)
+	if !s.Busy || s.Command != "sleep 60" {
+		t.Errorf("session = %+v after a restart, want busy with command \"sleep 60\".\n"+
+			"The markers are in the shim's retained log and adoption replays them, so a blank state means "+
+			"the replay fed the terminal model and not the OSC trackers.", s)
 	}
 }

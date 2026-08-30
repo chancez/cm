@@ -1335,8 +1335,14 @@ func (s *Session) noteReport() {
 // Published like the derived state, because a terminal emulator or a waiting script reacts to it the same
 // way. A zero value clears the report, so the session falls back to what cm derives.
 func (s *Session) setReported(r Reported) {
+	// Stamped here rather than by each caller, so there is one clock in the path and a caller only has
+	// to say what the program said. A time that is already set is kept: that is a report recovered at
+	// adoption, and it has to keep the moment it was made rather than claim to be current.
+	if r.State != "" && r.At.IsZero() {
+		r.At = time.Now()
+	}
 	s.mu.Lock()
-	if r == s.reported {
+	if r.sameStatement(s.reported) {
 		s.mu.Unlock()
 		return
 	}

@@ -34,9 +34,7 @@ func TestReportTakesPrecedenceOverTheDerivedState(t *testing.T) {
 	}
 
 	want := Reported{State: "blocked", Detail: "needs approval", Source: "my-agent"}
-	if got := sess.Reported(); got != want {
-		t.Errorf("Reported() = %+v, want %+v", got, want)
-	}
+	checkReported(t, sess.Reported(), want, "")
 
 	// A wait for blocked is satisfied by the report, and a wait for busy is not: the report replaces the
 	// derived state rather than adding to it.
@@ -184,4 +182,25 @@ func TestReportRequiresAState(t *testing.T) {
 	}); err == nil {
 		t.Error("Report() with no state succeeded, want an error")
 	}
+}
+
+// checkReported asserts a session's report as a whole value against a want carrying no timestamp.
+//
+// The timestamp comes from the clock inside setReported, so no fixture can predict it. Checked for being
+// set, then folded into want so the comparison stays whole: comparing three fields by hand instead would
+// pass while the fourth was wrong, which is the failure the whole-value rule exists for.
+func checkReported(t *testing.T, got, want Reported, note string) {
+	t.Helper()
+	if got.State != "" && got.At.IsZero() {
+		t.Errorf("Reported() = %+v with no timestamp, so its age could never be shown", got)
+	}
+	want.At = got.At
+	if got == want {
+		return
+	}
+	if note != "" {
+		t.Errorf("Reported() = %+v, want %+v: %s", got, want, note)
+		return
+	}
+	t.Errorf("Reported() = %+v, want %+v", got, want)
 }

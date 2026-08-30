@@ -3126,6 +3126,13 @@ type Session struct {
 	// The note that came with the report, and who sent it. Both optional and free-form.
 	ReportedDetail string `protobuf:"bytes,15,opt,name=reported_detail,json=reportedDetail,proto3" json:"reported_detail,omitempty"`
 	ReportedSource string `protobuf:"bytes,16,opt,name=reported_source,json=reportedSource,proto3" json:"reported_source,omitempty"`
+	// When the report was made, in seconds since the epoch. Zero when nothing has reported, and zero
+	// from a server that predates this field.
+	//
+	// Worth sending because a report is the program's last word rather than a live reading: it stands
+	// until the program says otherwise, and it survives a server restart, so "blocked" alone cannot
+	// distinguish a program waiting on an answer now from one that said so hours ago.
+	ReportedAtUnix int64 `protobuf:"varint,24,opt,name=reported_at_unix,json=reportedAtUnix,proto3" json:"reported_at_unix,omitempty"`
 	// Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
 	//
 	// A terminal emulator needs this to decide whether closing a window is destructive: the shell owns
@@ -3151,8 +3158,9 @@ type Session struct {
 	CommandFinished     bool  `protobuf:"varint,18,opt,name=command_finished,json=commandFinished,proto3" json:"command_finished,omitempty"`
 	// The caller's own key/value labels for this session.
 	//
-	// Persisted, unlike the reported state above: a report describes a running program, while a tag
-	// describes the session, so it must survive a server restart and a reboot restore.
+	// Persisted for the session's whole life, including across a reboot restore. A report is persisted
+	// too, but only as a handover between servers: it describes a program, so it is dropped once the
+	// evidence says that program has gone, while a tag describes the session and always survives.
 	//
 	// cm never interprets a key. There is no tag that changes how a session is treated, because
 	// inferring meaning from one would be the same mistake as scraping a screen to work out what is
@@ -3319,6 +3327,13 @@ func (x *Session) GetReportedSource() string {
 		return x.ReportedSource
 	}
 	return ""
+}
+
+func (x *Session) GetReportedAtUnix() int64 {
+	if x != nil {
+		return x.ReportedAtUnix
+	}
+	return 0
 }
 
 func (x *Session) GetBusy() bool {
@@ -4606,7 +4621,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc4\x06\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xee\x06\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -4625,7 +4640,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\acwd_uri\x18\v \x01(\tR\x06cwdUri\x12%\n" +
 	"\x0ereported_state\x18\x0e \x01(\tR\rreportedState\x12'\n" +
 	"\x0freported_detail\x18\x0f \x01(\tR\x0ereportedDetail\x12'\n" +
-	"\x0freported_source\x18\x10 \x01(\tR\x0ereportedSource\x12\x12\n" +
+	"\x0freported_source\x18\x10 \x01(\tR\x0ereportedSource\x12(\n" +
+	"\x10reported_at_unix\x18\x18 \x01(\x03R\x0ereportedAtUnix\x12\x12\n" +
 	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\r \x01(\tR\acommand\x123\n" +
 	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +

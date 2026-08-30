@@ -633,3 +633,66 @@ func schemaVersionOf(t *testing.T, path string) int {
 	}
 	return version
 }
+
+// A report round-trips through Apply, timestamp included.
+//
+// The timestamp is the part worth pinning. It is stored in milliseconds, so a value that survived as a
+// date but lost its time of day would still look plausible in a listing while making every restored
+// report's age wrong. Truncated to milliseconds on the way in, since that is the column's resolution and
+// comparing against the original nanoseconds would fail for the wrong reason.
+func TestApplyRoundTripsAReport(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.Create(ctx, sampleSession("rep")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	when := time.Now().Truncate(time.Millisecond)
+	want := ReportedState{State: "blocked", Detail: "needs approval", Source: "agent", At: when}
+	if err := s.Apply(ctx, "rep", Update{Reported: &want}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	got, err := s.Get(ctx, "rep")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !got.Reported.At.Equal(want.At) {
+		t.Errorf("Reported.At = %v, want %v", got.Reported.At, want.At)
+	}
+	// The rest as a whole value, with the time normalized to the one just checked so a monotonic-clock
+	// difference does not fail an otherwise correct comparison.
+	got.Reported.At = want.At
+	if got.Reported != want {
+		t.Errorf("Reported = %+v, want %+v", got.Reported, want)
+	}
+}
+
+// Withdrawing a report clears the timestamp with it.
+//
+// A leftover time beside an empty state is the shape that makes a later reader show an age for a report
+// nobody made, so the four columns are written as one statement.
+func TestApplyClearsAReport(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.Create(ctx, sampleSession("clr")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	set := ReportedState{State: "busy", Detail: "building", Source: "agent", At: time.Now()}
+	if err := s.Apply(ctx, "clr", Update{Reported: &set}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if err := s.Apply(ctx, "clr", Update{Reported: &ReportedState{}}); err != nil {
+		t.Fatalf("clearing Apply() error = %v", err)
+	}
+
+	got, err := s.Get(ctx, "clr")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Reported != (ReportedState{}) {
+		t.Errorf("Reported = %+v, want the zero value", got.Reported)
+	}
+}

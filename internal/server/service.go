@@ -966,6 +966,11 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 				item.ReportedState = r.State
 				item.ReportedDetail = r.Detail
 				item.ReportedSource = r.Source
+				// Left at zero rather than sending a bogus timestamp, matching the attached-client times
+				// above. Only a report restored from a record that predates the column has none.
+				if !r.At.IsZero() {
+					item.ReportedAtUnix = r.At.Unix()
+				}
 				// Reflected in busy too, so a caller reading one field still gets the better answer.
 				item.Busy = r.State != "idle"
 			}

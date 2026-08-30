@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -21,6 +22,25 @@ type Reported struct {
 	Detail string
 	// Source names the reporter, so one program's report is distinguishable from another's.
 	Source string
+	// At is when the report was made. Zero when nothing has reported.
+	//
+	// Carried so a caller can tell a report made a moment ago from one made before the last server
+	// restart. Both are the program's own last word, and a restored one is a claim nobody has retracted
+	// rather than a live statement, so the age is the part that separates "blocked, waiting for you" from
+	// "said it was blocked hours ago".
+	//
+	// Deliberately excluded from what counts as a change: see sameStatement.
+	At time.Time
+}
+
+// sameStatement reports whether two reports say the same thing.
+//
+// The timestamp is left out on purpose, and the reason is not tidiness. A change is what increments
+// reportRuns and what a `cm wait` treats as the program having moved, so a program repeating its current
+// state must not count: with the time compared, a hook that reports "busy" on every prompt would satisfy
+// every wait issued against it.
+func (r Reported) sameStatement(other Reported) bool {
+	return r.State == other.State && r.Detail == other.Detail && r.Source == other.Source
 }
 
 // reportedStateNames maps the wire enum to what a caller sees.

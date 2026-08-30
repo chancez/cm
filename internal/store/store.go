@@ -189,10 +189,21 @@ type Session struct {
 	Env map[string]string
 	// Tags are the caller's own key/value labels for this session, used to group and filter it.
 	//
-	// Persisted, unlike a report: a report describes a running program and would come back after a
-	// restart describing one that has since finished, while a tag describes the session itself and
-	// has to survive. cm never interprets a key.
-	Tags      map[string]string
+	// cm never interprets a key.
+	Tags map[string]string
+	// Reported is what a program in the session last said about itself, and when.
+	//
+	// Stored because it cannot be recovered any other way. Everything else `cm list` shows about what a
+	// session is doing comes from OSC markers in the output, which the shim still holds and adoption
+	// replays, but `cm report` is an RPC: it reaches the server and touches no byte stream, so a server
+	// that forgets it has destroyed the only copy. A coding agent blocked on an approval says so once
+	// and then waits, so what was forgotten was exactly the state worth seeing.
+	//
+	// The time is stored with it because a restored report is a claim nobody has retracted rather than a
+	// live one. It is only presented for a session that is still running, and adoption drops it outright
+	// when the replayed OSC 133 markers show the shell back at a prompt with nothing running, which no
+	// program that is genuinely blocked can be. See Manager.adopt.
+	Reported  ReportedState
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -474,5 +485,19 @@ var migrations = []string{
 
 	CREATE INDEX sessions_state ON sessions(state);
 	CREATE INDEX bindings_session ON bindings(session_id);
+	`,
+	// What a program in the session last said about itself, so a server restart does not destroy it.
+	//
+	// Four columns rather than one JSON blob, unlike env and tags: these are a fixed set the server
+	// itself defines, not a caller's arbitrary keys, and reported_at is a time worth being a column so
+	// expiry could sort on it later.
+	//
+	// reported_at is milliseconds since the epoch, matching created_at and updated_at, with 0 meaning
+	// no report rather than 1970.
+	`
+	ALTER TABLE sessions ADD COLUMN reported_state TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN reported_detail TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN reported_source TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN reported_at INTEGER NOT NULL DEFAULT 0;
 	`,
 }

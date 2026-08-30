@@ -90,6 +90,14 @@ type sessionJSON struct {
 	// free-form and optional.
 	ReportedDetail string `json:"reported_detail"`
 	ReportedSource string `json:"reported_source"`
+	// ReportedAt is when the report was made, RFC 3339, empty when nothing has reported.
+	// ReportedAtUnix is the same instant in seconds, 0 when unknown.
+	//
+	// Worth reading rather than assuming a report is current: it is the program's last word and stands
+	// until the program says otherwise, including across a server restart. A script deciding whether to
+	// nudge a blocked session wants the age, not just the state.
+	ReportedAt     string `json:"reported_at"`
+	ReportedAtUnix int64  `json:"reported_at_unix"`
 	// Tags are the caller's own labels for this session, set at creation or with `cm tag`.
 	//
 	// A map rather than the "k=v,k" string the table prints, since a script filtering on one key
@@ -195,10 +203,54 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedState:       s.ReportedState,
 		ReportedDetail:      s.ReportedDetail,
 		ReportedSource:      s.ReportedSource,
+		ReportedAt:          rfc3339OrEmpty(s.ReportedAtUnix),
+		ReportedAtUnix:      s.ReportedAtUnix,
 		Tags:                sessionTags,
 		Hosting:             hosting,
 		AttachedClients:     clients,
 	}
+}
+
+// rfc3339OrEmpty renders a unix timestamp, keeping zero as empty rather than 1970.
+//
+// The same rule the attached-client times follow: an instant nobody recorded must not print as one
+// decades ago, since a reader acts on the difference.
+func rfc3339OrEmpty(unix int64) string {
+	if unix == 0 {
+		return ""
+	}
+	return time.Unix(unix, 0).Format(time.RFC3339)
+}
+
+// reportAgeThreshold is how old a report has to be before the STATE column shows its age.
+//
+// A threshold rather than always showing it, because the column is width-constrained and CWD sits last,
+// so every character spent here costs a path its tail. Below it the age says nothing a reader does not
+// assume: a program reports on each change, so a recent report is the current state. Above it the age is
+// the interesting part, and it covers both cases that produce one -- a program blocked for hours, and a
+// report that survived a server restart because cm now hands it over rather than forgetting it.
+const reportAgeThreshold = time.Hour
+
+// reportAge renders how long ago a report was made, empty when it is recent or unknown.
+//
+// now is a parameter so this is testable without a clock: the column it feeds is otherwise only
+// checkable by waiting an hour.
+//
+// A report timestamped in the future reads as recent rather than as a negative age. That is a clock that
+// moved, or a record written by a machine whose clock differs, and neither is worth putting in front of a
+// user as "-3h".
+func reportAge(unix int64, now time.Time) string {
+	if unix == 0 {
+		return ""
+	}
+	d := now.Sub(time.Unix(unix, 0))
+	if d < reportAgeThreshold {
+		return ""
+	}
+	if h := int(d.Hours()); h < 48 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dd", int(d.Hours())/24)
 }
 
 // truncate shortens s to at most n columns, marking that it was cut.
@@ -316,6 +368,10 @@ func sessionStateColumn(s *serverv1.Session) string {
 			// "needs approval" must not become "needs". A bound is still needed, since the column
 			// has to stay readable and nothing stops a reporter sending a paragraph.
 			out += ": " + truncate(s.ReportedDetail, 24)
+		}
+		// Only when it is old enough to change what the state means. See reportAgeThreshold.
+		if age := reportAge(s.ReportedAtUnix, time.Now()); age != "" {
+			out += ", " + age
 		}
 		return out + ")"
 	case state == "running" && s.Command != "":
@@ -641,6 +697,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"reported_state", j.ReportedState},
 		{"reported_detail", j.ReportedDetail},
 		{"reported_source", j.ReportedSource},
+		// When, so a caller can tell a program blocked right now from one that said so before the last
+		// server restart. Empty when nothing has reported.
+		{"reported_at", j.ReportedAt},
 		// Rendered as "k=v,k" here rather than as a map, since --field prints one bare value for a
 		// script to read. The JSON output carries the map for anything that wants the structure.
 		{"tags", tags.Format(j.Tags)},

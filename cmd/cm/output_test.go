@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -70,7 +71,10 @@ func TestSessionJSONKeys(t *testing.T) {
 		"busy", "command",
 		// The last command's own outcome, distinct from exit_code above, which is the session's.
 		"last_command_exit_code", "command_finished",
+		// reported_at makes the state readable: a report stands until the program changes it and
+		// survives a server restart, so its age is what separates "blocked now" from "blocked at 9am".
 		"reported_state", "reported_detail", "reported_source",
+		"reported_at", "reported_at_unix",
 		"tags", "hosting",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
@@ -697,5 +701,53 @@ func TestSessionsTableMarksRemoteAndHostingTogether(t *testing.T) {
 	want := "/remote/path (remote)  (hosting inner)"
 	if got := sessionCwdColumn(s); got != want {
 		t.Errorf("sessionCwdColumn() = %q, want %q", got, want)
+	}
+}
+
+// The STATE column shows a report's age only once the age changes what the state means.
+//
+// A program reports on each change, so a recent report is the current state and the age would only cost
+// width. An old one is either a program blocked for hours or a report that survived a server restart, and
+// both are cases where "blocked" alone reads as more current than it is.
+func TestReportAge(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) int64 { return now.Add(-d).Unix() }
+
+	tests := []struct {
+		name string
+		unix int64
+		want string
+	}{
+		{"nothing reported", 0, ""},
+		{"a minute ago", ago(time.Minute), ""},
+		{"just under the threshold", ago(59 * time.Minute), ""},
+		{"an hour ago", ago(time.Hour), "1h"},
+		{"three hours ago", ago(3 * time.Hour), "3h"},
+		// Hours up to two days, so "36h" reads as one working day rather than rounding to "1d".
+		{"36 hours ago", ago(36 * time.Hour), "36h"},
+		{"three days ago", ago(72 * time.Hour), "3d"},
+		// A clock that moved, or a record from a machine whose clock differs. Not "-2h".
+		{"timestamped in the future", now.Add(2 * time.Hour).Unix(), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reportAge(tc.unix, now); got != tc.want {
+				t.Errorf("reportAge() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The age reaches the column, after the detail, so a listing shows why a report should not be trusted as
+// current.
+func TestSessionStateColumnShowsAnOldReportsAge(t *testing.T) {
+	s := sampleWireSession("work")
+	s.ReportedState = "blocked"
+	s.ReportedDetail = "needs approval"
+	s.ReportedAtUnix = time.Now().Add(-3 * time.Hour).Unix()
+
+	want := "running(blocked: needs approval, 3h)"
+	if got := sessionStateColumn(s); got != want {
+		t.Errorf("sessionStateColumn() = %q, want %q", got, want)
 	}
 }

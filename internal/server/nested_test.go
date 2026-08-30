@@ -175,9 +175,7 @@ func TestNestedReportDoesNotBecomeTheParentsState(t *testing.T) {
 	sess.noteReport()
 
 	want := Reported{State: "busy", Detail: "my work", Source: "test"}
-	if got := sess.Reported(); got != want {
-		t.Errorf("Reported() = %+v, want %+v: the parent stopped accepting its own reports", got, want)
-	}
+	checkReported(t, sess.Reported(), want, "the parent stopped accepting its own reports")
 }
 
 // A command the child runs must not show as the parent's command.
