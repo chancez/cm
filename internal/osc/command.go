@@ -54,10 +54,26 @@ type CommandTracker struct {
 	state CommandState
 	// partial holds a trailing fragment that may be the start of a sequence.
 	partial []byte
+	// seen records whether any marker has been applied, which is not the same question as whether the
+	// state is non-zero.
+	//
+	// Needed because Feed's return value cannot answer it: an A marker arriving at a prompt leaves
+	// Running false and Command empty, so it changes nothing and Feed reports no change. A caller that
+	// has to tell "the shell is at a prompt" from "this shell reports no OSC 133 at all" -- adoption
+	// does, since the two states look identical and only one of them means a report about the session
+	// is stale -- has nothing else to read.
+	seen bool
 }
 
 // State returns what the shell has reported so far.
 func (t *CommandTracker) State() CommandState { return t.state }
+
+// Seen reports whether any OSC 133 marker has been applied.
+//
+// False means nothing has been observed, which happens both for a shell with no integration loaded and
+// for output whose markers scrolled out of whatever window the caller fed. Neither is "the shell is
+// idle": that is Seen with State().Running false.
+func (t *CommandTracker) Seen() bool { return t.seen }
 
 // Feed consumes a chunk of shell output and reports whether the state changed.
 //
@@ -151,6 +167,14 @@ func (t *CommandTracker) apply(params []byte) {
 	}
 
 	// The marker is the first character; anything after it is semicolon-separated parameters.
+	switch params[0] {
+	case 'A', 'B', 'C', 'D':
+		// Recorded before the marker is handled, so it covers the ones that change nothing. An
+		// unrecognized marker deliberately does not count: it says a shell integration is loaded but
+		// nothing about where the shell is.
+		t.seen = true
+	}
+
 	switch params[0] {
 	case 'A', 'B':
 		// A is prompt start and B is prompt end. Either means the shell is at a prompt, so whatever

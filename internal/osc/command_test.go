@@ -399,3 +399,34 @@ func TestCommandTrackerClearsStatusOnANewCommand(t *testing.T) {
 		t.Errorf("after a success: Exited=%v ExitCode=%d, want true and 0", got.Exited, got.ExitCode)
 	}
 }
+
+// Seen separates "at a prompt" from "this shell says nothing", which the state alone cannot.
+//
+// The distinction is what adoption reads. A session whose retained output holds a prompt marker and no
+// command after it really is idle, so a leftover "blocked" report about it is stale; a session whose
+// output holds no markers at all says nothing either way, and dropping a report on that evidence would
+// forget every session without shell integration.
+func TestCommandTrackerSeenSeparatesIdleFromSilent(t *testing.T) {
+	var silent CommandTracker
+	silent.Feed([]byte("just output, no markers\r\n"))
+	if silent.Seen() {
+		t.Error("Seen() = true after plain output, want false")
+	}
+
+	// The case Feed's return value cannot report: a prompt marker at the zero state changes nothing.
+	var idle CommandTracker
+	if changed := idle.Feed([]byte(realPromptStart)); changed {
+		t.Error("Feed(prompt start) reported a change from the zero state, want none")
+	}
+	if !idle.Seen() {
+		t.Error("Seen() = false after a prompt marker, want true")
+	}
+
+	// An unrecognized marker means an integration is loaded but says nothing about where the shell is,
+	// so it must not count as evidence of a prompt.
+	var unknown CommandTracker
+	unknown.Feed([]byte("\x1b]133;Z\x07"))
+	if unknown.Seen() {
+		t.Error("Seen() = true after an unrecognized marker, want false")
+	}
+}
