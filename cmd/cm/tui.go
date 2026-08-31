@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -20,6 +21,8 @@ import (
 func newTUICommand(g *globals) *cobra.Command {
 	var (
 		readOnly bool
+		preview  bool
+		refresh  time.Duration
 		tagArgs  []string
 	)
 	cmd := &cobra.Command{
@@ -37,6 +40,10 @@ list and the shell that ran it.
 
 The list refreshes about once a second, "/" filters it by name, directory, running
 command, or tag, and "?" lists every key.
+
+Under the list is the selected session's last output, which is what a session is
+actually recognisable by when half of them are named by the server and several
+share a directory. "p" closes it, and closing it stops the reads it costs.
 
 Running this inside a session nests: the detach key belongs to the outermost
 client, so detaching from a session picked here detaches the window instead.
@@ -79,13 +86,21 @@ client, so detaching from a session picked here detaches the window instead.
 				Sessions: cl,
 				Tags:     tagArgs,
 				Notice:   notice,
-				Attach:   attachFromPicker(attachArgv(g, readOnly), runAttachChild),
+				Preview:  preview,
+				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
+				// express that would leave someone who wants a list that holds still with no way to say so.
+				Refresh: &refresh,
+				Attach:  attachFromPicker(attachArgv(g, readOnly), runAttachChild),
 			})
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&readOnly, "read-only", false,
 		"follow sessions without sending input")
+	f.BoolVar(&preview, "preview", true,
+		"show the selected session's last output under the list")
+	f.DurationVar(&refresh, "refresh", time.Second,
+		"how often to re-read the session list, or 0 to only refresh after an action")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
 	return cmd

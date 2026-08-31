@@ -8,12 +8,13 @@ import "charm.land/bubbles/v2/key"
 // same bindings it describes: a key that moves and a help text that does not is a documentation bug
 // that a reader blames on the tool.
 type keyMap struct {
-	Attach key.Binding
-	New    key.Binding
-	Kill   key.Binding
-	Rename key.Binding
-	Help   key.Binding
-	Quit   key.Binding
+	Attach  key.Binding
+	New     key.Binding
+	Kill    key.Binding
+	Rename  key.Binding
+	Preview key.Binding
+	Help    key.Binding
+	Quit    key.Binding
 }
 
 func defaultKeys() keyMap {
@@ -34,6 +35,10 @@ func defaultKeys() keyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "rename"),
 		),
+		Preview: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "output"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "keys"),
@@ -50,7 +55,7 @@ func defaultKeys() keyMap {
 
 // ShortHelp is the one line under the list.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Attach, k.New, k.Kill, k.Rename, k.Help, k.Quit}
+	return []key.Binding{k.Attach, k.New, k.Kill, k.Rename, k.Preview, k.Help, k.Quit}
 }
 
 // FullHelp is what "?" expands to.
@@ -58,5 +63,5 @@ func (k keyMap) ShortHelp() []key.Binding {
 // The list's own navigation and filter keys are added by the model, which owns the list and so is the
 // only thing that can ask it what its bindings are. See model.fullHelp.
 func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Attach, k.New}, {k.Kill, k.Rename}, {k.Help, k.Quit}}
+	return [][]key.Binding{{k.Attach, k.New}, {k.Kill, k.Rename}, {k.Preview, k.Help, k.Quit}}
 }

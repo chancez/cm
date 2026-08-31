@@ -56,6 +56,44 @@ The alternative worth naming: give `internal/client` a cancellable input reader,
 leak at its source and let the picker attach in-process. That changes the input path of every client for
 the benefit of one caller, so it is not done here.
 
+## The output pane
+
+Under the list is the selected session's last output, which is what a session is actually recognisable
+by: half of them are named by the server, so the name says nothing, and several usually share a
+directory. `p` closes it, `--preview=false` starts without it, and closing it stops the reads.
+
+**Content comes from Read's plain form**, which renders the terminal model's cells to text. The raw form
+would carry the program's own escape sequences into a frame bubbletea composes, which is cm's largest
+family of bugs. Measured against a session that printed SGR, a CR overwrite, a tab, a BEL and a NUL:
+`cm read` returned clean text, with the overwrite and the tab already resolved by the model.
+
+It is sanitized anyway. `internal/ansi.Strip` removes escapes, CR, BS and BEL; the pane also drops the
+rest of C0 and expands tabs, since a tab moves the cursor to a stop the width accounting cannot see and
+shifts everything after it. Belt and braces on purpose: "the plain form should already be clean" is what
+the other instances of this bug also had.
+
+**The pane below the list, not beside it.** A session's output is lines written for a terminal's full
+width, and a narrow column beside the list would truncate all of them. The list's rows are wide too.
+Lines are truncated rather than wrapped, since a wrapped line takes a row the pane counted on.
+
+**A late answer is discarded.** A read is in flight while the cursor moves, so its answer can describe a
+session that is no longer selected. Painting it is worse than an empty pane: the content is real, it is
+just an answer to a question nobody asked. The pane holds *which* session it is waiting for and drops
+anything else, clears its lines when the cursor moves, and labels itself with the session it is waiting
+for rather than with the selection.
+
+**The list is sized to its rows, and the pane takes the rest.** bubbles pads a list to whatever height
+it is told, so three sessions on a tall window left ten blank lines above the pane. What the list spends
+on its own title and count is asked of its paginator rather than assumed: the first version guessed
+four, and a wrong guess there does not look like a bad constant, it looks like a list showing one
+session out of three.
+
+**Cost, measured.** One extra Read per second, on the connection the picker already holds. Server CPU
+over 30 seconds while previewing a session printing a line a second: 0.16s with the pane open, 0.16s
+with it closed, so it is below the noise of feeding that session at all. `cm read --lines 20` costs
+about 3ms of work on top of a bare invocation's 23ms, and does not grow with a session's output because
+the model retains a bounded scrollback.
+
 ## What it does not do
 
 **Switching.** Enter always attaches. Run inside a session it therefore nests, and the detach key
@@ -63,8 +101,10 @@ belongs to the outermost client, so a detach lands somewhere unexpected. Said in
 than refused, since nesting works and is occasionally wanted. `cm switch` is the command for a window
 already on a session.
 
-**A preview pane.** The selected session's screen beside the list needs `internal/vt` rendering into a
-viewport, and is where the escape-sequence traps in `docs/testing.md` live. Deferred deliberately.
+**Colour in the pane.** The plain form of Read drops attributes along with everything else, so the
+output is monochrome. Keeping SGR and nothing else would mean parsing the raw form and re-emitting only
+the sequences that cannot move a cursor, which is a filter that has to be right rather than nearly
+right. Not attempted yet.
 
 ## Choices worth knowing
 
@@ -81,6 +121,8 @@ and a different session is under it: a kill that re-read the selection at `y` wo
 **The cursor tracks a session, not a row.** Restoring by index moves the selection whenever anything
 older ends, which under a one second poll means it walks away while being aimed at.
 
+**The pane's own reads stop when it closes**, so the default picker costs what it did before it existed.
+
 **Filter state is checked before the bindings.** The actions are single letters and the filter is a text
 field, so bindings checked first make typing a name run commands: `n` creates a session, `x` offers to
 kill one. This one bit in the sandbox before the test existed.
@@ -88,8 +130,17 @@ kill one. This one bit in the sandbox before the test existed.
 **The child's argv carries this picker's directories.** A sandboxed picker whose child resolved its own
 would attach to the developer's real sessions while looking isolated.
 
-Each has a test in `internal/tui/model_test.go` or `cmd/cm/tui_test.go`, and each test was confirmed to
-fail with the behavior mutated out.
+Each has a test in `internal/tui/model_test.go`, `internal/tui/preview_test.go` or
+`cmd/cm/tui_test.go`, and each test was confirmed to fail with the behavior mutated out. Two mutations
+were inconclusive first time and are worth knowing about: removing either of the two guards that stop
+reads while the pane is closed changes nothing, because they are redundant, and a mutation that removed
+the sanitizer left an unused import so it never compiled, which `go test` reports as a failure and looks
+like success.
+
+An action's error is held apart from the poll's. Every action asks for a refresh immediately afterwards,
+and while one field served both, a successful refresh cleared the action's error microseconds after it
+was set: a failed kill reported nothing at all. Found by a test harness faithful enough to run the
+refresh the runtime would have run.
 
 ## Cost, measured
 

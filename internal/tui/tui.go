@@ -68,6 +68,10 @@ type Sessions interface {
 	Kill(context.Context, *serverv1.KillRequest) (*serverv1.KillResponse, error)
 	Bind(context.Context, *serverv1.BindRequest) (*serverv1.BindResponse, error)
 	Unbind(context.Context, *serverv1.UnbindRequest) (*serverv1.UnbindResponse, error)
+	// Read is the preview pane's source: the plain form renders the session's cells to text, so no
+	// escape sequence from the program reaches the frame. The raw form would, which is why it is not
+	// used here. See previewLines.
+	Read(context.Context, *serverv1.ReadRequest) (*serverv1.ReadResponse, error)
 }
 
 // AttachFunc gives this terminal to a session and returns when the attachment ends.
@@ -105,6 +109,14 @@ type Options struct {
 	// Tags filters the list, in the form `cm ls --tag` takes. Applied on the server for every
 	// refresh, so a session that gains a matching tag appears without a restart.
 	Tags []string
+	// Preview starts the picker with the output pane open.
+	Preview bool
+	// Refresh is how often the list re-reads the server. Nil means refreshInterval.
+	//
+	// A pointer so that zero can mean something: no polling at all, refreshing only after an action.
+	// That is what a test wants, since a timer in a unit test is a second of waiting or a race, and it
+	// is a coherent setting in its own right for someone who would rather the list held still.
+	Refresh *time.Duration
 	// Notice is shown in the status line at startup, for something true about this invocation rather
 	// than about a session. The picker running inside a session is the case it exists for: attaching
 	// from there nests, and the detach key belongs to the outermost client, so detaching lands

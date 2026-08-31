@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -28,6 +30,11 @@ type fakeSessions struct {
 	killErr      error
 	killResponse *serverv1.KillResponse
 	bindErr      error
+
+	// output is what Read answers, keyed by the session reference asked for.
+	output  map[string]string
+	reads   []*serverv1.ReadRequest
+	readErr error
 }
 
 func (f *fakeSessions) List(
@@ -70,6 +77,16 @@ func (f *fakeSessions) Unbind(
 	return &serverv1.UnbindResponse{}, nil
 }
 
+func (f *fakeSessions) Read(
+	_ context.Context, req *serverv1.ReadRequest,
+) (*serverv1.ReadResponse, error) {
+	f.reads = append(f.reads, req)
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	return &serverv1.ReadResponse{Data: []byte(f.output[req.Session])}, nil
+}
+
 // harness drives a model the way bubbletea would, without a terminal.
 //
 // Commands are run only when a test asks for it. Running every returned command automatically would
@@ -86,15 +103,26 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, sessions ...*serverv1.Session) *harness {
+	return newHarnessWith(t, Options{}, sessions...)
+}
+
+// newHarnessPreviewing is newHarness with the output pane open.
+func newHarnessPreviewing(t *testing.T, sessions ...*serverv1.Session) *harness {
+	return newHarnessWith(t, Options{Preview: true}, sessions...)
+}
+
+func newHarnessWith(t *testing.T, opts Options, sessions ...*serverv1.Session) *harness {
 	t.Helper()
-	h := &harness{t: t, sessions: &fakeSessions{sessions: sessions}}
-	h.model = newModel(context.Background(), Options{
-		Sessions: h.sessions,
-		Attach: func(_ context.Context, ref string) (Attachment, error) {
-			h.attached = append(h.attached, ref)
-			return h.result, nil
-		},
-	})
+	h := &harness{t: t, sessions: &fakeSessions{sessions: sessions, output: map[string]string{}}}
+	// No polling. A timer in a unit test is either a second of waiting or a race, and every refresh
+	// these tests care about is one they ask for. See Options.Refresh.
+	opts.Refresh = new(time.Duration)
+	opts.Sessions = h.sessions
+	opts.Attach = func(_ context.Context, ref string) (Attachment, error) {
+		h.attached = append(h.attached, ref)
+		return h.result, nil
+	}
+	h.model = newModel(context.Background(), opts)
 	// A size first, as bubbletea sends one before anything else. Without it the list has no height and
 	// no rows are visible, which makes every selection assertion below vacuous.
 	h.send(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -121,18 +149,65 @@ func (h *harness) pressCode(code rune) tea.Cmd {
 	return h.send(tea.KeyPressMsg{Code: code})
 }
 
+// maxRunSteps bounds one call to run, so a message loop fails the test instead of hanging it.
+//
+// Learned the hard way: chasing the cursor's blink through this runner ran until the five minute tool
+// timeout, and a hang says nothing about which loop it was. Any real chain here is a handful of
+// messages deep.
+const maxRunSteps = 50
+
 // run executes a command and feeds its message back in, which is what bubbletea's loop does.
+//
+// Batches are unwrapped and run in order rather than handed to the model, since a BatchMsg is the
+// runtime's business and the model would pass it to the list as an unknown message. This is safe only
+// because these harnesses do not poll: the refresh timer is the one command that blocks.
 func (h *harness) run(cmd tea.Cmd) {
 	h.t.Helper()
+	h.runStep(cmd, 0)
+}
+
+func (h *harness) runStep(cmd tea.Cmd, depth int) {
+	h.t.Helper()
+	if depth > maxRunSteps {
+		h.t.Fatalf("commands are still producing messages %d deep, which is a loop", depth)
+	}
 	if cmd == nil {
 		return
 	}
-	if msg := cmd(); msg != nil {
-		h.send(msg)
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			h.runStep(c, depth+1)
+		}
+		return
+	}
+	if msg == nil {
+		return
+	}
+	// The cursor's blink is a timer that reschedules itself forever, so it is dropped rather than
+	// chased. Matched on the package its type comes from because the first message in that chain is
+	// unexported, so there is nothing to assert against. Nothing in the picker depends on a blink.
+	if t := reflect.TypeOf(msg); t != nil && strings.HasPrefix(t.String(), "cursor.") {
+		return
+	}
+	// A message can produce another command, and the runtime runs those too: a list arriving is what
+	// leads to the pane being read, so a harness that stopped at the first message would test a picker
+	// whose preview never loads.
+	h.runStep(h.send(msg), depth+1)
+}
+
+// typeText presses each key and runs what it produced, which the list's filter needs: filtering is
+// applied by a command rather than inside Update, so a filter typed without running them matches
+// everything.
+func (h *harness) typeText(text string) {
+	h.t.Helper()
+	for _, r := range text {
+		h.run(h.press(string(r)))
 	}
 }
 
-// list answers with whatever the fake holds now.
+// list answers with whatever the fake holds now, and runs whatever that led to, which is how a
+// refresh also reaches the preview pane.
 func (h *harness) list() {
 	h.t.Helper()
 	h.run(h.model.fetch())
@@ -432,7 +507,7 @@ func TestAFailedListKeepsTheRowsAndSaysSo(t *testing.T) {
 	if got, want := len(h.model.list.Items()), 1; got != want {
 		t.Errorf("%d rows after a failed refresh, want %d", got, want)
 	}
-	if h.model.err == nil {
+	if h.model.listErr == nil {
 		t.Error("a failed refresh reported nothing")
 	}
 }
