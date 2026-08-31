@@ -92,9 +92,24 @@ func (s *Session) noteQueries(data []byte) {
 // is in today. Recording a request with nobody to answer it would stall the queue for the timeout and
 // achieve nothing.
 func (s *Session) proxyQuery(seq []byte) {
+	// A graphics query narrows who may be asked. Only a terminal that draws images can answer one, and one
+	// that cannot does not merely stay silent: it cannot parse an APC, so it prints the question across the
+	// screen as text. See query.RequiresImageSupport.
+	needsImages := query.RequiresImageSupport(seq)
+
 	s.mu.Lock()
-	tok := s.queryTargetLocked()
+	tok := s.queryTargetLocked(needsImages)
 	if tok == nil {
+		if needsImages && s.anyAnswererLocked() {
+			// A client is attached and it cannot draw images. That is a definite no rather than "not yet", so
+			// parking would stall every later reply behind a question nobody will ever answer, until the sweep
+			// expires it. The program is left in the position it would be in on a terminal without graphics
+			// support, which is the honest answer.
+			s.mu.Unlock()
+			s.log.Debug("not asking a graphics query, no attached terminal draws images",
+				"session", s.label)
+			return
+		}
 		// Parked rather than dropped, for the window at session creation.
 		//
 		// A session created by an attach starts its program while that attach is still completing, so a
@@ -188,6 +203,11 @@ func (s *Session) askParkedQueries(tok *attachToken) {
 		if !r.proxied || r.tok != nil {
 			continue
 		}
+		if query.RequiresImageSupport(r.seq) && !tok.drawsImages {
+			// Left parked for a client that can answer it. Handing a graphics query to a terminal that cannot
+			// draw images puts the question on its screen as text, which is the bug this filter exists for.
+			continue
+		}
 		r.tok = tok
 		r.asked = s.now()
 		send = append(send, append([]byte(nil), r.seq...))
@@ -223,7 +243,23 @@ func (s *Session) askParkedQueries(tok *attachToken) {
 // A read-only follower is excluded because its input is dropped on the way back (see recvLoop), so asking
 // one guarantees a timeout. A reservation that has not attached is excluded because it has no stream to
 // carry the question.
-func (s *Session) queryTargetLocked() *attachToken {
+// anyAnswererLocked reports whether any attached client could be asked a question at all.
+//
+// Separate from queryTargetLocked's eligibility so a graphics query can tell "nobody is here yet", which is
+// worth parking for, from "someone is here and cannot answer this kind", which is not.
+func (s *Session) anyAnswererLocked() bool {
+	for tok, cs := range s.clientSizes {
+		if cs.readOnly || !cs.attached {
+			continue
+		}
+		if s.queries[tok] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) queryTargetLocked(needsImages bool) *attachToken {
 	var best *attachToken
 	var bestOrder uint64
 	for tok, cs := range s.clientSizes {
@@ -231,6 +267,12 @@ func (s *Session) queryTargetLocked() *attachToken {
 			continue
 		}
 		if s.queries[tok] == nil {
+			continue
+		}
+		// tok can be nil here: a caller that never reserved one still gets sized, and a nil token draws no
+		// images, same as a terminal that said nothing.
+		if needsImages && (tok == nil || !tok.drawsImages) {
+			// Ineligible rather than merely unlikely to answer: this terminal prints an APC as text.
 			continue
 		}
 		// Highest order is the most recent attach. Activity would be better still, and order is the

@@ -141,6 +141,18 @@ func classifyTerminalOnly(p []byte) (n int, terminal bool) {
 	return 0, false
 }
 
+// RequiresImageSupport reports whether a query can only be answered by a terminal that draws images.
+//
+// A kitty graphics query, and nothing else. Needed because the proxy picks which client to ask, and asking
+// the wrong one is worse than asking nobody: a terminal with no graphics support cannot parse an APC at all,
+// so it prints the question across the screen as text and never answers. That reached a user as
+// "Ga=q,f=24,s=1,v=1" on a mobile ssh client while an `icat` in their kitty drew correctly, because the proxy
+// asks the most recently attached client and that was the phone.
+func RequiresImageSupport(p []byte) bool {
+	_, ok := classifyGraphicsQuery(p)
+	return ok
+}
+
 // classifyGraphicsQuery recognizes a kitty graphics command that asks a question.
 //
 // Only a=q, which asks whether a transmission would work and is answered without storing anything.

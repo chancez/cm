@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -110,11 +111,30 @@ func sessionWithClient(t *testing.T) (*Session, attachment) {
 		metaSubs:    make(map[*metaSub]struct{}),
 		boundaries:  osc.NewBoundaryTracker(0),
 		done:        make(chan struct{}),
+		// A logger, because the proxy reports what it decided not to ask. A nil one turns any such line into a
+		// panic in whatever test reaches it first, which is a fixture problem reported as a code failure.
+		log: slog.New(slog.DiscardHandler),
 	}
-	att, err := sess.attach(nil, nil)
+	// A client whose terminal draws images, which is what makes a *graphics* query proxyable at all: cm asks
+	// one only of a terminal that can answer it, since one that cannot prints the APC as text. Tests about
+	// something other than that eligibility want this client.
+	tok := sess.reserveClient()
+	tok.drawsImages = true
+	att, err := sess.attach(nil, tok)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
+	return sess, att
+}
+
+// sessionWithQuietClient is the same fixture whose client never said it can draw images, which is every
+// terminal without graphics support and every client predating the probe.
+func sessionWithQuietClient(t *testing.T) (*Session, attachment) {
+	t.Helper()
+	sess, att := sessionWithClient(t)
+	sess.mu.Lock()
+	att.token.drawsImages = false
+	sess.mu.Unlock()
 	return sess, att
 }
 

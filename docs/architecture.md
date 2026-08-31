@@ -1513,6 +1513,16 @@ attach loop runs a `graphics.Stripper` per attachment and removes graphics comma
 cannot-draw terminal is sent. A command paints no text and moves no cursor, so what is left describes the same
 screen without the picture.
 
+**And it gates who gets *asked* about images, which is a third path.** A graphics query (`APC G` with `a=q`) is
+terminal-only, so cm proxies it to one client rather than answering it, and the proxy picks the most recently
+attached client. That put icat's probe on a mobile ssh client while the kitty beside it drew correctly: a
+terminal with no graphics support cannot parse an APC, so it printed `Ga=q,f=24,s=1,v=1` across the screen and
+answered nothing. Gating the output stream does not cover this, because a proxied query does not travel in the
+output stream. `query.RequiresImageSupport` marks those queries and `queryTargetLocked` ranks only eligible
+clients, so the kitty is asked even though the phone attached later. With a client attached that cannot draw,
+the query is dropped rather than parked: parking is for "nobody is here yet", and a definite no would stall
+every later reply behind it until the sweep expired it.
+
 Three consequences, each of which is a way to get this wrong:
 
 - **Only for a client painting a terminal.** A follower is collecting the session's bytes, and `cm read --raw
