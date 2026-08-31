@@ -1,5 +1,8 @@
+[settings]
+lockfile = true
+
 [tools]
-go = "1.26.5"
+go = "prefix:1.27"
 protoc = "35.1"
 buf = "1.72.0"
 # Only needed by the `libghostty` task to build libghostty-vt from source.
