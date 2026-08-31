@@ -11,6 +11,7 @@ import (
 
 	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/fault"
+	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
@@ -380,6 +381,15 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// select for anything that cannot be repainted.
 	repaint := sess.repaintChan(att.token)
 
+	// Removes images from this client's output while its terminal has not said it can draw them. One per
+	// attachment, because what is held between chunks belongs to this stream and no other, and used only by
+	// this loop.
+	//
+	// painting is the same distinction the restore makes: a client filling a terminal window, as against a
+	// follower collecting bytes, which wants them all.
+	var gfxStrip graphics.Stripper
+	painting := !open.NoRestore
+
 	// Output is read on its own goroutine because the reader blocks, and this loop also has
 	// to notice a detach or a dropped connection.
 	type chunkMsg struct {
@@ -419,12 +429,45 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				}
 				return msg.err
 			}
+			data, nextSeq := msg.chunk.Data, uint64(0)
+			if msg.chunk.Gap {
+				// The bytes that would have completed a held command are the ones that were lost, so
+				// holding them would strip the front of whatever arrives next instead.
+				gfxStrip.Reset()
+			} else if painting && (!sess.drawsImages(att.token) || gfxStrip.Pending()) {
+				// This client's terminal cannot draw an image, so the images in the session's live output are
+				// removed rather than printed as base64 across its screen. That is the other half of the
+				// restore gate, and the half a user hit first: with a kitty and a phone both attached, an
+				// icat in the kitty drew there and dumped its payload as text on the phone, because the
+				// session's output goes to every client alike.
+				//
+				// Kept up while anything is held even once the terminal has said yes, since a chunk boundary
+				// inside a command is not a place to change one's mind: the remainder of a half-removed
+				// transmission is text on any terminal. Pending is false at a command boundary, which is
+				// where the switch is safe.
+				//
+				// Stripped here rather than in the client because the bytes are the cost. An image is
+				// megabytes and the terminal that cannot draw it is usually on the slow link, so sending it
+				// to be discarded on arrival would delay the text behind it.
+				//
+				// Not for a follower, which is what painting excludes: `cm read --raw --follow` is collecting
+				// the session's bytes, and removing some would be corruption in the file rather than a
+				// courtesy. A follower paints no terminal, so nothing there prints base64 either.
+				data = gfxStrip.Strip(data)
+				if len(data) != len(msg.chunk.Data) {
+					// Fewer bytes than the log holds, so the client cannot derive its position by adding
+					// them up. Stated explicitly, or a reconnect resumes short of where this client really
+					// is and replays the image it was spared.
+					nextSeq = uint64(msg.chunk.Seq) + uint64(len(msg.chunk.Data))
+				}
+			}
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Output{
 					Output: &serverv1.Output{
-						Seq:  uint64(msg.chunk.Seq),
-						Data: msg.chunk.Data,
-						Gap:  msg.chunk.Gap,
+						Seq:     uint64(msg.chunk.Seq),
+						Data:    data,
+						Gap:     msg.chunk.Gap,
+						NextSeq: nextSeq,
 					},
 				},
 			}); err != nil {

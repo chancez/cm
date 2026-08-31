@@ -942,7 +942,14 @@ func runSession(
 				if err := scr.session(o.Data); err != nil {
 					return outcomeDone, err
 				}
-				next := o.Seq + uint64(len(o.Data))
+				// The position after this chunk. Stated by the server when it differs from the arithmetic, which
+				// is when cm sent this client fewer bytes than the log holds: a terminal that cannot draw images
+				// has them removed from its output. Adding up what arrived would then leave the position short,
+				// and a reconnect would replay the image this client was spared.
+				next := o.NextSeq
+				if next == 0 {
+					next = o.Seq + uint64(len(o.Data))
+				}
 				*resumeFrom = &next
 				if opts.OnOutput != nil {
 					// After the write, so a caller told it has reached a position can rely on the bytes up

@@ -931,6 +931,19 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 //
 // Empty when there is nothing on screen, which is the common case: an answer arrives for every attach and
 // most sessions hold no images.
+// drawsImages reports whether this client's terminal said it can draw images.
+//
+// Read under the lock because two goroutines touch it: the request loop sets it when the terminal answers,
+// and the output loop reads it for every chunk it forwards.
+func (s *Session) drawsImages(tok *attachToken) bool {
+	if tok == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return tok.drawsImages
+}
+
 func (s *Session) imagesFor(tok *attachToken) []byte {
 	if tok == nil {
 		return nil

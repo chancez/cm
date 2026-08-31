@@ -1497,6 +1497,25 @@ a pipe has no terminal, where the question would be corruption in the file. A te
 all is treated as unable, which is the safe direction: the cost is an image a capable terminal would have
 drawn, against a screen of payload on one that would not.
 
+**The answer gates the live stream too, not only the restore.** That was the half missed first, and it reached
+a user immediately: with a kitty and a phone attached to one session, `icat` in the kitty drew there and
+printed its payload as text across the phone, because a session's output goes to every client alike. So the
+attach loop runs a `graphics.Stripper` per attachment and removes graphics commands from what a
+cannot-draw terminal is sent. A command paints no text and moves no cursor, so what is left describes the same
+screen without the picture.
+
+Three consequences, each of which is a way to get this wrong:
+
+- **Only for a client painting a terminal.** A follower is collecting the session's bytes, and `cm read --raw
+  --follow` with the images removed is corruption in whatever it writes to. `TestAFollowerStillReceivesImages`
+  guards the condition rather than the mechanism.
+- **The position has to be stated, not derived.** A client tracks where it is by adding up the bytes it
+  received, which is short by exactly what was removed, so a reconnect would resume before the image and
+  replay it. `Output.next_seq` carries the true position and is set only when the two disagree.
+- **The switch happens at a command boundary.** Stripping continues while the stripper holds part of a command
+  even after the terminal says yes, because the remainder of a half-removed transmission is text on any
+  terminal. `Pending` being false is what makes the boundary observable.
+
 The interception withholds a command until it is whole, and "withheld" has to be distinguishable from
 "nothing to intercept". `graphics.Scanner.Scan` reports the second as nil, meaning forward the chunk
 unchanged, and the first as an empty result. Conflating them sent the bytes of a partial command out twice,

@@ -2726,7 +2726,18 @@ type Output struct {
 	Data  []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
 	// Set when output was truncated before the requested sequence, so the client knows its
 	// view has a hole and should reattach fresh rather than assume continuity.
-	Gap           bool `protobuf:"varint,3,opt,name=gap,proto3" json:"gap,omitempty"`
+	Gap bool `protobuf:"varint,3,opt,name=gap,proto3" json:"gap,omitempty"`
+	// The log position after this chunk, when it is not seq plus the bytes carried.
+	//
+	// A client derives its resume position by adding the bytes it received, which is right until cm sends a
+	// client fewer bytes than the log holds. That happens for a terminal that cannot draw images: it is sent
+	// the session's output with the graphics commands taken out, because those are megabytes it would print
+	// as base64. Its position still has to refer to the whole log, or a reconnect resumes short of where it
+	// really is and replays what it has already seen, image included.
+	//
+	// Unset when the two agree, which is every chunk to every other client, so this stays absent from the
+	// ordinary path rather than being computed twice and compared.
+	NextSeq       uint64 `protobuf:"varint,4,opt,name=next_seq,json=nextSeq,proto3" json:"next_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2780,6 +2791,13 @@ func (x *Output) GetGap() bool {
 		return x.Gap
 	}
 	return false
+}
+
+func (x *Output) GetNextSeq() uint64 {
+	if x != nil {
+		return x.NextSeq
+	}
+	return 0
 }
 
 // Exited reports that the session's shell exited, so the client should stop rather than
@@ -4907,11 +4925,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"session_id\x18\x05 \x01(\tR\tsessionId\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\x12\x18\n" +
 	"\arestore\x18\x03 \x01(\fR\arestore\x12\x19\n" +
-	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"@\n" +
+	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"[\n" +
 	"\x06Output\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
-	"\x03gap\x18\x03 \x01(\bR\x03gap\"%\n" +
+	"\x03gap\x18\x03 \x01(\bR\x03gap\x12\x19\n" +
+	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"%\n" +
 	"\x06Exited\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"d\n" +
 	"\rSignalRequest\x12\x18\n" +

@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -153,5 +155,103 @@ func TestALateGraphicsAnswerStillGetsImages(t *testing.T) {
 	// And the placement comes with them, or the payload is bytes for no picture.
 	if got := late.output(); !strings.Contains(got, "a=p") {
 		t.Error("the late send carried no placement, so nothing draws")
+	}
+}
+
+// An image drawn while a terminal that cannot draw one is attached does not reach it.
+//
+// The reported case, and the half a restore gate cannot cover: a kitty and a phone attached to the same
+// session, `icat` run in the kitty. It drew there and printed its payload as text across the phone, because a
+// session's output goes to every attached client alike and only the restore was gated.
+//
+// Both clients attach *before* the image exists, which is what makes this the live path rather than the restore
+// path, and the image is triggered by typing into the leader the way a user runs icat.
+func TestAnImageDrawnLiveSkipsATerminalThatCannotDrawIt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a server, a shell and two ptys")
+	}
+
+	e := newEnvWith(t, cmHooksBinary(t), "")
+
+	const payload = "QUJDQUJDQUJDQUJD"
+
+	// The command goes in a file and is run with cat, so the payload cannot appear on the command line. Typed
+	// directly, the shell echoes what was typed and every client sees those characters legitimately: the first
+	// version of this test failed on its own echo, which is the needle-in-the-transcript trap docs/testing.md
+	// warns about.
+	cmdPath := filepath.Join(e.state, "live.img")
+	if err := os.WriteFile(cmdPath,
+		[]byte("\x1b_Ga=T,f=24,s=2,v=2,i=7;"+payload+"\x1b\\"), 0o600); err != nil {
+		t.Fatalf("writing the image command: %v", err)
+	}
+
+	// An interactive shell, so the image can be triggered after both clients are watching.
+	drawing := attachOnPtyDrawing(t, e, nil, "gfxlive", "--", "/bin/sh")
+	waitForOnPty(t, drawing, "$")
+
+	// The one that cannot: attached, and deliberately never answering.
+	quiet := attachOnPty(t, e, "gfxlive")
+	waitForOnPty(t, quiet, "$")
+
+	// Typed into the leader, which is what running icat is.
+	const marker = "IMAGE-DONE"
+	drawing.typeLine("cat " + cmdPath + `; printf '\r\n` + marker + `\r\n'`)
+	waitForOnPty(t, drawing, marker)
+	waitForOnPty(t, quiet, marker)
+	// The marker arrives after the image in the same stream, so both clients have been sent everything by
+	// now. A sleep here would only be covering for that ordering.
+
+	if got := drawing.output(); !strings.Contains(got, payload) {
+		t.Errorf("the terminal that answered the probe never received the live image, so nothing draws "+
+			"anywhere: %q", truncateForTest(got))
+	}
+	if got := quiet.output(); strings.Contains(got, payload) {
+		t.Errorf("a terminal that cannot draw images was sent one live, which it prints as base64 across "+
+			"the screen: %q", truncateForTest(got))
+	}
+	// And it is still a working attachment rather than a censored one.
+	if got := quiet.output(); !strings.Contains(got, marker) {
+		t.Errorf("the quiet client lost the session output as well as the image: %q", truncateForTest(got))
+	}
+}
+
+// A follower is not censored: `cm read --raw --follow` gets the session's bytes, image included.
+//
+// The gate is about a *terminal* that would print base64 rather than a picture. A follower paints no terminal,
+// it collects the stream, and removing bytes there is corruption in whatever it is writing to. This is the
+// guard on the condition rather than on the mechanism: dropping the painting test would make the stripping look
+// more uniform and would quietly break every consumer of the byte stream.
+func TestAFollowerStillReceivesImages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a server, a shell and a pty")
+	}
+
+	e := newEnvWith(t, cmHooksBinary(t), "")
+
+	const payload = "QUJDQUJDQUJDQUJD"
+	cmdPath := filepath.Join(e.state, "follow.img")
+	if err := os.WriteFile(cmdPath,
+		[]byte("\x1b_Ga=T,f=24,s=2,v=2,i=7;"+payload+"\x1b\\"), 0o600); err != nil {
+		t.Fatalf("writing the image command: %v", err)
+	}
+
+	drawing := attachOnPtyDrawing(t, e, nil, "gfxfollow", "--", "/bin/sh")
+	waitForOnPty(t, drawing, "$")
+
+	// The follower runs for a bounded window; the image is emitted once it is attached, since --follow
+	// streams what arrives from now rather than replaying the log.
+	got := make(chan string, 1)
+	go func() {
+		got <- e.followFor(5*time.Second, "read", "--raw", "--follow", "gfxfollow").stdout
+	}()
+	e.waitFor("the follower to attach", 15*time.Second, func() bool {
+		return e.sessionDetail(t, "gfxfollow").Clients == 2
+	})
+	drawing.typeLine("cat " + cmdPath + "; printf '\r\nFOLLOW-DONE\r\n'")
+	waitForOnPty(t, drawing, "FOLLOW-DONE")
+
+	if stream := <-got; !strings.Contains(stream, payload) {
+		t.Errorf("a follower did not receive the image, so the byte stream it collects is missing what the "+
+			"program wrote: %q", truncateForTest(stream))
 	}
 }

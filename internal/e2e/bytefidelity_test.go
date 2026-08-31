@@ -79,7 +79,10 @@ func TestClientTerminalReceivesTheProgramsBytesIntact(t *testing.T) {
 	e := newEnvWith(t, cmHooksBinary(t), "")
 
 	transcript := e.state + "/transcript.jsonl"
-	c := attachOnPtyWithEnv(t, e,
+	// A terminal that answers the graphics probe, which this test needs to be about byte fidelity at all: a
+	// terminal that cannot draw images has them removed from its stream on purpose, so the graphics half of
+	// this would be asserting against a deliberate omission. See attachOnPtyDrawing.
+	c := attachOnPtyDrawing(t, e,
 		[]string{"CM_TESTHOOK_TRANSCRIPT=" + transcript},
 		"fidelity", "--", "/bin/sh", "-c", script)
 

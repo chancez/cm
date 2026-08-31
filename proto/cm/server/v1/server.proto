@@ -799,6 +799,17 @@ message Output {
   // Set when output was truncated before the requested sequence, so the client knows its
   // view has a hole and should reattach fresh rather than assume continuity.
   bool gap = 3;
+  // The log position after this chunk, when it is not seq plus the bytes carried.
+  //
+  // A client derives its resume position by adding the bytes it received, which is right until cm sends a
+  // client fewer bytes than the log holds. That happens for a terminal that cannot draw images: it is sent
+  // the session's output with the graphics commands taken out, because those are megabytes it would print
+  // as base64. Its position still has to refer to the whole log, or a reconnect resumes short of where it
+  // really is and replays what it has already seen, image included.
+  //
+  // Unset when the two agree, which is every chunk to every other client, so this stays absent from the
+  // ordinary path rather than being computed twice and compared.
+  uint64 next_seq = 4;
 }
 
 // Exited reports that the session's shell exited, so the client should stop rather than

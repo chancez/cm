@@ -115,3 +115,41 @@ func TestPushedImagesAreWrittenToTheTerminal(t *testing.T) {
 		t.Fatal("runSession did not return")
 	}
 }
+
+// A client sent fewer bytes than the log holds takes its position from the server, not from arithmetic.
+//
+// This is the resume half of stripping images out of a live stream. A client adds up what it received to know
+// where it is, which is right until cm removes bytes on purpose: for a terminal that cannot draw images, the
+// graphics commands never arrive. Adding up what did arrive leaves the position short of the truth, and the
+// reconnect that follows replays the image this client was spared, one chunk at a time, forever.
+func TestAStrippedChunkTakesItsPositionFromTheServer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nextSeq uint64
+		want    uint64
+	}{
+		{"stated by the server", 900, 900},
+		{"derived when absent", 0, 102},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.stream.opened("test", 100, nil)
+			h.stream.recv <- recvResult{resp: &serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Output{
+					Output: &serverv1.Output{Seq: 100, Data: []byte("ab"), NextSeq: tc.nextSeq},
+				},
+			}}
+			h.stream.exited(0)
+
+			if _, err := h.run(context.Background()); err != nil {
+				t.Fatalf("runSession() error = %v", err)
+			}
+			if h.resumeFrom == nil {
+				t.Fatal("no resume position was recorded")
+			}
+			if got := *h.resumeFrom; got != tc.want {
+				t.Errorf("resume position = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
