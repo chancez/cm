@@ -57,6 +57,14 @@ type Config struct {
 	// Empty means the default; "none" disables detaching by key.
 	DetachKey string `toml:"detach_key"`
 
+	// PrefixKey names the key that opens the overlay inside an attached session, as a control character
+	// like "ctrl-]". Empty means the default; "none" disables the overlay.
+	//
+	// A second setting rather than a mode on DetachKey, because both keys are live at once and they do
+	// different things: detaching stays one press, and the prefix is what makes cm reachable from under a
+	// full-screen program.
+	PrefixKey string `toml:"prefix_key"`
+
 	// LogLevel is the minimum severity recorded: debug, info, warn, error, or off.
 	//
 	// On by default at info. The server and shim run detached with their stdio discarded, so

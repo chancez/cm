@@ -22,6 +22,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		onRestore    string
 		env          []string
 		detachKeyArg string
+		prefixKeyArg string
 		noAttach     bool
 		tagArgs      []string
 	)
@@ -45,6 +46,13 @@ makes an ordinary shell session with ordinary persistence.
 
 Detaching leaves the session running. The key is ctrl-\ by default, set by
 detach_key in the config file, and overridden for one attachment by --detach-key.
+
+ctrl-] opens an overlay at the bottom of the screen, from which any cm command can
+be run without leaving the program in the session: ':' for a command line, 'b' to
+bind a name, 's' to switch, 'd' to detach, '?' for the rest. Pressing ctrl-] or
+ctrl-\ twice sends it to the program, which is the only way to reach a key cm
+intercepts. Set by prefix_key, or --prefix-key for one attachment, and "none"
+turns it off.
 
 Attaching from inside another cm session keeps working without an override: the key
 leaves the innermost session, and a second press leaves the outer one. The override
@@ -100,6 +108,23 @@ matters for another multiplexer, which sees the key first and never passes it on
 				return err
 			}
 
+			prefixSpec := cfg.PrefixKey
+			if prefixKeyArg != "" {
+				prefixSpec = prefixKeyArg
+			}
+			prefixKey, err := client.ParsePrefixKey(prefixSpec)
+			if err != nil {
+				return err
+			}
+			// Refused rather than resolved by precedence. Both keys are live at once, so one key configured
+			// as both means whichever loses is unreachable, and a user who did that by accident would see a
+			// working detach and an overlay that never opens.
+			if !detachKey.Disabled && !prefixKey.Disabled && detachKey.Byte == prefixKey.Byte {
+				return fmt.Errorf(
+					"the detach key and the prefix key are both %s, so one of them would never fire",
+					detachKey.Name)
+			}
+
 			// Taken before anything reads the environment, because Env below forwards this process's
 			// whole environment to a session this call creates. See takeResumeFrom.
 			resumeFrom := takeResumeFrom(os.Getpid())
@@ -120,6 +145,11 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Dir:       dir,
 				Command:   argsAfterDash(cmd, args),
 				DetachKey: detachKey,
+				PrefixKey: prefixKey,
+				// How the overlay runs a cm command. Supplied here rather than built in internal/client,
+				// because which binary, which runtime directory, and which commands need a terminal of their
+				// own are all this layer's knowledge. See overlayRunner.
+				RunCommand: overlayRunner(dirs),
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
@@ -181,6 +211,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 		"label the new session, as key or key=value (repeatable, ignored when reattaching)")
 	f.StringVar(&detachKeyArg, "detach-key", "",
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
+	f.StringVar(&prefixKeyArg, "prefix-key", "",
+		`key that opens cm's overlay: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
 	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,

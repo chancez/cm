@@ -119,6 +119,17 @@ type Options struct {
 	// PrefixKey is the key that opens the overlay. The zero value intercepts nothing, so a caller that
 	// does not want an overlay gets none: see KeySpec.live.
 	PrefixKey KeySpec
+
+	// RunCommand runs a cm command the overlay was asked to run, and returns what it printed.
+	//
+	// Supplied by the caller rather than done here, because how to invoke cm is the command layer's
+	// business: which binary, which runtime directory, and which commands are refused because they want a
+	// terminal of their own. This package would have to guess all three. sessionRef is the session the
+	// command should act on, spelled as a reference.
+	//
+	// Nil disables running commands, which is what every caller that is not `cm attach` does. The keys
+	// still work; a command reports that it cannot run rather than appearing to do nothing.
+	RunCommand func(ctx context.Context, sessionRef string, args []string) (string, error)
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
 	// now on.
 	//
@@ -755,10 +766,37 @@ func runSession(
 		detachKey, _ = ParseDetachKey(DefaultDetachKey)
 	}
 
+	// The overlay needs a terminal of its own to paint on, so anything else -- a follower streaming to a
+	// pipe, a caller filtering the output -- gets no prefix key at all rather than one that swallows a
+	// keystroke and shows nothing for it. Same condition the screen uses to decide whether it paints.
+	ov := &overlay{
+		// Through the screen, so a row cannot land inside a half-written sequence. It builds each block
+		// with one write, so a paint is one injection.
+		out:      injectWriter{scr},
+		size:     tty.Size,
+		enabled:  opts.Output == nil && tty.IsTerminal() && !opts.NoRestore,
+		readOnly: opts.ReadOnly,
+		prefix:   opts.PrefixKey,
+		detach:   detachKey,
+		session:  result.Session,
+		log:      opts.Log,
+	}
+	prefixKey := opts.PrefixKey
+	if !ov.enabled {
+		prefixKey = KeySpec{}
+	}
+
 	// The gate buffers a partial detach sequence across reads, so a CSI-encoded detach split between
 	// two reads is still recognized rather than forwarded to the shell, and releases it after
 	// escapeGrace so a lone escape is not withheld forever.
-	gate := &inputGate{detach: detachKey, prefix: opts.PrefixKey}
+	gate := &inputGate{detach: detachKey, prefix: prefixKey}
+
+	// A command the overlay dispatched, delivered when the child exits.
+	//
+	// Buffered so the goroutine that ran it cannot be left blocked on a send after this connection ended,
+	// and read in the select below rather than waited for inline: a command run inline would freeze the
+	// session's output for as long as it took, and `cm doctor` takes over a second.
+	cmdDone := make(chan overlayCommand, 1)
 	// A timer exists only while the gate is holding something. Nil channels block forever, which is
 	// what keeps this case out of the select the rest of the time.
 	var (
@@ -793,8 +831,60 @@ func runSession(
 		return false
 	}
 
+	// applyOverlay carries out what the overlay decided, and reports an outcome when the attachment is
+	// finishing or has to reconnect.
+	//
+	// In this order deliberately. Bytes the overlay forwards go first, so a key it sent to the program is
+	// delivered before a repaint that would otherwise race it. A detach beats a repaint, since nothing
+	// needs repainting on a screen this client is about to leave.
+	applyOverlay := func(resp overlayResponse) (outcome, bool) {
+		if sendInput(resp.Send) {
+			return outcomeReconnect, true
+		}
+		if len(resp.Run) > 0 {
+			if opts.RunCommand == nil {
+				// A caller that wired an overlay but no runner: the keys still work, and a command says why
+				// it cannot rather than appearing to do nothing.
+				ov.finish("", errors.New("this client cannot run commands"))
+			} else {
+				// By ID rather than by the reference this attempt asked for. A name can have moved since,
+				// and the ID is what the session is: see AGENTS.md on the two spellings.
+				ref := paths.FormatSessionID(result.SessionID)
+				args := resp.Run
+				go func() {
+					out, err := opts.RunCommand(ctx, ref, args)
+					select {
+					case cmdDone <- overlayCommand{out: out, err: err}:
+					case <-ctx.Done():
+					}
+				}()
+			}
+		}
+		if resp.Detach {
+			_ = stream.Send(&serverv1.AttachRequest{
+				Event: &serverv1.AttachRequest_Detach{
+					Detach: &serverv1.Detach{NoAck: true},
+				},
+			})
+			result.Detached = true
+			return outcomeDone, true
+		}
+		if resp.Repaint {
+			// The rows the overlay covered held the program's content, and cm's model is the only thing that
+			// knows what was there. Dropping the position and reconnecting repaints from it, which is the
+			// same move the outage notice and a detected gap both make, for the same reason.
+			opts.Log.Debug("repainting after the overlay closed", "session", result.Session)
+			*resumeFrom = nil
+			return outcomeReconnect, true
+		}
+		return outcomeDone, false
+	}
+
 	for {
 		select {
+		case cmd := <-cmdDone:
+			ov.finish(cmd.out, cmd.err)
+
 		case msg, ok := <-out:
 			if !ok {
 				return outcomeReconnect, nil
@@ -953,6 +1043,10 @@ func runSession(
 				if err := scr.session(o.Data); err != nil {
 					return outcomeDone, err
 				}
+				// The session's bytes are written verbatim and never withheld, which is right, so a program
+				// that draws while the overlay is up paints over it. Redrawing after each chunk means the
+				// overlay heals rather than being left half erased.
+				ov.repaint()
 				// The position after this chunk. Stated by the server when it differs from the arithmetic, which
 				// is when cm sent this client fewer bytes than the log holds: a terminal that cannot draw images
 				// has them removed from its output. Adding up what arrived would then leave the position short,
@@ -1007,8 +1101,32 @@ func runSession(
 				continue
 			}
 
+			// While the overlay is up it owns the keyboard, so the gate is bypassed entirely. That is what
+			// makes the detach key reach the program from in there rather than detaching, and it is also why
+			// the overlay has to forward what it does not recognize: nothing else is left to do it.
+			if ov.active() {
+				if outcome, done := applyOverlay(ov.feed(data)); done {
+					return outcome, nil
+				}
+				continue
+			}
+
 			dec := gate.feed(data, now)
 			buf := dec.Forward
+			if dec.Action == gatePrefix {
+				// Whatever preceded the prefix was typed at the program and goes there first, in order.
+				if sendInput(buf) {
+					return outcomeReconnect, nil
+				}
+				stopHold()
+				ov.session = result.Session
+				ov.open()
+				// The same read can hold the action key, which is what a fast typist or a paste produces.
+				if outcome, done := applyOverlay(ov.feed(dec.Rest)); done {
+					return outcome, nil
+				}
+				continue
+			}
 			if dec.Action == gateDetach {
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.
@@ -1088,6 +1206,9 @@ func runSession(
 			}); err != nil {
 				return outcomeReconnect, nil
 			}
+			// Repainted at the new size rather than left where it was: the block is anchored to the bottom
+			// row, and that row has moved.
+			ov.repaint()
 
 		case <-ctx.Done():
 			// Interrupted, such as by SIGTERM. Detach rather than abandoning the stream, so the exit is

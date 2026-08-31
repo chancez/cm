@@ -55,6 +55,7 @@ type configJSON struct {
 	ScrollbackLines int    `json:"scrollback_lines"`
 	ResizePolicy    string `json:"resize_policy"`
 	DetachKey       string `json:"detach_key"`
+	PrefixKey       string `json:"prefix_key"`
 	LogLevel        string `json:"log_level"`
 	LogEnabled      bool   `json:"log_enabled"`
 	RestoreMode     string `json:"restore_mode"`
@@ -134,6 +135,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	if detach == "" {
 		detach = client.DefaultDetachKey
 	}
+	prefix := cfg.PrefixKey
+	if prefix == "" {
+		prefix = client.DefaultPrefixKey
+	}
 
 	_, fileErr := os.Stat(path)
 	out := configJSON{
@@ -148,6 +153,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		ScrollbackLines: cfg.Scrollback(),
 		ResizePolicy:    resize,
 		DetachKey:       detach,
+		PrefixKey:       prefix,
 		LogLevel:        strings.ToLower(level.String()),
 		LogEnabled:      logEnabled,
 		RestoreMode:     string(restore),
@@ -187,6 +193,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "scrollback_lines          %d\n", out.ScrollbackLines)
 	fmt.Fprintf(os.Stdout, "resize_policy             %s\n", out.ResizePolicy)
 	fmt.Fprintf(os.Stdout, "detach_key                %s\n", out.DetachKey)
+	fmt.Fprintf(os.Stdout, "prefix_key                %s\n", out.PrefixKey)
 	if out.LogEnabled {
 		fmt.Fprintf(os.Stdout, "log_level                 %s\n", out.LogLevel)
 	} else {

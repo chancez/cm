@@ -524,3 +524,9 @@ func clip(s string, width int) string {
 	}
 	return s
 }
+
+// overlayCommand is a finished command on its way back to the overlay.
+type overlayCommand struct {
+	out string
+	err error
+}
