@@ -620,8 +620,11 @@ func TestOverlayHidesTheCursorAndFillsTheWidth(t *testing.T) {
 	if !strings.Contains(got, "\x1b[?25l") {
 		t.Errorf("paint wrote %q, want the cursor hidden: the program's cursor is restored onto the bar", got)
 	}
-	if rows := o.rows(24, 80); len(rows) != 1 || len(rows[0]) != 79 {
-		t.Errorf("bar is %d wide, want 79: one short of the terminal, and padded to it", len(rows[0]))
+	// Padded on the way to the terminal rather than in rows(), which stays the logical view: what has to
+	// span the pane is what was written.
+	wantBar := overlayBarStyle + pad(o.rows(24, 80)[0], 79) + overlayStyleOff
+	if !strings.Contains(got, wantBar) {
+		t.Errorf("paint wrote %q, want a bar padded to 79 columns: %q", got, wantBar)
 	}
 
 	buf.Reset()
@@ -837,5 +840,59 @@ func TestOverlayHelpToggles(t *testing.T) {
 	o.feed([]byte("?"))
 	if !o.helping {
 		t.Error("a third ? did not reopen the help")
+	}
+}
+
+// The two shades, and the selection at the bar's brightness.
+//
+// Reverse video for both rather than colours, so each follows the terminal's own theme: a 256-colour grey
+// that reads on a dark background is unreadable on a light one, and cm cannot know which it has. The rows
+// under the bar add faint, and the chooser's selection drops it again, which is what makes the selected row
+// findable now that every row has a background.
+func TestOverlayShades(t *testing.T) {
+	o, buf := newTestOverlay(t, 24, 80)
+	o.open()
+	if got := buf.String(); !strings.Contains(got, overlayBarStyle) {
+		t.Errorf("the bar is not inverse: %q", got)
+	}
+
+	o.feed([]byte("s"))
+	buf.Reset()
+	o.sessions(pickItems(3), nil)
+
+	got := buf.String()
+	if !strings.Contains(got, overlayBodyStyle) {
+		t.Errorf("the rows under the bar are not dimmed: %q", got)
+	}
+	// The selected row is bright, and it is the first item, so the bar's style appears twice: once for the
+	// bar and once for the selection.
+	if n := strings.Count(got, overlayBarStyle); n != 2 {
+		t.Errorf("%d rows at the bar's brightness, want 2: the bar and the selection", n)
+	}
+
+	// Moving the cursor moves the bright row rather than adding one: the next paint still has exactly two,
+	// and the second one is a row further down.
+	buf.Reset()
+	o.feed([]byte{0x0e})
+	moved := buf.String()
+	if n := strings.Count(moved, overlayBarStyle); n != 2 {
+		t.Errorf("after moving, %d bright rows, want 2: the bar and the new selection", n)
+	}
+	if first, second := strings.Index(moved, "session-0"), strings.Index(moved, "session-1"); first > second {
+		t.Fatalf("the rows are not in order, so the check below means nothing: %q", moved)
+	}
+	if strings.Index(moved, overlayBarStyle+"  session-1") < 0 &&
+		!strings.Contains(moved, "> session-1") && !strings.Contains(moved, ">  session-1") {
+		t.Errorf("the selection did not move to the second row: %q", moved)
+	}
+
+	// Nothing is highlighted outside a list, so a command's output is uniformly dimmed.
+	o2, buf2 := newTestOverlay(t, 24, 80)
+	o2.open()
+	o2.feed([]byte(":list\r"))
+	buf2.Reset()
+	o2.finish("work\nother\n", nil)
+	if n := strings.Count(buf2.String(), overlayBarStyle); n != 1 {
+		t.Errorf("%d bright rows in a command's output, want 1: the bar alone", n)
 	}
 }

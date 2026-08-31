@@ -208,6 +208,16 @@ repaint replays cm's model and the model carries no cursor visibility -- `intern
 a highlight that stops where its text does reads as a stray line of the program's output rather than as
 cm's.
 
+Three shades, and they are *attributes* rather than colours. The bar is reverse video, the rows under it add
+faint, and a chooser's selected row drops the faint again. Each therefore follows the terminal's own
+foreground and background: a 256-colour grey that reads well on a dark theme is unreadable on a light one,
+and cm does not know which it is looking at. A terminal that ignores faint shows one shade for the whole
+block, which is legible and is what this looked like before.
+
+Every row is padded to the width so a shade covers the pane. A highlight that stops where its text does
+reads as a stray line of the program's output rather than as cm's, which is what the first version looked
+like.
+
 One paint per keypress, which needed fixing: the caller opens the overlay and then feeds whatever
 followed the prefix key, and both painted, so the transcript hook showed the whole block reaching the
 terminal twice for one press.

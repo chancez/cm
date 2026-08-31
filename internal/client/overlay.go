@@ -114,6 +114,32 @@ const (
 	promptName
 )
 
+// The two shades of the block, and why they are attributes rather than colours.
+//
+// Reverse video for both, so each follows the terminal's own foreground and background instead of assuming
+// a theme: a 256-colour grey that reads well on a dark background is unreadable on a light one, and cm does
+// not know which it is looking at. The rows under the bar add faint, which a terminal renders as a dimmer
+// version of the same swap, so the bar and its content are distinguishable without naming a colour.
+//
+// A terminal that ignores faint shows one shade for the whole block, which is what this looked like before
+// and is still legible. That is the reason for this arrangement rather than a second colour pair.
+const (
+	overlayBarStyle  = "\x1b[7m"
+	overlayBodyStyle = "\x1b[2;7m"
+	overlayStyleOff  = "\x1b[0m"
+)
+
+// highlight reports which body row is drawn at the bar's brightness rather than dimmed, or -1.
+//
+// The chooser's selection, which the "> " marker alone was carrying until the rows gained a background: a
+// marker two characters wide is what the eye finds last on a shaded row.
+func (o *overlay) highlight() int {
+	if o.mode != overlayPick || o.pick == nil {
+		return -1
+	}
+	return o.pick.cursorRow()
+}
+
 // maxOverlayRows bounds the block, on top of never taking more than half the terminal.
 //
 // A cap at all because a command like `cm list` on a machine with thirty sessions would otherwise cover
@@ -578,9 +604,7 @@ func (o *overlay) rows(rows, cols int) []string {
 	// Never more than half the screen, and never more than maxOverlayRows. A block that covered the
 	// program it is overlaying would make the overlay the problem.
 	budget := min(max(rows/2, 1), maxOverlayRows)
-	// Padded to the full width, so the bar's inverse video spans the pane rather than ending where the text
-	// does. A short highlighted run reads as a stray line of output; a full-width one reads as cm's.
-	out := []string{pad(clip(o.bar(), width), width)}
+	out := []string{clip(o.bar(), width)}
 
 	// The chooser sizes itself to what is left, so its window can follow the cursor. Everything else is a
 	// fixed block that gets truncated below.
@@ -644,6 +668,9 @@ func (o *overlay) paint() {
 	// going from a command's output back to the bar alone.
 	total := max(o.painted, len(lines))
 	blank := total - len(lines)
+	// Which body row is the selection, computed before the loop so the arithmetic is in one place: rows
+	// carries the bar at index 0, and the chooser counts from its first item.
+	highlight := o.highlight()
 
 	// DECSC and DECRC around the whole block, so the cursor the program is using is exactly where it was.
 	// Each row is addressed absolutely and cleared first, so nothing here can scroll and no row can hold
@@ -664,14 +691,22 @@ func (o *overlay) paint() {
 		if row <= 0 {
 			continue
 		}
+		// Every row is padded to the width, so a shade covers the pane rather than stopping where its text
+		// does: a highlight that ends mid-row reads as a stray line of the program's output rather than as
+		// cm's. One column short of the terminal, for the pending-wrap reason above.
 		switch {
 		case i < blank:
 			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K", row)
 		case i == blank:
-			// The bar is inverse so it reads as cm's rather than as the program's own output.
-			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K\x1b[7m%s\x1b[0m", row, lines[i-blank])
+			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K%s%s%s",
+				row, overlayBarStyle, pad(lines[i-blank], int(cols)-1), overlayStyleOff)
 		default:
-			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K%s", row, lines[i-blank])
+			style := overlayBodyStyle
+			if i-blank-1 == highlight {
+				style = overlayBarStyle
+			}
+			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K%s%s%s",
+				row, style, pad(lines[i-blank], int(cols)-1), overlayStyleOff)
 		}
 	}
 	b.WriteString("\x1b8")

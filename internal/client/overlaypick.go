@@ -46,6 +46,18 @@ type picker struct {
 	loading bool
 	// err is why the list could not be fetched.
 	err string
+	// start is the first item the last render showed, so the overlay can work out which painted row the
+	// cursor is on and light it up. Recorded by body rather than recomputed, since the window arithmetic
+	// belongs to one place.
+	start int
+}
+
+// cursorRow reports which of the rows body returned holds the cursor, or -1 when none does.
+func (p *picker) cursorRow() int {
+	if p.loading || p.err != "" || len(p.matches()) == 0 {
+		return -1
+	}
+	return p.cursor - p.start
 }
 
 // pickItem is one choosable thing.
@@ -182,6 +194,7 @@ func (p *picker) body(limit int) []string {
 	if p.cursor >= height {
 		start = p.cursor - height + 1
 	}
+	p.start = start
 	end := min(start+height, len(m))
 
 	// The label column is padded to the widest label *in view*, so the details line up as a column instead
