@@ -231,7 +231,9 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// What the client's terminal said it can draw, recorded on the reservation so attach can decide whether
 	// this restore carries images. Established by the client because the answer arrives on its terminal; see
 	// probeGraphics in internal/client.
-	tok.drawsImages = open.TerminalKittyGraphics
+	if open.TerminalKittyGraphics {
+		tok.images = imagesYes
+	}
 
 	att, err := sess.attach(resumeFrom, tok)
 	if err != nil {
@@ -770,6 +772,9 @@ func (s *Service) recvLoop(
 				// Sent from here, which is where the Detached ack is sent for the same reason: this is the
 				// goroutine that received the request, and both are replies to it rather than session
 				// output. Session output and proxied queries go out on the attach loop instead.
+				// Recorded either way. A no matters as much as a yes: it is what tells the query proxy that
+				// this terminal will never answer a graphics query, as against not having answered yet.
+				sess.noteImagesAnswer(tok, req.GetTerminalGraphics().DrawsImages)
 				if !req.GetTerminalGraphics().DrawsImages {
 					break
 				}

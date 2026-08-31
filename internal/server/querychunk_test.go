@@ -119,7 +119,7 @@ func sessionWithClient(t *testing.T) (*Session, attachment) {
 	// one only of a terminal that can answer it, since one that cannot prints the APC as text. Tests about
 	// something other than that eligibility want this client.
 	tok := sess.reserveClient()
-	tok.drawsImages = true
+	tok.images = imagesYes
 	att, err := sess.attach(nil, tok)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
@@ -133,7 +133,7 @@ func sessionWithQuietClient(t *testing.T) (*Session, attachment) {
 	t.Helper()
 	sess, att := sessionWithClient(t)
 	sess.mu.Lock()
-	att.token.drawsImages = false
+	att.token.images = imagesNo
 	sess.mu.Unlock()
 	return sess, att
 }

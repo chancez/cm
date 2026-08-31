@@ -933,6 +933,9 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 // most sessions hold no images.
 // drawsImages reports whether this client's terminal said it can draw images.
 //
+// Only a yes counts, which is the safe direction for the two callers that send bytes: an unanswered probe must
+// not be sent an image.
+//
 // Read under the lock because two goroutines touch it: the request loop sets it when the terminal answers,
 // and the output loop reads it for every chunk it forwards.
 func (s *Session) drawsImages(tok *attachToken) bool {
@@ -941,7 +944,24 @@ func (s *Session) drawsImages(tok *attachToken) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return tok.drawsImages
+	return tok.images == imagesYes
+}
+
+// noteImagesAnswer records what a client's terminal answered.
+//
+// A no is recorded as well as a yes, which is what lets the query proxy tell a terminal that cannot draw from
+// one that has not answered yet.
+func (s *Session) noteImagesAnswer(tok *attachToken, draws bool) {
+	if tok == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if draws {
+		tok.images = imagesYes
+		return
+	}
+	tok.images = imagesNo
 }
 
 func (s *Session) imagesFor(tok *attachToken) []byte {
@@ -949,7 +969,7 @@ func (s *Session) imagesFor(tok *attachToken) []byte {
 		return nil
 	}
 	s.mu.Lock()
-	tok.drawsImages = true
+	tok.images = imagesYes
 	term := s.term
 	cellHeight := s.gfxCellHeight
 	s.mu.Unlock()
@@ -2132,16 +2152,33 @@ func (s *Session) noteWatched() {
 // token a distinct address and doubles as useful identity in logs.
 type attachToken struct {
 	order uint64
-	// drawsImages records that this client's terminal answered a graphics probe with yes, so a restore may
-	// include the images the screen refers to.
+	// images is what this client's terminal said about drawing images, in three states rather than two.
 	//
 	// Per attachment rather than per session, because it is a fact about one terminal: the same session is
 	// legitimately watched by a kitty that can draw them and an ssh client that cannot. Default false is the
 	// safe direction, and it is what a client predating the probe reports: the cost is an image a capable
 	// terminal would have drawn, against a screen of base64 on one that would not. See probeGraphics in
 	// internal/client and Open.terminal_kitty_graphics.
-	drawsImages bool
+	// The third state is the one that bit: the answer arrives a round trip *after* Open, so "false" at any
+	// moment early in an attachment means "not answered yet" rather than "cannot". Conflating them made cm
+	// drop a graphics query from a program that ran in that window, which is any shell that draws an image
+	// promptly, and images stopped appearing in a plain kitty session again.
+	images imagesAnswer
 }
+
+// imagesAnswer is what a client has said about its terminal drawing images.
+type imagesAnswer uint8
+
+const (
+	// imagesUnknown means nothing has been said yet. Sending images is unsafe, and a question only a drawing
+	// terminal can answer is worth holding rather than dropping: the answer may be a millisecond away.
+	imagesUnknown imagesAnswer = iota
+	// imagesNo is a terminal that answered and cannot draw. Definite, so a question it could never answer is
+	// dropped rather than held.
+	imagesNo
+	// imagesYes is a terminal that answered it can.
+	imagesYes
+)
 
 // attachment is what a client gets from attaching.
 type attachment struct {
@@ -2298,7 +2335,7 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		//
 		// tok is nil for a caller that reserved nothing, which no client does: the service always reserves
 		// before attaching. Treated as "did not say yes" for the same reason the field defaults false.
-		drawsImages := tok != nil && tok.drawsImages
+		drawsImages := tok != nil && tok.images == imagesYes
 		restore = b
 		if drawsImages {
 			restore = append(b, s.graphicsRestore()...)

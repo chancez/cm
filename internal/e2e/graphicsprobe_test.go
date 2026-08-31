@@ -304,3 +304,61 @@ func TestImagesSurviveAReconnect(t *testing.T) {
 			truncateForTest(got))
 	}
 }
+
+// The full handshake a program performs before it sends an image, end to end.
+//
+// This is what `kitten icat` does and what none of the tests above covered: it asks the terminal whether a
+// transmission would work and waits for the reply before sending anything. Every earlier test emitted a
+// transmission directly, so the whole query path was untested end to end, and three separate bugs shipped in
+// it: cm asked the wrong client, cm dropped the question when the answer had not arrived yet, and a client
+// whose terminal cannot parse an APC had the question printed on its screen.
+//
+// Three assertions, which together are "icat draws": the drawing terminal is asked, the terminal that cannot
+// draw is not, and the reply reaches the program rather than being discarded as unsolicited.
+func TestAGraphicsHandshakeReachesTheDrawingTerminalAndBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a server, a shell and two ptys")
+	}
+
+	e := newEnvWith(t, cmHooksBinary(t), "")
+
+	// icat's own probe, in a file so its bytes cannot appear in the shell's echo of the command.
+	const probeID = "31"
+	queryPath := filepath.Join(e.state, "query.apc")
+	if err := os.WriteFile(queryPath,
+		[]byte("\x1b_Gi="+probeID+",s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"), 0o600); err != nil {
+		t.Fatalf("writing the query: %v", err)
+	}
+
+	drawing := attachOnPtyDrawing(t, e, nil, "gfxhandshake", "--", "/bin/sh")
+	waitForOnPty(t, drawing, "$")
+	quiet := attachOnPty(t, e, "gfxhandshake")
+	waitForOnPty(t, quiet, "$")
+
+	drawing.typeLine("cat " + queryPath + `; printf '\r\nASKED\r\n'`)
+	waitForOnPty(t, drawing, "ASKED")
+
+	// cm proxies the query to a terminal that can answer it, which is the kitty rather than the client that
+	// attached later.
+	// Matched on the program's own image id rather than on "a=q", because cm's probe to each terminal is also
+	// an a=q and appears in both streams legitimately. The first version of this test matched that instead and
+	// failed on cm asking the quiet client its own question.
+	want := "i=" + probeID
+	if got := drawing.waitForOutput(want, 10*time.Second); !strings.Contains(got, want) {
+		t.Fatalf("the drawing terminal was never asked, so a program waits out its detection timeout and "+
+			"draws nothing: %q", truncateForTest(got))
+	}
+	if q := quiet.output(); strings.Contains(q, want) {
+		t.Errorf("the terminal that cannot draw images was asked, and it renders the question as text: %q",
+			truncateForTest(q))
+	}
+
+	// And the answer reaches the program. Written by the terminal that was asked, the way a real one replies;
+	// cm matches it to the outstanding request and writes it to the pty, where the shell echoes it. That echo
+	// is in the session's output, so seeing it is proof the reply was delivered rather than discarded.
+	drawing.write([]byte("\x1b_Gi=" + probeID + ";OK\x1b\\"))
+	if echoed := drawing.waitForOutput("Gi="+probeID+";OK", 10*time.Second); !strings.Contains(echoed, "OK") {
+		t.Errorf("the terminal's reply never reached the program, so icat sees no answer and gives up: %q",
+			truncateForTest(echoed))
+	}
+}

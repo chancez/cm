@@ -124,7 +124,7 @@ func TestImagesForALateAnswerCarryTransmissionsAndPlacements(t *testing.T) {
 	if i, j := strings.Index(got, "a=t"), strings.Index(got, "a=p"); i > j {
 		t.Errorf("placement precedes its transmission, so the terminal drops it; got %q", truncate(got))
 	}
-	if !tok.drawsImages {
+	if tok.images != imagesYes {
 		t.Error("the token was not marked, so a later restore for this same client would carry no images")
 	}
 	// And a restore taken after this does carry them inline, which is what that mark is for.

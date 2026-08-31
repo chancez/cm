@@ -100,13 +100,16 @@ func (s *Session) proxyQuery(seq []byte) {
 	s.mu.Lock()
 	tok := s.queryTargetLocked(needsImages)
 	if tok == nil {
-		if needsImages && s.anyAnswererLocked() {
-			// A client is attached and it cannot draw images. That is a definite no rather than "not yet", so
-			// parking would stall every later reply behind a question nobody will ever answer, until the sweep
-			// expires it. The program is left in the position it would be in on a terminal without graphics
-			// support, which is the honest answer.
+		if needsImages && s.everyAnswererSaidNoImagesLocked() {
+			// Every attached client has answered, and none can draw. A definite no, so parking would stall
+			// every later reply behind a question nobody will ever answer until the sweep expired it. The
+			// program is left where it would be on a terminal without graphics support.
+			//
+			// Only when they have all *answered*. An unanswered probe is parked instead, which is the case
+			// that made images vanish from a plain kitty session: the answer arrives a round trip after Open,
+			// and a program that draws an image immediately asks inside that window.
 			s.mu.Unlock()
-			s.log.Debug("not asking a graphics query, no attached terminal draws images",
+			s.log.Debug("not asking a graphics query, every attached terminal said it cannot draw images",
 				"session", s.label)
 			return
 		}
@@ -203,7 +206,7 @@ func (s *Session) askParkedQueries(tok *attachToken) {
 		if !r.proxied || r.tok != nil {
 			continue
 		}
-		if query.RequiresImageSupport(r.seq) && !tok.drawsImages {
+		if query.RequiresImageSupport(r.seq) && tok.images != imagesYes {
 			// Left parked for a client that can answer it. Handing a graphics query to a terminal that cannot
 			// draw images puts the question on its screen as text, which is the bug this filter exists for.
 			continue
@@ -243,20 +246,25 @@ func (s *Session) askParkedQueries(tok *attachToken) {
 // A read-only follower is excluded because its input is dropped on the way back (see recvLoop), so asking
 // one guarantees a timeout. A reservation that has not attached is excluded because it has no stream to
 // carry the question.
-// anyAnswererLocked reports whether any attached client could be asked a question at all.
+// everyAnswererSaidNoImagesLocked reports whether every client that could be asked has answered that its
+// terminal cannot draw images.
 //
-// Separate from queryTargetLocked's eligibility so a graphics query can tell "nobody is here yet", which is
-// worth parking for, from "someone is here and cannot answer this kind", which is not.
-func (s *Session) anyAnswererLocked() bool {
+// Three states rather than two is the whole point. "Nobody is here yet" and "here but has not answered" are
+// both worth parking a graphics query for, since the answer may be a millisecond away; only "answered, and
+// cannot" is a definite no. Treating an unanswered probe as a no dropped the queries of any program that drew
+// an image promptly after an attach.
+func (s *Session) everyAnswererSaidNoImagesLocked() bool {
+	found := false
 	for tok, cs := range s.clientSizes {
-		if cs.readOnly || !cs.attached {
+		if cs.readOnly || !cs.attached || s.queries[tok] == nil {
 			continue
 		}
-		if s.queries[tok] != nil {
-			return true
+		found = true
+		if tok == nil || tok.images != imagesNo {
+			return false
 		}
 	}
-	return false
+	return found
 }
 
 func (s *Session) queryTargetLocked(needsImages bool) *attachToken {
@@ -269,9 +277,9 @@ func (s *Session) queryTargetLocked(needsImages bool) *attachToken {
 		if s.queries[tok] == nil {
 			continue
 		}
-		// tok can be nil here: a caller that never reserved one still gets sized, and a nil token draws no
-		// images, same as a terminal that said nothing.
-		if needsImages && (tok == nil || !tok.drawsImages) {
+		// tok can be nil here: a caller that never reserved one still gets sized, and a nil token has said
+		// nothing about images.
+		if needsImages && (tok == nil || tok.images != imagesYes) {
 			// Ineligible rather than merely unlikely to answer: this terminal prints an APC as text.
 			continue
 		}

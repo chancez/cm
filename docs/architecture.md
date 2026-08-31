@@ -1519,9 +1519,15 @@ attached client. That put icat's probe on a mobile ssh client while the kitty be
 terminal with no graphics support cannot parse an APC, so it printed `Ga=q,f=24,s=1,v=1` across the screen and
 answered nothing. Gating the output stream does not cover this, because a proxied query does not travel in the
 output stream. `query.RequiresImageSupport` marks those queries and `queryTargetLocked` ranks only eligible
-clients, so the kitty is asked even though the phone attached later. With a client attached that cannot draw,
-the query is dropped rather than parked: parking is for "nobody is here yet", and a definite no would stall
-every later reply behind it until the sweep expired it.
+clients, so the kitty is asked even though the phone attached later.
+
+That eligibility needs three states rather than two, and two was a bug of its own: the answer arrives a round
+trip *after* Open, so "not yes" early in an attachment means "not answered yet". Treating it as a definite no
+dropped the query of any program that drew an image promptly after an attach, which is any shell running icat as
+its first command. `imagesUnknown` parks the question, which is what the queue already does for one nobody can
+be asked yet, and the answer releases it; `imagesNo` drops it, because parking a question nobody will ever
+answer stalls every later reply until the sweep expires it. A client reports its no as well as its yes for
+exactly this reason.
 
 Three consequences, each of which is a way to get this wrong:
 

@@ -264,7 +264,7 @@ func (f *fakeTerminal) Written() string {
 func drawingClient(t *testing.T, s *Session) *attachToken {
 	t.Helper()
 	tok := s.reserveClient()
-	tok.drawsImages = true
+	tok.images = imagesYes
 	return tok
 }
 

@@ -104,3 +104,66 @@ func TestAGraphicsQueryPrefersTheTerminalThatDrawsImages(t *testing.T) {
 			"terminal that can draw is attached")
 	}
 }
+
+// A client that has not answered yet holds the question rather than losing it.
+//
+// This is the regression that took images out of a plain kitty session for a second time, and the state I had
+// conflated: the terminal's answer arrives a round trip *after* Open, so "not yes" early in an attachment means
+// "not answered yet", not "cannot". A program that draws an image promptly after an attach asks inside that
+// window, and treating it as a definite no dropped the query, so icat waited out its detection timeout and drew
+// nothing.
+//
+// Parked, which is what the queue already does for a question nobody can be asked yet, and then delivered when
+// the answer arrives.
+func TestAGraphicsQueryWaitsForATerminalThatHasNotAnsweredYet(t *testing.T) {
+	sess, att := sessionWithClient(t)
+	defer sess.detach(att)
+	// Back to the state a client is in between Open and its terminal's answer.
+	sess.mu.Lock()
+	att.token.images = imagesUnknown
+	sess.mu.Unlock()
+
+	sess.processChunk([]byte("painting"+graphicsQuery+"and carrying on"), 0)
+
+	if got := outstandingRequests(sess); got != 1 {
+		t.Fatalf("outstanding proxied requests = %d, want 1: the answer may be a millisecond away, so the "+
+			"question is held rather than dropped", got)
+	}
+	select {
+	case q := <-att.queries:
+		t.Fatalf("the client was asked %q before saying whether its terminal can draw images", q)
+	default:
+	}
+
+	// The answer arrives, and the parked question goes out.
+	sess.noteImagesAnswer(att.token, true)
+	sess.askParkedQueries(att.token)
+	select {
+	case q := <-att.queries:
+		if string(q) != graphicsQuery {
+			t.Errorf("the client was asked %q, want %q", q, graphicsQuery)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the parked query was never delivered after the terminal answered yes, so the program waits " +
+			"for a reply nobody was asked for")
+	}
+}
+
+// A no keeps a parked graphics query parked, rather than handing it to a terminal that prints it as text.
+func TestAParkedGraphicsQueryIsNotHandedToATerminalThatCannotDraw(t *testing.T) {
+	sess, att := sessionWithClient(t)
+	defer sess.detach(att)
+	sess.mu.Lock()
+	att.token.images = imagesUnknown
+	sess.mu.Unlock()
+
+	sess.processChunk([]byte(graphicsQuery), 0)
+	sess.noteImagesAnswer(att.token, false)
+	sess.askParkedQueries(att.token)
+
+	select {
+	case q := <-att.queries:
+		t.Errorf("a terminal that answered no was handed %q, which it renders as text", q)
+	default:
+	}
+}

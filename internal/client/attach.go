@@ -988,15 +988,17 @@ func runSession(
 			// program asked itself. See graphicsProbe.take.
 			now := time.Now()
 			data, answered, draws := gfx.take(data, now)
-			if answered && draws && !opts.ReadOnly {
-				// The server withholds images until told, so this is what unlocks them. Sent before the
-				// keystrokes in this same chunk, which is the order the answer arrived in.
+			if answered && !opts.ReadOnly {
+				// Reported either way, and the no matters as much as the yes. A yes unlocks the images the
+				// server is withholding; a no is what lets the server tell this terminal from one that has
+				// not answered yet, which it needs before dropping a question only a drawing terminal could
+				// answer. Sent before the keystrokes in this same chunk, which is the order they arrived in.
 				_ = stream.Send(&serverv1.AttachRequest{
 					Event: &serverv1.AttachRequest_TerminalGraphics{
-						TerminalGraphics: &serverv1.TerminalGraphics{DrawsImages: true},
+						TerminalGraphics: &serverv1.TerminalGraphics{DrawsImages: draws},
 					},
 				})
-				opts.Log.Debug("the terminal answered that it can draw images")
+				opts.Log.Debug("the terminal answered about drawing images", "draws", draws)
 			}
 			if len(data) == 0 {
 				continue
