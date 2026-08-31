@@ -347,12 +347,17 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	signal.Notify(winch, syscall.SIGWINCH)
 	defer signal.Stop(winch)
 
-	// Reading the terminal must not block the reconnect loop, so input is read once by a
-	// long-lived goroutine and delivered over a channel. A read blocked in the kernel
-	// cannot be cancelled, which is why this goroutine outlives individual connections.
-	input := make(chan []byte, 16)
-	inputErr := make(chan error, 1)
-	go readInput(tty, input, inputErr)
+	// Reading the terminal must not block the reconnect loop, so input is read on its own goroutine and
+	// delivered over a channel. One reader for the whole attachment, reconnects included, because the
+	// terminal does not change when a connection does.
+	//
+	// Cancellable, which is what lets the overlay hand the terminal to `cm tui` and take it back: see
+	// terminalInput.
+	in, err := newTerminalInput(tty)
+	if err != nil {
+		return result, err
+	}
+	defer in.suspend()
 
 	// outage tracks the current disconnection: when it started, whether it has been reported, and
 	// whether this client has ever been connected at all.
@@ -459,7 +464,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		}
 
 		outcome, err := runSession(
-			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, input, inputErr, &gfxProbe)
+			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, in, &gfxProbe)
 		conn.Close()
 
 		switch outcome {
@@ -654,8 +659,9 @@ func runSession(
 	resumeFrom **uint64,
 	pending *[]byte,
 	winch <-chan os.Signal,
-	input <-chan []byte,
-	inputErr <-chan error,
+	// in is the terminal's input, shared across reconnects and suspendable so the overlay can hand the
+	// terminal to a child process.
+	in *terminalInput,
 	// gfx is the terminal's outstanding graphics question, shared across reconnects because the terminal is
 	// the same one: a reply arriving after a dropped connection still answers what was asked before it.
 	gfx *graphicsProbe,
@@ -1101,7 +1107,7 @@ func runSession(
 				}
 			}
 
-		case data, ok := <-input:
+		case data, ok := <-in.data:
 			if !ok {
 				// Input ended. When stdin is a terminal that means the window is gone, and
 				// leaving is right: an owning client disconnecting without detaching is what
@@ -1114,7 +1120,7 @@ func runSession(
 				if tty.IsTerminal() {
 					return outcomeDone, nil
 				}
-				input = nil // stop selecting on a closed channel
+				in.data = nil // stop selecting on a closed channel
 				continue
 			}
 
@@ -1209,11 +1215,16 @@ func runSession(
 				return outcomeReconnect, nil
 			}
 
-		case err := <-inputErr:
+		case err := <-in.errs:
 			// EOF on a non-terminal stdin is exhausted input, not a reason to stop: the
 			// session's output is still worth displaying until it ends.
 			if errors.Is(err, io.EOF) && !tty.IsTerminal() {
-				inputErr = nil
+				in.errs = nil
+				continue
+			}
+			// A cancellation is the overlay having taken the terminal for a child process, not a failure.
+			// Reporting it would end the attachment for the most ordinary reason there is.
+			if interrupted(err) {
 				continue
 			}
 			// Reading the terminal failed, which reconnecting cannot fix.
@@ -1258,28 +1269,6 @@ func runSession(
 			})
 			result.Detached = true
 			return outcomeDone, nil
-		}
-	}
-}
-
-// readInput forwards terminal input until it fails.
-//
-// A read blocked in the kernel cannot be cancelled, so this goroutine is intentionally
-// allowed to outlive a connection and is reused across reconnects.
-func readInput(tty *TTY, out chan<- []byte, errc chan<- error) {
-	defer close(out)
-	buf := make([]byte, inputReadSize)
-	for {
-		n, err := tty.Read(buf)
-		if n > 0 {
-			// Copy: the buffer is reused on the next read.
-			data := make([]byte, n)
-			copy(data, buf[:n])
-			out <- data
-		}
-		if err != nil {
-			errc <- err
-			return
 		}
 	}
 }

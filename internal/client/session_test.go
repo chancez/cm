@@ -443,8 +443,9 @@ func (h *harness) run(ctx context.Context) (outcome, error) {
 		// about the terminal's graphics answer.
 		gfx = &graphicsProbe{}
 	}
+	// The harness feeds the channels directly, so there is no reader to suspend: see newTestInput.
 	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, &h.result,
-		&h.resumeFrom, &h.pending, h.winch, h.input, h.inputErr, gfx)
+		&h.resumeFrom, &h.pending, h.winch, newTestInput(h.input, h.inputErr), gfx)
 }
 
 // runAsync calls runSession on its own goroutine, for cases that must interact while it runs.
