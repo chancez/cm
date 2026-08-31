@@ -106,6 +106,55 @@ func SessionRef(ref string) (value string, isID bool) {
 // FormatSessionID renders an ID the way a user types it back.
 func FormatSessionID(id string) string { return IDSigil + id }
 
+// FormatNames renders every name a session answers to, for a column at most budget wide.
+//
+// All of them rather than the first, which is the difference between an alias being usable and being
+// findable: a name bound later resolves perfectly well, but `cm list` showed only the first, so for an
+// implicit per-window session the cell said "kitty.325" and finding the session by what it was working on
+// still meant piping the listing through grep.
+//
+// Oldest first, which is the order the store returns and the order a person recognizes: the first name is
+// the one the session was created with.
+//
+// Overflow drops whole names and says how many were dropped, rather than cutting the joined string. Both
+// surfaces that call this promise every name they show can be typed straight back into another command,
+// and half a name cannot. At least one is always kept, so the cell never becomes a bare count.
+//
+// A budget of zero or less means no bound. Returns "" for a session nothing names; the caller decides what
+// to show instead, which is an ID reference in both cases today.
+//
+// Width is counted in runes, matching what tabwriter counts when it sizes a column and what the TUI's
+// fixed cells assume. Not display width: a wide rune occupies two cells and counts as one here, which
+// costs alignment on that row rather than correctness.
+func FormatNames(names []string, budget int) string {
+	if len(names) == 0 {
+		return ""
+	}
+	joined := strings.Join(names, ",")
+	if budget <= 0 || runeLen(joined) <= budget {
+		return joined
+	}
+	// The suffix is measured before anything is dropped, since dropping is what makes room for it.
+	room := budget - runeLen(fmt.Sprintf(" +%d", len(names)))
+	kept, width := 1, runeLen(names[0])
+	for _, name := range names[1:] {
+		width += 1 + runeLen(name)
+		if width > room {
+			break
+		}
+		kept++
+	}
+	if kept == len(names) {
+		// A single name wider than the budget on its own, which is the only way every name is kept while
+		// the join still overflows. Nothing was dropped, so it is returned whole and the caller's own
+		// truncation decides: a "+0" suffix would claim something is hidden when nothing is.
+		return joined
+	}
+	return fmt.Sprintf("%s +%d", strings.Join(names[:kept], ","), len(names)-kept)
+}
+
+func runeLen(s string) int { return len([]rune(s)) }
+
 // ValidateSessionID reports whether an ID is safe to use in a path.
 //
 // This is the path traversal boundary that ValidateSessionName used to be: an ID names both the shim

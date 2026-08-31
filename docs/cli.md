@@ -23,6 +23,23 @@ A session may also have no name at all, which is what `cm attach` with no argume
 `cm list` shows such a session by its ID reference in the NAME column, so whatever is printed can be pasted
 straight back into another command.
 
+A session may equally answer to several names, and the NAME column shows all of them, comma separated and
+oldest first. That is what makes an alias worth binding: a per-window session the terminal emulator named
+`kitty.325` can also be `refactor`, and both are in the listing, so finding it is reading a row rather than
+grepping one.
+
+```
+$ cm bind refactor          # names the session this is run in
+$ cm list
+NAME                ID         PID    CLIENTS  STATE    CREATED  CWD
+kitty.325,refactor  @yych7tdc  43668  1        running  4m       ~/projects/cm
+$ cm attach refactor
+```
+
+Where a set of names is wider than the column, whole names are dropped and a `+2` says how many, rather
+than one name being cut in half: everything the column shows is meant to be typeable. `cm info` and
+`cm list --json` carry the full set in `names` either way.
+
 `cm switch` moves this window's client to another session and leaves every name alone, so a restarted
 terminal returns to the session it always named. `cm rebind` moves the window's name as well, which is what
 makes it stick. `cm rebind --replace` also ends the session the name came off, and `rebind_replaces` makes that the

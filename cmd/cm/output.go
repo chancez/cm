@@ -308,6 +308,25 @@ func firstWord(cmd string) string {
 	return cmd
 }
 
+// nameColumnBudget bounds the NAME cell, in the units truncate counts.
+//
+// Matching the TAGS cap, and for the same reason: CWD sits last, so every column before it eats into a
+// path. A session carries few names in practice but nothing bounds how many, and one that collected a
+// dozen would push the path off a normal terminal.
+const nameColumnBudget = 32
+
+// sessionNameColumn renders the NAME cell, which is every name bound to the session.
+//
+// Falls back to Name for a session nothing names, since the server fills that with
+// internal/server.Label, so the cell reads as an "@id" reference rather than being empty. See
+// paths.FormatNames for why the whole set is shown and how it is bounded.
+func sessionNameColumn(s *serverv1.Session) string {
+	if names := paths.FormatNames(s.Names, nameColumnBudget); names != "" {
+		return names
+	}
+	return s.Name
+}
+
 // stateName renders a session's lifecycle stage.
 //
 // Falls back to the older `exited` boolean when a server predates the state field, so a newer
@@ -551,13 +570,17 @@ func printSessionsTableWidth(w io.Writer, sessions []*serverv1.Session, termCols
 		cell   func(*serverv1.Session) string
 	}
 	columns := []column{
-		{"NAME", func(s *serverv1.Session) string { return s.Name }},
+		{"NAME", sessionNameColumn},
 		// Always shown, unlike TAGS and TITLE below, and it costs eight columns of width to do it.
 		//
 		// Worth that: an ID is how a session is referred to when it matters that the reference cannot
 		// be pointed elsewhere, and a named session's ID appears nowhere else, so leaving it out would
 		// make the identity undiscoverable from the one command people run to find sessions. A session
 		// with no names shows the same value in NAME, since that is what it is called.
+		//
+		// It is also the reference to hold on to, which is the other half of NAME listing every name: a
+		// session can answer to several, and any of them can be pointed elsewhere between one call and
+		// the next, while an ID either finds the same session or finds nothing.
 		{"ID", func(s *serverv1.Session) string { return paths.FormatSessionID(s.Id) }},
 		{"PID", func(s *serverv1.Session) string { return fmt.Sprint(s.ShellPid) }},
 		{"CLIENTS", func(s *serverv1.Session) string { return fmt.Sprint(s.Clients) }},

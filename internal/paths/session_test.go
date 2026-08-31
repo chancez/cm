@@ -132,6 +132,42 @@ func TestValidateSessionNameRejectsTheIDSigil(t *testing.T) {
 	}
 }
 
+// Every name is shown, since showing only the first is what made an alias resolve while staying
+// invisible in the listing. What overflow does matters as much: a cell must never contain half a name,
+// because a reader is expected to type what they see straight back into another command.
+func TestFormatNames(t *testing.T) {
+	tests := []struct {
+		desc   string
+		names  []string
+		budget int
+		want   string
+	}{
+		{"nothing names it", nil, 32, ""},
+		{"one name", []string{"work"}, 32, "work"},
+		{"an alias beside the name a terminal invented", []string{"kitty.325", "refactor"}, 32,
+			"kitty.325,refactor"},
+		{"oldest first, whatever order they fit in", []string{"a", "b", "c"}, 32, "a,b,c"},
+		{"a budget of zero means no bound", []string{"kitty.325", "refactor"}, 0, "kitty.325,refactor"},
+		{"exactly the budget is not overflow", []string{"abcd", "efgh"}, 9, "abcd,efgh"},
+		// One over, so the second name goes and the count says so rather than "abcd,efg".
+		{"one over drops a whole name", []string{"abcd", "efgh"}, 8, "abcd +1"},
+		{"several dropped are counted together", []string{"abcd", "efgh", "ijkl", "mnop"}, 12,
+			"abcd,efgh +2"},
+		// Nothing to drop, so no suffix: "+0" would say something is hidden when nothing is, and the
+		// caller's own truncation is what bounds the cell.
+		{"a single name over the budget is returned whole", []string{"averylongsessionname"}, 8,
+			"averylongsessionname"},
+		{"the first name is kept even when it does not fit", []string{"averylongsessionname", "x"}, 8,
+			"averylongsessionname +1"},
+	}
+	for _, tt := range tests {
+		if got := FormatNames(tt.names, tt.budget); got != tt.want {
+			t.Errorf("FormatNames(%q, %d) = %q, want %q (%s)",
+				tt.names, tt.budget, got, tt.want, tt.desc)
+		}
+	}
+}
+
 func TestValidateSessionID(t *testing.T) {
 	valid := []string{"a7k2m9x4", "mig00001", "x", "0"}
 	for _, id := range valid {

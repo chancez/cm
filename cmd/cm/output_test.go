@@ -503,6 +503,41 @@ func TestSessionsTablePrefersAReportedState(t *testing.T) {
 	}
 }
 
+// The NAME column shows every name, not just the label.
+//
+// This is the whole point of a session answering to several. An alias bound onto a session the terminal
+// emulator named resolves fine for attach, send and kill, but the label is the first name, so the listing
+// said "kitty.325" and finding the session by what it was working on still meant grepping.
+func TestSessionsTableShowsEveryName(t *testing.T) {
+	s := sampleWireSession("kitty.325")
+	s.Names = []string{"kitty.325", "refactor"}
+
+	var buf bytes.Buffer
+	if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
+		t.Fatalf("printSessionsTable() error = %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "kitty.325,refactor") {
+		t.Errorf("table = %q, want both names in the NAME column", got)
+	}
+}
+
+// A session nothing names still fills the cell, because the server puts an ID reference in Name.
+//
+// The cell must never be blank: what NAME shows is what a reader types into the next command, and a
+// session with no names is reachable only by ID.
+func TestSessionsTableNamesASessionWithNoBindings(t *testing.T) {
+	s := sampleWireSession("@a7k2m9x4")
+	s.Names = nil
+
+	var buf bytes.Buffer
+	if err := printSessionsTable(&buf, []*serverv1.Session{s}); err != nil {
+		t.Fatalf("printSessionsTable() error = %v", err)
+	}
+	if got := buf.String(); !strings.Contains(got, "@a7k2m9x4") {
+		t.Errorf("table = %q, want the ID reference in the NAME column", got)
+	}
+}
+
 // A long detail is truncated rather than reduced to its first word.
 //
 // A detail is a sentence a human wrote, so "needs approval to write a file" must not become "needs". The

@@ -140,11 +140,15 @@ func age(t, now time.Time) string {
 // Column widths for everything except the last column, which takes the rest of the line.
 //
 // Fixed rather than measured against the contents, unlike `cm ls`. A list that re-measures on every
-// refresh moves its columns while someone is reading it, and a session name changing length is enough
-// to do that. A name is capped at 24 by paths.ValidateSessionName, so the name column only truncates
-// where the table would have widened for one long name and made every other row worse.
+// refresh moves its columns while someone is reading it, and a session gaining a name is enough to do
+// that. The name column therefore elides where the table would have widened for one long cell and made
+// every other row worse; paths.FormatNames drops whole names to fit rather than cutting one in half.
+// nameWidth holds a set rather than one name, which is why it is 24 rather than 16. The case it is
+// sized for is the one this list exists to make readable: a per-window session the terminal emulator
+// named, plus the topic bound onto it, so "kitty.325,refactor" at 18. At 16 that cell had to drop the
+// alias and show "kitty.325 +1", which is the auto-generated half of the pair and the useless half.
 const (
-	nameWidth    = 16
+	nameWidth    = 24
 	stateWidth   = 10
 	clientsWidth = 3
 	ageWidth     = 4
@@ -182,11 +186,19 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, listItem list.Ite
 	}
 	s := it.session
 
-	// Name already reads as an ID reference for a session nothing names, because the server fills it
-	// with internal/server.Label rather than with a bare name. So this cell is never empty and what it
-	// shows can always be typed back into another command, which is what docs/cli.md promises of the
-	// NAME column. Names is the field to read when the real names are wanted: see model.rename.
-	name := s.Name
+	// Every name, not just the label, so an alias bound onto a session named by the server is visible
+	// rather than merely findable through the filter. paths.FormatNames drops whole names when they do
+	// not fit the cell rather than cutting the joined string, which is what keeps the promise below.
+	//
+	// Name is the fallback, and it already reads as an ID reference for a session nothing names, because
+	// the server fills it with internal/server.Label rather than with a bare name. So this cell is never
+	// empty and what it shows can always be typed back into another command, which is what docs/cli.md
+	// promises of the NAME column. Names is still the field to read when the names themselves are
+	// wanted: see model.rename.
+	name := paths.FormatNames(s.Names, nameWidth)
+	if name == "" {
+		name = s.Name
+	}
 
 	// Built as fixed-width cells and then trimmed, rather than assembled with a width budget. The
 	// alternative computes the last column's width from a running total, which is the shape that
