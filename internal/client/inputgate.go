@@ -38,7 +38,7 @@ const escapeGrace = 50 * time.Millisecond
 // to test either apart from a live attachment, and the missing bound above went unnoticed for that
 // reason.
 type inputGate struct {
-	key DetachKeySpec
+	key KeySpec
 	// suspended stops the key being intercepted, so it reaches the session like any other keystroke.
 	//
 	// Set while a nested client is attached inside this session, which the server reports. That client
@@ -46,7 +46,7 @@ type inputGate struct {
 	// inner gate is what recognizes it. Without this the outer client always won, which for a
 	// per-window session meant ctrl-\ closed the window instead of leaving the inner session.
 	//
-	// Separate from DetachKeySpec.Disabled, which is the configured "no key detaches". This one comes
+	// Separate from KeySpec.Disabled, which is the configured "no key detaches". This one comes
 	// and goes with the nesting and must not overwrite what the user configured.
 	suspended bool
 	// held is a partial encoding of the key, kept until the rest arrives or the grace expires.

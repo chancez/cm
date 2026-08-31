@@ -15,6 +15,10 @@ func TestParseDetachKey(t *testing.T) {
 		{spec: "ctrl-z", wantByte: 0x1A, wantName: "ctrl-z"},
 		{spec: "ctrl-]", wantByte: 0x1D, wantName: "ctrl-]"},
 		{spec: "ctrl-_", wantByte: 0x1F, wantName: "ctrl-_"},
+		// A named key that is one character resolves through the same table `cm send --key` uses, so
+		// the key with the best ergonomics on a keyboard is spellable at all. NUL is what a terminal
+		// sends for it, when it sends anything.
+		{spec: "ctrl-space", wantByte: 0x00, wantName: "ctrl-space"},
 		// Short form and case insensitivity, since a config file is hand-written.
 		{spec: "c-a", wantByte: 0x01, wantName: "ctrl-a"},
 		{spec: "CTRL-A", wantByte: 0x01, wantName: "ctrl-a"},
@@ -33,6 +37,11 @@ func TestParseDetachKey(t *testing.T) {
 		// be pressed.
 		{spec: "ctrl-1", wantErr: true},
 		{spec: "ctrl-,", wantErr: true},
+		// Named keys whose own byte is already a control code, so they are not ctrl- combinations:
+		// ctrl-[ is how the escape key is spelled.
+		{spec: "ctrl-esc", wantErr: true},
+		{spec: "ctrl-enter", wantErr: true},
+		{spec: "ctrl-up", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -54,6 +63,33 @@ func TestParseDetachKey(t *testing.T) {
 				t.Errorf("Byte = %#x, want %#x", got.Byte, tt.wantByte)
 			}
 		})
+	}
+}
+
+// The two keys default independently, and to different keys: they are both live at once, so a default
+// shared between them would leave the overlay unreachable or detaching unreachable depending on which
+// won.
+func TestParsePrefixKeyDefaults(t *testing.T) {
+	prefix, err := ParsePrefixKey("")
+	if err != nil {
+		t.Fatalf("ParsePrefixKey(\"\") error = %v", err)
+	}
+	want := KeySpec{
+		Byte:      0x1D,
+		Sequences: encodingsFor(']'),
+		Name:      "ctrl-]",
+	}
+	if prefix.Byte != want.Byte || prefix.Name != want.Name || prefix.Disabled {
+		t.Errorf("ParsePrefixKey(\"\") = %+v, want %+v", prefix, want)
+	}
+
+	detach, err := ParseDetachKey("")
+	if err != nil {
+		t.Fatalf("ParseDetachKey(\"\") error = %v", err)
+	}
+	if detach.Byte == prefix.Byte {
+		t.Errorf("the default prefix and detach keys are both %#x, so one of them is unreachable",
+			detach.Byte)
 	}
 }
 
@@ -81,6 +117,35 @@ func TestParseDetachKeyCoversAllEncodings(t *testing.T) {
 	for _, input := range []string{"\x12", "\x1b[114;5u", "\x1b[27;5;114~"} {
 		if got := key.Find([]byte(input)); got != -1 {
 			t.Errorf("Find(%q) = %d, want -1", input, got)
+		}
+	}
+}
+
+// find reports the length as well as the offset, and the length is what lets the prefix key hand the
+// rest of the read to the overlay. Asserted per encoding because they differ in length, which is the
+// whole reason a caller cannot assume one byte: `prefix` then `d` typed quickly arrives as one read, and
+// a caller that skipped one byte would feed "[93;5ud" to the overlay and act on "[".
+func TestKeySpecFindReportsTheLength(t *testing.T) {
+	key, err := ParsePrefixKey("ctrl-]")
+	if err != nil {
+		t.Fatalf("ParsePrefixKey() error = %v", err)
+	}
+	tests := []struct {
+		in         string
+		wantOffset int
+		wantLength int
+	}{
+		{in: "\x1d", wantOffset: 0, wantLength: 1},
+		{in: "ab\x1dd", wantOffset: 2, wantLength: 1},
+		{in: "\x1b[93;5ud", wantOffset: 0, wantLength: 7},
+		{in: "\x1b[27;5;93~d", wantOffset: 0, wantLength: 10},
+		{in: "abc", wantOffset: -1, wantLength: 0},
+	}
+	for _, tt := range tests {
+		offset, length := key.find([]byte(tt.in))
+		if offset != tt.wantOffset || length != tt.wantLength {
+			t.Errorf("find(%q) = (%d, %d), want (%d, %d)",
+				tt.in, offset, length, tt.wantOffset, tt.wantLength)
 		}
 	}
 }

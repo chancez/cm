@@ -57,7 +57,7 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 		ReadOnly:   true,
 		// No detach key: this is not an interactive attachment, and reserving a keystroke from a stream being
 		// piped would swallow a byte of output.
-		DetachKey: client.DetachKeySpec{Name: "none", Disabled: true},
+		DetachKey: client.KeySpec{Name: "none", Disabled: true},
 		// No repaint. A follower streams what happens next; the screen as it stands now is either already
 		// printed by the caller or deliberately not wanted.
 		NoRestore: true,
@@ -332,7 +332,7 @@ func followSessionSignalling(
 		Session:    session,
 		SocketPath: dirs.ServerSocket(),
 		ReadOnly:   true,
-		DetachKey:  client.DetachKeySpec{Name: "none", Disabled: true},
+		DetachKey:  client.KeySpec{Name: "none", Disabled: true},
 		NoRestore:  true,
 		Output:     followWriter(raw),
 		OnAttached: func() {

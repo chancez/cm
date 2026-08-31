@@ -115,7 +115,7 @@ type Options struct {
 	// session that already exists, since an attach is not how tags are changed.
 	Tags map[string]string
 	// DetachKey is the key that detaches. Zero value means the default.
-	DetachKey DetachKeySpec
+	DetachKey KeySpec
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
 	// now on.
 	//
