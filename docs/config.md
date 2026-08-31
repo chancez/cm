@@ -32,6 +32,9 @@ resize_policy = "leader"
 # The key that detaches a client. "none" disables detaching by key.
 detach_key = "ctrl-\\"
 
+# The key that opens cm's overlay inside a session. "none" disables it.
+prefix_key = "ctrl-]"
+
 # Diagnostic log level: debug, info, warn, error, or off.
 log_level = "info"
 
@@ -89,6 +92,7 @@ forget_unpersisted_after = "5m"
 | `scrollback_lines` | integer; `0` is unlimited | `2000` |
 | `resize_policy` | `leader`, `last-attach`, `first-attach`, `smallest` | `leader` |
 | `detach_key` | `ctrl-<key>`, or `none` to disable | `ctrl-\` |
+| `prefix_key` | `ctrl-<key>`, or `none` to disable the overlay | `ctrl-]` |
 | `log_level` | `debug`, `info`, `warn`, `error`, `off` | `info` |
 | `shim_log_retention` | Go duration; `0` keeps every log | `168h` (a week) |
 | `database_backup_retention` | Go duration; `0` keeps every snapshot | `168h` (a week) |
@@ -153,6 +157,27 @@ leaves the outer one. See "Who owns the detach key when sessions are nested" in
 outside cm already claims the key, such as attaching from inside another multiplexer.
 `cm detach [session]` is the same operation without a key, for a script or for detaching a session
 other than the one you are in.
+
+### prefix_key
+
+The key that opens the overlay: a few rows at the bottom of the screen from which any cm command can
+run without leaving the program in the session. Accepts the same spellings as `detach_key`, including
+`ctrl-space`, and `none` to disable the overlay entirely. `cm attach --prefix-key` overrides it for one
+attachment.
+
+Detaching is unaffected and still takes one press of `detach_key`. Both keys are live at once, so
+`cm attach` refuses a configuration where they are the same key rather than choosing between them.
+
+Inside the overlay: `:` for a command line, `b` for `bind`, `s` for `switch`, `d` to detach, `?` for the
+rest, escape to close. Pressing the prefix or the detach key a second time forwards it to the program,
+which is the only way to reach a key cm intercepts: `ctrl-\` never reached a pty from a cm client
+before this, so SIGQUIT was unreachable inside a session.
+
+`ctrl-]` was chosen for ergonomics and cost. Left ctrl with a right-hand key, unlike screen's `ctrl-a`
+and tmux's `ctrl-b`, and the cheapest right-hand control code to take: `ctrl-o` is vim's jumplist-back,
+`ctrl-u`, `ctrl-p`, `ctrl-n` and `ctrl-l` are readline's, and `ctrl-]` costs only vim's ctags tag-jump,
+which an LSP's `gd` has largely replaced. `ctrl-space` has better ergonomics still and is spellable, but
+is not the default because not every terminal sends NUL for it. See [overlay.md](overlay.md).
 
 ### log_level
 
