@@ -92,7 +92,7 @@ func TestOverlayArmedActions(t *testing.T) {
 			wantMode: overlayPrompt,
 		},
 		{
-			name:     "b prefills a bind",
+			name:     "b opens a name field",
 			keys:     "b",
 			wantMode: overlayPrompt,
 		},
@@ -122,20 +122,6 @@ func TestOverlayArmedActions(t *testing.T) {
 				t.Errorf("feed(%q) left mode %v, want %v", tc.keys, o.mode, tc.wantMode)
 			}
 		})
-	}
-}
-
-// b and s are shortcuts into the prompt rather than commands of their own, so what they leave on the line
-// is what a user then completes. Asserted because getting the prefill wrong is invisible until someone
-// types a name and the wrong command runs.
-func TestOverlayPromptPrefills(t *testing.T) {
-	for key, want := range map[string]string{"b": "bind ", "s": "switch ", ":": ""} {
-		o, _ := newTestOverlay(t, 24, 80)
-		o.open()
-		o.feed([]byte(key))
-		if got := string(o.line); got != want {
-			t.Errorf("after %q the line is %q, want %q", key, got, want)
-		}
 	}
 }
 
@@ -469,5 +455,180 @@ func TestOverlayPaintsOncePerKeypress(t *testing.T) {
 	o.repaint()
 	if buf.Len() <= first {
 		t.Error("repaint wrote nothing, so an overlay painted over by the session would stay broken")
+	}
+}
+
+// items builds a picker's worth of sessions for the cases below.
+func pickItems(n int) []pickItem {
+	out := make([]pickItem, 0, n)
+	for i := range n {
+		out = append(out, pickItem{
+			Ref:    fmt.Sprintf("@id%d", i),
+			Label:  fmt.Sprintf("session-%d", i),
+			Detail: "~/dir",
+		})
+	}
+	return out
+}
+
+// Choosing rather than typing, which is the whole point of the picker: s asks for the list, the list
+// arrives, and enter switches to what is under the cursor.
+func TestOverlayPickerSwitches(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+
+	if got := o.feed([]byte("s")); !sameResponse(got, overlayResponse{List: true}) {
+		t.Fatalf("feed(s) = %+v, want a request for the session list", got)
+	}
+	if o.mode != overlayPick {
+		t.Fatalf("mode = %v, want overlayPick", o.mode)
+	}
+	// Something is on screen while the list is in flight, since a server round trip is not instant and a
+	// blank bar reads as a broken keypress.
+	if rows := o.rows(24, 80); len(rows) != 2 || !strings.Contains(rows[1], "listing sessions") {
+		t.Errorf("rows while loading = %q, want a note that the list is coming", rows)
+	}
+
+	o.sessions(pickItems(3), nil)
+	rows := o.rows(24, 80)
+	if len(rows) != 4 || !strings.Contains(rows[0], "switch to") || !strings.Contains(rows[1], "> ") {
+		t.Fatalf("rows = %q, want the prompt and a cursor on the first item", rows)
+	}
+
+	// Down one, then choose: the second session, by ID rather than by name.
+	o.feed([]byte{0x0e})
+	got := o.feed([]byte("\r"))
+	if !sameResponse(got, overlayResponse{SwitchTo: "@id1", Repaint: true}) {
+		t.Errorf("enter = %+v, want a switch to the second session", got)
+	}
+}
+
+// Typing filters instead of moving, which is what lets one keystroke find a session among twenty. j and k
+// cannot also mean movement for that reason, so the arrows and ctrl-n/ctrl-p do it.
+func TestOverlayPickerFiltersAndMoves(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	items := pickItems(12)
+	items[7].Label = "notebook"
+	o.sessions(items, nil)
+
+	o.feed([]byte("note"))
+	if got := len(o.pick.matches()); got != 1 {
+		t.Errorf("matches after typing note = %d, want 1", got)
+	}
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{SwitchTo: "@id7", Repaint: true}) {
+		t.Errorf("enter after filtering = %+v, want the filtered session", got)
+	}
+
+	// Backspace widens it again, and ctrl-u clears the filter outright.
+	o, _ = newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	o.sessions(items, nil)
+	o.feed([]byte("note"))
+	o.feed([]byte{0x7f})
+	if got := len(o.pick.matches()); got != 1 {
+		t.Errorf("matches after a backspace = %d, want 1 (not- still matches only notebook)", got)
+	}
+	o.feed([]byte{0x15})
+	if got := len(o.pick.matches()); got != len(items) {
+		t.Errorf("matches after ctrl-u = %d, want all %d", got, len(items))
+	}
+
+	// The window follows the cursor rather than letting it walk off the bottom.
+	for range 11 {
+		o.feed([]byte{0x0e})
+	}
+	body := o.pick.body(4)
+	if len(body) != 4 || !strings.Contains(body[3], "> ") {
+		t.Errorf("body with the cursor at the end = %q, want the cursor on the last visible row", body)
+	}
+}
+
+// Killing takes one key of confirmation, because a mistyped filter plus enter would otherwise end
+// someone's shell.
+func TestOverlayPickerKillConfirms(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("k"))
+	o.sessions(pickItems(2), nil)
+
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{}) {
+		t.Fatalf("choosing to kill = %+v, want nothing run yet", got)
+	}
+	if o.mode != overlayConfirm || !strings.Contains(o.bar(), "kill session-0?") {
+		t.Fatalf("mode %v bar %q, want a confirmation naming the session", o.mode, o.bar())
+	}
+	// Any key but y abandons it, which is the safe answer being the easy one.
+	if got := o.feed([]byte("x")); !sameResponse(got, overlayResponse{Repaint: true}) {
+		t.Errorf("a key other than y = %+v, want the kill abandoned", got)
+	}
+
+	o, _ = newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("k"))
+	o.sessions(pickItems(2), nil)
+	o.feed([]byte("\r"))
+	if got := o.feed([]byte("y")); !sameResponse(got, overlayResponse{Run: []string{"kill", "@id0"}}) {
+		t.Errorf("y = %+v, want the kill run by ID", got)
+	}
+}
+
+// Switching to the session you are already in is refused rather than performed: it is a no-op that costs a
+// visible repaint and looks like a broken keypress.
+func TestOverlayPickerRefusesTheCurrentSession(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	items := pickItems(2)
+	items[0].Current = true
+	o.sessions(items, nil)
+
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{}) {
+		t.Errorf("choosing the current session = %+v, want nothing done", got)
+	}
+	if !strings.Contains(o.status, "already attached") {
+		t.Errorf("status = %q, want it to say so", o.status)
+	}
+}
+
+// b asks for a name and nothing else, so the verb is the keypress rather than something to type. That was
+// the friction in the first version: binding a name meant typing "bind" as well as the name.
+func TestOverlayNamePrompt(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("b"))
+	if o.mode != overlayPrompt || o.prompt != promptName {
+		t.Fatalf("mode %v prompt %v, want a name field", o.mode, o.prompt)
+	}
+	if !strings.Contains(o.bar(), "name:") {
+		t.Errorf("bar = %q, want it to ask for a name rather than look like a command line", o.bar())
+	}
+	if got := o.feed([]byte("refactor\r")); !sameResponse(got, overlayResponse{Run: []string{"bind", "refactor"}}) {
+		t.Errorf("typing a name = %+v, want a bind", got)
+	}
+}
+
+// Two things a real terminal showed: the terminal drew its own cursor on top of the bar, and the bar's
+// highlight stopped where its text did, which reads as a stray line of output rather than as cm's.
+func TestOverlayHidesTheCursorAndFillsTheWidth(t *testing.T) {
+	o, buf := newTestOverlay(t, 24, 80)
+	o.open()
+
+	got := buf.String()
+	if !strings.Contains(got, "\x1b[?25l") {
+		t.Errorf("paint wrote %q, want the cursor hidden: the program's cursor is restored onto the bar", got)
+	}
+	if rows := o.rows(24, 80); len(rows) != 1 || len(rows[0]) != 79 {
+		t.Errorf("bar is %d wide, want 79: one short of the terminal, and padded to it", len(rows[0]))
+	}
+
+	buf.Reset()
+	var resp overlayResponse
+	o.close(&resp)
+	if !strings.Contains(buf.String(), "\x1b[?25h") {
+		t.Errorf("close wrote %q, want the cursor shown again: nothing else will, since the restore blob "+
+			"carries no cursor visibility", buf.String())
 	}
 }

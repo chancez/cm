@@ -25,6 +25,12 @@ const (
 	keyBackspace
 	// keyKillLine is ctrl-u, which clears the line, as readline does.
 	keyKillLine
+	// keyUp and keyDown move a selection: the arrows, and ctrl-p and ctrl-n.
+	//
+	// Both spellings because the picker filters on every printable key, so j and k cannot also mean
+	// movement. That is fzf's arrangement and the reason for it is the same.
+	keyUp
+	keyDown
 	// keyCancel closes the overlay: escape or ctrl-c.
 	keyCancel
 	// keyIgnore is input the overlay drops. A key release, a repeat, or a keypress it does not bind.
@@ -61,6 +67,10 @@ func decodeKey(p []byte) (overlayKey, int) {
 		return overlayKey{Kind: keyBackspace}, 1
 	case b == 0x15:
 		return overlayKey{Kind: keyKillLine}, 1
+	case b == 0x10:
+		return overlayKey{Kind: keyUp}, 1
+	case b == 0x0e:
+		return overlayKey{Kind: keyDown}, 1
 	case b == 0x03:
 		return overlayKey{Kind: keyCancel}, 1
 	case b < 0x20:
@@ -94,9 +104,15 @@ func decodeEscape(p []byte) (overlayKey, int) {
 		// including the terminator, since the program is blocked waiting for it.
 		return overlayKey{Kind: keyPassThrough}, stringControlLen(p)
 	case 'O':
-		// SS3, which is how an application-mode terminal sends the arrow and F1-F4 keys. A keypress, and
-		// none of them are bound.
+		// SS3, which is how an application-mode terminal sends the arrow and F1-F4 keys. Up and down are
+		// bound; the rest are keypresses nothing here wants.
 		if len(p) >= 3 {
+			switch p[2] {
+			case 'A':
+				return overlayKey{Kind: keyUp}, 3
+			case 'B':
+				return overlayKey{Kind: keyDown}, 3
+			}
 			return overlayKey{Kind: keyIgnore}, 3
 		}
 		return overlayKey{Kind: keyPassThrough}, len(p)
@@ -134,8 +150,12 @@ func decodeCSI(p []byte) (overlayKey, int) {
 		// keypresses. Bracketed paste markers arrive here too, and dropping them is what lets a paste land
 		// in the prompt as text.
 		return overlayKey{Kind: keyIgnore}, n
-	case 'A', 'B', 'C', 'D', 'E', 'F', 'H', 'P', 'Q', 'S':
-		// Arrows, home, end and F1-F4 in their CSI forms. Keypresses, none bound.
+	case 'A':
+		return overlayKey{Kind: keyUp}, n
+	case 'B':
+		return overlayKey{Kind: keyDown}, n
+	case 'C', 'D', 'E', 'F', 'H', 'P', 'Q', 'S':
+		// Left, right, home, end and F1-F4 in their CSI forms. Keypresses, none bound.
 		return overlayKey{Kind: keyIgnore}, n
 	default:
 		// Everything else is an answer or an event the program asked for: CSI R is a cursor position
@@ -186,6 +206,12 @@ func decodeKittyKey(params string) overlayKey {
 	switch code {
 	case 13:
 		return overlayKey{Kind: keyEnter}
+	case 57352:
+		// The kitty protocol's own codepoints for the arrow keys, which a terminal in that mode sends
+		// instead of the CSI A and B forms.
+		return overlayKey{Kind: keyUp}
+	case 57353:
+		return overlayKey{Kind: keyDown}
 	case 27:
 		return overlayKey{Kind: keyCancel}
 	case 127, 8:

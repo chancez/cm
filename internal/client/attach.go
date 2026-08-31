@@ -797,6 +797,8 @@ func runSession(
 	// and read in the select below rather than waited for inline: a command run inline would freeze the
 	// session's output for as long as it took, and `cm doctor` takes over a second.
 	cmdDone := make(chan overlayCommand, 1)
+	// The session list the overlay's chooser asked for, fetched the same way and for the same reason.
+	listDone := make(chan overlaySessions, 1)
 	// A timer exists only while the gate is holding something. Nil channels block forever, which is
 	// what keeps this case out of the select the rest of the time.
 	var (
@@ -873,6 +875,26 @@ func runSession(
 				}()
 			}
 		}
+		if resp.List {
+			// On this same connection, which ttrpc multiplexes, so the chooser needs no second dial. On a
+			// goroutine for the reason a command is: the loop has a terminal to keep painting.
+			id := result.SessionID
+			go func() {
+				out, err := cl.List(ctx, &serverv1.ListRequest{})
+				select {
+				case listDone <- overlaySessions{items: pickItemsFrom(out, id), err: err}:
+				case <-ctx.Done():
+				}
+			}()
+		}
+		if resp.SwitchTo != "" {
+			// The client's own switch, which keeps this process, this terminal and this input reader: see
+			// outcomeSwitch. The overlay is closed by then, so nothing needs repainting first -- the target
+			// session paints over the whole screen.
+			result.SwitchTo = resp.SwitchTo
+			opts.Log.Debug("switching from the overlay", "target", resp.SwitchTo)
+			return outcomeSwitch, true
+		}
 		if resp.Detach {
 			_ = stream.Send(&serverv1.AttachRequest{
 				Event: &serverv1.AttachRequest_Detach{
@@ -897,6 +919,9 @@ func runSession(
 		select {
 		case cmd := <-cmdDone:
 			ov.finish(cmd.out, cmd.err)
+
+		case list := <-listDone:
+			ov.sessions(list.items, list.err)
 
 		case msg, ok := <-out:
 			if !ok {

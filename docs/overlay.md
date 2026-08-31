@@ -15,15 +15,40 @@ Keys, all configurable through `prefix_key`:
 
 ```
 ctrl-]        open
+ctrl-] s      switch: choose a session from a list
+ctrl-] k      kill: choose one, then y to confirm
+ctrl-] b      name this session: type just the name
 ctrl-] d      detach
-ctrl-] :      a cm command line
-ctrl-] b      bind <name>          prefills the command line
-ctrl-] s      switch <session>     prefills the command line
 ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
+ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        close
+
+in a list:    type to filter, arrows or ctrl-n/ctrl-p to move, enter to choose
 ```
+
+## Choosing beats typing, and that is why there is a picker
+
+The first version made every action a command line, and it was unpleasant to use for a reason worth
+writing down: it asked people to *type things they were looking at*. Naming a session is unavoidable
+typing, since the name is new text. Choosing a session that already exists is not, and neither is typing
+the verb -- `bind` is the keypress `b`.
+
+So `s` and `k` open a chooser (`internal/client/overlaypick.go`) and `b` asks for a name and nothing else.
+`:` survives for the long tail, `tag` and `doctor` and `kill --all`, but it is no longer how the common
+things are done.
+
+The chooser is filter-first, like fzf: printable keys narrow the list, and moving is the arrows or
+ctrl-n/ctrl-p. j and k cannot also mean movement when every key filters, and a filter is what makes twenty
+sessions usable in six rows.
+
+Two costs taken deliberately. It is a second list-and-filter implementation next to the one bubbletea
+already gives cm, justified only by having to fit under a program that is still drawing; it stays one
+column with no preview, and anything richer is what handing over to `cm tui` is for. And its rows are
+formatted by hand: the label column is padded to the widest label *in view*, and directories are shortened
+from the *left*, because sessions in one project share every leading segment and a row cut from the right
+shows the same prefix on every line.
 
 `detach_key` is untouched: detaching is still one press of `ctrl-\`. The two keys are live at once, and
 `cm attach` refuses a configuration where they are the same key rather than picking a winner, since
@@ -127,6 +152,14 @@ Everything `outageNotice` learned, for the same reasons: one write per block, ab
 each row cleared first, DECSC and DECRC around the whole thing, and a width one column short of the
 terminal because writing the last column leaves it in pending wrap and one more byte then scrolls the
 session's screen out from under the model about to repaint it.
+
+Two things a real terminal showed that no test would have. The terminal drew its own cursor on top of the
+bar, because the paint restores the program's cursor and that lands on a row the overlay covers: the cursor
+is hidden while the overlay is up, and shown again on close. It has to be shown *explicitly*, since the
+repaint replays cm's model and the model carries no cursor visibility -- `internal/vt` emits no `?25h` or
+`?25l` at all, which is a gap in restore as much as here. And the bar is padded to the full width, because
+a highlight that stops where its text does reads as a stray line of the program's output rather than as
+cm's.
 
 One paint per keypress, which needed fixing: the caller opens the overlay and then feeds whatever
 followed the prefix key, and both painted, so the transcript hook showed the whole block reaching the

@@ -58,6 +58,13 @@ type overlay struct {
 	mode overlayMode
 	// line is what has been typed at the prompt.
 	line []rune
+	// prompt names what the line is for, so a field asking for a name does not look like a command line.
+	prompt promptKind
+	// pick is the chooser, set while mode is overlayPick.
+	pick *picker
+	// confirm is a command held until one keypress approves it, and confirmWhat describes it.
+	confirm     []string
+	confirmWhat string
 	// status replaces the hints on the bar: what a command printed, or why one was refused.
 	status string
 	// body is a command's output, under the bar.
@@ -75,12 +82,30 @@ const (
 	overlayClosed overlayMode = iota
 	// overlayArmed is the prefix pressed, waiting for an action key.
 	overlayArmed
-	// overlayPrompt is a cm command being typed.
+	// overlayPrompt is text being typed: a cm command, or a name.
 	overlayPrompt
+	// overlayPick is a session being chosen from a list.
+	overlayPick
+	// overlayConfirm is a command waiting for one key to approve it.
+	overlayConfirm
 	// overlayRunning is a command dispatched and not yet finished.
 	overlayRunning
 	// overlayResult is what a command printed, dismissed by any key.
 	overlayResult
+)
+
+// promptKind is what the typed line means.
+//
+// A distinction worth having rather than one prompt for everything: the first version of this made every
+// action a command line, so binding a name meant typing "bind" as well as the name. Typing a name is
+// unavoidable, since the name is new text; typing the verb that consumes it is not.
+type promptKind int
+
+const (
+	// promptCommand is a whole cm command line, the escape hatch for the long tail.
+	promptCommand promptKind = iota
+	// promptName is a name for this session, which becomes `cm bind <name>`.
+	promptName
 )
 
 // maxOverlayRows bounds the block, on top of never taking more than half the terminal.
@@ -108,6 +133,18 @@ type overlayResponse struct {
 	// attach loop: a command run inline would freeze the session's output for as long as it took, and
 	// `cm doctor` takes over a second.
 	Run []string
+	// List asks the caller to fetch the session list, which arrives back through overlay.sessions.
+	//
+	// The overlay holds no server client, so it cannot fetch its own list: the one place that talks to a
+	// server is the attach loop. Asked for rather than cached, because a picker showing sessions that ended
+	// minutes ago is worse than a brief "listing sessions...".
+	List bool
+	// SwitchTo names a session this client should move to.
+	//
+	// A reference the caller acts on rather than a `cm switch` command, because the client can already do
+	// this: outcomeSwitch keeps the process, the terminal and the input reader, so switching costs no
+	// re-exec and no reattach. Spelled as an ID for the reason pickItem.Ref gives.
+	SwitchTo string
 	// Detach ends the attachment.
 	Detach bool
 	// Repaint reports that the overlay left the screen and the rows it covered need repainting from cm's
@@ -121,10 +158,19 @@ func (o *overlay) active() bool { return o.mode != overlayClosed }
 // open arms the overlay, which is what the prefix key does.
 func (o *overlay) open() {
 	o.mode = overlayArmed
+	o.reset()
+	o.paint()
+}
+
+// reset clears everything an action left behind, so one keypress cannot inherit the last one's state.
+func (o *overlay) reset() {
 	o.line = o.line[:0]
+	o.prompt = promptCommand
 	o.status = ""
 	o.body = nil
-	o.paint()
+	o.pick = nil
+	o.confirm = nil
+	o.confirmWhat = ""
 }
 
 // feed offers the overlay a read of keystrokes and reports what the client must do.
@@ -194,6 +240,10 @@ func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 		o.armedKey(key, resp)
 	case overlayPrompt:
 		o.promptKey(key, resp)
+	case overlayPick:
+		o.pickKey(key, resp)
+	case overlayConfirm:
+		o.confirmKey(key, resp)
 	case overlayRunning:
 		// Ignored rather than queued. A keystroke typed while a command runs would otherwise act on the
 		// result screen that is about to appear, which is not what the user was answering.
@@ -222,27 +272,35 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 	case 'd':
 		resp.Detach = true
 		o.close(resp)
+	case 's':
+		// A chooser rather than a prompt. Typing the name of a session you can see listed is the friction
+		// that made the first version of this unpleasant to use.
+		o.startPick("switch to", pickSwitch, resp)
+	case 'k':
+		o.startPick("kill", pickKill, resp)
+	case 'b':
+		// A name is new text, so this one really does need typing. Only the name, though: the verb is the
+		// keypress.
+		o.mode = overlayPrompt
+		o.prompt = promptName
+		o.line = o.line[:0]
 	case ':':
 		o.mode = overlayPrompt
+		o.prompt = promptCommand
 		o.line = o.line[:0]
-	case 'b':
-		o.mode = overlayPrompt
-		o.line = []rune("bind ")
-	case 's':
-		o.mode = overlayPrompt
-		o.line = []rune("switch ")
 	case 'q':
 		// A mnemonic for the detach key, which on the default is ctrl-\ and so SIGQUIT. Same effect as
 		// pressing the detach key while armed, and worth having twice: this one is discoverable from the
 		// help line, and the other is the tmux habit.
 		o.forwardKey(o.detach, resp)
 	case '?':
-		o.status = fmt.Sprintf("%s twice sends it to the program, %s sends %s",
-			o.prefix.Name, "q", o.detach.Name)
+		o.status = fmt.Sprintf("%s twice sends it to the program", o.prefix.Name)
 		o.body = []string{
-			"d  detach            :  run a cm command",
-			"b  bind <name>       s  switch <session>",
-			"?  this help         escape  close",
+			"s  switch session    b  name this session",
+			"k  kill a session    d  detach",
+			"q  send " + o.detach.Name + " to the program",
+			":  any cm command    escape  close",
+			"in a list: type to filter, arrows or ctrl-n/ctrl-p to move, enter to choose",
 		}
 		o.mode = overlayResult
 	default:
@@ -257,7 +315,7 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 func (o *overlay) promptKey(key overlayKey, resp *overlayResponse) {
 	switch key.Kind {
 	case keyEnter:
-		args, err := splitCommandLine(string(o.line))
+		args, err := o.promptArgs()
 		switch {
 		case err != nil:
 			o.status = err.Error()
@@ -279,6 +337,96 @@ func (o *overlay) promptKey(key overlayKey, resp *overlayResponse) {
 	default:
 		o.line = append(o.line, key.Rune)
 	}
+}
+
+// promptArgs turns what was typed into a command, according to what the prompt was asking for.
+func (o *overlay) promptArgs() ([]string, error) {
+	text := strings.TrimSpace(string(o.line))
+	if text == "" {
+		return nil, nil
+	}
+	if o.prompt == promptName {
+		// Not split like a command line: a name is one argument, and quoting rules would only be a way to
+		// get a confusing error. cm validates it, which is where that check belongs.
+		return []string{"bind", text}, nil
+	}
+	return splitCommandLine(text)
+}
+
+// startPick opens the chooser and asks the caller for the session list.
+func (o *overlay) startPick(prompt string, action pickAction, resp *overlayResponse) {
+	o.mode = overlayPick
+	o.line = o.line[:0]
+	o.body = nil
+	o.status = ""
+	o.pick = &picker{prompt: prompt, action: action, loading: true}
+	resp.List = true
+}
+
+// sessions fills the chooser with what the server reported, which the caller fetched.
+func (o *overlay) sessions(items []pickItem, err error) {
+	if o.mode != overlayPick || o.pick == nil {
+		// The overlay moved on while the list was in flight, which an escape does. Dropped rather than
+		// painted over whatever is on screen now.
+		o.log.Debug("a session list arrived after its picker closed", "err", err, "items", len(items))
+		return
+	}
+	o.pick.loading = false
+	if err != nil {
+		o.pick.err = err.Error()
+		o.paint()
+		return
+	}
+	o.pick.items = items
+	o.paint()
+}
+
+// pickKey applies one keypress to the chooser and acts on a choice.
+func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
+	switch o.pick.key(key) {
+	case pickCancelled:
+		o.close(resp)
+	case pickedItem:
+		it, ok := o.pick.selected()
+		if !ok {
+			return
+		}
+		switch o.pick.action {
+		case pickSwitch:
+			if it.Current {
+				// Refused rather than performed. Switching to the session you are in is a no-op that looks
+				// like a broken keypress, and the reconnect it would cost is a visible repaint for nothing.
+				o.status = "already attached to " + it.Label
+				o.mode = overlayResult
+				return
+			}
+			resp.SwitchTo = it.Ref
+			o.close(resp)
+		case pickKill:
+			// One key of confirmation, because a mistyped filter plus enter would otherwise end someone's
+			// shell. The label rather than the ID, since that is what the user recognizes.
+			o.mode = overlayConfirm
+			o.confirm = []string{"kill", it.Ref}
+			o.confirmWhat = "kill " + it.Label
+			o.pick = nil
+		}
+	}
+}
+
+// confirmKey approves or abandons a held command.
+//
+// Only y approves. Any other key abandons, rather than only escape: the safe answer has to be the easy one,
+// and a user who reaches this screen by accident presses something arbitrary to get out of it.
+func (o *overlay) confirmKey(key overlayKey, resp *overlayResponse) {
+	if key.Kind == keyRune && (key.Rune == 'y' || key.Rune == 'Y') {
+		resp.Run = o.confirm
+		o.status = "running " + strings.Join(o.confirm, " ")
+		o.confirm, o.confirmWhat = nil, ""
+		o.body = nil
+		o.mode = overlayRunning
+		return
+	}
+	o.close(resp)
 }
 
 // finish reports a dispatched command's outcome, which the attach loop delivers when the child exits.
@@ -362,13 +510,23 @@ func (o *overlay) rows(rows, cols int) []string {
 	// Never more than half the screen, and never more than maxOverlayRows. A block that covered the
 	// program it is overlaying would make the overlay the problem.
 	budget := min(max(rows/2, 1), maxOverlayRows)
-	out := []string{clip(o.bar(), width)}
-	for i, line := range o.body {
+	// Padded to the full width, so the bar's inverse video spans the pane rather than ending where the text
+	// does. A short highlighted run reads as a stray line of output; a full-width one reads as cm's.
+	out := []string{pad(clip(o.bar(), width), width)}
+
+	// The chooser sizes itself to what is left, so its window can follow the cursor. Everything else is a
+	// fixed block that gets truncated below.
+	body := o.body
+	if o.mode == overlayPick && o.pick != nil {
+		body = o.pick.body(budget - 1)
+	}
+
+	for i, line := range body {
 		if len(out) >= budget {
 			// Said rather than silently cut. A truncated list read as a complete one is the failure worth
 			// avoiding: `cm list` showing four sessions when there are nine is a wrong answer, not a short one.
 			out[len(out)-1] = clip(fmt.Sprintf("... and %d more lines, run it in a shell to see them",
-				len(o.body)-i+1), width)
+				len(body)-i+1), width)
 			break
 		}
 		out = append(out, clip(line, width))
@@ -385,10 +543,16 @@ func (o *overlay) bar() string {
 	switch {
 	case o.status != "":
 		return fmt.Sprintf(" cm %s | %s ", label, o.status)
+	case o.mode == overlayConfirm:
+		return fmt.Sprintf(" cm %s | %s? y to confirm, any other key cancels ", label, o.confirmWhat)
+	case o.mode == overlayPick:
+		return fmt.Sprintf(" cm %s | %s: %s", label, o.pick.prompt, string(o.pick.filter))
+	case o.mode == overlayPrompt && o.prompt == promptName:
+		return fmt.Sprintf(" cm %s | name: %s", label, string(o.line))
 	case o.mode == overlayPrompt:
 		return fmt.Sprintf(" cm %s : %s", label, string(o.line))
 	default:
-		return fmt.Sprintf(" cm %s | d detach  : command  b bind  s switch  q %s  ? help ",
+		return fmt.Sprintf(" cm %s | s switch  b name  k kill  d detach  q %s  ? help ",
 			label, o.detach.Name)
 	}
 }
@@ -417,7 +581,15 @@ func (o *overlay) paint() {
 	// Each row is addressed absolutely and cleared first, so nothing here can scroll and no row can hold
 	// the tail of a longer one.
 	var b strings.Builder
-	b.WriteString("\x1b7")
+	// The cursor is hidden for as long as the overlay is up, and this is not cosmetic: the program's cursor
+	// is restored below, and when that lands on a row the overlay covers the terminal draws its cursor on
+	// top of the bar. Reported from a real terminal.
+	//
+	// Not moved to the prompt instead, which would look better: the session's bytes are written verbatim
+	// and immediately, and a program that draws while the overlay is up does so from wherever the cursor
+	// is. Leaving it in cm's bar would corrupt that program's output, which is a worse bug than a missing
+	// cursor.
+	b.WriteString("\x1b[?25l\x1b7")
 	first := int(rows) - total + 1
 	for i := range total {
 		row := first + i
@@ -472,7 +644,11 @@ func (o *overlay) close(resp *overlayResponse) {
 					fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K", row)
 				}
 			}
-			b.WriteString("\x1b8")
+			// Shown again explicitly, because nothing else will: the repaint replays cm's terminal model, and
+			// the model does not carry cursor visibility at all -- internal/vt emits no ?25h or ?25l. The cost
+			// is that a program which had *hidden* its cursor gets it back until it hides it again, which is
+			// the same gap a reattach to such a program already has. Recorded in docs/ideas.md.
+			b.WriteString("\x1b8\x1b[?25h")
 			fmt.Fprint(o.out, b.String())
 		}
 		// Erasing is not enough, and this is the part that is easy to leave out: the rows held the
@@ -509,6 +685,14 @@ func (o *overlay) forwardKey(key KeySpec, resp *overlayResponse) {
 	}
 }
 
+// pad fills a row out to a width, so a highlighted bar covers the pane.
+func pad(s string, width int) string {
+	if n := utf8.RuneCountInString(s); n < width {
+		return s + strings.Repeat(" ", width-n)
+	}
+	return s
+}
+
 // clip cuts a row to a width in characters.
 //
 // Measured in runes rather than bytes so a multi-byte character is not cut in half, which puts a
@@ -536,4 +720,10 @@ func clip(s string, width int) string {
 type overlayCommand struct {
 	out string
 	err error
+}
+
+// overlaySessions is a fetched session list on its way to the chooser.
+type overlaySessions struct {
+	items []pickItem
+	err   error
 }
