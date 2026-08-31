@@ -52,10 +52,25 @@ type graphicsProbe struct {
 	// gotDA records that the device attributes reply has been consumed. That reply is the last thing this
 	// exchange expects, so it is also what ends it: after it, a reply belongs to whoever asked next.
 	gotDA bool
+	// draws is the answer itself, kept after the exchange ends so every later Open can carry it.
+	//
+	// This is what a reconnect needs. The answer arrives on one connection, and a client outlives its
+	// connections: a server restart, an outage or a switch opens a new one. Reporting the answer only where it
+	// arrived left every attach after the first saying "cannot draw", and since the exchange was already
+	// settled nothing asked again, so a terminal that had answered yes was gated off images permanently. That
+	// reached a user as a plain kitty session with no pictures, after a server restart they had not connected
+	// to the symptom.
+	draws bool
 	// log is where a discarded or unexpected reply is recorded, since an image that does not appear is
 	// otherwise inexplicable.
 	log *slog.Logger
 }
+
+// drawsImages reports what the terminal answered, or false while nothing has.
+//
+// False covers three cases that need no distinction here: not asked, not answered yet, and answered no. All
+// three mean the same thing to the server, which is to send no images.
+func (p *graphicsProbe) drawsImages() bool { return p.draws }
 
 // ask writes the question to the terminal.
 //
@@ -66,8 +81,14 @@ type graphicsProbe struct {
 // cannot parse an APC prints about forty bytes of this command, and the repaint that follows a fresh attach
 // opens by clearing the screen, so those bytes are erased before anyone sees them. A client that gets no
 // repaint must therefore not ask, which is why a resume does not.
+// Asked once per attachment rather than once per process, which is what a reconnect needs: the caller re-asks
+// when it has no answer yet, so a terminal that missed the window or was not there for the first attempt gets
+// asked again. Anything held from a previous exchange is dropped, since a reply to the old question cannot
+// arrive on the new one and holding it would strip the front of the next one.
 func (p *graphicsProbe) ask(scr *screen, log *slog.Logger) {
 	p.log = log
+	p.settled, p.gotDA = false, false
+	p.framer = input.ReplyFramer{}
 	if err := scr.inject(graphics.ProbeCommands()); err != nil {
 		// A terminal that cannot be written to will not be shown images either, so this is not worth
 		// failing an attach over.
@@ -105,6 +126,7 @@ func (p *graphicsProbe) take(data []byte, now time.Time) (rest []byte, answered,
 			if isAnswer, yes := graphics.IsProbeAnswer(cmd); isAnswer {
 				if !p.settled {
 					p.settled, answered, draws = true, true, yes
+					p.draws = yes
 				}
 				continue
 			}

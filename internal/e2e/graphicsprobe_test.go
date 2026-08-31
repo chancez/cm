@@ -255,3 +255,52 @@ func TestAFollowerStillReceivesImages(t *testing.T) {
 			"program wrote: %q", truncateForTest(stream))
 	}
 }
+
+// A terminal that answered keeps its images across a reconnect.
+//
+// The reported bug, and the one the earlier tests could not see because they all attach once: the answer arrives
+// on one connection, and a client outlives its connections. A server restart, an outage or a switch opens a new
+// one, and the answer was reported only where it arrived, so every Open after the first said "cannot draw".
+// The exchange being settled meant nothing asked again, so a kitty that had answered yes was gated off images
+// permanently. Symptom: a plain local kitty session with no pictures at all, after a restart nobody would
+// connect to it.
+//
+// A server restart is the reconnect that is reachable here, and it is also how the bug was reached in practice:
+// installing a new build restarts the server under whatever is attached.
+func TestImagesSurviveAReconnect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a server, a shell and a pty, and restarts the server")
+	}
+
+	e := newEnvWith(t, cmHooksBinary(t), "")
+
+	const payload = "QUJDQUJDQUJDQUJD"
+	cmdPath := filepath.Join(e.state, "reconnect.img")
+	if err := os.WriteFile(cmdPath,
+		[]byte("\x1b_Ga=T,f=24,s=2,v=2,i=7;"+payload+"\x1b\\"), 0o600); err != nil {
+		t.Fatalf("writing the image command: %v", err)
+	}
+
+	c := attachOnPtyDrawing(t, e, nil, "gfxreconnect", "--", "/bin/sh")
+	waitForOnPty(t, c, "$")
+
+	e.restartServer()
+	e.waitFor("the session to be adopted", 25*time.Second, func() bool {
+		return e.sessionDetail(t, "gfxreconnect").State == "running"
+	})
+	// The client reconnects on its own; waiting for it to be counted again is what says the new connection
+	// exists, so what follows is about the new Open rather than about the old one.
+	e.waitFor("the client to reconnect", 25*time.Second, func() bool {
+		return e.sessionDetail(t, "gfxreconnect").Clients == 1
+	})
+
+	// An image drawn after the reconnect, on the connection whose Open is the thing under test.
+	c.typeLine("cat " + cmdPath + `; printf '\r\nRECONNECT-DONE\r\n'`)
+	waitForOnPty(t, c, "RECONNECT-DONE")
+
+	if got := c.output(); !strings.Contains(got, payload) {
+		t.Errorf("a terminal that answered the probe stopped receiving images after a reconnect, so a "+
+			"server restart silently turns pictures off for the rest of that client's life: %q",
+			truncateForTest(got))
+	}
+}

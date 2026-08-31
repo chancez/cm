@@ -398,9 +398,6 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// with no terminal too, which is a follower writing to a pipe: nothing there draws an image, and the
 	// question would be corruption in the file.
 	var gfxProbe graphicsProbe
-	if tty.IsTerminal() && !opts.NoRestore && resumeFrom == nil {
-		gfxProbe.ask(opts.screen, log)
-	}
 
 	starter := &serverStarter{start: opts.StartServer, stopped: opts.ServerStopped}
 
@@ -434,6 +431,17 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		// longer than reconnectQuietPeriod, and a correct screen beats a complete one.
 		if notice.clear() {
 			resumeFrom = nil
+		}
+
+		// The answer this terminal has already given, carried into this connection's Open. Sticky because a
+		// client outlives its connections: reporting it only where it arrived meant every attach after a
+		// restart or a switch said "cannot draw", and the exchange being settled meant nothing asked again.
+		opts.terminalGraphics = gfxProbe.drawsImages()
+		// And asked again when there is no answer, which is a first attach or a terminal that stayed silent.
+		// Skipped for a resume, which is not repainted and so is sent no images anyway, and skipped without a
+		// terminal, where the question would be corruption in a follower's stream.
+		if !opts.terminalGraphics && tty.IsTerminal() && !opts.NoRestore && resumeFrom == nil {
+			gfxProbe.ask(opts.screen, log)
 		}
 
 		outcome, err := runSession(

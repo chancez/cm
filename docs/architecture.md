@@ -1479,6 +1479,15 @@ link. `kitten icat` waits ten seconds for this same answer (`--detection-timeout
 into whatever was running. The window is now ten seconds and gates nothing but how long a reply is still
 recognised as cm's.
 
+**The answer belongs to the terminal, not to the connection.** A client outlives its connections: a server
+restart, an outage or a switch opens a new one, and the answer has to ride every `Open` after the first. It did
+not, and that shipped: the answer was reported only where it arrived, and since the exchange was already
+settled nothing asked again, so a kitty that had answered yes was gated off images for the rest of its life. It
+reached a user as a plain local kitty session with no pictures at all, after a restart that nobody would
+connect to the symptom, and no test caught it because every test attached exactly once. So the probe holds the
+answer, `Attach` carries it into each `Open`, and a probe with no answer asks again on each fresh attach.
+`TestImagesSurviveAReconnect` is the guard.
+
 A late push cannot disturb the screen it arrives after, which is what makes this safe rather than merely
 convenient. The commands paint no text, the placements are wrapped in DECSC/DECRC so the cursor ends where it
 started, and the cells an image covers hold no characters of their own because a program that draws one moves

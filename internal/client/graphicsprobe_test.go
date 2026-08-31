@@ -214,3 +214,36 @@ func TestGraphicsProbeStopsClaimingAfterBothReplies(t *testing.T) {
 		t.Errorf("rest = %q, want %q forwarded to the program", got, other)
 	}
 }
+
+// The answer outlives the connection it arrived on, and a probe with no answer can be asked again.
+//
+// Both are what a reconnect needs, and their absence was a shipped bug: the answer was reported only on the
+// connection that received it, so every Open after a server restart said "cannot draw" while the settled
+// exchange meant nothing asked again. A kitty that had answered yes lost images for the rest of its life.
+func TestGraphicsProbeRemembersTheAnswerAndCanBeAskedAgain(t *testing.T) {
+	p, out := asked(t)
+	if p.drawsImages() {
+		t.Error("drawsImages() is true before any answer")
+	}
+
+	p.take([]byte(okAnswer()+deviceAttributes), time.Now())
+	if !p.drawsImages() {
+		t.Fatal("drawsImages() is false after the terminal said OK, so no later Open can carry the answer")
+	}
+
+	// Asking again re-arms the exchange, which is what a client with no answer does on its next attach. The
+	// yes is kept, since it is a fact about the terminal rather than about the connection.
+	before := out.Len()
+	p.ask(newScreen(out, true, probeLog()), probeLog())
+	if out.Len() == before {
+		t.Error("a second ask wrote nothing, so a terminal that missed the first window is never asked again")
+	}
+	if !p.drawsImages() {
+		t.Error("asking again forgot the answer")
+	}
+	// And the re-armed exchange can be answered.
+	_, answered, draws := p.take([]byte(okAnswer()), time.Now())
+	if !answered || !draws {
+		t.Errorf("answered=%v draws=%v after a second ask, want both true", answered, draws)
+	}
+}
