@@ -128,6 +128,13 @@ type clientRowJSON struct {
 	// Reported alongside Active because the mark alone cannot say how old it is, and a client that last
 	// typed days ago is the active one only in the sense that nothing else has typed since.
 	LastInputAt *time.Time `json:"last_input_at"`
+	// Capabilities is what this client reports it can do, empty from one too old to say.
+	//
+	// Beside Stale rather than replacing it, because the two answer different questions. Stale asks
+	// whether the builds differ, which is what a `cm clients upgrade` decision needs. This asks what the
+	// client can actually do, which is what explains a feature not working, and two builds can differ
+	// without differing in any capability.
+	Capabilities []string `json:"capabilities"`
 }
 
 // clientRows flattens sessions into one row per attached client.
@@ -170,6 +177,8 @@ func clientRows(
 				AttachedAt:  unixTimeOrNil(c.AttachedAtUnix),
 				Active:      c.Active,
 				LastInputAt: unixTimeOrNil(c.LastInputAtUnix),
+				// Empty rather than null, matching the other slices in this package's JSON.
+				Capabilities: append([]string{}, c.GetCapabilities()...),
 			})
 		}
 	}

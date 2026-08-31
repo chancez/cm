@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/paths"
@@ -199,7 +200,8 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// Recorded as soon as there is a token to hang it on, so a client that fails between here and
 	// attaching is still described while it exists. Advisory and never used for a decision: an older
 	// client sends neither field, and the zero values report as unknown.
-	sess.noteClientIdentity(tok, open.ClientVersion, open.ClientPid)
+	sess.noteClientIdentity(tok, open.ClientVersion, open.ClientPid,
+		capability.Parse(open.GetClientCapabilities()))
 	if open.ReadOnly {
 		// Recorded before anything is pumped. A follower cannot answer a terminal query, since its
 		// input is dropped, and counting one as an answerer makes the emulator stay silent and the
@@ -924,6 +926,10 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 					Version:  c.Version,
 					ReadOnly: c.ReadOnly,
 					Active:   c.Active,
+					// Empty from a client that reported none. proto3 puts an empty repeated field and an
+					// absent one on the wire identically, so the far side parses either into the zero Set
+					// and reads capability.Unknown rather than a client that supports nothing.
+					Capabilities: c.Capabilities.Strings(),
 				}
 				// Left at zero rather than sending a bogus timestamp when unknown, which a
 				// zero time.Time would become through Unix().

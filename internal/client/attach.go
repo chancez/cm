@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -75,6 +76,10 @@ func (o Options) Open(session string) *serverv1.Open {
 		// --no-attach. Every client describes itself the same way as a result.
 		ClientVersion: paths.Version(),
 		ClientPid:     int32(os.Getpid()),
+		// Beside the version because only this process knows either. Attach is the one hop a client's
+		// capabilities could not reach before: they were sent on `cm doctor` and `cm version` alone, so a
+		// server learned nothing about a client that only ever attached.
+		ClientCapabilities: capability.Client().Strings(),
 		// Questions handed to this client that it has not answered, so a reconnect does not lose them. Empty
 		// on a first attach, and empty from a caller that never received one. See pendingQueries.
 		OutstandingQueries: o.outstandingQueries(),

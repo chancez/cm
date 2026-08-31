@@ -3,6 +3,7 @@ package server
 import (
 	"testing"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/shim"
 )
 
@@ -30,12 +31,12 @@ func TestADroppedClientKeepsItsPlaceInTheAttachOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(first.token, "v1", clientPID)
+	sess.noteClientIdentity(first.token, "v1", clientPID, capability.Set{})
 	second, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(second.token, "v1", clientPID+1)
+	sess.noteClientIdentity(second.token, "v1", clientPID+1, capability.Set{})
 	defer sess.detach(second)
 
 	if _, _, _, _, resize := sess.registerClientSize(first.token, 40, 100, 0, 0, false); !resize {
@@ -56,7 +57,7 @@ func TestADroppedClientKeepsItsPlaceInTheAttachOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(rejoined)
-	sess.noteClientIdentity(rejoined.token, "v1", clientPID)
+	sess.noteClientIdentity(rejoined.token, "v1", clientPID, capability.Set{})
 
 	// The window that was earliest is earliest again, so sizing did not move.
 	if _, _, _, _, secondSizes := sess.registerClientSize(second.token, 24, 80, 0, 0, false); secondSizes {
@@ -84,12 +85,12 @@ func TestADeliberateDetachForfeitsItsPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(first.token, "v1", clientPID)
+	sess.noteClientIdentity(first.token, "v1", clientPID, capability.Set{})
 	second, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(second.token, "v1", clientPID+1)
+	sess.noteClientIdentity(second.token, "v1", clientPID+1, capability.Set{})
 	defer sess.detach(second)
 
 	// A deliberate detach records nothing, which is the whole difference: the handler calls rememberOrder
@@ -101,7 +102,7 @@ func TestADeliberateDetachForfeitsItsPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(rejoined)
-	sess.noteClientIdentity(rejoined.token, "v1", clientPID)
+	sess.noteClientIdentity(rejoined.token, "v1", clientPID, capability.Set{})
 
 	if _, _, _, _, sizes := sess.registerClientSize(second.token, 24, 80, 0, 0, false); !sizes {
 		t.Errorf("after a deliberate detach the remaining client does not size the session, so first-attach " +
@@ -126,7 +127,7 @@ func TestAnOlderClientWithoutAPidIsUnaffected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(first)
-	sess.noteClientIdentity(first.token, "", 0)
+	sess.noteClientIdentity(first.token, "", 0, capability.Set{})
 	before := orderOf(t, sess, first.token)
 
 	sess.rememberOrder(0, first.token)
@@ -143,7 +144,7 @@ func TestAnOlderClientWithoutAPidIsUnaffected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(second)
-	sess.noteClientIdentity(second.token, "", 0)
+	sess.noteClientIdentity(second.token, "", 0, capability.Set{})
 
 	if after := orderOf(t, sess, second.token); after <= before {
 		t.Errorf("the second client's order is %d, not after the first's %d: an older client must still get "+

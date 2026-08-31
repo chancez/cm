@@ -139,6 +139,13 @@ type attachedClientJSON struct {
 	// AttachedAt is when this client attached, null when it reported no time, which is what a client
 	// older than the field looks like.
 	AttachedAt *time.Time `json:"attached_at"`
+	// Capabilities is what this client reports it can do, empty from one too old to say.
+	//
+	// Version above says which build; this says what that build can do, which is the question a build
+	// string leaves open. Empty means the client predates capability reporting rather than that it
+	// supports nothing: every reporting build includes the "capabilities" token itself, so an empty list
+	// is conclusive only in that direction.
+	Capabilities []string `json:"capabilities"`
 }
 
 // toSessionJSON converts a wire session for output.
@@ -168,6 +175,8 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 			Version:    c.Version,
 			ReadOnly:   c.ReadOnly,
 			AttachedAt: unixTimeOrNil(c.AttachedAtUnix),
+			// Empty rather than null, like the slice above, so a consumer indexes without a nil check.
+			Capabilities: append([]string{}, c.GetCapabilities()...),
 		})
 	}
 

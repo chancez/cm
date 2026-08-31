@@ -506,6 +506,21 @@ message Open {
   //
   // Advisory. An older client sends none and behaves as it did.
   repeated bytes outstanding_queries = 22;
+
+  // What this client can do, as capability tokens from internal/capability.
+  //
+  // Beside client_version above for the same reason it is there: only the client knows, and the server
+  // cannot tell which binary connected to it. The version says two builds differ; this says what differs.
+  //
+  // Sent on attach specifically because that is the one hop a client's set could not reach. A client
+  // reports its capabilities on `cm doctor` and `cm version`, so before this the server learned nothing
+  // about a client that only ever attached, which is every ordinary client.
+  //
+  // Advisory, and the server branches on none of it today. What it buys now is that a listing can say
+  // what an attached client can do rather than only which build it claims to be; see
+  // AttachedClient.capabilities. Empty from a client predating this field, which reads as
+  // capability.Unknown rather than as a refusal.
+  repeated string client_capabilities = 23;
 }
 
 // AttachedClient describes one client attached to a session.
@@ -536,6 +551,17 @@ message AttachedClient {
   // only learns about focus when the program inside the session enabled DECSET 1004. A keystroke
   // arrives on exactly one attach stream.
   bool active = 6;
+
+  // What this client reports it can do, from Open.client_capabilities.
+  //
+  // The same argument as version above, one level more useful. A version was added here because
+  // diagnosing a session loss meant reconstructing what was attached from ps and lsof, and a build
+  // string still leaves the reader to work out what that build could do. This answers it directly.
+  //
+  // Empty from a client too old to send any, and that is reported as unknown rather than as a client
+  // that can do nothing: an empty list is conclusive only because every reporting build includes the
+  // "capabilities" token itself. See capability.Support.
+  repeated string capabilities = 7;
 }
 
 message Input {

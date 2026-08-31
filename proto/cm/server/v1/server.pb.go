@@ -1478,6 +1478,20 @@ type Open struct {
 	//
 	// Advisory. An older client sends none and behaves as it did.
 	OutstandingQueries [][]byte `protobuf:"bytes,22,rep,name=outstanding_queries,json=outstandingQueries,proto3" json:"outstanding_queries,omitempty"`
+	// What this client can do, as capability tokens from internal/capability.
+	//
+	// Beside client_version above for the same reason it is there: only the client knows, and the server
+	// cannot tell which binary connected to it. The version says two builds differ; this says what differs.
+	//
+	// Sent on attach specifically because that is the one hop a client's set could not reach. A client
+	// reports its capabilities on `cm doctor` and `cm version`, so before this the server learned nothing
+	// about a client that only ever attached, which is every ordinary client.
+	//
+	// Advisory, and the server branches on none of it today. What it buys now is that a listing can say
+	// what an attached client can do rather than only which build it claims to be; see
+	// AttachedClient.capabilities. Empty from a client predating this field, which reads as
+	// capability.Unknown rather than as a refusal.
+	ClientCapabilities []string `protobuf:"bytes,23,rep,name=client_capabilities,json=clientCapabilities,proto3" json:"client_capabilities,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1652,6 +1666,13 @@ func (x *Open) GetOutstandingQueries() [][]byte {
 	return nil
 }
 
+func (x *Open) GetClientCapabilities() []string {
+	if x != nil {
+		return x.ClientCapabilities
+	}
+	return nil
+}
+
 // AttachedClient describes one client attached to a session.
 //
 // Reported so `cm list --json` can say what is attached rather than only how many things are, which
@@ -1680,7 +1701,17 @@ type AttachedClient struct {
 	// every attached client, so a query asking "which client are you" is answered by all of them, and cm
 	// only learns about focus when the program inside the session enabled DECSET 1004. A keystroke
 	// arrives on exactly one attach stream.
-	Active        bool `protobuf:"varint,6,opt,name=active,proto3" json:"active,omitempty"`
+	Active bool `protobuf:"varint,6,opt,name=active,proto3" json:"active,omitempty"`
+	// What this client reports it can do, from Open.client_capabilities.
+	//
+	// The same argument as version above, one level more useful. A version was added here because
+	// diagnosing a session loss meant reconstructing what was attached from ps and lsof, and a build
+	// string still leaves the reader to work out what that build could do. This answers it directly.
+	//
+	// Empty from a client too old to send any, and that is reported as unknown rather than as a client
+	// that can do nothing: an empty list is conclusive only because every reporting build includes the
+	// "capabilities" token itself. See capability.Support.
+	Capabilities  []string `protobuf:"bytes,7,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1755,6 +1786,13 @@ func (x *AttachedClient) GetActive() bool {
 		return x.Active
 	}
 	return false
+}
+
+func (x *AttachedClient) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 type Input struct {
@@ -4530,7 +4568,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05input\x18\x02 \x01(\v2\x13.cm.server.v1.InputH\x00R\x05input\x12.\n" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detachB\a\n" +
-	"\x05event\"\xa4\x06\n" +
+	"\x05event\"\xd5\x06\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -4556,21 +4594,23 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x0eclient_version\x18\x13 \x01(\tR\rclientVersion\x12\x1d\n" +
 	"\n" +
 	"client_pid\x18\x14 \x01(\x05R\tclientPid\x12/\n" +
-	"\x13outstanding_queries\x18\x16 \x03(\fR\x12outstandingQueries\x1a<\n" +
+	"\x13outstanding_queries\x18\x16 \x03(\fR\x12outstandingQueries\x12/\n" +
+	"\x13client_capabilities\x18\x17 \x03(\tR\x12clientCapabilities\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x12\n" +
-	"\x10_resume_from_seqJ\x04\b\a\x10\b\"\xc8\x01\n" +
+	"\x10_resume_from_seqJ\x04\b\a\x10\b\"\xec\x01\n" +
 	"\x0eAttachedClient\x12\x10\n" +
 	"\x03pid\x18\x01 \x01(\x05R\x03pid\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x1b\n" +
 	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12(\n" +
 	"\x10attached_at_unix\x18\x04 \x01(\x03R\x0eattachedAtUnix\x12+\n" +
 	"\x12last_input_at_unix\x18\x05 \x01(\x03R\x0flastInputAtUnix\x12\x16\n" +
-	"\x06active\x18\x06 \x01(\bR\x06active\"\x1b\n" +
+	"\x06active\x18\x06 \x01(\bR\x06active\x12\"\n" +
+	"\fcapabilities\x18\a \x03(\tR\fcapabilities\"\x1b\n" +
 	"\x05Input\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"b\n" +
 	"\x06Resize\x12\x12\n" +

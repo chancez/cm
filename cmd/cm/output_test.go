@@ -169,12 +169,21 @@ func TestSessionJSONReportsAttachedClients(t *testing.T) {
 			PID:        4242,
 			Version:    "v0.1.2-9-g4352aa4",
 			AttachedAt: at(1_700_000_000),
+			// Empty rather than nil, and spelled out because the two are indistinguishable in a failure
+			// message: %+v prints both as [], so a nil-against-empty mismatch here reports a got and a want
+			// that look identical and gives the reader nothing to go on.
+			Capabilities: []string{},
 		},
 		{
 			PID:      5150,
 			ReadOnly: true,
 			// No version and no timestamp. AttachedAt stays nil rather than rendering an instant, which
 			// would read as a client attached decades ago instead of one whose time is unknown.
+			//
+			// Capabilities is empty for the same reason it is above, and means something different from the
+			// version being empty: a client that reports none predates the mechanism, so nothing about what
+			// it can do is established. See capability.Support.
+			Capabilities: []string{},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

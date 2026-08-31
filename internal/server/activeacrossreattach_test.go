@@ -3,6 +3,8 @@ package server
 import (
 	"testing"
 	"time"
+
+	"github.com/chancez/cm/internal/capability"
 )
 
 // TestTheActiveClientSurvivesAReattach covers the other thing a rebuilt clientSize entry loses.
@@ -25,12 +27,12 @@ func TestTheActiveClientSurvivesAReattach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(a.token, "v1", clientPID)
+	sess.noteClientIdentity(a.token, "v1", clientPID, capability.Set{})
 	b, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(b.token, "v1", clientPID+1)
+	sess.noteClientIdentity(b.token, "v1", clientPID+1, capability.Set{})
 	defer sess.detach(b)
 
 	// Typed in B and then in A, so A is the window in use.
@@ -51,7 +53,7 @@ func TestTheActiveClientSurvivesAReattach(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(rejoined)
-	sess.noteClientIdentity(rejoined.token, "v1", clientPID)
+	sess.noteClientIdentity(rejoined.token, "v1", clientPID, capability.Set{})
 
 	got, ok := sess.ActiveClient()
 	if !ok {
@@ -76,12 +78,12 @@ func TestADeliberateDetachGivesUpTheActiveMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(a.token, "v1", clientPID)
+	sess.noteClientIdentity(a.token, "v1", clientPID, capability.Set{})
 	b, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(b.token, "v1", clientPID+1)
+	sess.noteClientIdentity(b.token, "v1", clientPID+1, capability.Set{})
 	defer sess.detach(b)
 
 	sess.noteClientInput(b.token)
@@ -103,7 +105,7 @@ func TestADeliberateDetachGivesUpTheActiveMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(rejoined)
-	sess.noteClientIdentity(rejoined.token, "v1", clientPID)
+	sess.noteClientIdentity(rejoined.token, "v1", clientPID, capability.Set{})
 
 	if got, _ := sess.ActiveClient(); got.PID != clientPID+1 {
 		t.Errorf("active client is pid %d after a deliberate detach and reattach, want %d: attaching is not "+

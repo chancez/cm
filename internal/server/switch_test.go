@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -52,7 +53,7 @@ func switchFixture(t *testing.T) (*Service, *store.Store, *Session, *attachToken
 	}
 
 	tok := sess.reserveClient()
-	sess.noteClientIdentity(tok, "v1", 1000)
+	sess.noteClientIdentity(tok, "v1", 1000, capability.Set{})
 	att, err := sess.attach(nil, tok)
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
@@ -232,7 +233,7 @@ func TestSwitchWithNoActiveClientAsksNobody(t *testing.T) {
 		t.Fatal("session not adopted")
 	}
 	tok := sess.reserveClient()
-	sess.noteClientIdentity(tok, "v1", 1000)
+	sess.noteClientIdentity(tok, "v1", 1000, capability.Set{})
 	if _, err := sess.attach(nil, tok); err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -266,7 +267,7 @@ func TestSwitchAllClientsMovesEveryWindow(t *testing.T) {
 	// A second window on the same session, which has typed nothing: it is not the active client, so the
 	// default would leave it where it is.
 	quiet := sess.reserveClient()
-	sess.noteClientIdentity(quiet, "v1", 2000)
+	sess.noteClientIdentity(quiet, "v1", 2000, capability.Set{})
 	if _, err := sess.attach(nil, quiet); err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -298,7 +299,7 @@ func TestSwitchLeavesOtherWindowsAlone(t *testing.T) {
 	svc, _, sess, tok, target := switchFixture(t)
 
 	quiet := sess.reserveClient()
-	sess.noteClientIdentity(quiet, "v1", 2000)
+	sess.noteClientIdentity(quiet, "v1", 2000, capability.Set{})
 	if _, err := sess.attach(nil, quiet); err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

@@ -426,6 +426,11 @@ type clientSize struct {
 	// empty value as unknown is better than inferring one.
 	version string
 	pid     int32
+	// capabilities is what the client reported it can do, also for reporting only.
+	//
+	// The zero Set for a client that sent none, which answers capability.Unknown to everything rather
+	// than Absent, so a client predating the field is not read as one that refused.
+	capabilities capability.Set
 	// attachedAt is when this attachment became live, for reporting. Zero for a reservation.
 	attachedAt time.Time
 	// openedOnAlt records that this client attached while the session was on the alternate screen, so its
@@ -1735,6 +1740,9 @@ type AttachedClientInfo struct {
 	// timestamp at once and a caller holding only its own row cannot. A CLI comparing timestamps itself
 	// would also have to re-derive the ties-go-to-nobody rule below.
 	Active bool
+	// Capabilities is what this client reported it can do, for reporting only. The zero Set from a client
+	// that sent none, which is unknown rather than none.
+	Capabilities capability.Set
 }
 
 // noteClientIdentity records what a client said about itself, for reporting only.
@@ -1742,14 +1750,16 @@ type AttachedClientInfo struct {
 // Separate from attach rather than a parameter on it, because attach is called by paths that have no
 // client to describe: a reservation, and the internal attachments the tests and `cm run` use. A no-op
 // for an unknown token, which is what a detach racing the identity arriving looks like.
-func (s *Session) noteClientIdentity(tok *attachToken, version string, pid int32) {
+func (s *Session) noteClientIdentity(
+	tok *attachToken, version string, pid int32, caps capability.Set,
+) {
 	if tok == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cs := s.clientSizes[tok]; cs != nil {
-		cs.version, cs.pid = version, pid
+		cs.version, cs.pid, cs.capabilities = version, pid, caps
 	}
 	// Restores the place this client held if its previous stream dropped rather than detaching. Done here
 	// because this is the first point the pid is known and it is still ahead of sizeForAttach: doing it
@@ -1845,12 +1855,13 @@ func (s *Session) AttachedClients() []AttachedClientInfo {
 			continue
 		}
 		entries = append(entries, entry{cs.order, AttachedClientInfo{
-			PID:         cs.pid,
-			Version:     cs.version,
-			ReadOnly:    cs.readOnly,
-			AttachedAt:  cs.attachedAt,
-			LastInputAt: cs.lastInputAt,
-			Active:      active != nil && tok == active,
+			PID:          cs.pid,
+			Version:      cs.version,
+			ReadOnly:     cs.readOnly,
+			AttachedAt:   cs.attachedAt,
+			LastInputAt:  cs.lastInputAt,
+			Active:       active != nil && tok == active,
+			Capabilities: cs.capabilities,
 		}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })

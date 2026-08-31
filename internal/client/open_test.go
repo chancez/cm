@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -47,6 +48,9 @@ func TestOptionsOpenCarriesEveryField(t *testing.T) {
 		// hard-coded, since a literal would make this test fail on every version bump.
 		ClientVersion: paths.Version(),
 		ClientPid:     int32(os.Getpid()),
+		// Same: a property of this build rather than of the attachment, and taken from the registry so a
+		// token added later is carried here without editing the test.
+		ClientCapabilities: capability.Client().Strings(),
 		// Rows, Cols, and ResumeFromSeq are deliberately not set here: only the caller knows a
 		// terminal's size or where a reconnecting client left off.
 	}

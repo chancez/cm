@@ -3,6 +3,8 @@ package server
 import (
 	"testing"
 	"time"
+
+	"github.com/chancez/cm/internal/capability"
 )
 
 // TestLeadershipDoesNotGoToWhoeverReconnectsFirst covers the default resize policy across a restart.
@@ -31,14 +33,14 @@ func TestLeadershipDoesNotGoToWhoeverReconnectsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(a.token, "v1", clientPID)
+	sess.noteClientIdentity(a.token, "v1", clientPID, capability.Set{})
 	sess.registerClientSize(a.token, 40, 100, 0, 0, false)
 
 	b, err := sess.attach(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.noteClientIdentity(b.token, "v1", clientPID+1)
+	sess.noteClientIdentity(b.token, "v1", clientPID+1, capability.Set{})
 	sess.registerClientSize(b.token, 24, 80, 0, 0, false)
 
 	// A is the window in use.
@@ -58,7 +60,7 @@ func TestLeadershipDoesNotGoToWhoeverReconnectsFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(bBack)
-	sess.noteClientIdentity(bBack.token, "v1", clientPID+1)
+	sess.noteClientIdentity(bBack.token, "v1", clientPID+1, capability.Set{})
 	_, _, _, _, bResizes := sess.registerClientSize(bBack.token, 24, 80, 0, 0, false)
 
 	aBack, err := sess.attach(nil, nil)
@@ -66,7 +68,7 @@ func TestLeadershipDoesNotGoToWhoeverReconnectsFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sess.detach(aBack)
-	sess.noteClientIdentity(aBack.token, "v1", clientPID)
+	sess.noteClientIdentity(aBack.token, "v1", clientPID, capability.Set{})
 	_, _, _, _, aResizes := sess.registerClientSize(aBack.token, 40, 100, 0, 0, false)
 
 	// The end state is what is guaranteed. B reconnecting first is legitimately the most recently used window

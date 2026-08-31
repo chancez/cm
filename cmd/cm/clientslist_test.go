@@ -15,14 +15,20 @@ func sampleClientSessions() []*serverv1.Session {
 		{
 			Name: "work",
 			AttachedClients: []*serverv1.AttachedClient{
-				{Pid: 100, Version: "current", AttachedAtUnix: 1_700_000_000},
+				{
+					Pid: 100, Version: "current", AttachedAtUnix: 1_700_000_000,
+					// A reporting client. The token list is arbitrary here: what matters is that whatever
+					// the client sent arrives in the row unchanged.
+					Capabilities: []string{"capabilities"},
+				},
 				{Pid: 101, Version: "old", ReadOnly: true, AttachedAtUnix: 1_700_000_100},
 			},
 		},
 		{
 			Name: "other",
 			AttachedClients: []*serverv1.AttachedClient{
-				// No version and no timestamp, which is what a client predating those fields sends.
+				// No version, no timestamp and no capabilities, which is what a client predating all three
+				// sends. Capabilities empty means "cannot be established" rather than "supports nothing".
 				{Pid: 102},
 			},
 		},
@@ -40,10 +46,15 @@ func TestClientRows(t *testing.T) {
 		{
 			Session: "work", PID: 100, Version: "current", Stale: false,
 			AttachedAt: at(1_700_000_000),
+			// Carried through from what the client reported. Spelled as an empty slice on the rows below
+			// rather than left nil, because %+v prints nil and empty identically: a mismatch between the
+			// two reports a got and a want that look the same and tells the reader nothing.
+			Capabilities: []string{"capabilities"},
 		},
 		{
 			Session: "work", PID: 101, Version: "old", Stale: true, ReadOnly: true,
-			AttachedAt: at(1_700_000_100),
+			AttachedAt:   at(1_700_000_100),
+			Capabilities: []string{},
 		},
 		{
 			// A client that reported no build counts as stale: the field exists because older clients did
@@ -51,7 +62,8 @@ func TestClientRows(t *testing.T) {
 			// hide exactly what --stale is for.
 			Session: "other", PID: 102, Version: "", Stale: true,
 			// No timestamp, so AttachedAt stays nil rather than rendering an instant.
-			AttachedAt: nil,
+			AttachedAt:   nil,
+			Capabilities: []string{},
 		},
 	}
 	// The instants are pinned rather than copied out of the result, which the string form could not do:
@@ -85,7 +97,7 @@ func TestClientRowsStaleOnly(t *testing.T) {
 // Naming sessions must restrict the listing to them.
 func TestClientRowsFiltersBySession(t *testing.T) {
 	got := clientRows(sampleClientSessions(), []string{"other"}, "current", false)
-	want := []clientRowJSON{{Session: "other", PID: 102, Stale: true}}
+	want := []clientRowJSON{{Session: "other", PID: 102, Stale: true, Capabilities: []string{}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("clientRows(names) = %+v\nwant %+v", got, want)
 	}
@@ -102,7 +114,7 @@ func TestClientRowsWithUnknownServerVersion(t *testing.T) {
 		Name:            "work",
 		AttachedClients: []*serverv1.AttachedClient{{Pid: 100}},
 	}}, nil, "", false)
-	want := []clientRowJSON{{Session: "work", PID: 100, Stale: false}}
+	want := []clientRowJSON{{Session: "work", PID: 100, Stale: false, Capabilities: []string{}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("clientRows() with no server version = %+v\nwant %+v", got, want)
 	}

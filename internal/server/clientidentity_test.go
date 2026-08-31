@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -123,7 +124,7 @@ func TestReservationIsNotReportedAsAttached(t *testing.T) {
 	}
 
 	tok := sess.reserveClient()
-	sess.noteClientIdentity(tok, "v0.1.2", 4242)
+	sess.noteClientIdentity(tok, "v0.1.2", 4242, capability.Set{})
 
 	if got := sess.AttachedClients(); len(got) != 0 {
 		t.Errorf("AttachedClients() = %+v for a bare reservation, want empty: nothing is watching "+

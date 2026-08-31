@@ -162,6 +162,8 @@ func TestClientRowJSONKeys(t *testing.T) {
 		"attached_at",
 		// Which client is being used, and when it last typed.
 		"active", "last_input_at",
+		// What the client can do, which is the question its build string leaves open.
+		"capabilities",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -192,14 +194,14 @@ func TestClientRowsCarriesActive(t *testing.T) {
 	got := clientRows(sessions, nil, "current", false)
 	want := []clientRowJSON{
 		{
-			Session: "work", PID: 100, Version: "current",
+			Session: "work", PID: 100, Version: "current", Capabilities: []string{},
 			AttachedAt: at(1_700_000_000),
 			// Never typed, so no time and no mark. Nil rather than an instant of zero, which would render
 			// as a client that typed decades ago.
 			LastInputAt: nil, Active: false,
 		},
 		{
-			Session: "work", PID: 101, Version: "current",
+			Session: "work", PID: 101, Version: "current", Capabilities: []string{},
 			AttachedAt: at(1_700_000_050), LastInputAt: at(1_700_000_100), Active: true,
 		},
 	}

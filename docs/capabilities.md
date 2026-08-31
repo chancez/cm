@@ -74,13 +74,21 @@ before the server acts on any session.
 the server's capabilities. Stated so it does not get built speculatively; add it when there is a
 caller.
 
+**Client to server: `DoctorRequest.client_capabilities` and `Open.client_capabilities`.** The first is
+what a diagnostic reads. The second exists because attach was the one hop a client's set could not reach:
+a client reports on `cm doctor` and `cm version` alone, so before it the server learned nothing about a
+client that only ever attached, which is every ordinary client. The server records it per attachment and
+reports it back on `AttachedClient.capabilities`, so a listing can say what an attached client can do
+rather than only which build it claims to be. Nothing branches on it yet, and the token for the first
+thing that does gets added with the branch.
+
 **Server to client: `StatusResponse`, plus `DoctorResponse` for the diagnostics.** `Status` is the
 cheapest thing a client can ask, so a command in class 3 above pays one unary call before committing:
 17.8us against the ~23ms a cm invocation costs anyway. `DoctorResponse` carries the same list because
 `cm version` and `cm doctor` already call `Doctor` for the version, and asking two RPCs for what one
 build is would be silly.
 
-`Opened` on the attach stream was planned and is **not** in yet. The argument for it is real, that a
+`Opened` on the attach stream, the server's half of that handshake, is **not** in yet. The argument for it is real, that a
 long-lived attach cannot afford a round trip to discover what it is talking to, but no attach code reads
 a capability today, and a wire field with no reader is the same dead weight as a token with no gate. It
 goes in with the first attach behavior that needs it.
@@ -142,6 +150,16 @@ the *whole suite*, because every server-side test drives a fake shim and none of
 one stop reporting. `internal/shim` has its own capability test for that now. A foundation that reports
 nothing while looking wired up is the failure this mechanism is most exposed to, and the consumer-side
 tests cannot see it.
+
+The client hop hit the same thing one layer up, which is why its test is end to end. Two mutations:
+deleting the line that puts capabilities in the `Open` the client sends, and making the server record an
+empty set instead of parsing the field. **Neither is caught by a unit test.** The server-side test calls
+`noteClientIdentity` directly, so it proves the record works and says nothing about the wiring, exactly
+as `TestAttachRecordsClientIdentity` warns for the fields before it: "a test that sets the value itself
+would pass while nothing on the real path did". Only `internal/e2e`, running a real `cm attach` against a
+real server and reading `cm clients list --json`, fails on either. The rule that falls out: **a capability
+field needs one test where the peer that produces it is the thing under test**, not a fake standing in for
+it.
 
 ## Three answers, not two
 
@@ -222,7 +240,10 @@ Three commits. The first two are done.
    the client's own set worth sending. `wait.reported-state` covers the hang `checks.go` documents and
    `wait.match` is the same hang one field over; `cm send --wait` runs the same wait through the same
    server and goes through the same rule, from `waitTarget.needsCapability` rather than a second copy.
-3. **Still open**: `Opened.capabilities` with an attach behavior that reads it, and a client capability
+3. **The client hop's attach half**: `Open.client_capabilities` and `AttachedClient.capabilities`, which
+   come as a pair because the listing can only be populated from the handshake.
+
+4. **Still open**: `Opened.capabilities` with an attach behavior that reads it, and a client capability
    with a server-side branch behind it, which is what makes `checkCapabilitySkew`'s older-client half
    reachable.
 
@@ -235,6 +256,13 @@ no business declaring a server capability, so that was a category error rather t
 setting, and the symptom was the exact failure the whole check is meant to avoid: a diagnostic that
 fires on a healthy install. `TestDiagnoseFindsNothingWhenHealthy` caught it and
 `TestCapabilitySkewIsSilentForAClientOfThisBuild` now guards it.
+
+**Adding a slice field breaks whole-value assertions with a diff that looks identical.** Five fixtures in
+`cmd/cm` compare a whole struct, which is the repo's rule and caught the change correctly. What made them
+slow to fix is that `reflect.DeepEqual` separates a nil slice from an empty one while `%+v` prints both as
+`[]`, so the failure reported a got and a want that read the same. The fixtures say `Capabilities:
+[]string{}` explicitly now, and one of them carries a real token so the flattening is exercised rather
+than merely made to compile.
 
 **A test that names its expected tokens stops testing when a token is added.** Three capability tests
 listed the two tokens that existed when they were written and passed unchanged when two more arrived,

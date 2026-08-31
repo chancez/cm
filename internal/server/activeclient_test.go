@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -39,7 +40,7 @@ func newSessionWithClients(t *testing.T, name string, n int) (*Session, []*attac
 	for i := range n {
 		tok := sess.reserveClient()
 		// A distinct pid per client, so a report naming the wrong one is visible rather than ambiguous.
-		sess.noteClientIdentity(tok, "v1", int32(1000+i))
+		sess.noteClientIdentity(tok, "v1", int32(1000+i), capability.Set{})
 		if _, err := sess.attach(nil, tok); err != nil {
 			t.Fatalf("attach() error = %v", err)
 		}
@@ -386,7 +387,7 @@ func TestReservationIsNeverActive(t *testing.T) {
 	sess, _ := newSessionWithClients(t, "reserved-active", 1)
 
 	tok := sess.reserveClient()
-	sess.noteClientIdentity(tok, "v1", 9999)
+	sess.noteClientIdentity(tok, "v1", 9999, capability.Set{})
 	// A reservation cannot really type, since input arrives on an attach stream it does not have. Forced
 	// here so the exclusion is tested where it matters: if this rule read only lastInputAt, the newest
 	// timestamp would belong to something with nothing behind it.
