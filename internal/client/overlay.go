@@ -65,6 +65,9 @@ type overlay struct {
 	// confirm is a command held until one keypress approves it, and confirmWhat describes it.
 	confirm     []string
 	confirmWhat string
+	// helping is the help on screen, which is armed with a reference under it rather than a mode of its
+	// own: every action key still works from there, so a key you have just read about does what it says.
+	helping bool
 	// status replaces the hints on the bar: what a command printed, or why one was refused.
 	status string
 	// body is a command's output, under the bar.
@@ -171,6 +174,7 @@ func (o *overlay) reset() {
 	o.pick = nil
 	o.confirm = nil
 	o.confirmWhat = ""
+	o.helping = false
 }
 
 // feed offers the overlay a read of keystrokes and reports what the client must do.
@@ -214,6 +218,8 @@ func (o *overlay) feed(data []byte) overlayResponse {
 			// A key release or a repeat of one cm handled, which a terminal reporting event types sends
 			// after every press. Dropping these is what stops the overlay closing the instant the prefix
 			// key is let go.
+		case keyEscape:
+			o.back(&resp)
 		case keyCancel:
 			o.close(&resp)
 		default:
@@ -233,6 +239,30 @@ func (o *overlay) feed(data []byte) overlayResponse {
 	return resp
 }
 
+// back steps out of whatever is on screen, and out of the overlay itself from the top.
+//
+// Escape rather than ctrl-c, and the two now differ: escape goes up one level, ctrl-c leaves. An accidental
+// `s` or `?` should not throw you out of the overlay, which is what a single meaning for both keys did.
+func (o *overlay) back(resp *overlayResponse) {
+	switch {
+	case o.helping:
+		// Back to the hints, still armed. What the user asked for: reading the help is not a reason to lose
+		// the overlay.
+		o.helping = false
+		o.body = nil
+		o.status = ""
+	case o.mode == overlayArmed:
+		o.close(resp)
+	default:
+		// A list, a prompt, a confirmation or a command's output. All of them are one step in, so escape
+		// returns to the action keys rather than to the session.
+		o.mode = overlayArmed
+		o.reset()
+	}
+	// Not painted here: feed paints once after the read it is handling, and painting again would write the
+	// block to the terminal twice for one keypress.
+}
+
 // handleKey applies one keypress in the current mode.
 func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 	switch o.mode {
@@ -249,7 +279,8 @@ func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 		// result screen that is about to appear, which is not what the user was answering.
 	case overlayResult:
 		// Any key dismisses, and the key is not acted on: the user is closing a message, and treating that
-		// keystroke as a new action would run something they did not choose.
+		// keystroke as a new action would run something they did not choose. Escape does not arrive here at
+		// all; it steps back to the action keys instead.
 		o.close(resp)
 	}
 }
@@ -266,6 +297,13 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		// leaving the overlay armed would put the *next* keystroke into cm long after the user moved on.
 		o.close(resp)
 		return
+	}
+
+	// Any action taken from the help screen leaves the help behind, which is what makes reading about a key
+	// and then pressing it work.
+	if key.Rune != '?' {
+		o.helping = false
+		o.body = nil
 	}
 
 	switch key.Rune {
@@ -294,15 +332,17 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		// help line, and the other is the tmux habit.
 		o.forwardKey(o.detach, resp)
 	case '?':
-		o.status = fmt.Sprintf("%s twice sends it to the program", o.prefix.Name)
+		o.status = fmt.Sprintf("help -- escape goes back, %s twice sends it to the program", o.prefix.Name)
 		o.body = []string{
 			"s  switch session    b  name this session",
 			"k  kill a session    d  detach",
 			"q  send " + o.detach.Name + " to the program",
-			":  any cm command    escape  close",
-			"in a list: type to filter, arrows or ctrl-n/ctrl-p to move, enter to choose",
+			":  any cm command    ctrl-c  leave the overlay",
+			"in a list: type to filter, ctrl-j/ctrl-k to move, enter to choose",
 		}
-		o.mode = overlayResult
+		// Still armed, so every key above works from here. Only escape is special, and it returns to the
+		// hints rather than closing.
+		o.helping = true
 	default:
 		// An unbound key closes rather than waiting for a second guess, which is what a prefix armed
 		// forever would be: the next keystroke would go to cm long after the user forgot they pressed it.
@@ -384,8 +424,6 @@ func (o *overlay) sessions(items []pickItem, err error) {
 // pickKey applies one keypress to the chooser and acts on a choice.
 func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 	switch o.pick.key(key) {
-	case pickCancelled:
-		o.close(resp)
 	case pickedItem:
 		it, ok := o.pick.selected()
 		if !ok {

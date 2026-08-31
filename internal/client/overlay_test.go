@@ -727,3 +727,89 @@ func TestOverlayCtrlKeysUnderTheKittyProtocol(t *testing.T) {
 		t.Errorf("kitty-encoded ctrl-c = %+v, want the overlay closed", got)
 	}
 }
+
+// Escape steps back one level rather than leaving the overlay, and ctrl-c leaves outright.
+//
+// Reported from use, about the help: reading what the keys are is not a reason to lose the overlay. The same
+// applies to backing out of a list or a prompt, so escape means "up one level" everywhere and only the top
+// level closes.
+func TestOverlayEscapeStepsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		// enter is what opens the sub-screen.
+		enter string
+		// list reports whether the sub-screen needs the session list before escape is pressed.
+		list bool
+	}{
+		{name: "help", enter: "?"},
+		{name: "a switch list", enter: "s", list: true},
+		{name: "a kill list", enter: "k", list: true},
+		{name: "a name prompt", enter: "b"},
+		{name: "a command line", enter: ":"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o, _ := newTestOverlay(t, 24, 80)
+			o.open()
+			o.feed([]byte(tc.enter))
+			if tc.list {
+				o.sessions(pickItems(3), nil)
+			}
+
+			// Escape: back to the action keys, still on screen, nothing asked of the caller.
+			if got := o.feed([]byte("\x1b")); !sameResponse(got, overlayResponse{}) {
+				t.Fatalf("escape = %+v, want nothing done: it steps back rather than closing", got)
+			}
+			if o.mode != overlayArmed || o.helping {
+				t.Fatalf("mode %v helping %v, want the armed hints", o.mode, o.helping)
+			}
+			if !strings.Contains(o.bar(), "s switch") {
+				t.Errorf("bar = %q, want the hints back", o.bar())
+			}
+
+			// And escape again leaves, since armed is the top level.
+			if got := o.feed([]byte("\x1b")); !sameResponse(got, overlayResponse{Repaint: true}) {
+				t.Errorf("a second escape = %+v, want the overlay closed", got)
+			}
+		})
+	}
+}
+
+// ctrl-c leaves from anywhere, which is what keeps escape's extra level from being a trap.
+func TestOverlayCtrlCLeavesFromAnywhere(t *testing.T) {
+	for _, enter := range []string{"?", "s", "b", ":"} {
+		o, _ := newTestOverlay(t, 24, 80)
+		o.open()
+		o.feed([]byte(enter))
+		o.sessions(pickItems(2), nil)
+		if got := o.feed([]byte{0x03}); !sameResponse(got, overlayResponse{Repaint: true}) {
+			t.Errorf("ctrl-c after %q = %+v, want the overlay closed", enter, got)
+		}
+	}
+}
+
+// Every action key still works while the help is up, so pressing the key you have just read about does what
+// it says rather than only dismissing the help.
+func TestOverlayHelpKeysStillAct(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("?"))
+	if !o.helping || len(o.rows(24, 80)) < 5 {
+		t.Fatalf("help is not on screen: helping=%v rows=%d", o.helping, len(o.rows(24, 80)))
+	}
+
+	if got := o.feed([]byte("s")); !sameResponse(got, overlayResponse{List: true}) {
+		t.Errorf("s from the help = %+v, want it to start the switch list", got)
+	}
+	if o.helping {
+		t.Error("the help is still on screen after acting on one of its keys")
+	}
+
+	o, _ = newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("?"))
+	if got := o.feed([]byte("d")); !sameResponse(got, overlayResponse{Detach: true, Repaint: true}) {
+		t.Errorf("d from the help = %+v, want a detach", got)
+	}
+}

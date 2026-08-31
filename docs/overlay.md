@@ -23,10 +23,22 @@ ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
 ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
-escape        close
+escape        back one level; from the top, out of the overlay
+ctrl-c        out of the overlay from anywhere
 
 in a list:    type to filter, ctrl-j/ctrl-k or arrows to move, enter to choose
 ```
+
+## Escape goes up, ctrl-c goes out
+
+Reported about the help, and it generalizes: reading what the keys are is not a reason to lose the overlay.
+So escape steps back one level -- out of a list, a prompt, a confirmation, a command's output, or the help --
+and only the top level closes. ctrl-c leaves from anywhere, which is what keeps the extra level from being a
+trap.
+
+The help is armed with a reference under it rather than a mode of its own, so every action key still works
+while it is up: pressing the key you have just read about does what it says instead of only dismissing the
+help.
 
 ## Choosing beats typing, and that is why there is a picker
 

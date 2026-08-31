@@ -109,15 +109,13 @@ const (
 	pickedNothing pickOutcome = iota
 	// pickedItem means enter was pressed on a match.
 	pickedItem
-	// pickCancelled means the user backed out.
-	pickCancelled
 )
 
 // key applies one keypress.
+// Escape and ctrl-c never reach here: the overlay handles going back and closing above this, so a list does
+// not have to know which of the two it is in the middle of.
 func (p *picker) key(k overlayKey) pickOutcome {
 	switch k.Kind {
-	case keyCancel:
-		return pickCancelled
 	case keyEnter:
 		if _, ok := p.selected(); !ok {
 			// Nothing to choose, so enter is not a choice. Silently ignored rather than closing: the user

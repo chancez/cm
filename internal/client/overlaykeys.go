@@ -31,7 +31,10 @@ const (
 	// movement. That is fzf's arrangement and the reason for it is the same.
 	keyUp
 	keyDown
-	// keyCancel closes the overlay: escape or ctrl-c.
+	// keyEscape goes back one level: out of a list, a prompt or the help, and out of the overlay from the
+	// top. Distinct from keyCancel because they now mean different things.
+	keyEscape
+	// keyCancel leaves the overlay outright, whatever is on screen. ctrl-c.
 	keyCancel
 	// keyIgnore is input the overlay drops. A key release, a repeat, or a keypress it does not bind.
 	keyIgnore
@@ -99,9 +102,9 @@ func decodeKey(p []byte) (overlayKey, int) {
 // decodeEscape classifies a sequence starting with ESC.
 func decodeEscape(p []byte) (overlayKey, int) {
 	if len(p) == 1 {
-		// Escape on its own closes, which is what a prompt is expected to do. See decodeKey on the split
+		// Escape on its own steps back, which is what a prompt is expected to do. See decodeKey on the split
 		// sequence this cannot tell apart from a real escape.
-		return overlayKey{Kind: keyCancel}, 1
+		return overlayKey{Kind: keyEscape}, 1
 	}
 
 	switch p[1] {
@@ -238,7 +241,7 @@ func decodeKittyKey(params string) overlayKey {
 	case 57353:
 		return overlayKey{Kind: keyDown}
 	case 27:
-		return overlayKey{Kind: keyCancel}
+		return overlayKey{Kind: keyEscape}
 	case 127, 8:
 		return overlayKey{Kind: keyBackspace}
 	}
