@@ -71,6 +71,7 @@ anything running:
 
 ```sh
 cm bind notes work              # a second name for the same session
+cm bind refactor                # name the session this is run in
 cm switch work                  # show work in this window, until this client goes away
 cm rebind work                  # move this window's name too, so a restart follows
 cm unbind notes

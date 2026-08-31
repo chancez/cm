@@ -18,14 +18,18 @@ func newBindCommand(g *globals) *cobra.Command {
 		asJSON bool
 	)
 	cmd := &cobra.Command{
-		Use:   "bind <name> <session>",
+		Use:   "bind <name> [session]",
 		Short: "Point a name at a session",
 		Long: `Point a name at a session, so attaching by that name reaches it.
 
+  cm bind refactor              # name the session this is running in
   cm bind work @a7k2m9x4        # name a session that had none
   cm bind build work            # a second name for the same session
   cm bind work review --move    # point an existing name somewhere else
   cm unbind build
+
+With no session, the one this command is running in is used, from CM_SESSION, so
+naming the session in front of you is one word and needs nothing looked up.
 
 A name is not a session's identity. A session is identified by its ID, which is
 allocated when it is created and never changes, and a name is a separate thing
@@ -47,17 +51,11 @@ session running, which is the session equivalent of detaching. Without it, 'cm k
 <name>' kills the session, which is what it has always meant. Use it for a name whose
 window borrowed a session that lives elsewhere, so closing the window lets go rather
 than ending someone's shell.`,
-		Args:              cobra.ExactArgs(2),
+		Args:              cobra.RangeArgs(1, 2),
 		ValidArgsFunction: completeBindArgs(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, session := args[0], args[1]
-			// Checked here so a typo is refused without a server, and because the error names the rule:
-			// an ID cannot be bound, since an ID is what names point at.
-			if _, isID := paths.SessionRef(name); isID {
-				return fmt.Errorf(
-					"%q is an ID reference, which cannot be bound: bind a name to it instead", name)
-			}
-			if err := paths.ValidateSessionName(name); err != nil {
+			name, session, err := splitBindArgs(args)
+			if err != nil {
 				return err
 			}
 
@@ -153,6 +151,33 @@ there is no way to make a shell unreachable by taking a name away from it.`,
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
+}
+
+// splitBindArgs resolves what to bind and what to bind it to.
+//
+// The session defaults to the calling one, from CM_SESSION, which is what makes `cm bind refactor` the
+// whole gesture for naming the window you are in. Same fallback `cm tag`, `cm report` and `cm detach`
+// use, and it retargets nothing: a bind moves a name, never a client.
+//
+// The name is checked before the target is resolved, so what is wrong with the name is what gets
+// reported. The other order answers `cm bind @a7k2m9x4` outside a session with "no session given", which
+// names the argument that was omitted rather than the one that cannot mean what it says.
+func splitBindArgs(args []string) (name, session string, err error) {
+	name = args[0]
+	// An ID cannot be bound, since an ID is what names point at. Refused here so a typo costs no server
+	// round trip, and because the error can name the rule.
+	if _, isID := paths.SessionRef(name); isID {
+		return "", "", fmt.Errorf(
+			"%q is an ID reference, which cannot be bound: bind a name to it instead", name)
+	}
+	if err := paths.ValidateSessionName(name); err != nil {
+		return "", "", err
+	}
+	session, err = sessionTarget(args[1:], "bind a name to")
+	if err != nil {
+		return "", "", err
+	}
+	return name, session, nil
 }
 
 // completeBindArgs completes the session in the second position and offers nothing for the first.

@@ -44,7 +44,8 @@ than one name being cut in half: everything the column shows is meant to be type
 terminal returns to the session it always named. `cm rebind` moves the window's name as well, which is what
 makes it stick. `cm rebind --replace` also ends the session the name came off, and `rebind_replaces` makes that the
 default. `cm bind` and `cm unbind` manage names: between them they cover renaming a session, giving it a second
-name, and moving a name to another session. `cm bind --borrow` marks a name whose kill releases the name
+name, and moving a name to another session. `cm bind <name>` with no session names the session it is run
+in, from `CM_SESSION`, the same way `cm tag` and `cm report` default. `cm bind --borrow` marks a name whose kill releases the name
 instead of killing the session, which is what a per-window name wants once its window is borrowing a
 session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
 teardown script should treat them apart: the session named there is still running.
