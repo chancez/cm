@@ -25,7 +25,7 @@ ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        close
 
-in a list:    type to filter, arrows or ctrl-n/ctrl-p to move, enter to choose
+in a list:    type to filter, ctrl-j/ctrl-k or arrows to move, enter to choose
 ```
 
 ## Choosing beats typing, and that is why there is a picker
@@ -39,9 +39,20 @@ So `s` and `k` open a chooser (`internal/client/overlaypick.go`) and `b` asks fo
 `:` survives for the long tail, `tag` and `doctor` and `kill --all`, but it is no longer how the common
 things are done.
 
-The chooser is filter-first, like fzf: printable keys narrow the list, and moving is the arrows or
-ctrl-n/ctrl-p. j and k cannot also mean movement when every key filters, and a filter is what makes twenty
-sessions usable in six rows.
+The chooser is filter-first, like fzf: printable keys narrow the list, and moving is ctrl-j/ctrl-k, or
+ctrl-n/ctrl-p, or the arrows. Bare j and k cannot also mean movement when every key filters, and a filter
+is what makes twenty sessions usable in six rows.
+
+Following fzf that far has one consequence worth stating: **ctrl-j is 0x0a**, so LF cannot also mean enter.
+Return is CR, which is what a terminal sends for it, and fzf makes exactly the same trade. The kitty
+protocol forms of these keys are decoded too, because a program that turned on report-all-keys makes the
+terminal send even ctrl-c as CSI 99;5u -- without those cases the overlay's own keys stop working under
+exactly the full-screen programs it exists for.
+
+The list also keeps its height as the filter narrows it, padding with blank rows. The block is anchored to
+the bottom of the screen, so a list that shrinks moves every row under the reader's eyes and repaints the
+program's content between keystrokes. It grows once, when the sessions replace "listing sessions...", and
+then holds still.
 
 Two costs taken deliberately. It is a second list-and-filter implementation next to the one bubbletea
 already gives cm, justified only by having to fit under a program that is still drawing; it stays one

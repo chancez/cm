@@ -169,7 +169,7 @@ Detaching is unaffected and still takes one press of `detach_key`. Both keys are
 `cm attach` refuses a configuration where they are the same key rather than choosing between them.
 
 Inside the overlay: `s` to switch and `k` to kill, both choosing from a filterable list rather than asking
-you to type a name; `b` to name this session; `d` to detach; `:` for any cm command; `?` for the rest;
+you to type a name (`ctrl-j`/`ctrl-k` or the arrows move, enter chooses); `b` to name this session; `d` to detach; `:` for any cm command; `?` for the rest;
 escape to close. Pressing the prefix or the detach key a second time forwards it to the program,
 which is the only way to reach a key cm intercepts: `ctrl-\` never reached a pty from a cm client
 before this, so SIGQUIT was unreachable inside a session.

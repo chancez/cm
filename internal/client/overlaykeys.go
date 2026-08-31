@@ -61,13 +61,22 @@ func decodeKey(p []byte) (overlayKey, int) {
 	switch b := p[0]; {
 	case b == 0x1b:
 		return decodeEscape(p)
-	case b == '\r' || b == '\n':
+	case b == '\r':
 		return overlayKey{Kind: keyEnter}, 1
+	case b == '\n':
+		// ctrl-j, which is 0x0a and would otherwise be a second spelling of enter. fzf binds it to "down"
+		// and the muscle memory that comes with it is what this overlay is being measured against, so it
+		// moves rather than submits. Return itself is CR, which is what a terminal sends for it.
+		return overlayKey{Kind: keyDown}, 1
+	case b == 0x0b:
+		// ctrl-k, up, for the same reason.
+		return overlayKey{Kind: keyUp}, 1
 	case b == 0x7f || b == 0x08:
 		return overlayKey{Kind: keyBackspace}, 1
 	case b == 0x15:
 		return overlayKey{Kind: keyKillLine}, 1
 	case b == 0x10:
+		// ctrl-p and ctrl-n, readline's spelling of the same movement.
 		return overlayKey{Kind: keyUp}, 1
 	case b == 0x0e:
 		return overlayKey{Kind: keyDown}, 1
@@ -197,9 +206,25 @@ func decodeKittyKey(params string) overlayKey {
 	if event != 1 {
 		return overlayKey{Kind: keyIgnore}
 	}
+	if mods == 5 {
+		// Ctrl. These have to be listed, because a program that turned on report-all-keys makes the terminal
+		// send even ctrl-c this way: without them the overlay's ctrl-c, ctrl-u and the fzf movement keys stop
+		// working under exactly the full-screen programs this feature exists for. The two keys cm intercepts
+		// are matched before anything is decoded, so they are not here.
+		switch code {
+		case 'j', 'n':
+			return overlayKey{Kind: keyDown}
+		case 'k', 'p':
+			return overlayKey{Kind: keyUp}
+		case 'u':
+			return overlayKey{Kind: keyKillLine}
+		case 'c':
+			return overlayKey{Kind: keyCancel}
+		}
+		return overlayKey{Kind: keyIgnore}
+	}
 	if mods != 1 {
-		// A modified key. The two cm intercepts are matched before anything is decoded, so anything left
-		// here is unbound.
+		// Any other modifier, which nothing here binds.
 		return overlayKey{Kind: keyIgnore}
 	}
 

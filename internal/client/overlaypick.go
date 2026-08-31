@@ -35,6 +35,13 @@ type picker struct {
 	filter []rune
 	// cursor indexes the *filtered* list.
 	cursor int
+	// height is how many rows the list occupies, fixed once the list has arrived.
+	//
+	// Fixed rather than following the number of matches, because the block is anchored to the bottom of the
+	// screen: a list that shrinks as you type moves every row under your eyes and repaints the program's
+	// content between keystrokes. It grows exactly once, when the list replaces "listing sessions...", and
+	// then holds still. Clamped to the space available on every render, so a resize still shrinks it.
+	height int
 	// loading is true until the session list arrives, since it comes from the server.
 	loading bool
 	// err is why the list could not be fetched.
@@ -157,9 +164,16 @@ func (p *picker) body(limit int) []string {
 		return []string{"listing sessions..."}
 	}
 
+	// Set from every session rather than from the matches, so the height reflects the list rather than
+	// whatever the filter currently allows. At least one row, since a picker with no rows is invisible.
+	if p.height == 0 {
+		p.height = max(min(len(p.items), limit), 1)
+	}
+	height := min(p.height, limit)
+
 	m := p.matches()
 	if len(m) == 0 {
-		return []string{"nothing matches " + string(p.filter)}
+		return padRows([]string{"nothing matches " + string(p.filter)}, height)
 	}
 	if p.cursor >= len(m) {
 		p.cursor = len(m) - 1
@@ -167,10 +181,10 @@ func (p *picker) body(limit int) []string {
 
 	// The window is anchored so the cursor sits inside it, scrolling by whole rows.
 	start := 0
-	if p.cursor >= limit {
-		start = p.cursor - limit + 1
+	if p.cursor >= height {
+		start = p.cursor - height + 1
 	}
-	end := min(start+limit, len(m))
+	end := min(start+height, len(m))
 
 	// The label column is padded to the widest label *in view*, so the details line up as a column instead
 	// of stepping in and out with each name's length. In view rather than overall, since a long name
@@ -207,7 +221,15 @@ func (p *picker) body(limit int) []string {
 		}
 		out = append(out, row)
 	}
-	return out
+	return padRows(out, height)
+}
+
+// padRows fills a list out with blank rows, so the block keeps its height.
+func padRows(rows []string, height int) []string {
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	return rows
 }
 
 // maxPickLabel bounds the label column, so one very long session name does not push every detail off the

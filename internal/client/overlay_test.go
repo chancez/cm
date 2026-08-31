@@ -632,3 +632,98 @@ func TestOverlayHidesTheCursorAndFillsTheWidth(t *testing.T) {
 			"carries no cursor visibility", buf.String())
 	}
 }
+
+// The block keeps its height as the filter narrows the list.
+//
+// Reported from real use: the picker is anchored to the bottom of the screen, so a list that shrinks as you
+// type moves every row under your eyes and repaints the program's content between keystrokes.
+func TestOverlayPickerHeightIsStableWhileFiltering(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	items := pickItems(6)
+	items[3].Label = "notebook"
+	o.sessions(items, nil)
+
+	want := len(o.rows(24, 80))
+	if want != 7 {
+		t.Fatalf("rows with 6 sessions = %d, want 7: a bar and six items", want)
+	}
+	for _, typed := range []string{"n", "o", "t", "e"} {
+		o.feed([]byte(typed))
+		if got := len(o.rows(24, 80)); got != want {
+			t.Errorf("after typing %q the block is %d rows, want %d: the height must not move",
+				typed, got, want)
+		}
+	}
+	// Even with nothing matching at all, which is the extreme of the same problem.
+	o.feed([]byte("zzz"))
+	if got := len(o.rows(24, 80)); got != want {
+		t.Errorf("with no matches the block is %d rows, want %d", got, want)
+	}
+
+	// A smaller terminal still shrinks it: the height is a preference, not a claim on space that is not
+	// there.
+	if got := len(o.rows(6, 80)); got > 3 {
+		t.Errorf("rows on a 6-row terminal = %d, want at most 3", got)
+	}
+}
+
+// fzf's movement keys, because that is the muscle memory this is measured against. ctrl-j is 0x0a, which
+// makes Return CR alone: fzf does exactly this, and treating LF as enter would submit on every ctrl-j.
+func TestOverlayPickerMovementKeys(t *testing.T) {
+	down := []string{"\n", "\x0e", "\x1b[B", "\x1bOB", "\x1b[106;5u", "\x1b[110;5u"}
+	up := []string{"\x0b", "\x10", "\x1b[A", "\x1bOA", "\x1b[107;5u", "\x1b[112;5u"}
+
+	for _, keys := range down {
+		o, _ := newTestOverlay(t, 24, 80)
+		o.open()
+		o.feed([]byte("s"))
+		o.sessions(pickItems(3), nil)
+		o.feed([]byte(keys))
+		if got := o.pick.cursor; got != 1 {
+			t.Errorf("%q moved the cursor to %d, want 1", keys, got)
+		}
+	}
+	for _, keys := range up {
+		o, _ := newTestOverlay(t, 24, 80)
+		o.open()
+		o.feed([]byte("s"))
+		o.sessions(pickItems(3), nil)
+		o.feed([]byte("\n\n"))
+		o.feed([]byte(keys))
+		if got := o.pick.cursor; got != 1 {
+			t.Errorf("%q moved the cursor to %d, want 1", keys, got)
+		}
+	}
+
+	// And Return still chooses, which is the half that would break if LF and CR were treated alike.
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	o.sessions(pickItems(3), nil)
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{SwitchTo: "@id0", Repaint: true}) {
+		t.Errorf("Return = %+v, want it to choose", got)
+	}
+}
+
+// A program that turned on the kitty protocol's report-all-keys makes the terminal send even ctrl-c as a
+// CSI u sequence. Without the ctrl cases in decodeKittyKey, the overlay's own keys stop working under
+// exactly the full-screen programs it exists for.
+func TestOverlayCtrlKeysUnderTheKittyProtocol(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	o.sessions(pickItems(3), nil)
+	o.feed([]byte("session"))
+
+	// ctrl-u clears the filter.
+	o.feed([]byte("\x1b[117;5u"))
+	if got := len(o.pick.filter); got != 0 {
+		t.Errorf("filter after a kitty-encoded ctrl-u is %d runes, want 0", got)
+	}
+	// ctrl-c closes the overlay.
+	if got := o.feed([]byte("\x1b[99;5u")); !sameResponse(got, overlayResponse{Repaint: true}) {
+		t.Errorf("kitty-encoded ctrl-c = %+v, want the overlay closed", got)
+	}
+}
