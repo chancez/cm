@@ -130,6 +130,16 @@ type Options struct {
 	// Nil disables running commands, which is what every caller that is not `cm attach` does. The keys
 	// still work; a command reports that it cannot run rather than appearing to do nothing.
 	RunCommand func(ctx context.Context, sessionRef string, args []string) (string, error)
+	// OpenPicker hands the terminal to cm's session picker and reports the session the user chose, empty
+	// when they chose none.
+	//
+	// Supplied by the caller for the same reason RunCommand is: this package would have to guess which
+	// binary to run and how to hear the answer back from it. Nil disables the overlay's picker binding.
+	//
+	// Called with nothing in this process reading the terminal, which is what terminalInput.suspend
+	// guarantees: two readers on one terminal means the keystroke goes to whichever the kernel wakes
+	// second.
+	OpenPicker func(ctx context.Context) (chosen string, err error)
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
 	// now on.
 	//
@@ -785,6 +795,7 @@ func runSession(
 		prefix:   opts.PrefixKey,
 		detach:   detachKey,
 		session:  result.Session,
+		canPick:  opts.OpenPicker != nil,
 		log:      opts.Log,
 	}
 	prefixKey := opts.PrefixKey
@@ -892,6 +903,30 @@ func runSession(
 				case <-ctx.Done():
 				}
 			}()
+		}
+		if resp.OpenPicker {
+			// The terminal goes to a child process, so this process must stop reading it first and start
+			// again after: see terminalInput. The reader is shared across reconnects, which is why it is
+			// suspended rather than replaced.
+			in.suspend()
+			chosen, err := opts.OpenPicker(ctx)
+			if resumeErr := in.resume(); resumeErr != nil {
+				// Nothing can be typed at the session any more, so carrying on would leave a window that
+				// paints and answers nothing.
+				return outcomeDone, true
+			}
+			switch {
+			case err != nil:
+				opts.Log.Warn("the session picker failed", "err", err)
+			case chosen != "":
+				result.SwitchTo = chosen
+				opts.Log.Debug("switching to the session chosen in the picker", "target", chosen)
+				return outcomeSwitch, true
+			}
+			// Nothing chosen, so the screen the picker covered is repainted from cm's model, which is what a
+			// closing overlay does anyway.
+			*resumeFrom = nil
+			return outcomeReconnect, true
 		}
 		if resp.SwitchTo != "" {
 			// The client's own switch, which keeps this process, this terminal and this input reader: see

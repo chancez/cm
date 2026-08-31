@@ -21,6 +21,7 @@ ctrl-] b      name this session: type just the name
 ctrl-] d      detach
 ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
+ctrl-] t      the full picker: cm tui, with its filter and preview pane
 ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        back one level; from the top, out of the overlay
@@ -28,6 +29,29 @@ ctrl-c        out of the overlay from anywhere
 
 in a list:    type to filter, ctrl-j/ctrl-k or arrows to move, enter to choose
 ```
+
+## The way out to the full picker
+
+`t` hands the terminal to `cm tui`, which is the answer to the overlay's own list being deliberately
+small: six rows under a program that is still drawing is right for choosing among a few sessions and
+useless for reading their output. The picker has the filter, the state column and the preview pane.
+
+Three things had to exist for that keypress to work.
+
+**A cancellable reader.** `internal/client` left its reader blocked in the kernel on purpose, and a child
+process would have competed with it for every keystroke. `terminalInput` can be suspended, which is what
+docs/tui.md called the right answer when it hit the same wall from the other side.
+
+**A switch action in the picker**, since attaching from a session nests and the detach key then belongs to
+the outer client -- the picker's own startup notice has always warned about exactly that. `s` moves the
+window instead. The binding is enabled by the caller supplying a way to switch, so it is absent rather
+than inert when there is nobody to move.
+
+**A way for the choice to come back.** The picker writes the chosen session to a file the client named on
+its argv, and the client then switches with machinery it already had. The obvious alternative, having the
+picker call the Switch RPC itself, has a race: the server would push the switch to a client that is blocked
+on the child, and the repaint afterwards discards the stream, so the window would silently not move. A file
+the parent reads after the child has exited has no such window.
 
 ## Escape goes up, ctrl-c goes out
 

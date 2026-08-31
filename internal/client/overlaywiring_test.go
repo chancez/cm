@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -260,5 +261,74 @@ func TestRunSessionNoOverlayWithoutATerminal(t *testing.T) {
 	h.stream.exited(0)
 	if oc := overlayWaitFor(t, done, "the session to end"); oc != outcomeDone {
 		t.Errorf("outcome = %v, want outcomeDone", oc)
+	}
+}
+
+// The picker binding hands the terminal to a child and acts on what it chose.
+//
+// Both outcomes matter and they differ. A session chosen is a switch, which keeps this process, this
+// terminal and this input reader. Nothing chosen is a repaint, because the picker covered the screen the
+// session had.
+func TestRunSessionOpensThePicker(t *testing.T) {
+	tests := []struct {
+		name string
+		// chosen is what the picker reports back.
+		chosen  string
+		err     error
+		want    outcome
+		wantRef string
+	}{
+		{name: "a session chosen switches", chosen: "@a7k2m9x4", want: outcomeSwitch, wantRef: "@a7k2m9x4"},
+		{name: "nothing chosen repaints", want: outcomeReconnect},
+		{name: "a failed picker repaints", err: errors.New("no terminal"), want: outcomeReconnect},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := overlayHarness(t)
+			opened := make(chan struct{}, 1)
+			h.opts.OpenPicker = func(context.Context) (string, error) {
+				opened <- struct{}{}
+				return tc.chosen, tc.err
+			}
+			h.stream.opened("test", 5, nil)
+
+			done := h.runAsync(context.Background())
+			h.input <- []byte("\x1dt")
+			overlayWaitFor(t, opened, "the picker to be opened")
+
+			if oc := overlayWaitFor(t, done, "the outcome"); oc != tc.want {
+				t.Errorf("outcome = %v, want %v", oc, tc.want)
+			}
+			if got := h.result.SwitchTo; got != tc.wantRef {
+				t.Errorf("SwitchTo = %q, want %q", got, tc.wantRef)
+			}
+			if tc.want == outcomeReconnect && h.resumeFrom != nil {
+				t.Errorf("resumeFrom = %v, want nil so the screen the picker covered is repainted",
+					*h.resumeFrom)
+			}
+			if got := h.stream.inputs(); len(got) != 0 {
+				t.Errorf("input reached the session: %q", got)
+			}
+		})
+	}
+}
+
+// A client with no way to open a picker says so rather than appearing to do nothing. Every caller that is
+// not `cm attach` is in that state, since only the command layer knows how to run one.
+func TestRunSessionPickerWithoutARunner(t *testing.T) {
+	h := overlayHarness(t)
+	h.stream.opened("test", 0, nil)
+
+	done := h.runAsync(context.Background())
+	h.input <- []byte("\x1dt")
+	// Dismiss whatever it said, which closes the overlay and asks for the repaint.
+	h.input <- []byte("\r")
+
+	if oc := overlayWaitFor(t, done, "the overlay to close"); oc != outcomeReconnect {
+		t.Errorf("outcome = %v, want outcomeReconnect", oc)
+	}
+	if got := h.stream.inputs(); len(got) != 0 {
+		t.Errorf("input reached the session: %q", got)
 	}
 }

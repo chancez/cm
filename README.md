@@ -94,7 +94,7 @@ stays where it was; press it again to leave the outer session too.
 
 `ctrl-]` opens an overlay at the bottom of the screen, from which cm is reachable without leaving the
 program in the session: `s` to switch and `k` to kill, choosing from a filterable list; `b` to name this
-session; `d` to detach; `:` for any cm command; `?` for the rest. That is how you name or move the session you are looking at while nvim or an agent
+session; `d` to detach; `t` for the full `cm tui` picker; `:` for any cm command; `?` for the rest. That is how you name or move the session you are looking at while nvim or an agent
 fills the window. Set by `prefix_key`, or `--prefix-key` for one attachment. Pressing `ctrl-]` or
 `ctrl-\` twice sends it to the program, which is the only way to reach a key cm intercepts. See
 [docs/overlay.md](docs/overlay.md).

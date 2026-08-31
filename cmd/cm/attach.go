@@ -150,6 +150,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 				// because which binary, which runtime directory, and which commands need a terminal of their
 				// own are all this layer's knowledge. See overlayRunner.
 				RunCommand: overlayRunner(dirs),
+				// And how it hands the terminal to the full picker. Both are supplied here rather than built
+				// in internal/client, which would have to guess which binary to run and how to hear back.
+				OpenPicker: overlayPicker(g, dirs),
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),

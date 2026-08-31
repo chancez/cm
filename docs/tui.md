@@ -178,3 +178,23 @@ better and is a server change, not a picker change.
 
 `cm tui` describes the implementation rather than the purpose, which is worth revisiting. Bare `cm`
 prints help today and could open the picker instead once this has earned it.
+
+## Switching, and being opened from a session's overlay
+
+`s` moves whoever opened the picker to the selected session. It is enabled only when the caller supplied a
+way to switch (`Options.Switch`), so with nobody to move the binding is absent rather than inert -- which is
+the picker's own case, a window with no session yet.
+
+That caller is an attached client, reached by `ctrl-] t` in its overlay. The handover is the same shape as
+this package's attachments, in the other direction: the client suspends its terminal reader, runs `cm tui`
+as a child, and takes the terminal back when it exits. What the user chose comes back through a file named
+on the child's argv (`--chosen-file`, hidden), and the client does the switch itself with the machinery it
+already has for `cm switch`.
+
+Not the Switch RPC from in here, and the reason is a race rather than taste: the server would push the
+switch to a client that is blocked waiting for this process, and the repaint that follows discards the
+stream, so the window would silently not move.
+
+The key is in the expanded help only. Measured: the short line reaches column 89 of 100, "s switch here"
+takes it past the width, the help is not truncated, and the overflow silently eats the columns to its
+right. It sits in the existing attach column for the same reason.

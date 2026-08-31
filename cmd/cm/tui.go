@@ -20,10 +20,11 @@ import (
 
 func newTUICommand(g *globals) *cobra.Command {
 	var (
-		readOnly bool
-		preview  bool
-		refresh  time.Duration
-		tagArgs  []string
+		readOnly   bool
+		preview    bool
+		refresh    time.Duration
+		tagArgs    []string
+		chosenFile string
 	)
 	cmd := &cobra.Command{
 		Use:   "tui",
@@ -47,7 +48,10 @@ share a directory. "p" closes it, and closing it stops the reads it costs.
 
 Running this inside a session nests: the detach key belongs to the outermost
 client, so detaching from a session picked here detaches the window instead.
-'cm switch' is the command for moving a window that is already on a session.`,
+'cm switch' is the command for moving a window that is already on a session.
+
+Opened from an attached session's overlay with ctrl-] t, "s" switches that window
+to the selected session instead of nesting an attachment inside it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateSelectors(tagArgs); err != nil {
@@ -82,11 +86,20 @@ client, so detaching from a session picked here detaches the window instead.
 					"running inside %s: attaching from here nests, and the detach key will detach this window", inside)
 			}
 
+			// Switching is offered only when somebody asked to be told what was chosen, which is an
+			// attached client that opened this picker from its overlay. Run from a shell there is nothing
+			// to move, and the binding stays absent rather than inert. See tui.SwitchFunc.
+			var switchTo tui.SwitchFunc
+			if chosenFile != "" {
+				switchTo = func(ref string) error { return writeChosenSession(chosenFile, ref) }
+			}
+
 			return tui.Run(cmd.Context(), tui.Options{
 				Sessions: cl,
 				Tags:     tagArgs,
 				Notice:   notice,
 				Preview:  preview,
+				Switch:   switchTo,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.
 				Refresh: &refresh,
@@ -103,6 +116,11 @@ client, so detaching from a session picked here detaches the window instead.
 		"how often to re-read the session list, or 0 to only refresh after an action")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.StringVar(&chosenFile, "chosen-file", "",
+		"write the session the user chose here, for the client that opened this picker")
+	// Hidden because it is a handover between two cm processes rather than something to type: an attached
+	// client passes it when its overlay opens the picker, and reads the answer back when this exits.
+	_ = f.MarkHidden("chosen-file")
 	return cmd
 }
 

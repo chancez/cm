@@ -51,6 +51,9 @@ type overlay struct {
 	// session is what the bar shows, and it is a label rather than a reference: what a command acts on is
 	// carried in the child's CM_SESSION by the runner.
 	session string
+	// canPick reports that the caller can hand the terminal to the full picker, which every caller that is
+	// not `cm attach` cannot.
+	canPick bool
 
 	log *slog.Logger
 
@@ -142,6 +145,13 @@ type overlayResponse struct {
 	// server is the attach loop. Asked for rather than cached, because a picker showing sessions that ended
 	// minutes ago is worse than a brief "listing sessions...".
 	List bool
+	// OpenPicker asks the caller to hand the terminal to cm's session picker.
+	//
+	// The overlay's own list is a handful of rows under a program that is still drawing, which is the right
+	// shape for choosing among a few sessions and the wrong one for reading their output. This is the way
+	// out to the full picker, with its filter and its preview pane, and it is a keypress rather than the
+	// default because it covers the screen.
+	OpenPicker bool
 	// SwitchTo names a session this client should move to.
 	//
 	// A reference the caller acts on rather than a `cm switch` command, because the client can already do
@@ -322,6 +332,16 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		o.mode = overlayPrompt
 		o.prompt = promptName
 		o.line = o.line[:0]
+	case 't':
+		if !o.canPick {
+			o.status = "this client cannot open the picker"
+			o.mode = overlayResult
+			return
+		}
+		resp.OpenPicker = true
+		// Closed rather than left up: the picker takes the whole screen, so the bar has nowhere to be, and
+		// what comes back is either a switch or a repaint.
+		o.close(resp)
 	case ':':
 		o.mode = overlayPrompt
 		o.prompt = promptCommand
@@ -332,10 +352,20 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		// help line, and the other is the tmux habit.
 		o.forwardKey(o.detach, resp)
 	case '?':
-		o.status = fmt.Sprintf("help -- escape goes back, %s twice sends it to the program", o.prefix.Name)
+		if o.helping {
+			// A toggle, as it is in `cm tui`: the key that opened the help closes it. Escape does too, but a
+			// reader who opened the help with ? reaches for ? to put it away.
+			o.helping = false
+			o.body = nil
+			o.status = ""
+			return
+		}
+		o.status = fmt.Sprintf("help -- ? or escape goes back, %s twice sends it to the program",
+			o.prefix.Name)
 		o.body = []string{
 			"s  switch session    b  name this session",
 			"k  kill a session    d  detach",
+			"t  the full picker, with a preview pane",
 			"q  send " + o.detach.Name + " to the program",
 			":  any cm command    ctrl-c  leave the overlay",
 			"in a list: type to filter, ctrl-j/ctrl-k to move, enter to choose",
@@ -590,7 +620,7 @@ func (o *overlay) bar() string {
 	case o.mode == overlayPrompt:
 		return fmt.Sprintf(" cm %s : %s", label, string(o.line))
 	default:
-		return fmt.Sprintf(" cm %s | s switch  b name  k kill  d detach  q %s  ? help ",
+		return fmt.Sprintf(" cm %s | s switch  b name  k kill  t picker  d detach  q %s  ? help ",
 			label, o.detach.Name)
 	}
 }

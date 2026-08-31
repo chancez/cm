@@ -813,3 +813,29 @@ func TestOverlayHelpKeysStillAct(t *testing.T) {
 		t.Errorf("d from the help = %+v, want a detach", got)
 	}
 }
+
+// ? toggles the help, as it does in `cm tui`: the key that opened it closes it. Escape also goes back, but
+// a reader who opened the help with ? reaches for ? to put it away.
+func TestOverlayHelpToggles(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+
+	o.feed([]byte("?"))
+	if !o.helping {
+		t.Fatal("? did not open the help")
+	}
+	if got := o.feed([]byte("?")); !sameResponse(got, overlayResponse{}) {
+		t.Errorf("? again = %+v, want it to close the help without leaving the overlay", got)
+	}
+	if o.helping || o.mode != overlayArmed {
+		t.Errorf("helping=%v mode=%v after a second ?, want the armed hints", o.helping, o.mode)
+	}
+	if !strings.Contains(o.bar(), "s switch") {
+		t.Errorf("bar = %q, want the hints back", o.bar())
+	}
+	// And a third press opens it again, so it is a toggle rather than a one-way door.
+	o.feed([]byte("?"))
+	if !o.helping {
+		t.Error("a third ? did not reopen the help")
+	}
+}
