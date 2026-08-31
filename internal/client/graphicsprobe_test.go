@@ -247,3 +247,50 @@ func TestGraphicsProbeRemembersTheAnswerAndCanBeAskedAgain(t *testing.T) {
 		t.Errorf("answered=%v draws=%v after a second ask, want both true", answered, draws)
 	}
 }
+
+// Who gets asked, and when. The resume row is the one that shipped wrong.
+//
+// A resuming client is not repainted, so nothing erases the question from a terminal that renders an APC as
+// text, and a resume therefore used to skip asking. That stranded a client whose process had never asked and
+// which only ever reconnects by resuming: it never asks, never answers, and cm treats its terminal as unable
+// for the rest of its life. Reported as no images in a plain kitty, with the client log showing no answer line
+// at all for that client. So a resume asks once per process, which bounds the cost to one line of text against
+// images never working.
+func TestGraphicsProbeAsksOnAResumeOnlyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		draws, everAsked               bool
+		isTerminal, painting, resuming bool
+		want                           bool
+	}{
+		{"fresh attach, nothing known", false, false, true, true, false, true},
+		{"fresh attach, asked before", false, true, true, true, false, true},
+		{"resume, never asked", false, false, true, true, true, true},
+		{"resume, already asked", false, true, true, true, true, false},
+		{"already answered yes", true, true, true, true, false, false},
+		{"follower with no terminal", false, false, false, true, false, false},
+		{"follower not painting", false, false, true, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &graphicsProbe{draws: tc.draws, everAsked: tc.everAsked}
+			if got := p.shouldAsk(tc.isTerminal, tc.painting, tc.resuming); got != tc.want {
+				t.Errorf("shouldAsk(%v, %v, %v) = %v, want %v",
+					tc.isTerminal, tc.painting, tc.resuming, got, tc.want)
+			}
+		})
+	}
+}
+
+// And asking records that it happened, which is what makes the resume case ask once rather than every time.
+func TestGraphicsProbeRecordsThatItAsked(t *testing.T) {
+	p, _ := asked(t)
+	if !p.everAsked {
+		t.Error("everAsked is false after asking, so a resuming client would ask on every reconnect")
+	}
+	if !p.shouldAsk(true, true, false) {
+		t.Error("a fresh attach with no answer does not ask")
+	}
+	if p.shouldAsk(true, true, true) {
+		t.Error("a resume asks again after this process already asked")
+	}
+}

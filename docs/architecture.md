@@ -1501,8 +1501,19 @@ sends both replies, `;OK` then `?62;c`, back to back in one read, and treating t
 answer came" turned every yes into a no. Nothing was ever drawn, and the negative test still passed. Whichever
 reply comes first decides; the other is consumed without revising it.
 
-Two cases skip the probe. A resume is not repainted and so is sent no images anyway, and a follower writing to
-a pipe has no terminal, where the question would be corruption in the file. A terminal that answers nothing at
+Who gets asked, and when, is `graphicsProbe.shouldAsk`. A follower with no terminal is never asked, since the
+question would be corruption in its stream. A fresh attach asks whenever the answer is unknown, because its
+repaint clears the question from a terminal that renders an APC as text. A resume asks too, but only once per
+client process: a resume is not repainted, so nothing erases the question, and the cost of one line of junk is
+worth paying against the state it prevents. That state was reached in practice: a client process that has never
+answered, and whose every reconnect resumes, is never asked again and counts as unable to draw images for the
+rest of its life. It presented as no images in a plain kitty for a long-lived client while a freshly attached
+one beside it worked, and the tell was in the client log, which had an answer line for the new client and none
+at all for the old one. Closing the window and reopening it fixed it, which is the shape of a stale process
+rather than a bug in the exchange.
+
+The question is logged as well as the answer, for that reason: without both lines, "no images" looks the same
+whether a client never asked or asked and was ignored, and those need different fixes. A terminal that answers nothing at
 all is treated as unable, which is the safe direction: the cost is an image a capable terminal would have
 drawn, against a screen of payload on one that would not.
 

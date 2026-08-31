@@ -437,10 +437,10 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		// client outlives its connections: reporting it only where it arrived meant every attach after a
 		// restart or a switch said "cannot draw", and the exchange being settled meant nothing asked again.
 		opts.terminalGraphics = gfxProbe.drawsImages()
-		// And asked again when there is no answer, which is a first attach or a terminal that stayed silent.
-		// Skipped for a resume, which is not repainted and so is sent no images anyway, and skipped without a
-		// terminal, where the question would be corruption in a follower's stream.
-		if !opts.terminalGraphics && tty.IsTerminal() && !opts.NoRestore && resumeFrom == nil {
+		// And asked again when there is no answer. See graphicsProbe.shouldAsk for the three cases, and for why
+		// a resume asks at all: a client that has never asked and only ever resumes would otherwise be treated
+		// as unable to draw images for the rest of its life.
+		if gfxProbe.shouldAsk(tty.IsTerminal(), !opts.NoRestore, resumeFrom != nil) {
 			gfxProbe.ask(opts.screen, log)
 		}
 

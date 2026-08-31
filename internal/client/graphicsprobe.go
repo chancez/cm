@@ -61,6 +61,11 @@ type graphicsProbe struct {
 	// reached a user as a plain kitty session with no pictures, after a server restart they had not connected
 	// to the symptom.
 	draws bool
+	// everAsked records that this process has put the question at least once, which is what bounds the cost
+	// of asking on a resume.
+	everAsked bool
+	// expiryLogged keeps the window-closed line to one per question rather than one per keystroke after it.
+	expiryLogged bool
 	// log is where a discarded or unexpected reply is recorded, since an image that does not appear is
 	// otherwise inexplicable.
 	log *slog.Logger
@@ -87,7 +92,8 @@ func (p *graphicsProbe) drawsImages() bool { return p.draws }
 // arrive on the new one and holding it would strip the front of the next one.
 func (p *graphicsProbe) ask(scr *screen, log *slog.Logger) {
 	p.log = log
-	p.settled, p.gotDA = false, false
+	p.everAsked = true
+	p.settled, p.gotDA, p.expiryLogged = false, false, false
 	p.framer = input.ReplyFramer{}
 	if err := scr.inject(graphics.ProbeCommands()); err != nil {
 		// A terminal that cannot be written to will not be shown images either, so this is not worth
@@ -96,6 +102,10 @@ func (p *graphicsProbe) ask(scr *screen, log *slog.Logger) {
 		return
 	}
 	p.asked = time.Now()
+	// Logged because its absence is what made a real failure undiagnosable: cm recorded the answer and not
+	// the question, so a client with no images looked the same whether it had never asked or had asked and
+	// been ignored. Those need different fixes.
+	log.Debug("asked the terminal whether it can draw images", "resumed_answer", p.draws)
 }
 
 // take removes this probe's answer from a chunk of terminal input.
@@ -107,7 +117,18 @@ func (p *graphicsProbe) ask(scr *screen, log *slog.Logger) {
 // property that keeps a program's own replies working: cm claims a reply only while its own question is
 // outstanding.
 func (p *graphicsProbe) take(data []byte, now time.Time) (rest []byte, answered, draws bool) {
-	if p.asked.IsZero() || p.gotDA || now.Sub(p.asked) > probeGraphicsWindow {
+	if p.asked.IsZero() || p.gotDA {
+		return data, false, false
+	}
+	if now.Sub(p.asked) > probeGraphicsWindow {
+		// Said once, when the window closes with nothing claimed. A terminal that never answers is the
+		// legitimate case, and it is also what a lost reply looks like, so the line is the only way to tell
+		// this apart from never having asked.
+		if !p.expiryLogged {
+			p.expiryLogged = true
+			p.log.Debug("no answer about drawing images within the window, treating the terminal as unable",
+				"window", probeGraphicsWindow)
+		}
 		return data, false, false
 	}
 
@@ -148,4 +169,31 @@ func (p *graphicsProbe) take(data []byte, now time.Time) (rest []byte, answered,
 		rest = append(rest, part.Data...)
 	}
 	return rest, answered, draws
+}
+
+// shouldAsk reports whether to put the question before this attach.
+//
+// Three inputs, and the awkward one is the resume. A resuming client is not repainted, so nothing erases the
+// question from a terminal that cannot parse an APC and prints it as text, which is why a resume used to skip
+// asking entirely. That left a client stuck: one whose process started before it ever asked, and which then
+// only ever reconnects by resuming, never asks again and never answers, so cm treats its terminal as unable
+// forever. That reached a user as no images in a plain kitty, with the client log showing no answer line at
+// all for that client while a freshly attached one beside it answered yes.
+//
+// So a resume asks too, but only if this process has never asked. That bounds the cost to one line of text on
+// a terminal that renders an APC, once per client process, against images never working at all for a
+// long-lived one. A fresh attach asks whenever the answer is unknown, since its repaint clears the question.
+func (p *graphicsProbe) shouldAsk(isTerminal, painting, resuming bool) bool {
+	switch {
+	case p.draws:
+		// Already answered yes. Nothing to gain, and Attach carries the answer into every Open.
+		return false
+	case !isTerminal || !painting:
+		// A follower collecting bytes. The question would be corruption in its stream.
+		return false
+	case !resuming:
+		return true
+	default:
+		return !p.everAsked
+	}
 }
