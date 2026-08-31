@@ -31,7 +31,7 @@ func TestATallScrolledImageStillDrawsForASecondClient(t *testing.T) {
 		t.Fatalf("Resize() error = %v", err)
 	}
 
-	first, err := sess.attach(nil, nil)
+	first, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestATallScrolledImageStillDrawsForASecondClient(t *testing.T) {
 			"the crop path", places[0].Row)
 	}
 
-	second, err := sess.attach(nil, nil)
+	second, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}

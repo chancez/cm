@@ -110,3 +110,18 @@ func TestSessionBytes(t *testing.T) {
 		t.Errorf("SessionBytes() = %q, want %q", got, want)
 	}
 }
+
+// The other reading of the same transcript: what the terminal actually received.
+//
+// A test asking whether cm delivered something it generated has to use this one. SessionBytes drops exactly
+// those bytes, which reported a missing image for a stream that carried it.
+func TestAllBytes(t *testing.T) {
+	writes := []Write{
+		{Data: []byte("one")},
+		{Data: []byte("\x1b]2;t\x07"), Injected: true},
+		{Data: []byte("two")},
+	}
+	if got, want := string(AllBytes(writes)), "one\x1b]2;t\x07two"; got != want {
+		t.Errorf("AllBytes() = %q, want %q", got, want)
+	}
+}

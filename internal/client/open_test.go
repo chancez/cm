@@ -99,6 +99,10 @@ func TestOptionsOpenSetsEveryWireField(t *testing.T) {
 		Tags:          map[string]string{"k": "v"},
 		NoRestore:     true,
 		InsideSession: "parent",
+		// Unexported because only Attach can establish it, and set here rather than skipped so the mapping
+		// stays under this guard: a terminal's answer that Open forgets to carry is an image sent to a
+		// terminal that cannot draw it.
+		terminalGraphics: true,
 	}
 	open := opts.Open("work")
 

@@ -1,0 +1,117 @@
+package client
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/chancez/cm/internal/graphics"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
+)
+
+// The terminal's yes reaches the server as an event, and does not reach the session as input.
+//
+// Both halves are the point. The server withholds images until a client says its terminal can draw them, so
+// without the event no client ever sees a picture; and the answer is a reply to a question cm asked, so
+// forwarding it would type `_Gi=...;OK` into whatever program is running.
+//
+// A unit test rather than only end to end because the answer arrives on the same channel as keystrokes, and
+// the request it turns into is not observable from outside except by the images that follow.
+func TestAGraphicsAnswerIsReportedToTheServer(t *testing.T) {
+	h := newHarness(t)
+	// A probe that has asked, which is the state the loop finds after Attach wrote the question.
+	h.gfx = &graphicsProbe{}
+	h.gfx.ask(newScreen(h.out, false, probeLog()), probeLog())
+
+	h.stream.opened("test", 1, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := h.runAsync(ctx)
+
+	h.input <- []byte(okAnswer() + "x")
+	// Open, the answer and the keystroke: three requests, and waiting for all of them is what makes the
+	// absence of one an assertion rather than a race.
+	h.stream.waitForRequests(t, 3)
+
+	var reported *serverv1.TerminalGraphics
+	var typed []byte
+	for _, req := range h.stream.requests() {
+		if g := req.GetTerminalGraphics(); g != nil {
+			reported = g
+		}
+		if in := req.GetInput(); in != nil {
+			typed = append(typed, in.Data...)
+		}
+	}
+	if reported == nil || !reported.DrawsImages {
+		t.Errorf("TerminalGraphics = %v, want one reporting draws_images: without it the server sends no "+
+			"images to any client", reported)
+	}
+	if got, want := string(typed), "x"; got != want {
+		t.Errorf("input forwarded = %q, want %q: the answer belongs to cm, the keystroke to the program",
+			got, want)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runSession did not return")
+	}
+}
+
+// A read-only client reports nothing, because it has no input channel to the session and no images are sent
+// to it either: the whole point of one is that it cannot affect the session.
+func TestAReadOnlyClientDoesNotReportGraphics(t *testing.T) {
+	h := newHarness(t)
+	h.opts.ReadOnly = true
+	h.gfx = &graphicsProbe{}
+	h.gfx.ask(newScreen(h.out, false, probeLog()), probeLog())
+	h.stream.opened("test", 1, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := h.runAsync(ctx)
+
+	h.input <- []byte(okAnswer())
+	h.waitForInputConsumed(t)
+	for _, req := range h.stream.requests() {
+		if g := req.GetTerminalGraphics(); g != nil {
+			t.Errorf("a read-only client reported %v, want nothing: it is sent no images either", g)
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runSession did not return")
+	}
+}
+
+// Images pushed by the server reach the terminal, which is the other end of the same exchange.
+func TestPushedImagesAreWrittenToTheTerminal(t *testing.T) {
+	h := newHarness(t)
+	// A painting screen, because a pipe-backed TTY is not a terminal and a screen over one drops every
+	// injection: without this the test passes for an implementation that writes nothing at all.
+	h.opts.screen = newScreen(h.out, true, probeLog())
+	h.stream.opened("test", 1, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := h.runAsync(ctx)
+
+	want := graphics.Encode("a=t,i=7,f=24,s=2,v=2", []byte("AQIDAQIDAQIDAQID"))
+	h.stream.images(want)
+	if got := h.terminalOutputWithin(5 * time.Second); !strings.Contains(got, string(want)) {
+		t.Errorf("pushed images never reached the terminal; wrote %q", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runSession did not return")
+	}
+}

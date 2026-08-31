@@ -33,7 +33,7 @@ func TestTwoClientsBothGetTheLiveImage(t *testing.T) {
 	}
 
 	// The first client, attached before the image arrives, as in the report.
-	first, err := sess.attach(nil, nil)
+	first, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("first attach() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestTwoClientsBothGetTheLiveImage(t *testing.T) {
 	t.Logf("model placements = %+v (err %v)", places, perr)
 	t.Logf("store retransmissions = %d", len(sess.gfxStore.Retransmissions()))
 
-	second, err := sess.attach(nil, nil)
+	second, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("second attach() error = %v", err)
 	}

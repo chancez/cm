@@ -256,6 +256,18 @@ func (f *fakeTerminal) Written() string {
 	return string(f.written)
 }
 
+// drawingClient reserves a client whose terminal answered that it can draw kitty graphics.
+//
+// A test asserting on a restored image has to say this, because cm withholds images from a client that never
+// said it: a token left at its default gets the screen and no pictures, which is the whole point of the
+// probe. Written as a helper rather than repeated so the reason lives in one place.
+func drawingClient(t *testing.T, s *Session) *attachToken {
+	t.Helper()
+	tok := s.reserveClient()
+	tok.drawsImages = true
+	return tok
+}
+
 // shortTempDir keeps socket paths under the sockaddr_un limit, which t.TempDir() exceeds
 // because it embeds the test name.
 func shortTempDir(t *testing.T) string {

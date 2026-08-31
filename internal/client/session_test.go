@@ -176,6 +176,16 @@ func (s *fakeStream) outputGap(seq uint64, data string) {
 	})
 }
 
+// images delivers a late image push, which is what the server sends once a client reports its terminal can
+// draw them.
+func (s *fakeStream) images(data []byte) {
+	s.recv <- recvResult{resp: &serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Images{
+			Images: &serverv1.Images{Data: data},
+		},
+	}}
+}
+
 // exited queues the session ending.
 func (s *fakeStream) exited(code int32) {
 	s.push(&serverv1.AttachResponse{
@@ -320,6 +330,8 @@ type harness struct {
 	winch      chan os.Signal
 	input      chan []byte
 	inputErr   chan error
+	// gfx is the graphics probe the loop is given. Nil means one that never asked, which claims nothing.
+	gfx *graphicsProbe
 }
 
 // newHarness prepares a runSession call against a pipe-backed TTY.
@@ -425,8 +437,14 @@ func newPtyHarness(t *testing.T, rows, cols uint16) *harness {
 // The reference is the harness's own session name, which is what Attach passes on a first attach.
 func (h *harness) run(ctx context.Context) (outcome, error) {
 	h.t.Helper()
+	gfx := h.gfx
+	if gfx == nil {
+		// A probe that never asked, which claims nothing: these tests drive the loop directly and are not
+		// about the terminal's graphics answer.
+		gfx = &graphicsProbe{}
+	}
 	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, &h.result,
-		&h.resumeFrom, &h.pending, h.winch, h.input, h.inputErr)
+		&h.resumeFrom, &h.pending, h.winch, h.input, h.inputErr, gfx)
 }
 
 // runAsync calls runSession on its own goroutine, for cases that must interact while it runs.

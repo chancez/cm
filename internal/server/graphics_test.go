@@ -176,7 +176,7 @@ func TestGraphicsImagesAreResentOnAttach(t *testing.T) {
 	// cm's store rather than from anything a client saw.
 	sess.handleGraphics(parseAll(t, "\x1b_Ga=T,f=24,s=1,v=1,i=42;AQID\x1b\\"))
 
-	att, err := sess.attach(nil, nil)
+	att, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -319,7 +319,7 @@ func TestGraphicsRestorePlacesImagesAfterTheScreen(t *testing.T) {
 
 	sess.handleGraphics(parseAll(t, "\x1b_Ga=T,f=24,s=1,v=1,i=42;AQID\x1b\\"))
 
-	att, err := sess.attach(nil, nil)
+	att, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -415,7 +415,7 @@ func TestGraphicsNamesAnUnnamedImage(t *testing.T) {
 		t.Errorf("the forwarded command carries no image id; got %q", out)
 	}
 	// And retained, which it was not before: an unnamed image could not be stored.
-	att, err := sess.attach(nil, nil)
+	att, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}
@@ -450,7 +450,7 @@ func TestGraphicsNamesOnlyTheFirstChunk(t *testing.T) {
 	}
 
 	// One image, both halves of the payload.
-	att, err := sess.attach(nil, nil)
+	att, err := sess.attach(nil, drawingClient(t, sess))
 	if err != nil {
 		t.Fatalf("attach() error = %v", err)
 	}

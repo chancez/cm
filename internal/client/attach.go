@@ -80,6 +80,10 @@ func (o Options) Open(session string) *serverv1.Open {
 		// capabilities could not reach before: they were sent on `cm doctor` and `cm version` alone, so a
 		// server learned nothing about a client that only ever attached.
 		ClientCapabilities: capability.Client().Strings(),
+		// What the terminal can draw, as distinct from what this build can do. Unset by every caller and
+		// filled by Attach, so `attach --no-attach` and any other Open with no terminal behind it reports
+		// false, which is correct: there is nothing there to draw an image.
+		TerminalKittyGraphics: o.terminalGraphics,
 		// Questions handed to this client that it has not answered, so a reconnect does not lose them. Empty
 		// on a first attach, and empty from a caller that never received one. See pendingQueries.
 		OutstandingQueries: o.outstandingQueries(),
@@ -224,6 +228,11 @@ type Options struct {
 	// not reset when a stream does. Nil means one is built on the spot, which is what a test calling
 	// runSession directly gets.
 	screen *screen
+
+	// terminalGraphics records what this client's terminal answered when asked whether it can draw kitty
+	// graphics, so Open can report it. Set by Attach after probing rather than by a caller: only the
+	// process holding the terminal can establish it. See probeGraphics.
+	terminalGraphics bool
 
 	// pending remembers questions the server handed this client, so a reconnect can re-offer them and the
 	// reply that comes back can still be matched.
@@ -376,6 +385,23 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		}
 	}
 
+	// Ask the terminal whether it can draw images, and do not wait for the answer.
+	//
+	// Not waiting is the design rather than a shortcut. The answer decides whether the server sends images,
+	// but it does not have to decide that at Open: a yes arriving later is reported then, and the server sends
+	// the images at that point. Waiting instead put a bound on the attach path, and any bound is too small for
+	// some link. See graphicsProbe.
+	//
+	// Skipped for a resume, for two reasons pointing the same way. A resuming client is not repainted, so it
+	// is sent no images and needs no answer; and a terminal that cannot parse an APC prints the question
+	// itself, which is harmless only because a fresh attach's repaint opens by clearing the screen. Skipped
+	// with no terminal too, which is a follower writing to a pipe: nothing there draws an image, and the
+	// question would be corruption in the file.
+	var gfxProbe graphicsProbe
+	if tty.IsTerminal() && !opts.NoRestore && resumeFrom == nil {
+		gfxProbe.ask(opts.screen, log)
+	}
+
 	starter := &serverStarter{start: opts.StartServer, stopped: opts.ServerStopped}
 
 	var outage outageState
@@ -411,7 +437,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		}
 
 		outcome, err := runSession(
-			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, input, inputErr)
+			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, input, inputErr, &gfxProbe)
 		conn.Close()
 
 		switch outcome {
@@ -608,6 +634,9 @@ func runSession(
 	winch <-chan os.Signal,
 	input <-chan []byte,
 	inputErr <-chan error,
+	// gfx is the terminal's outstanding graphics question, shared across reconnects because the terminal is
+	// the same one: a reply arriving after a dropped connection still answers what was asked before it.
+	gfx *graphicsProbe,
 ) (outcome, error) {
 	// Defaulted again rather than relied on from Attach. Attach fills this in, but this function is
 	// also driven directly by its tests, which is the whole reason the loop body is separable, and a
@@ -815,6 +844,22 @@ func runSession(
 				}
 				continue
 			}
+			if im := msg.resp.GetImages(); im != nil {
+				// Images for a screen this client has already painted, because its terminal answered the
+				// graphics probe after Open. The bytes store and place; they paint no text, and the cells an
+				// image covers hold none of their own, so nothing already on screen is disturbed.
+				//
+				// Injected through the one writer, which is what keeps them off a sequence boundary the
+				// session is in the middle of: the same rule that exists because a window title written
+				// straight to stdout once landed inside a program's SGR.
+				if len(im.Data) > 0 {
+					if err := scr.inject(im.Data); err != nil {
+						// An image that cannot be written costs the picture and nothing else.
+						opts.Log.Warn("writing late images failed", "error", err)
+					}
+				}
+				continue
+			}
 			if q := msg.resp.GetQuery(); q != nil {
 				// The server is asking this terminal a question it cannot answer itself: the background
 				// colour, the clipboard, the window's pixel size. Written to the terminal, whose reply
@@ -923,7 +968,26 @@ func runSession(
 				continue
 			}
 
-			buf, detach := gate.feed(data, time.Now())
+			// The probe's answer is cm's, not the program's, so it is taken out before anything else sees
+			// this chunk. Everything else passes through untouched, including a reply to a question the
+			// program asked itself. See graphicsProbe.take.
+			now := time.Now()
+			data, answered, draws := gfx.take(data, now)
+			if answered && draws && !opts.ReadOnly {
+				// The server withholds images until told, so this is what unlocks them. Sent before the
+				// keystrokes in this same chunk, which is the order the answer arrived in.
+				_ = stream.Send(&serverv1.AttachRequest{
+					Event: &serverv1.AttachRequest_TerminalGraphics{
+						TerminalGraphics: &serverv1.TerminalGraphics{DrawsImages: true},
+					},
+				})
+				opts.Log.Debug("the terminal answered that it can draw images")
+			}
+			if len(data) == 0 {
+				continue
+			}
+
+			buf, detach := gate.feed(data, now)
 			if detach {
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.

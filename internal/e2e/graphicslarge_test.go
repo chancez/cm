@@ -68,9 +68,12 @@ func TestALargeImageReachesASecondClient(t *testing.T) {
 	// Emitted by cat rather than printf, because it is megabytes: the program's output path is what
 	// matters, not how the bytes get there.
 	const marker = "IMAGE-SENT"
-	script := "cat " + cmdPath + "; printf '" + marker + "\\r\\n'; sleep 60"
+	// The marker starts on a fresh line, because the image leaves the cursor mid-row and a marker printed
+	// there wraps: measured as "I\\r\\nMAGE-SENT" in the pty, which no literal match can see.
+	script := "cat " + cmdPath + "; printf '\\r\\n" + marker + "\\r\\n'; sleep 60"
 
-	first := attachOnPty(t, e, "gfxlarge", "--", "/bin/sh", "-c", script)
+	// A terminal that can draw images, which cm now requires before sending any. See attachOnPtyDrawing.
+	first := attachOnPtyDrawing(t, e, nil, "gfxlarge", "--", "/bin/sh", "-c", script)
 	waitForOnPty(t, first, marker)
 	if got := first.output(); !strings.Contains(got, payload[:64]) {
 		t.Fatalf("the first client never received the transmission, so nothing below is being tested")
@@ -78,12 +81,15 @@ func TestALargeImageReachesASecondClient(t *testing.T) {
 
 	// The second client, attaching while the first is still there, which is the reported shape.
 	transcript := filepath.Join(e.state, "second.jsonl")
-	second := attachOnPtyWithEnv(t, e, []string{"CM_TESTHOOK_TRANSCRIPT=" + transcript}, "gfxlarge")
+	second := attachOnPtyDrawing(t, e, []string{"CM_TESTHOOK_TRANSCRIPT=" + transcript}, "gfxlarge")
 	waitForOnPty(t, second, marker)
 	time.Sleep(1500 * time.Millisecond)
 
 	writes := readTranscript(t, transcript)
-	got := ansi.SessionBytes(writes)
+	// Everything the terminal received, not just the session's own bytes. This client answered the graphics
+	// probe after its attach, so its images arrive as a push and are injected: cm generated them. Reading
+	// SessionBytes here reported a blank picture for a stream that carried the whole image.
+	got := ansi.AllBytes(writes)
 	t.Logf("the second client received %d bytes", len(got))
 
 	// Replayed into a fresh model, the way the client's own terminal receives it.

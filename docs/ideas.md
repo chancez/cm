@@ -802,6 +802,13 @@ interception: the restore came back 35 bytes, with neither the image nor the scr
 chunk at 4096 so this is not what `icat` does, but nothing stops a program doing it, and the failure is
 silent.
 
+**Open: one oversized command yields an empty restore.** `maxHeld` in `internal/graphics/scan.go` bounds an
+unfinished command at 1 MiB on the reasoning that "what has to fit is one command, not a whole image". A
+program that sends a whole image in a single command exceeds that, and the result is worse than a missed
+interception: the restore came back 35 bytes, with neither the image nor the screen text. kitty's own clients
+chunk at 4096 so this is not what `icat` does, but nothing stops a program doing it, and the failure is
+silent.
+
 **Open: cm re-transmits images without asking the terminal first.** `graphicsRestore` sends every stored
 payload to every attaching client, and nothing establishes that the client's terminal can draw kitty
 graphics. A terminal that cannot prints the base64 as text: reported from a mobile ssh client, where a

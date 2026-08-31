@@ -919,6 +919,55 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	s.feedTerminal(gfxData, s.recent.Next())
 }
 
+// imagesFor builds the image half of a restore for a client that has just said it can draw them.
+//
+// The same bytes the restore would have carried, and in the same order: transmissions rewritten to a=t so
+// they store without drawing, then placements as a=p positioned with CUP inside DECSC/DECRC. Nothing here
+// paints text, and the cells an image covers hold none of their own, because a program that draws one moves
+// the cursor past it. So these can arrive after the screen without disturbing it.
+//
+// Marks the attachment as drawing images, so a later restore for the same client carries them inline rather
+// than needing this again.
+//
+// Empty when there is nothing on screen, which is the common case: an answer arrives for every attach and
+// most sessions hold no images.
+func (s *Session) imagesFor(tok *attachToken) []byte {
+	if tok == nil {
+		return nil
+	}
+	s.mu.Lock()
+	tok.drawsImages = true
+	term := s.term
+	cellHeight := s.gfxCellHeight
+	s.mu.Unlock()
+	if term == nil {
+		return nil
+	}
+
+	transmissions := s.graphicsRestore()
+	if len(transmissions) == 0 {
+		return nil
+	}
+
+	// Read under termMu for the reason attach does: a placement read while the pump is advancing the model
+	// names a row the client is not looking at yet.
+	s.termMu.Lock()
+	placements, err := term.Placements()
+	s.termMu.Unlock()
+	if err != nil {
+		// Costs the pictures on this attachment and nothing else, which is the same trade attach makes.
+		s.log.Warn("reading image placements for a late send failed, images will be missing",
+			"session", s.label, "error", err)
+		return nil
+	}
+	if len(placements) == 0 {
+		// Images are stored but none is on the active screen, which is what a full-screen program looks
+		// like. Sending transmissions alone would be payload for no picture.
+		return nil
+	}
+	return append(transmissions, graphics.PlaceCommands(placements, cellHeight)...)
+}
+
 // graphicsRestore builds the commands that re-send this session's images to an attaching client.
 //
 // Empty when nothing has been transmitted, which is the common case and costs one map read.
@@ -2070,6 +2119,15 @@ func (s *Session) noteWatched() {
 // token a distinct address and doubles as useful identity in logs.
 type attachToken struct {
 	order uint64
+	// drawsImages records that this client's terminal answered a graphics probe with yes, so a restore may
+	// include the images the screen refers to.
+	//
+	// Per attachment rather than per session, because it is a fact about one terminal: the same session is
+	// legitimately watched by a kitty that can draw them and an ssh client that cannot. Default false is the
+	// safe direction, and it is what a client predating the probe reports: the cost is an image a capable
+	// terminal would have drawn, against a screen of base64 on one that would not. See probeGraphics in
+	// internal/client and Open.terminal_kitty_graphics.
+	drawsImages bool
 }
 
 // attachment is what a client gets from attaching.
@@ -2221,14 +2279,24 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// Every command is forced to q=2 by the store, so a re-transmission generates no response. That
 		// is what keeps this off the reply path: an image cm sends asks the terminal nothing, so nothing
 		// comes back to be mistaken for an answer to a question cm never asked.
-		restore = append(b, s.graphicsRestore()...)
+		// Images only for a terminal that said it can draw them. Both halves are withheld together: a
+		// placement whose image was not sent draws nothing, and a transmission with no placement is
+		// megabytes of payload for no picture, which is what reached a mobile ssh client as text.
+		//
+		// tok is nil for a caller that reserved nothing, which no client does: the service always reserves
+		// before attaching. Treated as "did not say yes" for the same reason the field defaults false.
+		drawsImages := tok != nil && tok.drawsImages
+		restore = b
+		if drawsImages {
+			restore = append(b, s.graphicsRestore()...)
+		}
 		// A failure to read placements costs the images on this restore and nothing else, so it is logged
 		// rather than failing the attach: a client with a correct screen and no pictures is far better
 		// than a client that cannot attach.
 		if placeErr != nil {
 			s.log.Warn("reading image placements for a restore failed, images will be missing",
 				"session", s.label, "error", placeErr)
-		} else {
+		} else if drawsImages {
 			// mu is already held by attach, so the field is read directly.
 			restore = append(restore, graphics.PlaceCommands(placements, s.gfxCellHeight)...)
 		}

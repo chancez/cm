@@ -44,7 +44,10 @@ func attachOnPty(t *testing.T, e *env, args ...string) *ptyClient {
 		t.Fatalf("pty.Start() error = %v", err)
 	}
 	// A definite size, so a restored screen has a known geometry rather than the pty's default.
-	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
+	// Pixel dimensions as well as cells, matching attachOnPtyWithEnv and matching a real terminal, which
+	// reports both. Without them the model has no cell size, so it calls every image placement off-screen and
+	// no image restore is reachable at all: a graphics test then passes on a path it never exercised.
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80, X: 800, Y: 480}); err != nil {
 		t.Fatalf("Setsize() error = %v", err)
 	}
 

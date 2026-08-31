@@ -227,6 +227,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// queries here finds no answerer, and a pause makes that ordering testable rather than raced.
 	fault.At(fault.BeforeClientCanAnswer)
 
+	// What the client's terminal said it can draw, recorded on the reservation so attach can decide whether
+	// this restore carries images. Established by the client because the answer arrives on its terminal; see
+	// probeGraphics in internal/client.
+	tok.drawsImages = open.TerminalKittyGraphics
+
 	att, err := sess.attach(resumeFrom, tok)
 	if err != nil {
 		sess.releaseClient(tok)
@@ -714,6 +719,31 @@ func (s *Service) recvLoop(
 			}
 			req := received.req
 			switch {
+			case req.GetTerminalGraphics() != nil:
+				// The terminal answered after Open, which is the normal case on any link where the round
+				// trip outlasts the client's window: it asks and does not wait. Nothing was sent before
+				// this, so the images go now.
+				//
+				// Sent from here, which is where the Detached ack is sent for the same reason: this is the
+				// goroutine that received the request, and both are replies to it rather than session
+				// output. Session output and proxied queries go out on the attach loop instead.
+				if !req.GetTerminalGraphics().DrawsImages {
+					break
+				}
+				images := sess.imagesFor(tok)
+				if len(images) == 0 {
+					break
+				}
+				if err := srv.Send(&serverv1.AttachResponse{
+					Event: &serverv1.AttachResponse_Images{
+						Images: &serverv1.Images{Data: images},
+					},
+				}); err != nil {
+					return err
+				}
+				s.mgr.log.Debug("sent images to a client whose terminal answered late",
+					"session", sess.id, "bytes", len(images))
+
 			case req.GetDetach() != nil:
 				// Acknowledged before signalling, so a client that asks can wait for confirmation rather than
 				// racing its own disconnect.

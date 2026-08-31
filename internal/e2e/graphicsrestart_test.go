@@ -46,7 +46,9 @@ func TestImagesSurviveAServerRestart(t *testing.T) {
 	e := newEnvWith(t, cmHooksBinary(t), "")
 
 	// The first client, which is what makes the session produce the image at all.
-	first := attachOnPty(t, e, "gfxrestart", "--", "/bin/sh", "-c", script)
+	// A pty answers nothing on its own, and cm now withholds images from a client that never said it could
+	// draw them, so every client here has to play a terminal that can. See attachOnPtyDrawing.
+	first := attachOnPtyDrawing(t, e, nil, "gfxrestart", "--", "/bin/sh", "-c", script)
 	waitForOnPty(t, first, marker)
 
 	// It reached this client, so the transmission really happened and the fixture is sound.
@@ -57,12 +59,14 @@ func TestImagesSurviveAServerRestart(t *testing.T) {
 
 	// A fresh attach before any restart: the image is re-sent from cm's store, which is the behaviour this is
 	// compared against.
+	// The transcript is read with AllBytes rather than SessionBytes: a client that answers the graphics probe
+	// after its attach is sent its images as a push, which is an injection because cm generated it.
 	beforeTranscript := e.state + "/gfxbefore.jsonl"
-	before := attachOnPtyWithEnv(t, e,
+	before := attachOnPtyDrawing(t, e,
 		[]string{"CM_TESTHOOK_TRANSCRIPT=" + beforeTranscript}, "gfxrestart")
 	waitForOnPty(t, before, marker)
 	time.Sleep(500 * time.Millisecond)
-	if got := string(ansi.SessionBytes(readTranscript(t, beforeTranscript))); !strings.Contains(got, payload) {
+	if got := string(ansi.AllBytes(readTranscript(t, beforeTranscript))); !strings.Contains(got, payload) {
 		t.Fatalf("a fresh attach without a restart did not carry the image, so the control is broken and the "+
 			"restart case below would prove nothing:\n%q", got)
 	}
@@ -79,12 +83,12 @@ func TestImagesSurviveAServerRestart(t *testing.T) {
 
 	// And now the same fresh attach, after the restart.
 	afterTranscript := e.state + "/gfxafter.jsonl"
-	after := attachOnPtyWithEnv(t, e,
+	after := attachOnPtyDrawing(t, e,
 		[]string{"CM_TESTHOOK_TRANSCRIPT=" + afterTranscript}, "gfxrestart")
 	waitForOnPty(t, after, marker)
 	time.Sleep(500 * time.Millisecond)
 
-	if got := string(ansi.SessionBytes(readTranscript(t, afterTranscript))); !strings.Contains(got, payload) {
+	if got := string(ansi.AllBytes(readTranscript(t, afterTranscript))); !strings.Contains(got, payload) {
 		t.Errorf("a client attaching after a restart received no image transmission, so the screen it was "+
 			"given has placements that resolve to nothing and the image is blank. The model regains its "+
 			"images from the history replay, but cm's own store of the payloads does not, and that store is "+

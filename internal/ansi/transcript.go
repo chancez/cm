@@ -79,3 +79,18 @@ func SessionBytes(writes []Write) []byte {
 	}
 	return out
 }
+
+// AllBytes returns everything the terminal received, in order, injections included.
+//
+// The counterpart to SessionBytes, and the right one when the question is what the terminal ended up with
+// rather than what the program wrote. cm generates some of what a terminal needs: a restore's clear, a proxied
+// query, and the images pushed to a client whose terminal answered the graphics probe after its attach. Those
+// are injections by construction, so a test that reaches for SessionBytes cannot see them and reports a
+// missing image for bytes that were delivered.
+func AllBytes(writes []Write) []byte {
+	var out []byte
+	for _, w := range writes {
+		out = append(out, w.Data...)
+	}
+	return out
+}

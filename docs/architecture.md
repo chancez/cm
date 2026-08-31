@@ -1455,6 +1455,48 @@ well formed either way and the only symptom is a missing picture. Putting the tr
 right, since an id must exist before a placement names it, and that ordering shipped and reached a user as
 images missing on every client but the first.
 
+cm sends an image only to a client whose terminal said it can draw one, and that rule is the graphics
+protocol's rather than cm's. A sender probes first, with a one-pixel `a=q` transmission, and sends nothing if
+no `OK` comes back: `kitten icat` over ssh to a plain terminal emits no payload at all for that reason. cm
+re-transmits stored images on every attach, which makes cm a sender, and it was not asking. A mobile ssh
+client got a screen of base64 where a restored window should have been.
+
+The probe lives in the client, not the server, because the client owns the terminal and the answer arrives on
+its own input. A `;OK` or a `?62;c` forwarded to the program is the corruption the one-writer rule exists to
+prevent, so those bytes are cm's to consume.
+
+**cm asks before `Open` and does not wait for the answer.** The question is written, the attach proceeds, and
+whenever the answer arrives it is reported: at `Open` as `Open.terminal_kitty_graphics` if it beat the attach,
+and afterwards as an `AttachRequest.terminal_graphics` event, which the server answers with an
+`AttachResponse.images` push carrying the same transmissions and placements a restore would have inlined. So a
+terminal on a slow link is served its text immediately and its pictures one round trip later.
+
+Not waiting is the design, and the alternative was built first: a 250ms blocking read on the attach path. Any
+bound is wrong here, because the bound has to cover the worst link and the attach cannot afford the worst
+link. `kitten icat` waits ten seconds for this same answer (`--detection-timeout`, from
+`kittens/icat/detect.go`) and errors out rather than guessing, which is not a wait an attach can spend. The
+250ms version also lost late replies *into the program*: a terminal that answered at 300ms had its `;OK` typed
+into whatever was running. The window is now ten seconds and gates nothing but how long a reply is still
+recognised as cm's.
+
+A late push cannot disturb the screen it arrives after, which is what makes this safe rather than merely
+convenient. The commands paint no text, the placements are wrapped in DECSC/DECRC so the cursor ends where it
+started, and the cells an image covers hold no characters of their own because a program that draws one moves
+the cursor past it. The space is already reserved by the text layout, so nothing reflows.
+`TestLateImagesDoNotDisturbThePaintedScreen` asserts it through a real emulator rather than by inspection.
+
+Pairing the query with primary DA is what makes a *negative* answer arrive at all. Every terminal answers
+`ESC [ c`, and one that cannot draw images says nothing to the graphics query, so the DA reply arriving alone
+*is* the no, and no silence has to be waited out. The corollary bit once: a terminal that *can* draw images
+sends both replies, `;OK` then `?62;c`, back to back in one read, and treating the second as "no graphics
+answer came" turned every yes into a no. Nothing was ever drawn, and the negative test still passed. Whichever
+reply comes first decides; the other is consumed without revising it.
+
+Two cases skip the probe. A resume is not repainted and so is sent no images anyway, and a follower writing to
+a pipe has no terminal, where the question would be corruption in the file. A terminal that answers nothing at
+all is treated as unable, which is the safe direction: the cost is an image a capable terminal would have
+drawn, against a screen of payload on one that would not.
+
 The interception withholds a command until it is whole, and "withheld" has to be distinguishable from
 "nothing to intercept". `graphics.Scanner.Scan` reports the second as nil, meaning forward the chunk
 unchanged, and the first as an empty result. Conflating them sent the bytes of a partial command out twice,

@@ -377,6 +377,7 @@ message AttachRequest {
     Input input = 2;
     Resize resize = 3;
     Detach detach = 4;
+    TerminalGraphics terminal_graphics = 5;
   }
 }
 
@@ -521,6 +522,56 @@ message Open {
   // AttachedClient.capabilities. Empty from a client predating this field, which reads as
   // capability.Unknown rather than as a refusal.
   repeated string client_capabilities = 23;
+
+  // Whether this client's terminal answered that it can draw kitty graphics.
+  //
+  // Distinct from client_capabilities, and the distinction is the point: that list says what a cm build can
+  // do, while this says what the terminal on the other side of it can draw. The same binary attached from
+  // kitty and from a mobile ssh client reports the same capabilities and a different answer here.
+  //
+  // Established by the client, because the client owns the terminal and the answer arrives on its own input.
+  // cm re-transmits stored images to an attaching client, which makes cm a sender under the graphics
+  // protocol, and a sender asks first: kitten icat over ssh to a plain terminal sends no payload at all for
+  // exactly this reason. cm did not ask, so a terminal that cannot draw an image was sent one and printed
+  // the base64 as text.
+  //
+  // False from a client that predates this field, and from one that never probed, which is the safe
+  // direction: the cost is an image a capable terminal would have drawn, against a screen of payload on one
+  // that would not.
+  bool terminal_kitty_graphics = 24;
+}
+
+// TerminalGraphics reports what this client's terminal answered about drawing images, after Open.
+//
+// Open carries the same fact, and this exists because the answer can arrive later than Open. A terminal is
+// asked with a one-pixel a=q paired with primary DA and the reply travels over the link, so on a slow one it
+// lands after the attach has already been served. Waiting for it instead was the first design and it was
+// wrong twice over: it put a bound on the attach path, and a bound is a number that is too small for some
+// link, which is the mistake docs/architecture.md records against tmux's 500ms escape-time. kitten icat waits
+// ten seconds for this same answer, so the honest conclusion is that no small number is right and the attach
+// must not wait at all.
+//
+// Sent at most once per attachment, when the answer arrives and says yes. A no needs no message: the server
+// withholds images until told otherwise, which is the safe direction.
+message TerminalGraphics {
+  // Whether the terminal answered that it can draw kitty graphics.
+  bool draws_images = 1;
+}
+
+// Images carries the image data and placements for one client, after its Open.
+//
+// The bytes are what a restore would have contained: transmissions rewritten to a=t, then placements as a=p
+// positioned with CUP inside DECSC/DECRC. They are self-positioning and add nothing to the text, because the
+// cells an image covers hold no text of their own; a program that draws one moves the cursor past it, so the
+// rows are already blank in the screen the client painted.
+//
+// Injected by the client through the one writer that owns its terminal, which is what keeps these from
+// landing inside a sequence the session is in the middle of writing. Sending them as output instead would put
+// them in the numbered stream, where they are not: the log records what the program produced, and these are
+// cm's.
+message Images {
+  // The commands to write, in order.
+  bytes data = 1;
 }
 
 // AttachedClient describes one client attached to a session.
@@ -601,6 +652,7 @@ message AttachResponse {
     Detached detached = 5;
     Query query = 6;
     Hosting hosting = 7;
+    Images images = 8;
   }
 }
 

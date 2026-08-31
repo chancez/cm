@@ -216,7 +216,7 @@ func TestRevivedSessionServesEveryClientFromItsModel(t *testing.T) {
 	}
 
 	for _, which := range []string{"first", "second"} {
-		att, err := sess.attach(nil, nil)
+		att, err := sess.attach(nil, drawingClient(t, sess))
 		if err != nil {
 			t.Fatalf("%s attach() error = %v", which, err)
 		}
