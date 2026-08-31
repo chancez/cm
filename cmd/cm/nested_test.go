@@ -45,11 +45,15 @@ func TestInsideCmSession(t *testing.T) {
 
 	t.Run("in a session with a terminal on stdout", func(t *testing.T) {
 		// The nested attach: CM_SESSION names the session whose pty this stdout is.
-		t.Setenv(paths.SessionEnv(), "parent")
+		//
+		// Spelled as cm really exports it, which is the ID with its sigil. A bare name here hid a
+		// server-side bug: the value is a *reference*, the server looked it up as an ID, and nesting
+		// silently never engaged. See Service.hostingParent.
+		t.Setenv(paths.SessionEnv(), "@a7k2m9x4")
 		withStdout(t, tty, func() {
-			if got := insideCmSession(); got != "parent" {
+			if got := insideCmSession(); got != "@a7k2m9x4" {
 				t.Errorf("insideCmSession() = %q, want %q: a nested attach was not recognized, so "+
-					"the parent goes on recording the child's reports as its own", got, "parent")
+					"the parent goes on recording the child's reports as its own", got, "@a7k2m9x4")
 			}
 		})
 	})

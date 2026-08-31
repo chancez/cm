@@ -270,15 +270,9 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// forever would stop reporting its own directory for the rest of its life, which is a worse bug
 	// than the one being fixed.
 	//
-	// The parent may not be a session this server knows: it can have exited, or the client can name
-	// one from a different server, and neither is an error worth failing an attach over. Nothing is
-	// frozen in that case, which is correct, because there is no parent whose bookkeeping could be
-	// wrong.
-	if open.InsideSession != "" && open.InsideSession != sess.id {
-		if parent, live := s.mgr.Get(open.InsideSession); live {
-			parent.beginHosting(sess.id)
-			defer parent.endHosting(sess.id)
-		}
+	if parent, hosting := s.hostingParent(ctx, open.InsideSession, sess.id); hosting {
+		parent.beginHosting(sess.id)
+		defer parent.endHosting(sess.id)
 	}
 
 	s.mgr.log.Info("client attached",
