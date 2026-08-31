@@ -801,3 +801,28 @@ program that sends a whole image in a single command exceeds that, and the resul
 interception: the restore came back 35 bytes, with neither the image nor the screen text. kitty's own clients
 chunk at 4096 so this is not what `icat` does, but nothing stops a program doing it, and the failure is
 silent.
+
+**Open: cm re-transmits images without asking the terminal first.** `graphicsRestore` sends every stored
+payload to every attaching client, and nothing establishes that the client's terminal can draw kitty
+graphics. A terminal that cannot prints the base64 as text: reported from a mobile ssh client, where a
+restored claude window came back as a screen of payload that `ctrl-l` cleared.
+
+The protocol already answers this and cm is the party skipping it. A sender probes first, with a 1-pixel
+`a=q` transmission, and only sends if the terminal answers `OK`; that is why `kitten icat` over ssh to a
+plain terminal emits no payload at all. When a program ran icat under cm the probe *was* asked and answered,
+by whichever client was attached, so the image is legitimate. What cm then does is replay it to a different
+terminal that never answered anything, which makes cm a sender that never asked.
+
+So the fix is the protocol's own handshake per client rather than cm-process capability negotiation:
+`Open.client_capabilities` describes what a cm build can do, not what a terminal can draw. The client owns
+its terminal, so it probes once on attach and reports the answer, and the server withholds payloads from a
+client that did not say yes. A pipe answers nothing and correctly gets none, which also stops
+`cm read --follow` receiving image bytes.
+
+The cost is a reply cm must consume rather than forward. A probe answer reaching the program as input is the
+failure family `docs/architecture.md` warns about, and the client already intercepts the detach key, so that
+is where the interception belongs.
+
+Ordering made this visible rather than causing it. Transmissions used to precede the screen, whose leading
+`ESC [ 2J` erased whatever a confused terminal had printed; they follow it now, because that same erase
+discards the stored image, so the garbage stays on screen.
