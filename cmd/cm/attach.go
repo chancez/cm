@@ -125,6 +125,21 @@ matters for another multiplexer, which sees the key first and never passes it on
 					detachKey.Name)
 			}
 
+			// Parsed here rather than in internal/client so a mistake in the config file is reported by the
+			// command that read it, naming the setting, instead of arriving as an unstyled overlay.
+			barStyle, err := client.ParseStyle(styleOr(cfg.Overlay.Bar, client.DefaultBarStyle))
+			if err != nil {
+				return fmt.Errorf("overlay.bar: %w", err)
+			}
+			bodyStyle, err := client.ParseStyle(styleOr(cfg.Overlay.Body, client.DefaultBodyStyle))
+			if err != nil {
+				return fmt.Errorf("overlay.body: %w", err)
+			}
+			selectedStyle, err := client.ParseStyle(styleOr(cfg.Overlay.Selected, client.DefaultSelectedStyle))
+			if err != nil {
+				return fmt.Errorf("overlay.selected: %w", err)
+			}
+
 			// Taken before anything reads the environment, because Env below forwards this process's
 			// whole environment to a session this call creates. See takeResumeFrom.
 			resumeFrom := takeResumeFrom(os.Getpid())
@@ -146,6 +161,10 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Command:   argsAfterDash(cmd, args),
 				DetachKey: detachKey,
 				PrefixKey: prefixKey,
+				// How it is drawn, from [overlay] in the config file.
+				BarStyle:      barStyle,
+				BodyStyle:     bodyStyle,
+				SelectedStyle: selectedStyle,
 				// How the overlay runs a cm command. Supplied here rather than built in internal/client,
 				// because which binary, which runtime directory, and which commands need a terminal of their
 				// own are all this layer's knowledge. See overlayRunner.

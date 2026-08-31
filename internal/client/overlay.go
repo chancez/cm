@@ -55,6 +55,12 @@ type overlay struct {
 	// not `cm attach` cannot.
 	canPick bool
 
+	// barStyle, bodyStyle and selectedStyle are how the three regions are drawn. Configurable because no
+	// default survives every theme, which was learned by shipping one that did not: see ParseStyle.
+	barStyle      Style
+	bodyStyle     Style
+	selectedStyle Style
+
 	log *slog.Logger
 
 	// mode is what is on screen.
@@ -114,20 +120,9 @@ const (
 	promptName
 )
 
-// The two shades of the block, and why they are attributes rather than colours.
-//
-// Reverse video for both, so each follows the terminal's own foreground and background instead of assuming
-// a theme: a 256-colour grey that reads well on a dark background is unreadable on a light one, and cm does
-// not know which it is looking at. The rows under the bar add faint, which a terminal renders as a dimmer
-// version of the same swap, so the bar and its content are distinguishable without naming a colour.
-//
-// A terminal that ignores faint shows one shade for the whole block, which is what this looked like before
-// and is still legible. That is the reason for this arrangement rather than a second colour pair.
-const (
-	overlayBarStyle  = "\x1b[7m"
-	overlayBodyStyle = "\x1b[2;7m"
-	overlayStyleOff  = "\x1b[0m"
-)
+// overlayStyleOff ends a styled row. Everything else about the appearance is configurable: see ParseStyle
+// and the styles on overlay.
+const overlayStyleOff = "\x1b[0m"
 
 // highlight reports which body row is drawn at the bar's brightness rather than dimmed, or -1.
 //
@@ -699,11 +694,11 @@ func (o *overlay) paint() {
 			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K", row)
 		case i == blank:
 			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K%s%s%s",
-				row, overlayBarStyle, pad(lines[i-blank], int(cols)-1), overlayStyleOff)
+				row, o.barStyle, pad(lines[i-blank], int(cols)-1), overlayStyleOff)
 		default:
-			style := overlayBodyStyle
+			style := o.bodyStyle
 			if i-blank-1 == highlight {
-				style = overlayBarStyle
+				style = o.selectedStyle
 			}
 			fmt.Fprintf(&b, "\x1b[%d;1H\x1b[2K%s%s%s",
 				row, style, pad(lines[i-blank], int(cols)-1), overlayStyleOff)

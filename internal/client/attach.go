@@ -120,6 +120,12 @@ type Options struct {
 	// does not want an overlay gets none: see KeySpec.live.
 	PrefixKey KeySpec
 
+	// BarStyle, BodyStyle and SelectedStyle are how the overlay's three regions are drawn. Empty means the
+	// default. See ParseStyle for why these are configurable at all.
+	BarStyle      Style
+	BodyStyle     Style
+	SelectedStyle Style
+
 	// RunCommand runs a cm command the overlay was asked to run, and returns what it printed.
 	//
 	// Supplied by the caller rather than done here, because how to invoke cm is the command layer's
@@ -797,6 +803,10 @@ func runSession(
 		session:  result.Session,
 		canPick:  opts.OpenPicker != nil,
 		log:      opts.Log,
+
+		barStyle:      styleOr(opts.BarStyle, DefaultBarStyle),
+		bodyStyle:     styleOr(opts.BodyStyle, DefaultBodyStyle),
+		selectedStyle: styleOr(opts.SelectedStyle, DefaultSelectedStyle),
 	}
 	prefixKey := opts.PrefixKey
 	if !ov.enabled {

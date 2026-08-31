@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/chancez/cm/internal/paths"
@@ -122,4 +123,13 @@ func refuseOverlayCommand(args []string) error {
 	// Nothing here rejects a command for being unknown. cm's own error for that is better than a guess,
 	// and a list of valid commands maintained here would go stale the first time one is added.
 	return nil
+}
+
+// styleOr is the configured style or the default, so a setting left out means the default rather than an
+// unstyled region.
+func styleOr(configured, fallback string) string {
+	if strings.TrimSpace(configured) == "" {
+		return fallback
+	}
+	return configured
 }

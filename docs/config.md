@@ -35,6 +35,12 @@ detach_key = "ctrl-\\"
 # The key that opens cm's overlay inside a session. "none" disables it.
 prefix_key = "ctrl-]"
 
+# How the overlay is drawn. See the prefix_key section for the grammar.
+[overlay]
+bar = "reverse"
+body = "bright-white on color236"
+selected = "bright-white on color241"
+
 # Diagnostic log level: debug, info, warn, error, or off.
 log_level = "info"
 
@@ -93,6 +99,9 @@ forget_unpersisted_after = "5m"
 | `resize_policy` | `leader`, `last-attach`, `first-attach`, `smallest` | `leader` |
 | `detach_key` | `ctrl-<key>`, or `none` to disable | `ctrl-\` |
 | `prefix_key` | `ctrl-<key>`, or `none` to disable the overlay | `ctrl-]` |
+| `overlay.bar` | a style: see [overlay](#overlay) | `reverse` |
+| `overlay.body` | a style | `bright-white on color236` |
+| `overlay.selected` | a style | `bright-white on color241` |
 | `log_level` | `debug`, `info`, `warn`, `error`, `off` | `info` |
 | `shim_log_retention` | Go duration; `0` keeps every log | `168h` (a week) |
 | `database_backup_retention` | Go duration; `0` keeps every snapshot | `168h` (a week) |
@@ -179,6 +188,42 @@ and tmux's `ctrl-b`, and the cheapest right-hand control code to take: `ctrl-o` 
 `ctrl-u`, `ctrl-p`, `ctrl-n` and `ctrl-l` are readline's, and `ctrl-]` costs only vim's ctags tag-jump,
 which an LSP's `gd` has largely replaced. `ctrl-space` has better ergonomics still and is spellable, but
 is not the default because not every terminal sends NUL for it. See [overlay.md](overlay.md).
+
+### overlay
+
+How the overlay's three regions are drawn: the bar, the rows under it, and a list's selected row.
+
+```toml
+[overlay]
+bar = "reverse"
+body = "bright-white on color236"
+selected = "bright-white on color241"
+```
+
+A style is a few words. A colour name sets the foreground, `on <colour>` sets the background, and
+`bold`, `italic`, `underline`, `reverse` and `plain` set attributes:
+
+```
+reverse
+bold black on white
+white on bright-black
+color15 on color238
+#ffffff on #303030
+```
+
+Colours are the eight ANSI names (`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`),
+any of them with a `bright-` prefix, `default` for the terminal's own, `colorN` for 0 to 255, or `#rrggbb`.
+
+There is deliberately no `faint`, and that is the reason this is configurable at all. The first version
+drew the bar in reverse video and the rows under it in reverse *plus faint*, expecting a dimmer version of
+the same swap. Faint dims the foreground, which reverse then draws as the background, so the rows came out
+grey text on a grey field: fine in the terminal it was written in, near-invisible in the next one. The
+defaults now name a colour *pair*, where the contrast belongs to the pair rather than to the theme, and
+`color236` and `color241` are fixed entries in the greyscale ramp rather than palette entries a colour
+scheme reinterprets. Both stay above 5:1 against near-white.
+
+The defaults are checked on a dark and a light terminal, which is the only way to judge this: a screenshot
+on each, not inference.
 
 ### log_level
 

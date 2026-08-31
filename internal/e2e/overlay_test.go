@@ -77,3 +77,22 @@ func TestOverlayForwardsTheDetachKeyToTheProgram(t *testing.T) {
 			s)
 	}
 }
+
+// A style the config file cannot express is refused when the client starts, naming the setting.
+//
+// The alternative is what the first version of this did: draw an unstyled overlay and leave the user
+// wondering which of three settings they got wrong. There is a config file involved, so the message has to
+// say which key.
+func TestAttachRejectsAnUnreadableOverlayStyle(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.writeConfig("[overlay]\nbody = \"chartreuse on chartreuse\"\n")
+	r := e.run("attach", "badstyle", "--", "/bin/sh")
+	if r.code == 0 {
+		t.Errorf("exit code = 0 for a style with no such colour, want non-zero\nstdout: %s", r.stdout)
+	}
+	if !strings.Contains(r.stderr, "overlay.body") {
+		t.Errorf("stderr = %q, want it to name overlay.body as the setting at fault", r.stderr)
+	}
+}

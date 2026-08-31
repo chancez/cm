@@ -29,6 +29,11 @@ func newTestOverlay(t *testing.T, rows, cols uint16) (*overlay, *bytes.Buffer) {
 		detach:  detach,
 		session: "work",
 		log:     slog.New(discardLogHandler{}),
+
+		// The same defaults runSession resolves, so a test sees what a terminal would.
+		barStyle:      styleOr("", DefaultBarStyle),
+		bodyStyle:     styleOr("", DefaultBodyStyle),
+		selectedStyle: styleOr("", DefaultSelectedStyle),
 	}, &buf
 }
 
@@ -622,7 +627,7 @@ func TestOverlayHidesTheCursorAndFillsTheWidth(t *testing.T) {
 	}
 	// Padded on the way to the terminal rather than in rows(), which stays the logical view: what has to
 	// span the pane is what was written.
-	wantBar := overlayBarStyle + pad(o.rows(24, 80)[0], 79) + overlayStyleOff
+	wantBar := string(o.barStyle) + pad(o.rows(24, 80)[0], 79) + overlayStyleOff
 	if !strings.Contains(got, wantBar) {
 		t.Errorf("paint wrote %q, want a bar padded to 79 columns: %q", got, wantBar)
 	}
@@ -852,7 +857,7 @@ func TestOverlayHelpToggles(t *testing.T) {
 func TestOverlayShades(t *testing.T) {
 	o, buf := newTestOverlay(t, 24, 80)
 	o.open()
-	if got := buf.String(); !strings.Contains(got, overlayBarStyle) {
+	if got := buf.String(); !strings.Contains(got, string(o.barStyle)) {
 		t.Errorf("the bar is not inverse: %q", got)
 	}
 
@@ -860,39 +865,50 @@ func TestOverlayShades(t *testing.T) {
 	buf.Reset()
 	o.sessions(pickItems(3), nil)
 
-	got := buf.String()
-	if !strings.Contains(got, overlayBodyStyle) {
-		t.Errorf("the rows under the bar are not dimmed: %q", got)
-	}
-	// The selected row is bright, and it is the first item, so the bar's style appears twice: once for the
-	// bar and once for the selection.
-	if n := strings.Count(got, overlayBarStyle); n != 2 {
-		t.Errorf("%d rows at the bar's brightness, want 2: the bar and the selection", n)
+	// Three distinct styles, which is the property that matters: a ramp with the selection between the bar
+	// and the rest, rather than the selection borrowing the bar's and merging with it when adjacent.
+	if o.barStyle == o.selectedStyle || o.selectedStyle == o.bodyStyle {
+		t.Fatalf("the styles are not distinct: bar %q selected %q body %q",
+			o.barStyle, o.selectedStyle, o.bodyStyle)
 	}
 
-	// Moving the cursor moves the bright row rather than adding one: the next paint still has exactly two,
-	// and the second one is a row further down.
+	got := buf.String()
+	for name, style := range map[string]Style{
+		"bar":      o.barStyle,
+		"selected": o.selectedStyle,
+		"body":     o.bodyStyle,
+	} {
+		if !strings.Contains(got, string(style)) {
+			t.Errorf("the %s style is not on screen: %q", name, got)
+		}
+	}
+	// One selected row, whatever else is drawn.
+	if n := strings.Count(got, string(o.selectedStyle)); n != 1 {
+		t.Errorf("%d rows in the selected style, want 1", n)
+	}
+
+	// Moving the cursor moves that row rather than adding another.
 	buf.Reset()
 	o.feed([]byte{0x0e})
 	moved := buf.String()
-	if n := strings.Count(moved, overlayBarStyle); n != 2 {
-		t.Errorf("after moving, %d bright rows, want 2: the bar and the new selection", n)
+	if n := strings.Count(moved, string(o.selectedStyle)); n != 1 {
+		t.Errorf("after moving, %d rows in the selected style, want 1", n)
 	}
-	if first, second := strings.Index(moved, "session-0"), strings.Index(moved, "session-1"); first > second {
-		t.Fatalf("the rows are not in order, so the check below means nothing: %q", moved)
-	}
-	if strings.Index(moved, overlayBarStyle+"  session-1") < 0 &&
-		!strings.Contains(moved, "> session-1") && !strings.Contains(moved, ">  session-1") {
-		t.Errorf("the selection did not move to the second row: %q", moved)
+	if i := strings.Index(moved, string(o.selectedStyle)); i < 0 ||
+		!strings.Contains(moved[i:], "session-1") {
+		t.Errorf("the selection did not move to the second session: %q", moved)
 	}
 
-	// Nothing is highlighted outside a list, so a command's output is uniformly dimmed.
+	// Nothing is selected outside a list, so a command's output is all one shade.
 	o2, buf2 := newTestOverlay(t, 24, 80)
 	o2.open()
 	o2.feed([]byte(":list\r"))
 	buf2.Reset()
 	o2.finish("work\nother\n", nil)
-	if n := strings.Count(buf2.String(), overlayBarStyle); n != 1 {
-		t.Errorf("%d bright rows in a command's output, want 1: the bar alone", n)
+	if n := strings.Count(buf2.String(), string(o2.selectedStyle)); n != 0 {
+		t.Errorf("%d rows in the selected style in a command's output, want 0", n)
+	}
+	if n := strings.Count(buf2.String(), string(o2.barStyle)); n != 1 {
+		t.Errorf("%d bars in a command's output, want 1", n)
 	}
 }

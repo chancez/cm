@@ -57,6 +57,9 @@ type Config struct {
 	// Empty means the default; "none" disables detaching by key.
 	DetachKey string `toml:"detach_key"`
 
+	// Overlay styles the overlay's three regions. Empty values mean the defaults.
+	Overlay OverlayConfig `toml:"overlay"`
+
 	// PrefixKey names the key that opens the overlay inside an attached session, as a control character
 	// like "ctrl-]". Empty means the default; "none" disables the overlay.
 	//
@@ -93,6 +96,20 @@ type Config struct {
 
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
+}
+
+// OverlayConfig is how the overlay is drawn.
+//
+// Configurable because no default is legible in every theme, and that was learned the hard way: the first
+// two-shade default came out grey on grey in a terminal other than the one it was written in. Each value is
+// a style in the small grammar internal/client.ParseStyle describes, such as "white on bright-black".
+type OverlayConfig struct {
+	// Bar is the top row, which names the session and the keys.
+	Bar string `toml:"bar"`
+	// Body is everything under it: the help, a command's output, and a list's rows.
+	Body string `toml:"body"`
+	// Selected is a list's selected row, which is otherwise a body row with a marker on it.
+	Selected string `toml:"selected"`
 }
 
 // PersistConfig controls whether a session's content survives a reboot.

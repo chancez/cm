@@ -56,6 +56,9 @@ type configJSON struct {
 	ResizePolicy    string `json:"resize_policy"`
 	DetachKey       string `json:"detach_key"`
 	PrefixKey       string `json:"prefix_key"`
+	OverlayBar      string `json:"overlay_bar"`
+	OverlayBody     string `json:"overlay_body"`
+	OverlaySelected string `json:"overlay_selected"`
 	LogLevel        string `json:"log_level"`
 	LogEnabled      bool   `json:"log_enabled"`
 	RestoreMode     string `json:"restore_mode"`
@@ -154,6 +157,9 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		ResizePolicy:    resize,
 		DetachKey:       detach,
 		PrefixKey:       prefix,
+		OverlayBar:      styleOr(cfg.Overlay.Bar, client.DefaultBarStyle),
+		OverlayBody:     styleOr(cfg.Overlay.Body, client.DefaultBodyStyle),
+		OverlaySelected: styleOr(cfg.Overlay.Selected, client.DefaultSelectedStyle),
 		LogLevel:        strings.ToLower(level.String()),
 		LogEnabled:      logEnabled,
 		RestoreMode:     string(restore),
@@ -194,6 +200,9 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "resize_policy             %s\n", out.ResizePolicy)
 	fmt.Fprintf(os.Stdout, "detach_key                %s\n", out.DetachKey)
 	fmt.Fprintf(os.Stdout, "prefix_key                %s\n", out.PrefixKey)
+	fmt.Fprintf(os.Stdout, "overlay.bar               %s\n", out.OverlayBar)
+	fmt.Fprintf(os.Stdout, "overlay.body              %s\n", out.OverlayBody)
+	fmt.Fprintf(os.Stdout, "overlay.selected          %s\n", out.OverlaySelected)
 	if out.LogEnabled {
 		fmt.Fprintf(os.Stdout, "log_level                 %s\n", out.LogLevel)
 	} else {

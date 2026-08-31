@@ -208,11 +208,20 @@ repaint replays cm's model and the model carries no cursor visibility -- `intern
 a highlight that stops where its text does reads as a stray line of the program's output rather than as
 cm's.
 
-Three shades, and they are *attributes* rather than colours. The bar is reverse video, the rows under it add
-faint, and a chooser's selected row drops the faint again. Each therefore follows the terminal's own
-foreground and background: a 256-colour grey that reads well on a dark theme is unreadable on a light one,
-and cm does not know which it is looking at. A terminal that ignores faint shows one shade for the whole
-block, which is legible and is what this looked like before.
+Three shades, as a ramp: the bar in reverse video, a list's selected row on grey 241, and everything else on
+grey 236, all with near-white text. Each is configurable through `[overlay]`, and the reason it is
+configurable is the first attempt at this.
+
+That attempt used reverse video for the bar and reverse *plus faint* under it, expecting faint to read as a
+dimmer version of the same swap. It does not: faint dims the foreground, and reverse then draws that as the
+background, so the rows came out grey on grey -- fine in the terminal it was written in and near-invisible
+in the next one. A screenshot settled it, not inference. So the rows name a colour *pair*, where the
+contrast belongs to the pair rather than to the theme, and the greys are fixed entries in the 256-colour
+ramp rather than palette entries a colour scheme reinterprets.
+
+The selected row is a third step rather than a reuse of the bar's style: borrowing it looked right until the
+cursor sat on the first row, where the two merged into one block with no boundary. Verified on a dark
+terminal and a light one, which is the only way to judge it.
 
 Every row is padded to the width so a shade covers the pane. A highlight that stops where its text does
 reads as a stray line of the program's output rather than as cm's, which is what the first version looked
