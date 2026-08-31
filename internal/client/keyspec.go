@@ -130,6 +130,16 @@ func encodingsFor(c byte) [][]byte {
 	}
 }
 
+// live reports whether this spec describes a key that is intercepted at all.
+//
+// The zero value is not, and saying so here rather than at each call site is the point: a KeySpec that
+// was never parsed has Byte 0, and 0 is NUL, which a terminal really does send for ctrl-space. An unset
+// prefix key would otherwise swallow that keystroke while looking disabled. Every parsed spec carries
+// its CSI encodings, so their absence is what distinguishes unset from configured.
+func (k KeySpec) live() bool {
+	return !k.Disabled && len(k.Sequences) > 0
+}
+
 // Find reports the offset of a press of this key in p, or -1 if there is none.
 func (k KeySpec) Find(p []byte) int {
 	i, _ := k.find(p)
@@ -143,7 +153,7 @@ func (k KeySpec) Find(p []byte) int {
 // types quickly or pastes. Dropping the remainder there ate the second keystroke of every fast
 // two-key sequence.
 func (k KeySpec) find(p []byte) (offset, length int) {
-	if k.Disabled {
+	if !k.live() {
 		return -1, 0
 	}
 
@@ -193,7 +203,7 @@ func (k KeySpec) MightStart(p []byte) bool {
 // The lesson worth carrying is that this symptom has had two distinct causes, so seeing it again is
 // not evidence about this function.
 func (k KeySpec) HoldBack(p []byte) int {
-	if k.Disabled {
+	if !k.live() {
 		return 0
 	}
 	keep := 0

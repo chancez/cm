@@ -116,6 +116,9 @@ type Options struct {
 	Tags map[string]string
 	// DetachKey is the key that detaches. Zero value means the default.
 	DetachKey KeySpec
+	// PrefixKey is the key that opens the overlay. The zero value intercepts nothing, so a caller that
+	// does not want an overlay gets none: see KeySpec.live.
+	PrefixKey KeySpec
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
 	// now on.
 	//
@@ -755,7 +758,7 @@ func runSession(
 	// The gate buffers a partial detach sequence across reads, so a CSI-encoded detach split between
 	// two reads is still recognized rather than forwarded to the shell, and releases it after
 	// escapeGrace so a lone escape is not withheld forever.
-	gate := &inputGate{key: detachKey}
+	gate := &inputGate{detach: detachKey, prefix: opts.PrefixKey}
 	// A timer exists only while the gate is holding something. Nil channels block forever, which is
 	// what keeps this case out of the select the rest of the time.
 	var (
@@ -1004,8 +1007,9 @@ func runSession(
 				continue
 			}
 
-			buf, detach := gate.feed(data, now)
-			if detach {
+			dec := gate.feed(data, now)
+			buf := dec.Forward
+			if dec.Action == gateDetach {
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.
 				if len(buf) > 0 && !opts.ReadOnly {

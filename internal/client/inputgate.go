@@ -31,20 +31,54 @@ import "time"
 // one was preferred.
 const escapeGrace = 50 * time.Millisecond
 
-// inputGate applies the detach key to a client's keystrokes, deciding what the session should see.
+// gateAction is what a read of keystrokes asks cm to do rather than the session.
+type gateAction int
+
+const (
+	// gateNone means nothing cm intercepts was pressed.
+	gateNone gateAction = iota
+	// gateDetach means the detach key was pressed.
+	gateDetach
+	// gatePrefix means the prefix key was pressed, so the overlay opens.
+	gatePrefix
+)
+
+// gateDecision is everything one read of keystrokes produced.
 //
-// Its own type because the decision has three outcomes and one of them is time-dependent, which is
+// A struct rather than several return values because the parts have to be read together: what the
+// session receives, what cm does, and what is left over for whatever cm opened.
+type gateDecision struct {
+	// Forward is what the session should receive, which is whatever preceded the key.
+	Forward []byte
+	// Action is what cm must do itself.
+	Action gateAction
+	// Rest is what followed the prefix key in the same read.
+	//
+	// Non-empty when the prefix and the key after it land in one read, which happens when someone types
+	// quickly or pastes. It belongs to the overlay rather than to the session. Detaching has no
+	// equivalent: what follows a detach is dropped on purpose, since the user asked to leave.
+	Rest []byte
+}
+
+// inputGate applies the keys cm intercepts to a client's keystrokes, deciding what the session sees.
+//
+// Its own type because the decision has several outcomes and one of them is time-dependent, which is
 // most of what there is to get wrong here. Inline in the attach loop it was two conditions with no way
 // to test either apart from a live attachment, and the missing bound above went unnoticed for that
 // reason.
 type inputGate struct {
-	key KeySpec
-	// suspended stops the key being intercepted, so it reaches the session like any other keystroke.
+	// detach ends the attachment, prefix opens the overlay. Both are matched the same way, and whichever
+	// was pressed first in a read wins.
+	detach KeySpec
+	prefix KeySpec
+	// suspended stops both keys being intercepted, so they reach the session like any other keystroke.
 	//
 	// Set while a nested client is attached inside this session, which the server reports. That client
-	// reads its input from this session's pty, so the key is only reachable by forwarding it, and the
-	// inner gate is what recognizes it. Without this the outer client always won, which for a
-	// per-window session meant ctrl-\ closed the window instead of leaving the inner session.
+	// reads its input from this session's pty, so the keys are only reachable by forwarding them, and the
+	// inner gate is what recognizes them. Without this the outer client always won, which for a
+	// per-window session meant ctrl-\ closed the window instead of leaving the inner session. The prefix
+	// key follows the same rule for the same reason: the overlay belongs to the session the user is
+	// looking at, which is the innermost one.
 	//
 	// Separate from KeySpec.Disabled, which is the configured "no key detaches". This one comes
 	// and goes with the nesting and must not overwrite what the user configured.
@@ -57,12 +91,7 @@ type inputGate struct {
 }
 
 // feed offers a read's worth of keystrokes to the gate.
-//
-// forward is what the session should receive, which is empty when everything was consumed. detach
-// reports that the key was pressed, in which case forward holds whatever preceded it and anything
-// after it is deliberately dropped: the user asked to leave, so later keystrokes belong to whatever
-// comes next.
-func (g *inputGate) feed(data []byte, now time.Time) (forward []byte, detach bool) {
+func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// The existing anchor is kept across the rejoin below, so a partial that grows over several reads
 	// is still released a fixed time after its *first* byte. Restarting the clock on each read would
 	// let a stream that keeps ending in a partial postpone the release indefinitely, which is the
@@ -80,15 +109,29 @@ func (g *inputGate) feed(data []byte, now time.Time) (forward []byte, detach boo
 	// typed. Nothing is held back either: a partial sequence has no one here to complete it, and the
 	// inner client needs the whole of it to recognize the key itself.
 	if g.suspended {
-		return buf, false
+		return gateDecision{Forward: buf}
 	}
 
-	if i := g.key.Find(buf); i >= 0 {
-		return buf[:i], true
+	// Whichever key was pressed first in this read wins, which is the only ordering that matches what the
+	// user did. Detaching wins a tie, which is reachable only by configuring both keys to the same key:
+	// leaving is the one that cannot be undone by pressing something else, so it is the safer reading.
+	detachAt, _ := g.detach.find(buf)
+	prefixAt, prefixLen := g.prefix.find(buf)
+	switch {
+	case detachAt >= 0 && (prefixAt < 0 || detachAt <= prefixAt):
+		return gateDecision{Forward: buf[:detachAt], Action: gateDetach}
+	case prefixAt >= 0:
+		return gateDecision{
+			Forward: buf[:prefixAt],
+			Action:  gatePrefix,
+			Rest:    buf[prefixAt+prefixLen:],
+		}
 	}
 
-	// Hold back a possible partial sequence until the rest arrives, or until the grace expires.
-	if keep := g.key.HoldBack(buf); keep > 0 && keep <= len(buf) {
+	// Hold back a possible partial sequence until the rest arrives, or until the grace expires. The
+	// longer of the two, since a partial that could still become either key must wait for whichever needs
+	// more bytes: with the defaults both encode as ESC [ 9 ... and diverge only at the fourth byte.
+	if keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf)); keep > 0 && keep <= len(buf) {
 		g.held = append(g.held, buf[len(buf)-keep:]...)
 		if anchor.IsZero() {
 			g.heldAt = now
@@ -97,7 +140,7 @@ func (g *inputGate) feed(data []byte, now time.Time) (forward []byte, detach boo
 		}
 		buf = buf[:len(buf)-keep]
 	}
-	return buf, false
+	return gateDecision{Forward: buf}
 }
 
 // deadline reports when the held bytes must be released, and whether anything is held at all.
