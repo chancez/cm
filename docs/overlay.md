@@ -87,6 +87,20 @@ Two cheaper repaints were considered and not built:
   reproducing that atomicity or replaying bytes across the snapshot, which is the two-sequence-space
   family that has already cost three bugs. Worth doing if the reconnect proves costly, and not before.
 
+## A forwarded key must not ride a dying stream
+
+Found in a real terminal and worth the paragraph, because the unit tests all passed. Closing the overlay
+repaints, and repainting closes the connection immediately, so a keystroke the overlay forwarded on that
+stream may never reach the server. Measured: forwarding `ctrl-\` to a foreground `sleep` killed it on
+some attempts and not others.
+
+So bytes the overlay forwards go into the client's `pending` buffer -- the same one that holds keystrokes
+typed during an outage -- and the reconnect flushes them straight after Open. Deterministic, and verified
+5 out of 5 in a real terminal after the change against a fail-sometimes before it.
+
+The general form is worth remembering: anything that returns `outcomeReconnect` in the same breath as
+sending on the stream it is about to close has this bug.
+
 ## Reading input while holding the keyboard
 
 The subtle part, and the one with the most history behind it. While the overlay is open it takes every
@@ -113,6 +127,10 @@ Everything `outageNotice` learned, for the same reasons: one write per block, ab
 each row cleared first, DECSC and DECRC around the whole thing, and a width one column short of the
 terminal because writing the last column leaves it in pending wrap and one more byte then scrolls the
 session's screen out from under the model about to repaint it.
+
+One paint per keypress, which needed fixing: the caller opens the overlay and then feeds whatever
+followed the prefix key, and both painted, so the transcript hook showed the whole block reaching the
+terminal twice for one press.
 
 The block is capped at half the terminal and 12 rows. What it cuts, it says: a truncated `cm list` read as
 a complete one is a wrong answer, not a short one.

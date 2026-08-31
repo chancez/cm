@@ -838,8 +838,21 @@ func runSession(
 	// delivered before a repaint that would otherwise race it. A detach beats a repaint, since nothing
 	// needs repainting on a screen this client is about to leave.
 	applyOverlay := func(resp overlayResponse) (outcome, bool) {
-		if sendInput(resp.Send) {
-			return outcomeReconnect, true
+		switch {
+		case len(resp.Send) == 0:
+		case resp.Repaint && !opts.ReadOnly:
+			// Held for the reconnect rather than sent on a stream that is about to be closed.
+			//
+			// This was a race, and it is why the overlay's forwarded key needs saying out loud: a repaint
+			// closes this connection immediately after, and a Send that has not reached the server by then
+			// is gone. Measured in a real terminal, forwarding ctrl-\ to a foreground `sleep` killed it on
+			// some attempts and not others, which is the worst possible failure for a key whose whole point
+			// is that it reaches the program. The reconnect flushes this straight after Open.
+			*pending = append(*pending, resp.Send...)
+		default:
+			if sendInput(resp.Send) {
+				return outcomeReconnect, true
+			}
 		}
 		if len(resp.Run) > 0 {
 			if opts.RunCommand == nil {

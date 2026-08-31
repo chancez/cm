@@ -115,6 +115,12 @@ func (s *screen) inject(p []byte) error {
 			"mid-sequence for too long", "held", len(s.held), "dropped", len(p))
 		return nil
 	}
+	// Logged because the symptom of a hold is silence, and it looks identical to cm having nothing to say.
+	// The overlay made that visible: with an idle session there is no next write to release the hold, so
+	// the bar simply never appeared and the keys still worked. Fed minus Boundary is how long the partial
+	// sequence is, which is what identifies whose it was.
+	s.log.Debug("holding bytes cm generated until the session's sequence ends",
+		"bytes", len(p), "held", len(s.held), "partial", s.track.Fed()-s.track.Boundary())
 	s.held = append(s.held, p...)
 	return nil
 }

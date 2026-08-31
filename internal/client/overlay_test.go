@@ -443,3 +443,31 @@ func TestSplitCommandLine(t *testing.T) {
 		}
 	}
 }
+
+// Opening and then feeding nothing paints once, not twice.
+//
+// The caller opens the overlay and then feeds whatever followed the prefix key in the same read, which is
+// usually nothing. Measured with the transcript hook against a real terminal: the whole block reached it
+// twice for one keypress, which is a visible flicker over a program's screen and pointless traffic on
+// every repaint.
+func TestOverlayPaintsOncePerKeypress(t *testing.T) {
+	o, buf := newTestOverlay(t, 24, 80)
+	o.open()
+	first := buf.Len()
+	if first == 0 {
+		t.Fatal("open painted nothing")
+	}
+	if got := o.feed(nil); !sameResponse(got, overlayResponse{}) {
+		t.Errorf("feed(nil) = %+v, want nothing to do", got)
+	}
+	if buf.Len() != first {
+		t.Errorf("feeding an empty read painted %d more bytes, want none", buf.Len()-first)
+	}
+
+	// A repaint after the session drew over the block must still write, identical content or not: that is
+	// what makes the overlay heal instead of being left half erased.
+	o.repaint()
+	if buf.Len() <= first {
+		t.Error("repaint wrote nothing, so an overlay painted over by the session would stay broken")
+	}
+}

@@ -131,6 +131,13 @@ func (o *overlay) open() {
 func (o *overlay) feed(data []byte) overlayResponse {
 	var resp overlayResponse
 
+	// Nothing to apply and nothing to repaint. The caller opens the overlay and then feeds whatever
+	// followed the prefix key in the same read, which is usually nothing, and open has already painted:
+	// measured with the transcript hook, that wrote the whole block to the terminal twice per keypress.
+	if len(data) == 0 {
+		return resp
+	}
+
 	for len(data) > 0 {
 		// While armed, the two keys cm intercepts are checked before anything is decoded, so pressing
 		// either one a second time forwards it. Only at the front of what is left, so this cannot claim a

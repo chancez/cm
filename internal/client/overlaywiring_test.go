@@ -146,24 +146,51 @@ func TestRunSessionOverlayRunsACommandThenRepaints(t *testing.T) {
 
 // The overlay forwards the detach key to the program, which is the only way to reach a key cm intercepts.
 // Before this, no 0x1c ever reached a pty from a cm client, so SIGQUIT was unreachable inside a session.
+//
+// The forwarded bytes are carried into the reconnect rather than sent on this connection, and that is the
+// point of the test. Closing the overlay repaints, which closes this stream immediately, so a Send that
+// has not reached the server by then is lost. Measured in a real terminal before the fix: forwarding
+// ctrl-\ to a foreground `sleep` killed it on some attempts and not others. A key whose whole purpose is
+// to reach the program cannot be delivered nine times in ten.
 func TestRunSessionOverlaySendsTheDetachKeyToTheProgram(t *testing.T) {
 	h := overlayHarness(t)
 	h.stream.opened("test", 0, nil)
 
 	done := h.runAsync(context.Background())
 	h.input <- []byte("\x1dq")
-	// The Open, then the forwarded key.
-	h.stream.waitForRequests(t, 2)
 
-	if got := string(h.stream.inputs()); got != "\x1c" {
-		t.Errorf("input forwarded = %q, want the detach key itself", got)
+	if oc := overlayWaitFor(t, done, "the repaint"); oc != outcomeReconnect {
+		t.Errorf("outcome = %v, want outcomeReconnect for the repaint", oc)
+	}
+	if got := string(h.pending); got != "\x1c" {
+		t.Errorf("pending = %q, want the detach key held for the reconnect to flush", got)
+	}
+	if got := h.stream.inputs(); len(got) != 0 {
+		t.Errorf("input %q went out on a stream that was about to close, where it can be lost", got)
 	}
 	if n := h.stream.detaches(); n != 0 {
 		t.Errorf("client sent %d Detach messages, want 0: the key was for the program", n)
 	}
-	if oc := overlayWaitFor(t, done, "the repaint"); oc != outcomeReconnect {
-		t.Errorf("outcome = %v, want outcomeReconnect for the repaint", oc)
+}
+
+// And the reconnect really does flush it, which is the other half of the same guarantee: bytes parked in
+// pending that nothing sends are worse than bytes lost on a dying stream, because they look delivered.
+func TestRunSessionFlushesAForwardedKeyAfterTheReconnect(t *testing.T) {
+	h := overlayHarness(t)
+	h.pending = []byte("\x1c")
+	h.stream.opened("test", 0, nil)
+
+	done := h.runAsync(context.Background())
+	h.stream.waitForRequests(t, 2)
+	if got := string(h.stream.inputs()); got != "\x1c" {
+		t.Errorf("inputs = %q, want the held key flushed on the new connection", got)
 	}
+	if len(h.pending) != 0 {
+		t.Errorf("pending = %q after the flush, want it emptied", h.pending)
+	}
+
+	h.stream.exited(0)
+	overlayWaitFor(t, done, "the session to end")
 }
 
 // While a command is in flight the loop keeps running, which is why it is dispatched rather than run
