@@ -102,10 +102,25 @@ type harness struct {
 	attached []string
 	// result is what the attach function reports back.
 	result Attachment
+	// switched records every reference the switch function was given, and switchErr is what it reports.
+	switched  []string
+	switchErr error
 }
 
 func newHarness(t *testing.T, sessions ...*serverv1.Session) *harness {
 	return newHarnessWith(t, Options{}, sessions...)
+}
+
+// newHarnessSwitching is newHarness with a caller that can be switched, which is what the picker has when
+// the overlay opened it from inside a session.
+func newHarnessSwitching(t *testing.T, sessions ...*serverv1.Session) *harness {
+	t.Helper()
+	h := &harness{t: t}
+	opts := Options{Switch: func(ref string) error {
+		h.switched = append(h.switched, ref)
+		return h.switchErr
+	}}
+	return newHarnessWithInto(t, h, opts, sessions...)
 }
 
 // newHarnessPreviewing is newHarness with the output pane open.
@@ -115,7 +130,16 @@ func newHarnessPreviewing(t *testing.T, sessions ...*serverv1.Session) *harness 
 
 func newHarnessWith(t *testing.T, opts Options, sessions ...*serverv1.Session) *harness {
 	t.Helper()
-	h := &harness{t: t, sessions: &fakeSessions{sessions: sessions, output: map[string]string{}}}
+	return newHarnessWithInto(t, &harness{t: t}, opts, sessions...)
+}
+
+// newHarnessWithInto builds into a harness the caller has already started filling, so a case can close over
+// it from an Options callback.
+func newHarnessWithInto(
+	t *testing.T, h *harness, opts Options, sessions ...*serverv1.Session,
+) *harness {
+	t.Helper()
+	h.sessions = &fakeSessions{sessions: sessions, output: map[string]string{}}
 	// No polling. A timer in a unit test is either a second of waiting or a race, and every refresh
 	// these tests care about is one they ask for. See Options.Refresh.
 	opts.Refresh = new(time.Duration)
@@ -669,5 +693,93 @@ func TestAKillThatFailsPerSessionIsNotReportedAsSuccess(t *testing.T) {
 	}
 	if h.model.status == "killed work" {
 		t.Error("a failed kill was reported as a kill")
+	}
+}
+
+// The switch binding moves the caller, by ID, and ends the picker.
+//
+// By ID for the reason the kill does: the list refreshes on a timer, so a name can be pointing at another
+// session between the row being drawn and the key being pressed, and a switch aimed at a name would send
+// the window somewhere the user did not choose.
+func TestSwitchMovesTheCallerByID(t *testing.T) {
+	h := newHarnessSwitching(t, session("work", "a7k2m9x4", 100), session("other", "b8l3n0y5", 200))
+	h.list()
+
+	cmd := h.press("s")
+	if cmd == nil {
+		t.Fatal("s did nothing, want a switch")
+	}
+	msg := cmd()
+	if got, want := h.switched, []string{"@a7k2m9x4"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("switched to %v, want %v", got, want)
+	}
+
+	// A successful switch quits: the caller moves the window as this process exits, so there is nothing
+	// left for the picker to show.
+	if _, quit := h.send(msg)().(tea.QuitMsg); !quit {
+		t.Errorf("a completed switch did not quit the picker")
+	}
+}
+
+// Without a caller to move there is no switch key at all: not inert, absent. That is the picker's own
+// case, a window with no session yet, where switching has no meaning.
+func TestSwitchIsAbsentWithoutACaller(t *testing.T) {
+	h := newHarness(t, session("work", "a7k2m9x4", 100))
+	h.list()
+
+	if h.model.keys.Switch.Enabled() {
+		t.Error("the switch binding is enabled with no way to switch")
+	}
+	if cmd := h.press("s"); cmd != nil {
+		t.Errorf("s produced %T, want nothing: the binding is disabled", cmd())
+	}
+	if len(h.switched) != 0 {
+		t.Errorf("switched %v with no caller to move", h.switched)
+	}
+
+	// And it is not offered in the help, since bubbles leaves a disabled binding out.
+	h.press("?")
+	if got := h.model.help.View(h.model.fullHelp()); strings.Contains(got, "switch here") {
+		t.Errorf("the help offers the switch key with no caller to move:\n%s", got)
+	}
+}
+
+// A failed switch says so and leaves the picker up, rather than quitting into a window that did not move.
+func TestSwitchReportsAFailure(t *testing.T) {
+	h := newHarnessSwitching(t, session("work", "a7k2m9x4", 100))
+	h.switchErr = errors.New("no client to move")
+	h.list()
+
+	h.run(h.press("s"))
+	if h.model.err == nil {
+		t.Fatal("a failed switch reported nothing")
+	}
+	if got := h.model.footer(); !strings.Contains(got, "no client to move") {
+		t.Errorf("the failure is not in the footer:\n%s", got)
+	}
+}
+
+// With a caller to move, the expanded help offers the key and still fits the window. The picker's help is
+// not truncated, and the layout measures the footer by counting newlines, so a column that overflows
+// silently loses the columns to its right.
+func TestTheExpandedHelpFitsWithTheSwitchKey(t *testing.T) {
+	h := newHarnessSwitching(t, manySessions(40)...)
+	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	h.list()
+	h.press("?")
+
+	got := h.model.help.View(h.model.fullHelp())
+	if !strings.Contains(got, "switch here") {
+		t.Fatalf("the expanded help does not name the switch key:\n%s", got)
+	}
+	if w := lipgloss.Width(got); w > h.model.width {
+		t.Errorf("the expanded help is %d columns wide in a %d column window, so its last column is cut:\n%s",
+			w, h.model.width, got)
+	}
+	// The columns to the right of the new key are what an overflow eats first.
+	for _, want := range []string{"filter", "quit"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the expanded help lost the %q column:\n%s", want, got)
+		}
 	}
 }

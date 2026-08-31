@@ -37,6 +37,8 @@ type model struct {
 	ctx      context.Context
 	sessions Sessions
 	attach   AttachFunc
+	// switchTo moves whoever opened the picker, or is nil when there is nobody to move. See SwitchFunc.
+	switchTo SwitchFunc
 	tags     []string
 	home     string
 	// interval is how often the list re-reads the server, zero for not at all. See Options.Refresh.
@@ -114,15 +116,23 @@ func newModel(ctx context.Context, opts Options) model {
 		interval = *opts.Refresh
 	}
 
+	keys := defaultKeys()
+	// Enabled only when the caller can actually switch. A disabled binding is skipped by key.Matches and
+	// left out of the help, so the key is neither offered nor inert.
+	if opts.Switch != nil {
+		keys.Switch.SetEnabled(true)
+	}
+
 	return model{
 		ctx:      ctx,
 		interval: interval,
 		sessions: opts.Sessions,
 		attach:   opts.Attach,
+		switchTo: opts.Switch,
 		tags:     opts.Tags,
 		home:     home,
 		list:     l,
-		keys:     defaultKeys(),
+		keys:     keys,
 		help:     help.New(),
 		input:    input,
 		preview:  preview{on: opts.Preview},
@@ -238,6 +248,15 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			m.status = "killed " + msg.label
 		}
 		return m, m.fetch()
+
+	case switchedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		// Nothing to report and nothing to refresh: the picker is done. The caller moves the window as this
+		// process exits, so a status line written here would be painted and then thrown away with the frame.
+		return m, tea.Quit
 
 	case renamedMsg:
 		m.err = msg.err
@@ -363,6 +382,14 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		}
 		return m.handOff(it.ref())
 
+	case key.Matches(msg, m.keys.Switch):
+		it, ok := m.selected()
+		if !ok {
+			return m, nil
+		}
+		m.err = nil
+		return m, m.switchHere(it)
+
 	case key.Matches(msg, m.keys.Kill):
 		it, ok := m.selected()
 		if !ok {
@@ -438,6 +465,26 @@ func (m model) renameKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// switchedMsg is a completed switch.
+type switchedMsg struct {
+	label string
+	err   error
+}
+
+// switchHere moves the caller to a session.
+//
+// By ID rather than by the name on the row, for the reason the overlay's own picker uses one: the list
+// refreshes on a timer and a name can be bound to another session between the row being drawn and the key
+// being pressed, which would send the window somewhere the user did not choose.
+func (m model) switchHere(it item) tea.Cmd {
+	label := it.session.GetName()
+	ref := it.ref()
+	switchTo := m.switchTo
+	return func() tea.Msg {
+		return switchedMsg{label: label, err: switchTo(ref)}
+	}
 }
 
 // kill ends a session.

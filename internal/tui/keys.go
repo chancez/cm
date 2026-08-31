@@ -9,6 +9,7 @@ import "charm.land/bubbles/v2/key"
 // that a reader blames on the tool.
 type keyMap struct {
 	Attach       key.Binding
+	Switch       key.Binding
 	New          key.Binding
 	Kill         key.Binding
 	Rename       key.Binding
@@ -24,6 +25,15 @@ func defaultKeys() keyMap {
 		Attach: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "attach"),
+		),
+		// Switch moves the window that opened the picker rather than nesting an attachment inside it, which
+		// is what enter would do from a session. Disabled unless the caller supplied a way to switch, so it
+		// is absent from the help as well as inert: bubbles skips a disabled binding in both. "s" matches
+		// the overlay's own switch key, which is where most people will arrive here from.
+		Switch: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "switch here"),
+			key.WithDisabled(),
 		),
 		New: key.NewBinding(
 			key.WithKeys("n"),
@@ -69,6 +79,10 @@ func defaultKeys() keyMap {
 
 // ShortHelp is the one line under the list.
 //
+// Switch is not on it either, for the same measured reason: the line reached column 89 of 100 with the
+// entries below, and "s switch here" takes it past the width. It is in the expanded help, in the column it
+// belongs to rather than one of its own.
+//
 // The half page keys are not on it, and that is a space decision rather than an oversight: the line
 // already carries the picker's actions plus the list's navigation and filter keys, it is not truncated
 // to the window, and the layout measures the footer by counting newlines, so a line that wraps costs a
@@ -85,7 +99,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 // navigation column rather than into one of these. See model.fullHelp.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Attach, k.New},
+		{k.Attach, k.Switch, k.New},
 		{k.Kill, k.Rename},
 		{k.Preview, k.Help, k.Quit},
 	}

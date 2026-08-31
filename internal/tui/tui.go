@@ -100,12 +100,26 @@ type Attachment struct {
 	Note string
 }
 
+// SwitchFunc moves whoever opened the picker to another session, and reports whether that worked.
+//
+// Nil when there is nothing to move: the picker's own reason to exist is a window with no session yet, and
+// there is no client to switch then. That absence is what disables the switch binding, rather than a
+// separate flag, so the key cannot be offered in a state where it would do nothing.
+//
+// A function rather than a Switch RPC on Sessions, because *who* moves is not something this package can
+// know. The caller is an attached client, it already knows how to move itself between sessions without a
+// re-exec or a reattach, and the server telling it to do so through a stream this process cannot see would
+// be a longer way round to the same place. See the overlay's picker handover in internal/client.
+type SwitchFunc func(ref string) error
+
 // Options configures a picker.
 type Options struct {
 	// Sessions is the server to ask. Required.
 	Sessions Sessions
 	// Attach hands the terminal to a session. Required.
 	Attach AttachFunc
+	// Switch moves the caller to a session, or is nil when there is no caller to move. See SwitchFunc.
+	Switch SwitchFunc
 	// Tags filters the list, in the form `cm ls --tag` takes. Applied on the server for every
 	// refresh, so a session that gains a matching tag appears without a restart.
 	Tags []string
