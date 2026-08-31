@@ -46,9 +46,9 @@ makes an ordinary shell session with ordinary persistence.
 Detaching leaves the session running. The key is ctrl-\ by default, set by
 detach_key in the config file, and overridden for one attachment by --detach-key.
 
-That override matters when something outside this client already claims the key: a
-multiplexer you are attaching from within sees it first, so the inner client never
-receives it and the window closes instead of detaching.`,
+Attaching from inside another cm session keeps working without an override: the key
+leaves the innermost session, and a second press leaves the outer one. The override
+matters for another multiplexer, which sees the key first and never passes it on.`,
 		// Only the args before "--" are the session name; everything after is the command
 		// to run, so MaximumNArgs would wrongly reject "attach x -- sh -c ...".
 		Args: func(cmd *cobra.Command, args []string) error {

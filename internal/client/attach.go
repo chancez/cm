@@ -798,6 +798,23 @@ func runSession(
 				}
 				return outcomeDone, nil
 			}
+			if h := msg.resp.GetHosting(); h != nil {
+				// Something attached from inside this session, or the last such client left. While one is
+				// there it reads its input from this session's pty, so the detach key belongs to it: this
+				// client stops intercepting and forwards the bytes, and the inner gate acts on them.
+				// Pressing the key twice leaves both, innermost first.
+				//
+				// Set on the gate rather than acted on here, since this loop is the only reader of it and
+				// the next keystroke is what the change has to affect. Anything the gate is withholding
+				// stays withheld and is released by the existing grace timer, in order, ahead of whatever
+				// is typed next.
+				if h.Nested != gate.suspended {
+					gate.suspended = h.Nested
+					opts.Log.Info("detach key handed to the innermost session",
+						"session", result.Session, "nested", h.Nested)
+				}
+				continue
+			}
 			if q := msg.resp.GetQuery(); q != nil {
 				// The server is asking this terminal a question it cannot answer itself: the background
 				// colour, the clipboard, the window's pixel size. Written to the terminal, whose reply

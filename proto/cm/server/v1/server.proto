@@ -600,7 +600,30 @@ message AttachResponse {
     Metadata metadata = 4;
     Detached detached = 5;
     Query query = 6;
+    Hosting hosting = 7;
   }
+}
+
+// Hosting reports whether a nested client is attached from inside this session.
+//
+// Sent when the state changes, and on attach when it is already true, so a client that reconnects to a
+// session whose nested attachment outlived it is not left believing it owns the detach key.
+//
+// It exists for the detach key. A nested `cm attach` reads its input from the parent's pty, so the
+// parent's client is the one holding the physical terminal and the parent's gate sees ctrl-\ first:
+// pressing it detached the *outer* session, which for a per-window session closes the window instead of
+// leaving the inner one. While this is set the parent's clients stop intercepting the key and forward it,
+// where the inner client's own gate recognizes it, so the key always leaves the innermost session.
+//
+// A statement of fact rather than an instruction, because what to do with it is the client's. A read-only
+// follower and `cm read --follow` have no detach key to suspend, and a client's key is configured on the
+// client side.
+//
+// Not carried on Metadata, which is what the *shell* said about itself. This is what the server knows
+// about who is attached, and it is already published separately for `cm list`'s hosting field.
+message Hosting {
+  // Whether a nested client is attached inside this session right now.
+  bool nested = 1;
 }
 
 // Query asks this client's terminal a question the server cannot answer itself.

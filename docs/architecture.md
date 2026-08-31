@@ -360,6 +360,43 @@ The deadline is anchored to the first byte withheld rather than restarted by eac
 keeps ending in a partial cannot postpone the release indefinitely, which would be the unbounded wait
 again by another route.
 
+### Who owns the detach key when sessions are nested
+
+The key leaves the innermost session, and only that one.
+
+A nested `cm attach` reads its input from the parent's pty, so the parent's client is the one holding the
+real terminal and its gate sees ctrl-\ first. It used to act on it, which meant the press left the
+*outer* session: for a per-window session that closes the terminal window, so the common case was the
+worst one. `--detach-key` on every nested attach was the only workaround, and nobody remembers it.
+
+The parent already knows a nested client is there, from `Open.inside_session`, and freezing its metadata
+is what that knowledge was added for. The same fact now drives the key. The server publishes it to the
+parent's attached clients as an `AttachResponse.Hosting` event, and a client that hears it stops
+intercepting its detach key and forwards the bytes, where the inner client's own gate recognizes them.
+Two presses leave both levels, innermost first.
+
+Four details are load-bearing:
+
+- **A fact, not an instruction.** The server says whether anything is nested; what to do with it is the
+  client's, because the key is configured client side and a read-only follower or `cm read --follow` has
+  none to hand over.
+- **Only the transitions are published, and the state is seeded on subscribe.** A client attaching while
+  a nested attach is already running has to be told on arrival: the inner client holds the parent's pty
+  rather than the connection, so it survives a server restart or a dropped stream, and a window coming
+  back would otherwise hold a key the inner client believes is its own.
+- **Published under the session's lock**, unlike metadata. This value is a level rather than a snapshot,
+  and two nested attachments transition independently, so a send outside the lock can reorder a child
+  ending against another starting and leave a client believing nothing is nested while an inner client is
+  still reading the pty. That is the original bug back by another route.
+- **Held bytes are not dropped at the handover.** A partial sequence withheld when the nesting starts is
+  released with whatever follows it, in order, so an escape typed just before a nested attach still
+  arrives.
+
+The limit worth stating: this works within one server. A nested attach on another host over ssh cannot
+tell the outer server anything, so `Hosting` is never sent and the key behaves as it did, leaving the
+outer session. Same shape as metadata attribution, which also does nothing for a parent this server does
+not have.
+
 ## Nested sessions work
 
 zmx treats the presence of its session environment variable as a request to *switch* the
@@ -396,6 +433,12 @@ absorb the child's values; the baselines a change is measured against have to ke
 published values stay put, or the child's last directory is published as the parent's the moment the
 nesting ends. That is the case `TestParentKeepsItsOwnValuesAfterNestingEnds` exists for, and a freeze
 without the re-baseline passes every other test.
+
+What the client sends is a *reference*, `CM_SESSION`, which is the ID with its sigil, and the server has
+to resolve it rather than look it up as an ID. A registry lookup by the raw value never matched, so the
+whole mechanism was dead while every test passed: the tests call `beginHosting` directly, and the one
+covering the client's side used a name-shaped value. `Service.hostingParent` is the one place that
+resolves it, which also accepts the name an older server exported.
 
 The client requires both `CM_SESSION` and a terminal on stdout before claiming to be nested. The
 variable alone is inherited by everything a session's shell starts, so `cm attach x > file` would freeze

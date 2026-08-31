@@ -176,6 +176,51 @@ func TestInputGateDeadline(t *testing.T) {
 	}
 }
 
+// While a nested client is attached inside the session, the key belongs to it: this gate must forward
+// every encoding of it and withhold nothing, because the inner gate is what recognizes it and needs the
+// whole sequence.
+//
+// The bug this is the unit for: the outer client always won, so ctrl-\ inside a nested attach detached the
+// outer session, which for a per-window session closes the window.
+func TestInputGateSuspendedForwardsTheKey(t *testing.T) {
+	for _, in := range []string{"\x1c", "ls\x1c", "\x1b[92;5u", "\x1b[27;5;92~", "\x1b"} {
+		g := newGate(t, DefaultDetachKey)
+		g.suspended = true
+
+		got, detach := g.feed([]byte(in), t0)
+		if string(got) != in || detach {
+			t.Errorf("feed(%q) = (%q, %v), want (%q, false)", in, got, detach, in)
+		}
+		if _, holding := g.deadline(); holding {
+			t.Errorf("feed(%q) withheld bytes while suspended", in)
+		}
+	}
+}
+
+// The handover has to be reversible, and anything held when it happens is released in order rather than
+// dropped: a nested attach that starts while an escape is withheld must not swallow that escape.
+func TestInputGateSuspendedAndResumed(t *testing.T) {
+	g := newGate(t, DefaultDetachKey)
+
+	// An escape arrives and is withheld, as it always is.
+	if got, detach := g.feed([]byte("\x1b"), t0); string(got) != "" || detach {
+		t.Fatalf("feed(escape) = (%q, %v), want (%q, false)", got, detach, "")
+	}
+
+	// The nested client attaches. The next read releases what was held, in order, and the detach key
+	// among it.
+	g.suspended = true
+	if got, detach := g.feed([]byte("[92;5u"), t0); string(got) != "\x1b[92;5u" || detach {
+		t.Fatalf("feed(the rest) = (%q, %v), want (%q, false)", got, detach, "\x1b[92;5u")
+	}
+
+	// The nested client leaves and this gate is the innermost again.
+	g.suspended = false
+	if got, detach := g.feed([]byte("\x1c"), t0); string(got) != "" || !detach {
+		t.Fatalf("feed(ctrl-\\) after resuming = (%q, %v), want (%q, true)", got, detach, "")
+	}
+}
+
 // A disabled key must hold nothing at all, since the whole point of "none" is that the key belongs to
 // the program. Holding for it would add latency for no possible benefit.
 func TestInputGateDisabledKeyHoldsNothing(t *testing.T) {

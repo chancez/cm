@@ -364,6 +364,13 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	metaSub := sess.subscribeMetadata()
 	defer sess.unsubscribeMetadata(metaSub)
 
+	// Whether something is attached from inside this session, which decides who owns the detach key.
+	// Subscribed before the loop for the same reason metadata is: a session already hosting a nested
+	// attachment has to say so now rather than at the next change, which may be this client's own
+	// keypress detaching the wrong session.
+	hostingSub := sess.subscribeHosting()
+	defer sess.unsubscribeHosting(hostingSub)
+
 	// Nil for a client with no entry, and a nil channel blocks forever, which keeps this case out of the
 	// select for anything that cannot be repainted.
 	repaint := sess.repaintChan(att.token)
@@ -435,6 +442,19 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Output{
 					Output: &serverv1.Output{Seq: uint64(sess.ClientSeq()), Gap: true},
+				},
+			}); err != nil {
+				return err
+			}
+
+		case nested := <-hostingSub.ch:
+			// A nested client attached inside this session, or the last one left. The client hands over
+			// its detach key while this is set, so ctrl-\ reaches the pty and detaches the inner
+			// session rather than this one. Sent from this loop because it is the only goroutine that
+			// may write to the stream.
+			if err := srv.Send(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Hosting{
+					Hosting: &serverv1.Hosting{Nested: nested},
 				},
 			}); err != nil {
 				return err

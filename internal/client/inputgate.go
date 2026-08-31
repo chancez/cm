@@ -39,6 +39,16 @@ const escapeGrace = 50 * time.Millisecond
 // reason.
 type inputGate struct {
 	key DetachKeySpec
+	// suspended stops the key being intercepted, so it reaches the session like any other keystroke.
+	//
+	// Set while a nested client is attached inside this session, which the server reports. That client
+	// reads its input from this session's pty, so the key is only reachable by forwarding it, and the
+	// inner gate is what recognizes it. Without this the outer client always won, which for a
+	// per-window session meant ctrl-\ closed the window instead of leaving the inner session.
+	//
+	// Separate from DetachKeySpec.Disabled, which is the configured "no key detaches". This one comes
+	// and goes with the nesting and must not overwrite what the user configured.
+	suspended bool
 	// held is a partial encoding of the key, kept until the rest arrives or the grace expires.
 	held []byte
 	// heldAt is when the current held bytes were first withheld, so the deadline is measured from the
@@ -65,6 +75,13 @@ func (g *inputGate) feed(data []byte, now time.Time) (forward []byte, detach boo
 		g.held = nil
 	}
 	g.heldAt = time.Time{}
+
+	// Everything through, including anything withheld before the handover, and in the order it was
+	// typed. Nothing is held back either: a partial sequence has no one here to complete it, and the
+	// inner client needs the whole of it to recognize the key itself.
+	if g.suspended {
+		return buf, false
+	}
 
 	if i := g.key.Find(buf); i >= 0 {
 		return buf[:i], true

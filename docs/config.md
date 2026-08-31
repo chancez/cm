@@ -145,9 +145,14 @@ synonym for the `ctrl-` prefix, and the key is case-insensitive.
 The key is detected in three encodings: the raw control byte, the kitty keyboard protocol form, and
 xterm's modifyOtherKeys form, so it still works under a program that enables either protocol.
 
+Nested cm sessions need no special setting: the key leaves the innermost session, and a second press
+leaves the outer one. See "Who owns the detach key when sessions are nested" in
+[architecture.md](architecture.md).
+
 `cm attach --detach-key` overrides the setting for a single attachment. Use it when something
-outside the client already claims the key, such as attaching to cm from inside another multiplexer.
-`cm detach [session]` is the same operation without a key, for a nested attach or for a script.
+outside cm already claims the key, such as attaching from inside another multiplexer.
+`cm detach [session]` is the same operation without a key, for a script or for detaching a session
+other than the one you are in.
 
 ### log_level
 

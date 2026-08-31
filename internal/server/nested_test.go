@@ -253,6 +253,81 @@ func TestParentStaysFrozenUntilEveryNestedAttachEnds(t *testing.T) {
 	}
 }
 
+// hostingState reads what a subscriber has been told, without waiting.
+//
+// A plain receive is enough: a publish completes inside beginHosting and endHosting, so by the time
+// either returns the value is already in the channel. Reported as (value, delivered) so a test can
+// assert that nothing was sent as well as what was.
+func hostingState(sub *hostingSub) (bool, bool) {
+	select {
+	case v := <-sub.ch:
+		return v, true
+	default:
+		return false, false
+	}
+}
+
+// The parent's clients are told when a nested attach starts and when the last one ends.
+//
+// This is what hands the detach key to the innermost session. Without the notification the parent's
+// client keeps intercepting ctrl-\, which for a per-window session closes the window instead of leaving
+// the inner session.
+//
+// Only the transitions are published, and that is asserted rather than assumed: a second child arriving
+// says nothing new, and telling a client twice is how a coalescing channel ends up delivering a stale
+// value after the state has already moved on.
+func TestHostingTransitionsAreToldToClients(t *testing.T) {
+	sess := newNestedTestSession(t, nil)
+	sub := sess.subscribeHosting()
+
+	if v, ok := hostingState(sub); ok {
+		t.Fatalf("a fresh subscriber was told %v, want nothing: it defaults to not hosting", v)
+	}
+
+	sess.beginHosting("child-a")
+	if v, ok := hostingState(sub); !ok || !v {
+		t.Errorf("after the first nested attach, told (%v, %v), want (true, true)", v, ok)
+	}
+
+	sess.beginHosting("child-b")
+	if v, ok := hostingState(sub); ok {
+		t.Errorf("a second nested attach published %v, want nothing: the state did not change", v)
+	}
+
+	sess.endHosting("child-a")
+	if v, ok := hostingState(sub); ok {
+		t.Errorf("one of two nested attachments ending published %v, want nothing: the other still "+
+			"holds the detach key", v)
+	}
+
+	sess.endHosting("child-b")
+	if v, ok := hostingState(sub); !ok || v {
+		t.Errorf("after the last nested attach ended, told (%v, %v), want (false, true)", v, ok)
+	}
+
+	// And an unsubscribed client hears nothing more, so a finished attachment cannot be published to.
+	sess.unsubscribeHosting(sub)
+	sess.beginHosting("child-c")
+	if v, ok := hostingState(sub); ok {
+		t.Errorf("an unsubscribed client was told %v", v)
+	}
+}
+
+// A client attaching while a nested attach is already running has to be told on arrival.
+//
+// The case is a client reconnecting: the inner `cm attach` holds the parent's pty rather than the
+// connection, so it survives a server restart or a dropped stream. Without the seed, the window comes
+// back holding a detach key the inner client believes is its own.
+func TestHostingIsSeededOnSubscribe(t *testing.T) {
+	sess := newNestedTestSession(t, nil)
+	sess.beginHosting("child")
+
+	sub := sess.subscribeHosting()
+	if v, ok := hostingState(sub); !ok || !v {
+		t.Errorf("a client attaching while nested was told (%v, %v), want (true, true)", v, ok)
+	}
+}
+
 // Attaching twice to the same child must be counted, not deduplicated.
 //
 // The same failure as above by a different route: keying on the child's name and deleting the entry on

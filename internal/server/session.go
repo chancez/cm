@@ -363,6 +363,11 @@ type Session struct {
 	// so a client can remove its own.
 	metaSubs map[*metaSub]struct{}
 
+	// hostingSubs are notified when this session starts or stops hosting a nested attachment, so each
+	// attached client can hand its detach key to the inner client and take it back afterwards. Keyed
+	// by pointer, like metaSubs, so a client can remove its own.
+	hostingSubs map[*hostingSub]struct{}
+
 	// hosting counts the nested attachments running inside this session's shell, keyed by the
 	// session each is attached to.
 	//
@@ -652,6 +657,9 @@ func newSession(
 		term:     term,
 		recent:   seqlog.NewAt[seq.Log](DefaultRecentBytes, clientSeq),
 		metaSubs: make(map[*metaSub]struct{}),
+		// Made here as well as lazily in subscribeHosting, since the server's own tests construct a
+		// Session literal to reach the pump seam and a nil map there would panic on the first subscriber.
+		hostingSubs: make(map[*hostingSub]struct{}),
 		// Positioned at the same offset as the log, since a session adopted after a server restart
 		// resumes partway in and a tracker starting from zero would place every boundary wrongly.
 		//
@@ -1568,6 +1576,66 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 	return s.title, s.cwd
 }
 
+// hostingSub receives changes in whether a nested attachment is running inside this session.
+//
+// Buffered with a depth of one and coalescing, like metaSub: what a client needs is the current state,
+// never the history of how it got there.
+type hostingSub struct {
+	ch chan bool
+}
+
+// publishHosting delivers the current hosting state to every subscriber.
+//
+// Called with s.mu held, which is the difference from publishMetadata and is deliberate. This value is a
+// level rather than a snapshot, and two nested attachments in one window transition independently: with
+// the send outside the lock, a child ending and another starting can have their sends reordered and leave
+// a client believing nothing is nested while an inner client is still reading the pty. That is the
+// original bug back again, so the mutation and the send are kept in one critical section. Safe because a
+// send here can never block: the channel is buffered and a stale value is dropped first.
+func (s *Session) publishHosting(nested bool) {
+	for sub := range s.hostingSubs {
+		select {
+		case <-sub.ch:
+		default:
+		}
+		select {
+		case sub.ch <- nested:
+		default:
+		}
+	}
+}
+
+// subscribeHosting registers for hosting changes and seeds the current state.
+//
+// Seeded, and only when true, for the case a client reconnects to a session whose nested attachment
+// outlived it: a server restart or a dropped stream leaves the inner `cm attach` running, since it holds
+// the pty rather than the connection. Without the seed that window would come back holding a detach key
+// the inner client believes it has. False is not seeded because it is the client's own default, and
+// sending it would cost an event on every attach to say nothing.
+func (s *Session) subscribeHosting() *hostingSub {
+	sub := &hostingSub{ch: make(chan bool, 1)}
+
+	s.mu.Lock()
+	if s.hostingSubs == nil {
+		s.hostingSubs = make(map[*hostingSub]struct{})
+	}
+	s.hostingSubs[sub] = struct{}{}
+	nested := len(s.hosting) > 0
+	s.mu.Unlock()
+
+	if nested {
+		sub.ch <- nested
+	}
+	return sub
+}
+
+// unsubscribeHosting removes a subscriber.
+func (s *Session) unsubscribeHosting(sub *hostingSub) {
+	s.mu.Lock()
+	delete(s.hostingSubs, sub)
+	s.mu.Unlock()
+}
+
 // beginHosting records that a client attached to child is running inside this session's shell.
 //
 // From that point until endHosting, everything in this session's output stream is the child's:
@@ -1580,8 +1648,14 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 // than every attach.
 func (s *Session) beginHosting(child string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	first := len(s.hosting) == 0
 	s.hosting[child]++
-	s.mu.Unlock()
+	// Only the transition is published, since a client acts on "is anything nested" rather than on the
+	// count. Under the lock: see publishHosting for why the send belongs in this critical section.
+	if first {
+		s.publishHosting(true)
+	}
 }
 
 // endHosting records that a nested attachment to child has finished.
@@ -1592,12 +1666,18 @@ func (s *Session) beginHosting(child string) {
 // change while the child's final values do not.
 func (s *Session) endHosting(child string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if n := s.hosting[child]; n > 1 {
 		s.hosting[child] = n - 1
 	} else {
 		delete(s.hosting, child)
 	}
-	s.mu.Unlock()
+	// The parent's clients take their detach key back here. Keyed on the count reaching zero rather
+	// than on this child, because two nested attachments in one window both hold the key: giving it
+	// back while the second is still running would detach the window on the next press.
+	if len(s.hosting) == 0 {
+		s.publishHosting(false)
+	}
 }
 
 // Hosting returns the sessions currently attached from inside this one, sorted.

@@ -190,6 +190,14 @@ func (s *fakeStream) detached() {
 	})
 }
 
+// hosting queues the server reporting whether a nested client is attached inside this session, which is
+// what decides who owns the detach key.
+func (s *fakeStream) hosting(nested bool) {
+	s.push(&serverv1.AttachResponse{
+		Event: &serverv1.AttachResponse_Hosting{Hosting: &serverv1.Hosting{Nested: nested}},
+	})
+}
+
 // switchTo queues the server asking this client to show a different session.
 func (s *fakeStream) switchTo(ref string) {
 	s.push(&serverv1.AttachResponse{

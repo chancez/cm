@@ -209,9 +209,12 @@ inner program: zmx added `ZMX_NO_DETACH_KEY`, which passes ctrl+\ through as ord
 has `detach_key` in the config file and `--detach-key` per attachment, including `none`.
 
 They differ in what the command targets. `zmx detach` takes no name and detaches all of a session's
-clients; `cm detach` takes a session name, `--all`, or a tag selector. Naming one is what a nested
-attach needs, since the key reaches whichever client owns the real terminal. See
-[config.md](config.md).
+clients; `cm detach` takes a session name, `--all`, or a tag selector. See [config.md](config.md).
+
+They also differ on nesting, which zmx does not support at all. cm hands the detach key to the innermost
+session: inside a nested attach the key leaves that one and the window stays put, and a second press
+leaves the outer session. See "Who owns the detach key when sessions are nested" in
+[architecture.md](architecture.md).
 
 **Where zmx is ahead or simply different.** It is a smaller system with one less moving part, and if
 you do not want a server you should not have one. Being written in Zig it links libghostty directly
