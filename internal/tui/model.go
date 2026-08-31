@@ -335,6 +335,14 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.layout()
 		return m, nil
 
+	case key.Matches(msg, m.keys.HalfPageDown):
+		m.moveCursor(m.halfPage())
+		return m, nil
+
+	case key.Matches(msg, m.keys.HalfPageUp):
+		m.moveCursor(-m.halfPage())
+		return m, nil
+
 	case key.Matches(msg, m.keys.Help):
 		m.help.ShowAll = !m.help.ShowAll
 		// The list is resized because the help got taller or shorter, and the list's height is what
@@ -491,6 +499,35 @@ func (m model) rename(target *serverv1.Session, name string) tea.Cmd {
 			}
 		}
 		return renamedMsg{label: label, name: name, dropped: dropped}
+	}
+}
+
+// halfPage is how many rows ctrl-u and ctrl-d move.
+//
+// Asked of the paginator rather than derived from the window height, which is the same reason layout
+// asks it: PerPage is how many rows the list decided it can show, so the output pane being open and the
+// help being expanded are already paid for. A half page of at least one row, so a list too short to
+// paginate still moves rather than swallowing the key.
+func (m model) halfPage() int {
+	half := m.list.Paginator.PerPage / 2
+	if half < 1 {
+		return 1
+	}
+	return half
+}
+
+// moveCursor steps the cursor n rows, negative for up.
+//
+// Stepped one row at a time rather than jumped, because the list is paginated rather than scrolled:
+// CursorUp and CursorDown turn the page when they run off the end of one, so a loop over them walks the
+// whole list, while setting an index would leave the paginator on the page it was on. Both stop at the
+// ends, so a half page from the last row lands on the last row instead of wrapping.
+func (m *model) moveCursor(n int) {
+	for ; n > 0; n-- {
+		m.list.CursorDown()
+	}
+	for ; n < 0; n++ {
+		m.list.CursorUp()
 	}
 }
 
@@ -660,8 +697,20 @@ func (c combinedHelp) ShortHelp() []key.Binding {
 	return append(c.picker.ShortHelp(), c.list.ShortHelp()...)
 }
 
+// FullHelp is the picker's columns followed by the list's, with the half page keys in the list's
+// navigation column rather than in a column of their own.
+//
+// That placement is a width decision, measured in a 100 column window: the expanded help is not
+// truncated to the window, it already came within 11 columns of the edge, and a seventh column pushed
+// the filter and quit columns off it entirely. The navigation column is also where they read best, next
+// to the whole page keys they are the half page version of.
 func (c combinedHelp) FullHelp() [][]key.Binding {
-	return append(c.picker.FullHelp(), c.list.FullHelp()...)
+	listHelp := c.list.FullHelp()
+	if len(listHelp) > 0 {
+		// The list puts its cursor, page and jump keys in its first column. See list.Model.FullHelp.
+		listHelp[0] = append(listHelp[0], c.picker.HalfPageUp, c.picker.HalfPageDown)
+	}
+	return append(c.picker.FullHelp(), listHelp...)
 }
 
 // describeAttachment says how an attachment ended.

@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -147,6 +149,12 @@ func (h *harness) press(k string) tea.Cmd {
 func (h *harness) pressCode(code rune) tea.Cmd {
 	h.t.Helper()
 	return h.send(tea.KeyPressMsg{Code: code})
+}
+
+// pressCtrl applies a control key, like ctrl+d, which arrives as a rune plus a modifier.
+func (h *harness) pressCtrl(k rune) tea.Cmd {
+	h.t.Helper()
+	return h.send(tea.KeyPressMsg{Code: k, Mod: tea.ModCtrl})
 }
 
 // maxRunSteps bounds one call to run, so a message loop fails the test instead of hanging it.
@@ -422,6 +430,136 @@ func TestTheCursorStaysOnItsSessionAcrossARefresh(t *testing.T) {
 
 	if got, want := h.selectedID(), "c9m4o1z6"; got != want {
 		t.Errorf("after a refresh the cursor is on %q, want %q", got, want)
+	}
+}
+
+// manySessions builds n running sessions, in the order the server would list them.
+//
+// Enough of them to fill more than one page, which is what the half page keys are for and what a
+// three session fixture cannot show: on a list that fits, every jump lands on the last row and a test
+// over it passes whatever the step size is.
+func manySessions(n int) []*serverv1.Session {
+	sessions := make([]*serverv1.Session, 0, n)
+	for i := range n {
+		sessions = append(sessions, session(fmt.Sprintf("s%02d", i), fmt.Sprintf("a7k2m9%02d", i), int64(100+i)))
+	}
+	return sessions
+}
+
+// TestHalfPageMovesHalfTheRowsAndTurnsThePage covers ctrl-d and ctrl-u.
+//
+// Half of the list's own PerPage rather than half the window: the pane and the expanded help both take
+// rows off the list, so a step measured from the height jumps further than there is list to jump
+// through. The page turn is asserted as well, because the list is paginated rather than scrolled, and a
+// step that moved the cursor without turning the page would stop at the bottom of the first page while
+// the cursor kept counting.
+func TestHalfPageMovesHalfTheRowsAndTurnsThePage(t *testing.T) {
+	h := newHarness(t, manySessions(40)...)
+	h.list()
+
+	perPage := h.model.list.Paginator.PerPage
+	half := perPage / 2
+	if half < 2 {
+		t.Fatalf("PerPage is %d, so a half page is %d: this test proves nothing that small", perPage, half)
+	}
+
+	h.pressCtrl('d')
+	if got, want := h.model.list.Index(), half; got != want {
+		t.Fatalf("ctrl-d put the cursor on row %d, want %d, half of a %d row page", got, want, perPage)
+	}
+	if got := h.model.list.Paginator.Page; got != 0 {
+		t.Errorf("one ctrl-d turned to page %d, want to still be on the first page", got)
+	}
+
+	// A second and a third, which is where the page has to turn: two half pages is a page.
+	h.pressCtrl('d')
+	h.pressCtrl('d')
+	if got, want := h.model.list.Index(), 3*half; got != want {
+		t.Errorf("three ctrl-d put the cursor on row %d, want %d", got, want)
+	}
+	if got, want := h.model.list.Paginator.Page, 3*half/perPage; got != want {
+		t.Errorf("three ctrl-d left the list on page %d, want %d", got, want)
+	}
+	if got, want := h.selectedID(), fmt.Sprintf("a7k2m9%02d", 3*half); got != want {
+		t.Errorf("selected %q, want %q", got, want)
+	}
+
+	h.pressCtrl('u')
+	if got, want := h.model.list.Index(), 2*half; got != want {
+		t.Errorf("ctrl-u put the cursor on row %d, want %d", got, want)
+	}
+}
+
+// TestTheExpandedHelpNamesTheHalfPageKeysAndStillFits covers where the keys are described.
+//
+// Both halves matter. A key that moves the cursor and is in no help line is one nobody finds, and the
+// expanded help is not truncated to the window, so a column too many silently pushes the last columns
+// off the right edge. Measured in a real 100 column terminal: the help reached column 89 before these
+// keys existed, a column of their own took it to 114 and cut the filter and quit columns off, and
+// putting them in the list's navigation column leaves the width where it was.
+func TestTheExpandedHelpNamesTheHalfPageKeysAndStillFits(t *testing.T) {
+	h := newHarness(t, manySessions(40)...)
+	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	h.list()
+	h.press("?")
+
+	view := h.model.help.View(h.model.fullHelp())
+	for _, want := range []string{"ctrl+u", "half page up", "ctrl+d", "half page down"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the expanded help does not mention %q:\n%s", want, view)
+		}
+	}
+	if got := lipgloss.Width(view); got > h.model.width {
+		t.Errorf("the expanded help is %d columns wide in a %d column window, so its last column is cut:\n%s",
+			got, h.model.width, view)
+	}
+}
+
+// TestHalfPageStopsAtTheEnds checks that neither key wraps.
+//
+// A picker that wrapped from the last session to the first would move the selection a long way on a key
+// pressed to move it a little, and the next keystroke acts on whatever is under it: enter attaches to
+// it and x offers to kill it.
+func TestHalfPageStopsAtTheEnds(t *testing.T) {
+	sessions := manySessions(40)
+	h := newHarness(t, sessions...)
+	h.list()
+
+	h.pressCtrl('u')
+	if got := h.model.list.Index(); got != 0 {
+		t.Errorf("ctrl-u on the first row moved to row %d, want to stay on 0", got)
+	}
+
+	// Far more presses than there are pages, so the end is reached whatever the window size works out to.
+	for range len(sessions) {
+		h.pressCtrl('d')
+	}
+	if got, want := h.selectedID(), sessions[len(sessions)-1].Id; got != want {
+		t.Errorf("ctrl-d past the end selected %q, want %q, the last session", got, want)
+	}
+}
+
+// TestHalfPageWhileFilteringBelongsToTheFilter is the same trap TestFilteringDoesNotRunActions covers,
+// arrived at from the other side.
+//
+// ctrl-u is delete-to-start in a text field, so a filter being typed has its own use for it. The keys
+// are checked after the filter state for that reason, and a picker that checked them first would move
+// the cursor under a filter the user is still typing.
+func TestHalfPageWhileFilteringBelongsToTheFilter(t *testing.T) {
+	h := newHarness(t, manySessions(40)...)
+	h.list()
+
+	h.press("/")
+	h.typeText("s1")
+	before := h.model.list.Index()
+
+	h.pressCtrl('u')
+
+	if got := h.model.list.Index(); got != before {
+		t.Errorf("ctrl-u while filtering moved the cursor to row %d, want it left on %d", got, before)
+	}
+	if got := h.model.list.FilterInput.Value(); got != "" {
+		t.Errorf("filter reads %q after ctrl-u, want it cleared: the key belongs to the field", got)
 	}
 }
 

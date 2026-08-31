@@ -125,7 +125,23 @@ older ends, which under a one second poll means it walks away while being aimed 
 
 **Filter state is checked before the bindings.** The actions are single letters and the filter is a text
 field, so bindings checked first make typing a name run commands: `n` creates a session, `x` offers to
-kill one. This one bit in the sandbox before the test existed.
+kill one. This one bit in the sandbox before the test existed. `ctrl-u` is the same trap from the other
+side: it is delete-to-start in a text field, so a filter being typed keeps it.
+
+**`ctrl-u` and `ctrl-d` move half a page**, as in vim and less. The list already turns whole pages on
+`u`, `d`, `f` and `b` from its own KeyMap, so the control pair is what was missing. Half of the list's
+`PerPage` rather than half the window, since the pane and the expanded help both take rows off the list.
+The cursor is stepped a row at a time rather than dropped on an index, because the list is paginated
+rather than scrolled: `CursorDown` turns the page when it runs off the end of one, and setting an index
+would leave the paginator behind. Neither key wraps, so a key pressed to move the selection a little
+cannot move it to the far end of the list, where the next `enter` or `x` would act on it.
+
+They are described in the expanded help rather than on the short line, and inside the list's own
+navigation column rather than in a column of their own. Neither help line is truncated to the window,
+and the layout measures the footer by counting newlines, so anything that overflows either costs the
+list a row or is silently cut off the right edge. Measured in a 100 column terminal: the expanded help
+reached column 89 before these keys, a column of its own took it to 118 and cut the filter and quit
+columns off, and the navigation column absorbs them for nothing.
 
 **The child's argv carries this picker's directories.** A sandboxed picker whose child resolved its own
 would attach to the developer's real sessions while looking isolated.
