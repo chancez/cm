@@ -264,6 +264,12 @@ Three places, by kind:
   has to be behavioral, since the live one resumes answering within about 11ms while a stale socket
   never does; `socketRefusalGrace` is that wait. Linux also queues 4097 connections against darwin's
   128, so a test that fills a backlog needs a bound above both or it silently proves nothing there.
+- **A client that reads no keys must not build a terminal reader.** `cancelreader` on Linux registers the
+  descriptor with epoll, which accepts a pipe or a tty and refuses a regular file or `/dev/null`, so
+  building one for `cm read --follow` broke it for every script, cron job and CI run. darwin's is
+  select-based and accepts all of them, including a closed descriptor, so nothing about this is visible
+  there: a test asserting the failure passes on darwin with the bug present. `Options.readsTerminal` is the
+  rule and `TestReadsTerminal` is the guard. See `docs/architecture.md`.
 - **A leaked shim holds a pty**, macOS caps them at 511 system-wide, and exhaustion surfaces as
   `device not configured` in whatever test runs next. Always stop sessions before the server.
 - **`cp` over a running binary gets later invocations SIGKILLed on macOS** -- the cached code signature

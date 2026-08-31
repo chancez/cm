@@ -62,6 +62,16 @@ func newTerminalInput(tty *TTY) (*terminalInput, error) {
 	return in, nil
 }
 
+// newIdleInput returns an input that never delivers anything, for an attachment that consumes no
+// keystrokes.
+//
+// The channels exist because the attachment selects on them either way and nothing ever sends: a nil
+// input would mean a nil check at every one of those selects instead. resume and suspend are both no-ops
+// on it, since a nil tty is already the "no reader" case they handle.
+func newIdleInput() *terminalInput {
+	return &terminalInput{data: make(chan []byte), errs: make(chan error, 1)}
+}
+
 // newTestInput wraps channels a test writes to directly, with no reader behind them.
 func newTestInput(data chan []byte, errs chan error) *terminalInput {
 	return &terminalInput{data: data, errs: errs}

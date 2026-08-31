@@ -553,6 +553,27 @@ be part of what was lost, so every later chunk is interpreted against state that
 gapped chunk is therefore not written either: its bytes are in the snapshot the repaint replays, so
 writing them first would paint them twice, once against the wrong state.
 
+### Which clients read the terminal
+
+`Options.readsTerminal` decides whether a client builds a terminal reader at all, and it asks what a
+reader would be *for*: input forwarding, the detach key, or the overlay's prefix key. A follower does none
+of those -- `ReadOnly`, both keys off, output to a pipe -- so it gets `newIdleInput`, whose channels exist
+only because the attachment selects on them.
+
+This was a bug before it was a rule, and a Linux-only one. `Attach` built the reader unconditionally, and
+`cancelreader` on Linux registers the descriptor with epoll, which accepts a pipe or a tty and refuses a
+regular file or `/dev/null`. So `cm read --follow` and `cm send --follow` exited 1 with "preparing to read
+the terminal: add reader to epoll interest list" whenever stdin was redirected, which is every script,
+cron job and CI run. Four e2e tests were failing on it, one of them `TestServerRestartsWhileAClientIsInTheAttachGap`, which uses a follower and did not look like the same bug.
+
+Two things worth keeping from fixing it. **Keying off `ReadOnly` alone is wrong**, and wrong in a way that
+costs a key rather than an error: `cm attach --read-only` is interactive and still reserves both keys, so
+it would have been left with no exit but killing the process. And **darwin cannot see this class of bug**:
+its cancelreader is select-based and accepts a redirected stdin, `/dev/null`, a regular file and a closed
+descriptor, all without error. Measured both ways in the Linux image, which is why the guard is a seam test
+about whether a reader is built (`TestReadsTerminal`) rather than a test about the epoll failure, which
+would pass on darwin with the bug present.
+
 A follower is the exception, and gets the bytes as they arrive. `cm read --follow` streams to a pipe
 and sets `NoRestore` precisely because a repaint would corrupt what it is writing, so for one of those
 a gap is a fact to report rather than something to fix, and dropping the chunk would lose real output.

@@ -331,6 +331,40 @@ type Result struct {
 	ExitCode int
 }
 
+// readsTerminal reports whether anything in this attachment will consume a keystroke.
+//
+// Three things can, and a client that does none of them has no use for a terminal reader: input
+// forwarding, the detach key, and the overlay's prefix key. A follower is the case that matters --
+// ReadOnly, both keys off, output going to a pipe -- and `cm read --follow` said as much long before this
+// existed, in the comment above its OpenTTYCooked call: "A follower sends no input, so raw mode would buy
+// nothing".
+//
+// Stated over what a reader is *for*, rather than as a list of commands that do not want one. Keying off
+// ReadOnly alone was the obvious alternative and is wrong in a way that costs a key rather than an error:
+// `cm attach --read-only` is interactive and still reserves both keys, so it would have been left with no
+// way out but killing the process.
+func (o Options) readsTerminal(tty *TTY) bool {
+	if !o.ReadOnly {
+		// Keystrokes reach the session.
+		return true
+	}
+	if !o.DetachKey.Disabled {
+		// A zero DetachKey means the default key rather than none, so this holds for any caller that did
+		// not deliberately turn it off. See where Attach defaults it.
+		return true
+	}
+	return o.PrefixKey.live() && o.overlayEnabled(tty)
+}
+
+// overlayEnabled reports whether the overlay has a terminal of its own to paint on.
+//
+// The overlay needs one, so anything else -- a follower streaming to a pipe, a caller filtering the
+// output -- gets no prefix key at all rather than one that swallows a keystroke and shows nothing for it.
+// The same condition the screen uses to decide whether it paints.
+func (o Options) overlayEnabled(tty *TTY) bool {
+	return o.Output == nil && tty.IsTerminal() && !o.NoRestore
+}
+
 // Attach connects a terminal to a session and runs until detach or session end.
 //
 // The terminal is put into raw mode once and restored once, around the whole attachment
@@ -369,10 +403,24 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	//
 	// Cancellable, which is what lets the overlay hand the terminal to `cm tui` and take it back: see
 	// terminalInput.
-	in, err := newTerminalInput(tty)
-	if err != nil {
-		return result, err
+	//
+	// Built only when something will consume a keystroke, which readsTerminal decides. A follower
+	// streaming to a pipe forwards no input and reserves no key, so a reader there has nothing to deliver
+	// to, and on Linux it does worse than nothing: cancelreader registers the descriptor with epoll,
+	// which accepts a pipe or a tty and refuses a regular file or /dev/null. `cm read --follow` and
+	// `cm send --follow` therefore exited 1 with "preparing to read the terminal: add reader to epoll
+	// interest list" whenever stdin was redirected, which is every script, cron job and CI run. Not
+	// reproducible on darwin, whose cancelreader is select-based and accepts all of them.
+	in := newIdleInput()
+	if opts.readsTerminal(tty) {
+		reader, err := newTerminalInput(tty)
+		if err != nil {
+			return result, err
+		}
+		in = reader
 	}
+	// Suspended either way. With no reader there is nothing to stop, and saying so once here is cheaper
+	// than a second condition on the way out.
 	defer in.suspend()
 
 	// outage tracks the current disconnection: when it started, whether it has been reported, and
@@ -788,15 +836,12 @@ func runSession(
 		detachKey, _ = ParseDetachKey(DefaultDetachKey)
 	}
 
-	// The overlay needs a terminal of its own to paint on, so anything else -- a follower streaming to a
-	// pipe, a caller filtering the output -- gets no prefix key at all rather than one that swallows a
-	// keystroke and shows nothing for it. Same condition the screen uses to decide whether it paints.
 	ov := &overlay{
 		// Through the screen, so a row cannot land inside a half-written sequence. It builds each block
 		// with one write, so a paint is one injection.
 		out:      injectWriter{scr},
 		size:     tty.Size,
-		enabled:  opts.Output == nil && tty.IsTerminal() && !opts.NoRestore,
+		enabled:  opts.overlayEnabled(tty),
 		readOnly: opts.ReadOnly,
 		prefix:   opts.PrefixKey,
 		detach:   detachKey,
