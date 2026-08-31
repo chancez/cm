@@ -224,3 +224,16 @@ Before believing a change is done: `go test ./...`, then `-race` on `./internal/
 `mise run test-linux` if anything platform, shell, or path related moved. And when a change replaces
 an approach rather than extending it, reread the tests written for the old one; they do not fail just
 because they are now wrong about the design.
+
+## Mutation-testing e2e needs `-count=1`
+
+`internal/e2e` does not import the packages it tests. The harness builds `cm` and runs it, so the test
+binary's dependencies are the harness's, and Go's test cache cannot see that the binary under test
+changed. Editing `internal/server` and re-running `go test ./internal/e2e/` therefore replays a cached
+pass, and the mutation you made to check a test can fail was never executed. Measured while adding the
+nesting tests: a mutation that removes the report-attribution guard printed `ok (cached)`, and the same
+run under `-count=1` failed on two assertions.
+
+That is the worst shape of false pass, since it looks exactly like the test standing guard. Use
+`-count=1` for anything e2e whose point is that the code changed, and for measuring a flake rate, where
+a cached pass turns 20 attempts into 1 attempt and 19 replays.

@@ -58,6 +58,29 @@ func TestInsideCmSession(t *testing.T) {
 		})
 	})
 
+	t.Run("what it declares is a session reference", func(t *testing.T) {
+		// The producer half of the contract. The server resolves this value as a reference, and it went
+		// wrong at exactly this seam: the client sent "@<id>" and the server looked it up as a bare ID,
+		// so nesting never engaged and nothing failed. Asserting the shape here means a change on either
+		// side has to be deliberate.
+		//
+		// Both spellings, because both really occur: a current shim exports the ID with its sigil, and a
+		// session created by an older server exported a name.
+		for _, value := range []string{paths.FormatSessionID("a7k2m9x4"), "work"} {
+			t.Setenv(paths.SessionEnv(), value)
+			withStdout(t, tty, func() {
+				got := insideCmSession()
+				if got != value {
+					t.Fatalf("insideCmSession() = %q, want %q verbatim", got, value)
+				}
+				if err := paths.ValidateSessionRef(got); err != nil {
+					t.Errorf("ValidateSessionRef(%q) = %v, want nil: the server resolves this as a "+
+						"reference, so anything it cannot resolve silences nesting without failing", got, err)
+				}
+			})
+		}
+	})
+
 	t.Run("outside a session", func(t *testing.T) {
 		// The overwhelmingly common case: an attach from a real terminal. There is no cm session on
 		// the other side and nothing to suspend.

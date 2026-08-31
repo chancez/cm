@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
 )
 
@@ -46,8 +47,12 @@ func TestHostingParentResolvesEitherSpelling(t *testing.T) {
 		want  bool
 	}{
 		{
+			// Built with the same function the server uses to tell a shim what to export, rather than
+			// spelled out here. A literal "@parent" would keep passing if the exported spelling changed,
+			// which is exactly how the two halves came apart: the consumer was tested against a value
+			// the producer never produced.
 			name:  "the ID with its sigil, which is what CM_SESSION holds",
-			ref:   "@parent",
+			ref:   paths.FormatSessionID("parent"),
 			ownID: "child",
 			want:  true,
 		},

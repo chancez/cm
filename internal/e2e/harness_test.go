@@ -552,6 +552,10 @@ type sessionJSON struct {
 	// Hosting names the sessions attached from inside this one by a nested `cm attach`, which is also
 	// what decides who owns the detach key.
 	Hosting []string `json:"hosting"`
+	// Cwd and Title are what the shell reported about itself, decoded. Read by the nesting tests: both
+	// are values a nested attach used to overwrite on the session it was launched from.
+	Cwd   string `json:"cwd"`
+	Title string `json:"title"`
 }
 
 // listTagged returns the sessions matching a tag selector, as `cm list --tag` reports them.
