@@ -98,11 +98,17 @@ func ParseKeySpec(spec string) (KeySpec, error) {
 //
 // Empty falls back to the default rather than disabling: an unset config setting must not silently
 // remove the only way to leave a session.
+// Errors name which key was wrong, which matters now that two of them are configurable: "key
+// \"not-a-key\" must be ctrl-<key>" leaves a user checking both settings.
 func ParseDetachKey(spec string) (KeySpec, error) {
 	if strings.TrimSpace(spec) == "" {
 		spec = DefaultDetachKey
 	}
-	return ParseKeySpec(spec)
+	key, err := ParseKeySpec(spec)
+	if err != nil {
+		return KeySpec{}, fmt.Errorf("detach %w", err)
+	}
+	return key, nil
 }
 
 // ParsePrefixKey resolves the overlay's prefix key, defaulting when nothing is configured.
@@ -110,7 +116,11 @@ func ParsePrefixKey(spec string) (KeySpec, error) {
 	if strings.TrimSpace(spec) == "" {
 		spec = DefaultPrefixKey
 	}
-	return ParseKeySpec(spec)
+	key, err := ParseKeySpec(spec)
+	if err != nil {
+		return KeySpec{}, fmt.Errorf("prefix %w", err)
+	}
+	return key, nil
 }
 
 // encodingsFor returns the CSI forms a terminal may send instead of the control byte.
