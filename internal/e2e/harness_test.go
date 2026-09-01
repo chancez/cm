@@ -954,6 +954,28 @@ PS1='` + promptMarker + `> '
 // with it consumed and never matches. Found by reading the bytes cm renders rather than assuming.
 const promptMarker = "CM_TEST_READY"
 
+// shellPromptEnv makes a plain /bin/sh print promptMarker, so a test can wait for its prompt.
+//
+// Needed because the prompt a shell picks by default is a property of neither the test nor the shell alone.
+// Measured in three places: /bin/sh on darwin is bash 3.2 and prints "sh-3.2$ ", while in the Linux image it
+// is dash, which chooses by uid and prints "# " as root against "$ " as uid 1000.
+//
+// The graphics tests waited for a literal "$", which matched darwin only through the "$" inside "sh-3.2$".
+// In the image, where tests run as root, there is no "$" at all, so four of them timed out for 30s each with
+// a message about the pty rather than about the prompt.
+//
+// Exported rather than written to an rc file, which is how the zsh sessions get theirs: dash reads PS1 from
+// its environment and only defaults when it is unset, verified in the image. The session's shell inherits
+// the environment of the client that *created* it, so this belongs on that client and not on one attaching
+// afterwards.
+//
+// The alternative was to accept either "$" or "#" in the wait. Rejected because it keeps a test looking for
+// a character that ordinary output also contains, where a marker is unambiguous and already the convention
+// here.
+func shellPromptEnv() []string {
+	return []string{"PS1=" + promptMarker + "> "}
+}
+
 // waitForPrompt blocks until a session's shell is ready to read input.
 //
 // Waiting for `state == "running"` is not the same thing and was a real source of flakiness. A session is

@@ -13,6 +13,7 @@ Both were the same defect, cm answering a terminal query while a real terminal w
 and both took far longer to find than they should have. What follows is what would have found them
 faster.
 
+
 ## Pick the right control
 
 The single most expensive mistake in the incidents above: comparing cm against **bare kitty** and
@@ -136,6 +137,22 @@ Before believing "it does not reproduce":
   nothing about a DA1 fix either way.
 - Beware `script(1)` and `send-text`: neither answers queries, so a mode that needs an answer never
   turns on.
+
+## A default shell prompt is not a fixed string
+
+Waiting for a shell's prompt means knowing what it prints, and that varies by platform and by user. Measured:
+`/bin/sh` on darwin is bash 3.2 and prints `sh-3.2$ `; in the Linux image it is dash, which chooses by uid,
+printing `# ` as root and `$ ` as uid 1000.
+
+Four graphics tests waited for a literal `"$"`. That matched darwin by accident, through the `$` inside
+`sh-3.2$`, and matched nothing in the image, where tests run as root: each timed out after 30s reporting
+what was on the pty rather than that its prompt assumption was wrong. `shellPromptEnv` exports
+`PS1=CM_TEST_READY> ` for a session's shell instead, which dash honours and which makes the wait the same
+marker the zsh sessions already use.
+
+The general form, which is the reason this is here rather than only in the fix: if a test waits on output it
+did not itself arrange, it is asserting on a default, and a default is a property of the machine. Arrange the
+string, then wait for it.
 
 ## A pty read caps at 1022 bytes, in both directions
 

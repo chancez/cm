@@ -186,12 +186,12 @@ func TestAnImageDrawnLiveSkipsATerminalThatCannotDrawIt(t *testing.T) {
 	}
 
 	// An interactive shell, so the image can be triggered after both clients are watching.
-	drawing := attachOnPtyDrawing(t, e, nil, "gfxlive", "--", "/bin/sh")
-	waitForOnPty(t, drawing, "$")
+	drawing := attachOnPtyDrawing(t, e, shellPromptEnv(), "gfxlive", "--", "/bin/sh")
+	waitForOnPty(t, drawing, promptMarker)
 
 	// The one that cannot: attached, and deliberately never answering.
 	quiet := attachOnPty(t, e, "gfxlive")
-	waitForOnPty(t, quiet, "$")
+	waitForOnPty(t, quiet, promptMarker)
 
 	// Typed into the leader, which is what running icat is.
 	const marker = "IMAGE-DONE"
@@ -235,8 +235,8 @@ func TestAFollowerStillReceivesImages(t *testing.T) {
 		t.Fatalf("writing the image command: %v", err)
 	}
 
-	drawing := attachOnPtyDrawing(t, e, nil, "gfxfollow", "--", "/bin/sh")
-	waitForOnPty(t, drawing, "$")
+	drawing := attachOnPtyDrawing(t, e, shellPromptEnv(), "gfxfollow", "--", "/bin/sh")
+	waitForOnPty(t, drawing, promptMarker)
 
 	// The follower runs for a bounded window; the image is emitted once it is attached, since --follow
 	// streams what arrives from now rather than replaying the log.
@@ -281,8 +281,8 @@ func TestImagesSurviveAReconnect(t *testing.T) {
 		t.Fatalf("writing the image command: %v", err)
 	}
 
-	c := attachOnPtyDrawing(t, e, nil, "gfxreconnect", "--", "/bin/sh")
-	waitForOnPty(t, c, "$")
+	c := attachOnPtyDrawing(t, e, shellPromptEnv(), "gfxreconnect", "--", "/bin/sh")
+	waitForOnPty(t, c, promptMarker)
 
 	e.restartServer()
 	e.waitFor("the session to be adopted", 25*time.Second, func() bool {
@@ -330,10 +330,10 @@ func TestAGraphicsHandshakeReachesTheDrawingTerminalAndBack(t *testing.T) {
 		t.Fatalf("writing the query: %v", err)
 	}
 
-	drawing := attachOnPtyDrawing(t, e, nil, "gfxhandshake", "--", "/bin/sh")
-	waitForOnPty(t, drawing, "$")
+	drawing := attachOnPtyDrawing(t, e, shellPromptEnv(), "gfxhandshake", "--", "/bin/sh")
+	waitForOnPty(t, drawing, promptMarker)
 	quiet := attachOnPty(t, e, "gfxhandshake")
-	waitForOnPty(t, quiet, "$")
+	waitForOnPty(t, quiet, promptMarker)
 
 	drawing.typeLine("cat " + queryPath + `; printf '\r\nASKED\r\n'`)
 	waitForOnPty(t, drawing, "ASKED")
