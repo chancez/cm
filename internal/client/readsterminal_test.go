@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 // Which clients read the terminal, which is what decides whether a reader is built at all.
@@ -123,4 +125,36 @@ func ttyForTest(t *testing.T) *TTY {
 	}
 	t.Cleanup(func() { tty.Close() })
 	return tty
+}
+
+// InputIsTerminal is what decides whether failing to read input is fatal, so it has to tell a pty from a
+// file. The consequence of getting it wrong runs both ways: read as a terminal, a redirected client exits
+// instead of attaching, which is the bug this pair exists for; read as not one, a real terminal comes up
+// attached with every keystroke dropped and no way to detach.
+func TestInputIsTerminal(t *testing.T) {
+	ptmx, pts, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open() error = %v", err)
+	}
+	defer ptmx.Close()
+	defer pts.Close()
+
+	onPty, err := OpenTTYCooked(pts, pts)
+	if err != nil {
+		t.Fatalf("OpenTTYCooked() on a pty error = %v", err)
+	}
+	if !onPty.InputIsTerminal() {
+		t.Error("InputIsTerminal() on a pty = false, want true")
+	}
+
+	// The shape that failed: `cm attach --read-only session < /dev/null > log`.
+	onFile := ttyForTest(t)
+	if onFile.InputIsTerminal() {
+		t.Error("InputIsTerminal() on a regular file = true, want false")
+	}
+	// And output, which is a different question about the same TTY: a file is not a terminal either way
+	// here, but the two are asked separately and were confused once already.
+	if onFile.IsTerminal() {
+		t.Error("IsTerminal() on a regular file = true, want false")
+	}
 }

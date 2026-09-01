@@ -566,6 +566,17 @@ regular file or `/dev/null`. So `cm read --follow` and `cm send --follow` exited
 the terminal: add reader to epoll interest list" whenever stdin was redirected, which is every script,
 cron job and CI run. Four e2e tests were failing on it, one of them `TestServerRestartsWhileAClientIsInTheAttachGap`, which uses a follower and did not look like the same bug.
 
+A reader that cannot be created is a second decision, and it is keyed on `InputIsTerminal` rather than on
+the error. If stdin is a terminal, failing is right: every keystroke would be dropped and the key that ends
+the attachment could not be pressed, so a window would look attached and answer nothing. If it is not a
+terminal there was no keystroke to lose, so the attachment proceeds with `newIdleInput` and a debug line.
+That is what `cm attach --read-only session < /dev/null > log &` needs, and two e2e tests that background a
+read-only client exactly that way had been failing on it.
+
+Attempted rather than skipped up front, which is the part worth keeping: stdin not being a terminal does not
+mean nothing can send. A pipe is readable and epoll accepts it, so `ctrl-\` written into one still detaches.
+Only the failure is tolerated.
+
 Two things worth keeping from fixing it. **Keying off `ReadOnly` alone is wrong**, and wrong in a way that
 costs a key rather than an error: `cm attach --read-only` is interactive and still reserves both keys, so
 it would have been left with no exit but killing the process. And **darwin cannot see this class of bug**:

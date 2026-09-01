@@ -269,7 +269,10 @@ Three places, by kind:
   building one for `cm read --follow` broke it for every script, cron job and CI run. darwin's is
   select-based and accepts all of them, including a closed descriptor, so nothing about this is visible
   there: a test asserting the failure passes on darwin with the bug present. `Options.readsTerminal` is the
-  rule and `TestReadsTerminal` is the guard. See `docs/architecture.md`.
+  rule and `TestReadsTerminal` is the guard. When a reader is wanted and cannot be built, `InputIsTerminal`
+  decides: fatal on a terminal, since a window that answers no keystroke is worse than an error, and a
+  degraded attach otherwise, which is what `cm attach --read-only < /dev/null` needs. See
+  `docs/architecture.md`.
 - **A leaked shim holds a pty**, macOS caps them at 511 system-wide, and exhaustion surfaces as
   `device not configured` in whatever test runs next. Always stop sessions before the server.
 - **`cp` over a running binary gets later invocations SIGKILLed on macOS** -- the cached code signature

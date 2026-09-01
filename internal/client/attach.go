@@ -414,10 +414,26 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	in := newIdleInput()
 	if opts.readsTerminal(tty) {
 		reader, err := newTerminalInput(tty)
-		if err != nil {
+		switch {
+		case err == nil:
+			in = reader
+		case tty.InputIsTerminal():
+			// A terminal cm cannot read is not usable: every keystroke would be dropped and the key that
+			// ends the attachment could not be pressed. Failing says so, where degrading would leave a
+			// window that looks attached and answers nothing.
 			return result, err
+		default:
+			// Not a terminal, so there was no keystroke to lose and this is a fact rather than a failure.
+			// The case that made it one: `cm attach --read-only session < /dev/null > log &` is a
+			// reasonable thing to run, and on Linux cancelreader registers the descriptor with epoll,
+			// which refuses /dev/null and a regular file. It exited 1 without attaching, and two e2e
+			// tests that background a read-only client that way had been failing on it.
+			//
+			// Attempted rather than skipped up front, because stdin not being a terminal does not mean
+			// nothing can send: a pipe is readable and epoll takes it, so ctrl-\ written into one still
+			// detaches. Only the failure is tolerated, and only here.
+			log.Debug("attached without reading the terminal", "error", err)
 		}
-		in = reader
 	}
 	// Suspended either way. With no reader there is nothing to stop, and saying so once here is cheaper
 	// than a second condition on the way out.

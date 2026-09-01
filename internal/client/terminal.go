@@ -39,6 +39,10 @@ type TTY struct {
 	// isTTY records whether output is a terminal, so escape sequences are not written
 	// into a pipe.
 	isTTY bool
+	// inIsTTY records whether input is a terminal, which is what says whether a keystroke can arrive at
+	// all. Recorded here rather than asked later: os.File.Fd() is not refcounted the way Read and Write
+	// are, so an ioctl on a descriptor a Close is racing is a real race.
+	inIsTTY bool
 	// closed makes Close idempotent.
 	closed bool
 }
@@ -53,12 +57,13 @@ type TTY struct {
 // process that has no use for the keyboard would still swallow ctrl-c.
 func OpenTTY(in, out *os.File) (*TTY, error) {
 	t := &TTY{
-		in:    in,
-		out:   out,
-		isTTY: term.IsTerminal(int(out.Fd())),
+		in:      in,
+		out:     out,
+		isTTY:   term.IsTerminal(int(out.Fd())),
+		inIsTTY: term.IsTerminal(int(in.Fd())),
 	}
 
-	if !term.IsTerminal(int(in.Fd())) {
+	if !t.inIsTTY {
 		return t, nil
 	}
 
@@ -85,9 +90,10 @@ func OpenTTY(in, out *os.File) (*TTY, error) {
 // the mode change is skipped, so Close has nothing to restore.
 func OpenTTYCooked(in, out *os.File) (*TTY, error) {
 	return &TTY{
-		in:    in,
-		out:   out,
-		isTTY: term.IsTerminal(int(out.Fd())),
+		in:      in,
+		out:     out,
+		isTTY:   term.IsTerminal(int(out.Fd())),
+		inIsTTY: term.IsTerminal(int(in.Fd())),
 	}, nil
 }
 
@@ -160,6 +166,13 @@ func (t *TTY) Clear() error {
 // closed window, which should end an attachment, from exhausted piped input, which should
 // not.
 func (t *TTY) IsTerminal() bool { return t.isTTY }
+
+// InputIsTerminal reports whether a keystroke can arrive at all.
+//
+// Distinct from IsTerminal, which is about output: `cm attach > log` has a terminal to read and a file to
+// write, and `cm attach --read-only < /dev/null` on a terminal has the opposite. Only this one says whether
+// failing to read input matters.
+func (t *TTY) InputIsTerminal() bool { return t.inIsTTY }
 
 // Write sends bytes to the terminal.
 func (t *TTY) Write(p []byte) (int, error) { return t.out.Write(p) }
