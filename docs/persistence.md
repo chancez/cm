@@ -50,6 +50,13 @@ cm attach edit --persist --on-restore=command -- nvim notes.md
 Opt-in rather than universal because writing every session's terminal output to disk continuously
 is a real cost, and most sessions are not worth it. The per-window sessions are.
 
+**The choice is made when the session's shim spawns, and cannot be changed later.** The log path goes
+into the shim's argv, so `--persist` on an already running session is ignored, and editing the config
+and restarting the server changes nothing: adoption reconnects to the surviving shims rather than
+respawning them. Making a session persist means ending its shell and reattaching, which starts a new
+shim, and the content from before is gone because it only ever lived in the old shim's memory. What
+that costs, and the two ways out, are in [ideas.md](ideas.md).
+
 ## What happens on restore
 
 Three behaviors, chosen by config with a per-session override:
