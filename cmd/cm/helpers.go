@@ -14,6 +14,7 @@ import (
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/transport"
 )
 
 // argsAfterDash returns the command to run in a new session, which is everything after a
@@ -52,5 +53,10 @@ func newClientLogger(dirs paths.Dirs, cfg *config.Config) (*slog.Logger, io.Clos
 	if err != nil {
 		return nil, nil
 	}
-	return logger.With("pid", os.Getpid(), "boot", paths.BootID()), closer
+	tagged := logger.With("pid", os.Getpid(), "boot", paths.BootID())
+	// What ttrpc has to say goes here rather than to the terminal. It is silenced regardless, in
+	// transport's init, since every path out of this function that returns nil is a client with no log
+	// at all -- and that is the configuration a lost stream printed itself into a session from.
+	transport.LogTo(tagged)
+	return tagged, closer
 }

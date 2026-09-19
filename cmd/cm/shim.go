@@ -12,6 +12,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
+	"github.com/chancez/cm/internal/transport"
 )
 
 // newShimCommand builds the hidden shim subcommand.
@@ -141,6 +142,9 @@ func runShim(ctx context.Context, dirs paths.Dirs, appCfg *config.Config, cfg sh
 		return err
 	}
 	defer closeLog.Close()
+	// As in the server and the client: whatever ttrpc reports goes to this log rather than to a
+	// descriptor cm did not choose.
+	transport.LogTo(logger)
 
 	socket := dirs.ShimSocket(cfg.Session)
 	l, err := shim.Listen(socket)

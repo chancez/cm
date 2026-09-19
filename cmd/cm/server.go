@@ -197,6 +197,10 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		return err
 	}
 	defer closeLog.Close()
+	// ttrpc's own diagnostics belong in this log. A dropped shim subscription says "ttrpc: stream
+	// buffer full" here and nowhere else, and its absence is what made the same failure take a day to
+	// place.
+	transport.LogTo(logger)
 
 	// Warned rather than refused, and logged before anything else can fail: a setting this build does not
 	// know is the most likely reason a server that used to start no longer does, and it is invisible
