@@ -358,6 +358,72 @@ Note also that it does not reuse the output matcher `cm wait --match` is built o
 in `docs/architecture.md` that it would. State changes come from the metadata subscription; "has this text
 appeared" is a different question.
 
+**A session's location, announced rather than derived.** cm has no model of *where* a session is. It has a
+cwd and a busy flag, both single values derived from bytes streaming past, and no notion of "this session is
+currently inside something, entered by this command".
+
+The gap shows as an asymmetry rather than as a missing feature: cm already models exactly this for one case.
+A nested `cm attach` is known about because the nested client *announces* it -- `Open.inside_session`,
+`Session.hosting`, and everything the nested detach key rests on. An ssh announces nothing, so cm knows
+nothing, and every consumer that needs to know reconstructs it from a side channel.
+
+What produced the entry: making a kitty split inherit an ssh session. That shipped in dotfiles by taking the
+host out of `cwd_uri`, which works and has two limits that no amount of care removes. ssh to the machine cm
+is running on is undetectable, because `osc.isLocalHost` compares the reported host to `os.Hostname()` and is
+right to call it local. And the host is the remote's own name rather than the ssh alias, measured against a
+real config: `chance-work-mbp -> CHANCEZ-M-2YPG.local` and a WSL host behind `localhost` do not reconstruct,
+while `*.chancez.xyz` hosts match on the first label and do.
+
+*Derivation cannot close it, and the reasons are specific.* kitty's zsh and bash integrations do send the
+command line, as `cmdline=` on OSC 133;C, and `internal/osc/command.go` parses it -- then clears it at
+`case 'A', 'B'` when the remote shell draws its first prompt. Keeping it instead requires deciding whether a
+prompt marker arriving mid-command means a nested shell or a shell that printed a fresh prompt after an
+interrupted command, and OSC 133 carries nothing to tell those apart: both are `A` with no `D`, and the
+existing tolerance for the second is deliberate. The parameter is also a kitty extension rather than part of
+the convention, spelled `cmdline=` for zsh and bash and `cmdline_url=` for fish, of which cm parses only the
+first, so `command` is always empty under fish.
+
+*The principle already exists in cm, one concept over.* `internal/shellinit/scripts/zsh.sh` says it about
+blocked state: only the program knows whether it is computing or waiting, which is why a report mechanism
+exists at all rather than more derivation. Where a session is belongs to the same category, and has not had
+its `cm report` yet.
+
+The shape, in three stages that are worth deciding separately:
+
+1. *A location stack in cm, announced by the local shell.* cm's shell integration emits
+   `\033]25453;enter=ssh;argv=<escaped>;id=<nonce>\007` from `preexec` and the matching `exit=` from
+   `precmd`, over the sequence cm already owns and parses. A bare `printf`, so it costs nothing per command
+   and works with no server running. This alone fixes both limits above, because the argv is what was typed
+   and the announcement does not care whether the host differs.
+2. *Expose and persist it.* `cm info --json` grows the stack, and `cm attach --like <ref>` reproduces the
+   top of it, which leaves `cm_launch.py` with no ssh knowledge at all. The persistence half is the same
+   plumbing the derived-state work is already doing, since a location held only in memory is lost on a
+   server restart.
+3. *Optional remote participation.* Needed only for ssh chains, where the second hop is made from a shell
+   cm's integration is dormant in: `zsh.sh` gates on `CM_SESSION`, which does not cross ssh. A distinct
+   variable should carry it rather than forwarding `CM_SESSION`, which is a session *reference* a remote
+   shell cannot act on -- the same class of mistake as a `CM_` variable binding itself to a flag. Something
+   like `CM_REPORTS=1`, gating the announcing half only.
+
+*Why a stack is tractable here, unlike the OSC 133 version.* There is one pty and one pump goroutine feeding
+the trackers chunk by chunk, so announcements from any depth arrive in a total order. Exits carry the id of
+their enter, so nothing has to be inferred. And a parent's exit discards its descendants, which needs no
+timeout and no reaping: a dropped connection kills the remote shell without an exit, but the local shell
+survives and its `precmd` fires when the ssh command returns, so the frame beneath is always collected.
+Only the deepest frame can be stranded, and the next parent exit takes it.
+
+*What it would pay for beyond splits.* `cm list` could report where a session actually is instead of a stale
+local path. The host prefix now hand-rolled in both `zsh/title.zsh` and the nvim title module exists only
+because nothing publishes the location. And `cwd_is_local` would stop being a hostname comparison standing in
+for a fact.
+
+*What would justify building it* is wanting ssh-to-self or exact aliases badly enough to pay for a new
+concept, or a second consumer appearing -- `cm list`, the title, or a remote-aware picker. Until then the
+`cwd_uri` host covers the common case in configuration, and the limits are documented where they bite. What
+should *not* be built is the shape considered and rejected first: a list of commands cm treats as
+session-hosting, `ssh` and `mosh` and `docker exec` and so on. It would work, and it makes cm hold an opinion
+about what programs mean, which announcement does not.
+
 ## Output delivery
 
 **Dropping stale mouse reports.** cm already drops a kitty key release and a focus report that arrive when
