@@ -18,6 +18,11 @@ ARG ZIG_VERSION=0.16.0
 # The full SHA, not the abbreviation mise.toml uses: `git fetch <abbrev>` fails with
 # "couldn't find remote ref", since a server will only resolve a complete object name.
 ARG GHOSTTY_REF=4d605bf0d819df901a0332bbb320dc849fdd82e4
+# Matches GLIBC_FLOOR in mise.toml, which explains what it is for: zig picks glibc functions at
+# comptime from the target version, so an unpinned build here would compile calls this image's glibc
+# has and an older distribution does not. Pinned so the tests run against the same emulator code a
+# release ships.
+ARG GLIBC_FLOOR=2.34
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates xz-utils curl \
     && rm -rf /var/lib/apt/lists/*
@@ -54,7 +59,8 @@ RUN cd /src/ghostty && zig build \
       -Demit-lib-vt=true \
       -Demit-xcframework=false \
       -Demit-macos-app=false \
-      -Doptimize=ReleaseSafe
+      -Doptimize=ReleaseSafe \
+      -Dtarget="$(uname -m)-linux-gnu.${GLIBC_FLOOR}"
 
 FROM golang:1.26-bookworm
 # zsh, because the OSC 133 tests need a shell that emits the markers, and skipping them here would leave

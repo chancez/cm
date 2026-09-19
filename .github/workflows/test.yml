@@ -30,8 +30,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # zigarch names the architecture in the target the Linux libghostty build pins its glibc
+          # version in, so the tests exercise the same emulator code a release ships. darwin has no
+          # glibc and so no value here.
           - os: ubuntu-24.04
             name: linux
+            zigarch: x86_64
           - os: macos-15
             name: darwin
     runs-on: ${{ matrix.os }}
@@ -94,14 +98,17 @@ jobs:
       # The pinned libghostty commit, read from mise.toml so the workflow and the build agree by
       # construction. A hardcoded ref here would keep testing the old emulator after a bump, which is
       # the kind of divergence that presents as a test failing for no visible reason.
-      - name: Read pinned libghostty ref
+      - name: Read pinned libghostty ref and glibc floor
         id: ghostty
         run: |
           set -euo pipefail
           ref="$(sed -n 's/^GHOSTTY_REF = "\(.*\)"$/\1/p' mise.toml)"
           [ -n "$ref" ] || { echo "could not read GHOSTTY_REF from mise.toml" >&2; exit 1; }
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "using libghostty $ref"
+          floor="$(sed -n 's/^GLIBC_FLOOR = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$floor" ] || { echo "could not read GLIBC_FLOOR from mise.toml" >&2; exit 1; }
+          echo "glibc=$floor" >> "$GITHUB_OUTPUT"
+          echo "using libghostty $ref, glibc floor $floor"
 
       # Keyed on the pinned ref, the optimize mode, and the runner, so a bump or a flag change misses
       # and everything else hits. The zig build is the dominant cost of this workflow, minutes against
@@ -111,12 +118,16 @@ jobs:
       # a Debug artifact makes a reverse index at the top row cost 14ms instead of 10us, and
       # internal/vt/scroll_test.go asserts on that ratio. A cache hit serving a Debug build would fail
       # that test with nothing in the diff to explain it.
+      #
+      # The glibc floor is in the key for the same reason, since it changes which functions zig compiles
+      # calls to. It is in the darwin key too, where it means nothing, because one wasted rebuild on a
+      # floor bump is cheaper than a second expression here.
       - name: Cache libghostty
         id: ghostty-cache
         uses: actions/cache@v4
         with:
           path: third_party/ghostty/zig-out
-          key: ghostty-${{ matrix.name }}-${{ steps.ghostty.outputs.ref }}-releasesafe
+          key: ghostty-${{ matrix.name }}-${{ steps.ghostty.outputs.ref }}-releasesafe-glibc${{ steps.ghostty.outputs.glibc }}
 
       - name: Install zig
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
@@ -130,6 +141,10 @@ jobs:
       # -Demit-xcframework=false because the default is "xcodebuild is on PATH", true even with only the
       # Command Line Tools, and configuring the iOS target then fails. -Doptimize=ReleaseSafe for the
       # reason in the cache key above.
+      #
+      # One flag is not in that task: on Linux the target names the glibc floor, matching release.yml, so
+      # the tests run against the emulator a release actually ships rather than one built for the runner's
+      # newer glibc. See GLIBC_FLOOR in mise.toml.
       - name: Build libghostty
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
@@ -154,11 +169,16 @@ jobs:
           else
             git checkout --detach FETCH_HEAD
           fi
+          target=""
+          if [ -n "${{ matrix.zigarch }}" ]; then
+            target="-Dtarget=${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
+          fi
           zig build \
             -Demit-lib-vt=true \
             -Demit-xcframework=false \
             -Demit-macos-app=false \
-            -Doptimize=ReleaseSafe
+            -Doptimize=ReleaseSafe \
+            $target
 
       # Proves the artifact the Go build will link against actually exists, whether it came from the
       # cache or the build above. A cache that restored an empty directory otherwise surfaces as a

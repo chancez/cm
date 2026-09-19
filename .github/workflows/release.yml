@@ -33,12 +33,17 @@ jobs:
           - os: macos-15-intel
             goos: darwin
             goarch: amd64
+          # zigarch is set on the Linux targets only, and is what names the target glibc version in
+          # the libghostty build below. Zig spells the architectures differently from Go, and only
+          # the gnu targets have a glibc version to pin, so darwin has no value here.
           - os: ubuntu-24.04
             goos: linux
             goarch: amd64
+            zigarch: x86_64
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
+            zigarch: aarch64
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
     steps:
@@ -49,22 +54,29 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Read pinned libghostty ref
+      # Both read from mise.toml so the workflow and a local build agree by construction.
+      - name: Read pinned libghostty ref and glibc floor
         id: ghostty
         run: |
           set -euo pipefail
           ref="$(sed -n 's/^GHOSTTY_REF = "\(.*\)"$/\1/p' mise.toml)"
           [ -n "$ref" ] || { echo "could not read GHOSTTY_REF from mise.toml" >&2; exit 1; }
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          floor="$(sed -n 's/^GLIBC_FLOOR = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$floor" ] || { echo "could not read GLIBC_FLOOR from mise.toml" >&2; exit 1; }
+          echo "glibc=$floor" >> "$GITHUB_OUTPUT"
+          echo "libghostty $ref, glibc floor $floor"
 
-      # Shared with the test workflow's cache when the key matches, which is the point: a release for a
-      # ref already tested does not rebuild the emulator.
+      # The glibc floor is in the key because it changes what zig compiles, not just how: an archive
+      # built for the runner's native glibc calls arc4random_buf and the released binary then refuses
+      # to start on anything older than 2.36. A cache hit serving such an archive would reintroduce
+      # that with nothing in the diff to explain it.
       - name: Cache libghostty
         id: ghostty-cache
         uses: actions/cache@v4
         with:
           path: third_party/ghostty/zig-out
-          key: ghostty-${{ matrix.goos }}-${{ matrix.goarch }}-${{ steps.ghostty.outputs.ref }}-releasesafe
+          key: ghostty-${{ matrix.goos }}-${{ matrix.goarch }}-${{ steps.ghostty.outputs.ref }}-releasesafe-glibc${{ steps.ghostty.outputs.glibc }}
 
       - name: Install zig
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
@@ -96,11 +108,19 @@ jobs:
           else
             git checkout --detach FETCH_HEAD
           fi
+          # On Linux, name the target glibc version rather than letting zig use the native one. Zig's
+          # std selects glibc functions at comptime from the target version, so the runner's 2.39
+          # decides what the *released* binary requires. See GLIBC_FLOOR in mise.toml.
+          target=""
+          if [ -n "${{ matrix.zigarch }}" ]; then
+            target="-Dtarget=${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
+          fi
           zig build \
             -Demit-lib-vt=true \
             -Demit-xcframework=false \
             -Demit-macos-app=false \
-            -Doptimize=ReleaseSafe
+            -Doptimize=ReleaseSafe \
+            $target
 
       # No ldflags stamping the version. paths.Version reads it from the Go build info, so a build from
       # a tagged commit reports the tag on its own; adding -X here would create a second source of truth
@@ -130,6 +150,35 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           go build -o "dist/cm" ./cmd/cm
+
+      # The floor is a promise about which distributions the artifact runs on, so it is checked on the
+      # artifact rather than assumed from the build flags. cm 0.4.0 needed GLIBC_2.36 for one symbol,
+      # arc4random_buf from libghostty, and failed to start on Ubuntu 22.04 with glibc 2.35. Nothing in
+      # the release caught it: the smoke test below runs on the runner, whose glibc is newer than
+      # anything this could break.
+      #
+      # Checked against the highest version the binary references, since a dynamic symbol names the
+      # oldest glibc that can satisfy it. Printing the offending symbols matters more than the failure:
+      # knowing it was arc4random_buf is what located the cause in zig's std rather than in Go.
+      - name: Verify the glibc floor
+        if: matrix.goos == 'linux'
+        run: |
+          set -euo pipefail
+          floor="${{ steps.ghostty.outputs.glibc }}"
+          # Matched without assuming the surrounding punctuation: GNU objdump prints the version bare
+          # while llvm-objdump parenthesises it, and a pattern that fits only one silently matches
+          # nothing on the other, which reads as "no glibc references" rather than as a broken check.
+          max="$(objdump -T dist/cm | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' | sort -V | tail -1)"
+          echo "highest glibc version referenced: ${max:-none}, floor: $floor"
+          # An empty result means objdump found no versioned glibc references at all, which for a
+          # dynamically linked cgo binary means this check is reading the wrong thing rather than that
+          # the binary is portable.
+          [ -n "$max" ] || { echo "no glibc symbol versions found, so this proved nothing" >&2; exit 1; }
+          if [ "$(printf '%s\n%s\n' "$max" "$floor" | sort -V | tail -1)" != "$floor" ]; then
+            echo "needs glibc $max, above the $floor floor, so it will not start on an older distribution:" >&2
+            objdump -T dist/cm | grep "GLIBC_$max" >&2
+            exit 1
+          fi
 
       # The tag names what this is supposed to be, so a mismatch here means the binary would lie about
       # its own identity. Only checked for a plain release tag: a pre-release like v1.0.0-rc1 contains a

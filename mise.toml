@@ -19,6 +19,22 @@ zig = "0.16.0"
 GHOSTTY_REF = "4d605bf0d"
 GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
 GHOSTTY_PREFIX = "{{config_root}}/third_party/ghostty/zig-out"
+# The oldest glibc a released Linux binary runs against, and the version the zig build targets there.
+# Read from here by both workflows and by Dockerfile.test, so the number lives in one place.
+#
+# It is not a preference: zig's std picks glibc functions at comptime from the *target* version, and
+# with zig's native target on an ubuntu-24.04 runner (glibc 2.39) it compiled a call to
+# arc4random_buf, which is glibc 2.36. That one symbol made cm 0.4.0 fail to start on Ubuntu 22.04,
+# whose glibc is 2.35, with "GLIBC_2.36 not found". Pinning 2.34 as the target makes zig use
+# getrandom instead. See docs/libghostty.md.
+#
+# 2.34 rather than lower because that is what the Go and cgo link against the runner's own libc
+# already needs, pthread_create and friends having moved into libc there. Lowering it further means
+# doing that link against an older glibc too.
+#
+# Not applied by the `libghostty` task below, which builds natively: a local archive is not
+# distributed, and the pin would need per-OS handling in a task a macOS developer runs.
+GLIBC_FLOOR = "2.34"
 # Generated protoc plugins install here so generation does not depend on the
 # ambient GOPATH/bin.
 GOBIN = "{{config_root}}/bin/tools"
