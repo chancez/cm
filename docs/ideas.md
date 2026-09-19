@@ -323,6 +323,49 @@ or exit status in a form cm does not already get from OSC 133 -- which, on inspe
 Worth restating so the next person does not re-derive it: the integration is small because OSC 133 already
 covers most of what a hook would report.
 
+**Shell integration cm installs itself, so a session reports anywhere.** cm reads OSC 7 and OSC 133 out
+of whatever loaded the terminal emulator's integration, and nothing makes that reach the shell the shim
+spawns. Locally the dotfiles load kitty's integration by hand for exactly this reason. Remotely it
+depends on how the ssh was made, which is where it breaks.
+
+Measured, in kitty 0.48.2's shipped bootstrap. The ssh kitten uploads a copy of `shell-integration` to
+the far side and installs it by exporting `ZDOTDIR` at that copy, in `exec_zsh_with_integration`
+(`shell-integration/ssh/bootstrap-utils.sh:102`), called only from `exec_login_shell`. `bootstrap.sh`
+runs a command passed to ssh *before* that, so `kitten ssh host cm attach work` reaches neither. The
+interactive form does, and the session inherits `ZDOTDIR` and `KITTY_SHELL_INTEGRATION` from the shell
+that created it, which is why the same session reports its directory when created one way and nothing at
+all when created the other. `KITTY_INSTALLATION_DIR` is not the mechanism remotely: it is a local
+app-bundle path.
+
+The consequence is not confined to the remote host. A local window holding that ssh never sees an OSC 7
+carrying the remote host either, so `cwd_is_local` stays true and a split inherits the wrong machine. Two
+measurements rule out the alternative explanations: libghostty keeps the URI host, so a restore replays
+`file://white/home/chance` intact rather than a bare path; and a nested attach does propagate the child's
+OSC 7 to the parent, checked in a sandbox where the parent's `cwd_uri` became the child's remote URI while
+`hosting` stayed empty. Propagation is not the gap. Emission is.
+
+*A workaround needing no cm change*, worth recording because it is what to do today: ssh with no command
+so the login shell runs, carry the session name in a variable the kitten copies (`ssh.conf`'s `env`), and
+`exec cm attach` from the remote rc guarded on `CM_SESSION` being empty. Cost is one line per host, and
+only on hosts you control.
+
+*What cm would do instead.* Ship its own zsh, bash and fish integration and set `ZDOTDIR`, `ENV` or
+`XDG_DATA_DIRS` for the shell it spawns, sourcing the user's rc first. Then a session reports with nothing
+installed on the host but the cm binary, and `cm shell-init` provides the markers rather than assuming
+them. Three costs. kitty's version of this is a decade of edge cases -- `KITTY_ORIG_ZDOTDIR`, unreadable
+rc files, zsh older than 5.4, three shells with three mechanisms -- and cm would take all of them on. It
+is the first time cm would interpose on shell startup, which is a posture change rather than a feature.
+And it has to be opt-in, because a user whose emulator already injects would get two writers of the same
+markers.
+
+*A smaller alternative covering half of it.* The shim knows the shell's pid, so `/proc/<pid>/cwd` on Linux
+and `libproc` on darwin give the directory with no shell cooperation at all, which is what zmx used `lsof`
+for. It covers the cwd, not command state, and not the host, so it does not fix a split on its own.
+
+Announced nesting does not address any of this, and the two get confused because both cross an ssh. That
+carries one fact, "a cm client is attached inside this pty", so the detach key reaches it. Where a session
+is remains the location question, which nothing derives.
+
 **Agent hooks as first-class contrib.** `contrib/hooks/` has a stop-hook example. Wiring `cm report` into
 whatever hook an agent already has is the single highest-leverage thing a user can do, because it turns a
 session cm cannot read into one it can wait on. More worked examples, per agent, would be cheap and useful.
