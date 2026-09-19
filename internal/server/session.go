@@ -1921,6 +1921,17 @@ func (s *Session) Hosting() []string {
 	return out
 }
 
+// AnnouncedClients reports how many clients announced themselves inside this session over its pty.
+//
+// A count rather than the ids, because an announced id is a nonce belonging to a client on another host and
+// names nothing a caller here could act on. Worth reporting even so: this is the one nesting state that can
+// be stale, and a window that will not detach is what a stale one looks like from outside.
+func (s *Session) AnnouncedClients() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.announced)
+}
+
 // CwdURI returns the directory exactly as the shell reported it, which for OSC 7 is a URI that
 // keeps the host.
 //

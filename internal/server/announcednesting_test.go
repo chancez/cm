@@ -167,11 +167,29 @@ func TestAnnouncedClientsAreBounded(t *testing.T) {
 		sess.processChunk(announce(fmt.Sprintf("id%d", i), false), 0)
 	}
 
-	sess.mu.Lock()
-	got := len(sess.announced)
-	sess.mu.Unlock()
-	if got != maxAnnouncedClients {
+	if got := sess.AnnouncedClients(); got != maxAnnouncedClients {
 		t.Errorf("announced clients tracked = %d, want %d", got, maxAnnouncedClients)
+	}
+}
+
+// The count is what a listing reports, and it has to follow both directions.
+//
+// Reported at all because an announced client that died with its link never withdrew: the window goes on
+// forwarding its detach key, and without this nothing outside says why.
+func TestAnnouncedClientsAreCounted(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	if got := sess.AnnouncedClients(); got != 0 {
+		t.Errorf("AnnouncedClients() = %d on a fresh session, want 0", got)
+	}
+	sess.processChunk(announce("a1", false), 0)
+	sess.processChunk(announce("b2", false), 0)
+	if got := sess.AnnouncedClients(); got != 2 {
+		t.Errorf("AnnouncedClients() = %d with two announced, want 2", got)
+	}
+	sess.processChunk(announce("a1", true), 0)
+	if got := sess.AnnouncedClients(); got != 1 {
+		t.Errorf("AnnouncedClients() = %d after one withdrew, want 1", got)
 	}
 }
 

@@ -1012,6 +1012,12 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// that ended with the previous server.
 			item.Hosting = sess.Hosting()
 
+			// Separate from Hosting because it is a count of nonces rather than references, and reported
+			// at all because it is the one nesting state that can be wrong: an announced client that died
+			// with its link never withdrew, and this is what a window that will not detach looks like from
+			// outside. See Session.announced.
+			item.AnnouncedClients = uint32(sess.AnnouncedClients())
+
 			// Same argument as Hosting: an attachment is live state and nothing about it is worth
 			// persisting. Kept alongside the count rather than replacing it, since a count is what a
 			// status line wants and this is what a diagnosis wants.

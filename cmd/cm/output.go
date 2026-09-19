@@ -108,6 +108,14 @@ type sessionJSON struct {
 	// attach its shell is blocked inside `cm attach` and reports nothing, so those values are its last
 	// true ones rather than stale ones. Empty rather than null for the usual case, like Tags.
 	Hosting []string `json:"hosting"`
+	// AnnouncedClients counts the clients attached inside this session that announced themselves over its
+	// pty rather than telling the server, which is what a `cm attach` beyond an ssh has to do.
+	//
+	// Not folded into Hosting, which names sessions a caller can act on: an announcement carries a nonce
+	// belonging to a client on another host. Reported because this is the one nesting state that can be
+	// wrong -- a client that died with its link never withdrew -- and it is what a window that will not
+	// detach looks like from outside.
+	AnnouncedClients uint32 `json:"announced_clients"`
 	// AttachedClients describes each client attached now, alongside the Clients count above.
 	//
 	// Added because diagnosing a lost session meant reconstructing what was attached from `ps` and
@@ -203,6 +211,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedAt:          unixTimeOrNil(s.ReportedAtUnix),
 		Tags:                sessionTags,
 		Hosting:             hosting,
+		AnnouncedClients:    s.AnnouncedClients,
 		AttachedClients:     clients,
 	}
 }

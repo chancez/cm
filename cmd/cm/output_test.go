@@ -95,6 +95,9 @@ func TestSessionJSONKeys(t *testing.T) {
 		// survives a server restart, so its age is what separates "blocked now" from "blocked at 9am".
 		"reported_state", "reported_detail", "reported_source", "reported_at",
 		"tags", "hosting",
+		// Counted separately from hosting, which names sessions: an announced client is a nonce on another
+		// host, and this is the one nesting state that can be stale.
+		"announced_clients",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
 	}
@@ -143,6 +146,20 @@ func TestSessionJSONValues(t *testing.T) {
 	// instant and the zone separately, so the fixture states the instant and the zone stops mattering.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
+	}
+}
+
+// A client that announced itself over the pty is counted in the JSON, since it is invisible otherwise.
+//
+// The case that needs it: a `cm attach` beyond an ssh announces itself so the outer window hands over its
+// detach key, and if that client dies with its link the announcement is never withdrawn. The window then
+// forwards a detach key nobody acts on, and this count is the only thing that says why.
+func TestSessionJSONReportsAnnouncedClients(t *testing.T) {
+	wire := sampleWireSession("work")
+	wire.AnnouncedClients = 2
+
+	if got := toSessionJSON(wire).AnnouncedClients; got != 2 {
+		t.Errorf("announced_clients = %d, want 2", got)
 	}
 }
 

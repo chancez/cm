@@ -3543,6 +3543,17 @@ type Session struct {
 	// whatever is running inside it. Not persisted: this describes two live attachments, and a stored
 	// value would come back after a restart claiming a nesting that ended with the previous server.
 	Hosting []string `protobuf:"bytes,20,rep,name=hosting,proto3" json:"hosting,omitempty"`
+	// How many clients announced themselves inside this session over its pty rather than telling the server.
+	//
+	// Not folded into hosting, which reports session references a caller can act on: what an announcement
+	// carries is a nonce belonging to a client on another host, and putting it there would make the field
+	// lie. Counted rather than listed for the same reason -- the identifiers mean nothing here.
+	//
+	// Reported because this is the one nesting state that can be wrong. An announced client that dies with
+	// its link sends no withdrawal, so the count stays up and the window goes on forwarding its detach key;
+	// without this a user meets a window that will not detach and has nothing to look at. `cm detach <ref>`
+	// from elsewhere is the way out.
+	AnnouncedClients uint32 `protobuf:"varint,25,opt,name=announced_clients,json=announcedClients,proto3" json:"announced_clients,omitempty"`
 	// The clients attached right now, one entry each.
 	//
 	// Alongside the count above rather than replacing it: clients is what a status line wants and is
@@ -3743,6 +3754,13 @@ func (x *Session) GetHosting() []string {
 		return x.Hosting
 	}
 	return nil
+}
+
+func (x *Session) GetAnnouncedClients() uint32 {
+	if x != nil {
+		return x.AnnouncedClients
+	}
+	return 0
 }
 
 func (x *Session) GetAttachedClients() []*AttachedClient {
@@ -5005,7 +5023,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xee\x06\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\x9b\a\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5031,7 +5049,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +
 	"\x10command_finished\x18\x12 \x01(\bR\x0fcommandFinished\x123\n" +
 	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x12\x18\n" +
-	"\ahosting\x18\x14 \x03(\tR\ahosting\x12G\n" +
+	"\ahosting\x18\x14 \x03(\tR\ahosting\x12+\n" +
+	"\x11announced_clients\x18\x19 \x01(\rR\x10announcedClients\x12G\n" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

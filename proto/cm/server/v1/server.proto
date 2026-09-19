@@ -1059,6 +1059,18 @@ message Session {
   // value would come back after a restart claiming a nesting that ended with the previous server.
   repeated string hosting = 20;
 
+  // How many clients announced themselves inside this session over its pty rather than telling the server.
+  //
+  // Not folded into hosting, which reports session references a caller can act on: what an announcement
+  // carries is a nonce belonging to a client on another host, and putting it there would make the field
+  // lie. Counted rather than listed for the same reason -- the identifiers mean nothing here.
+  //
+  // Reported because this is the one nesting state that can be wrong. An announced client that dies with
+  // its link sends no withdrawal, so the count stays up and the window goes on forwarding its detach key;
+  // without this a user meets a window that will not detach and has nothing to look at. `cm detach <ref>`
+  // from elsewhere is the way out.
+  uint32 announced_clients = 25;
+
   // The clients attached right now, one entry each.
   //
   // Alongside the count above rather than replacing it: clients is what a status line wants and is
