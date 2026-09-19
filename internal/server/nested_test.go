@@ -253,17 +253,17 @@ func TestParentStaysFrozenUntilEveryNestedAttachEnds(t *testing.T) {
 	}
 }
 
-// hostingState reads what a subscriber has been told, without waiting.
+// publishedHosting reads what a subscriber has been told, without waiting.
 //
 // A plain receive is enough: a publish completes inside beginHosting and endHosting, so by the time
 // either returns the value is already in the channel. Reported as (value, delivered) so a test can
 // assert that nothing was sent as well as what was.
-func hostingState(sub *hostingSub) (bool, bool) {
+func publishedHosting(sub *hostingSub) (hostingState, bool) {
 	select {
 	case v := <-sub.ch:
 		return v, true
 	default:
-		return false, false
+		return hostingState{}, false
 	}
 }
 
@@ -280,36 +280,36 @@ func TestHostingTransitionsAreToldToClients(t *testing.T) {
 	sess := newNestedTestSession(t, nil)
 	sub := sess.subscribeHosting()
 
-	if v, ok := hostingState(sub); ok {
-		t.Fatalf("a fresh subscriber was told %v, want nothing: it defaults to not hosting", v)
+	if v, ok := publishedHosting(sub); ok {
+		t.Fatalf("a fresh subscriber was told %+v, want nothing: it defaults to not hosting", v)
 	}
 
 	sess.beginHosting("child-a")
-	if v, ok := hostingState(sub); !ok || !v {
-		t.Errorf("after the first nested attach, told (%v, %v), want (true, true)", v, ok)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true}) {
+		t.Errorf("after the first nested attach, told (%+v, %v), want ({Nested:true}, true)", v, ok)
 	}
 
 	sess.beginHosting("child-b")
-	if v, ok := hostingState(sub); ok {
-		t.Errorf("a second nested attach published %v, want nothing: the state did not change", v)
+	if v, ok := publishedHosting(sub); ok {
+		t.Errorf("a second nested attach published %+v, want nothing: the state did not change", v)
 	}
 
 	sess.endHosting("child-a")
-	if v, ok := hostingState(sub); ok {
-		t.Errorf("one of two nested attachments ending published %v, want nothing: the other still "+
+	if v, ok := publishedHosting(sub); ok {
+		t.Errorf("one of two nested attachments ending published %+v, want nothing: the other still "+
 			"holds the detach key", v)
 	}
 
 	sess.endHosting("child-b")
-	if v, ok := hostingState(sub); !ok || v {
-		t.Errorf("after the last nested attach ended, told (%v, %v), want (false, true)", v, ok)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{}) {
+		t.Errorf("after the last nested attach ended, told (%+v, %v), want ({}, true)", v, ok)
 	}
 
 	// And an unsubscribed client hears nothing more, so a finished attachment cannot be published to.
 	sess.unsubscribeHosting(sub)
 	sess.beginHosting("child-c")
-	if v, ok := hostingState(sub); ok {
-		t.Errorf("an unsubscribed client was told %v", v)
+	if v, ok := publishedHosting(sub); ok {
+		t.Errorf("an unsubscribed client was told %+v", v)
 	}
 }
 
@@ -323,8 +323,8 @@ func TestHostingIsSeededOnSubscribe(t *testing.T) {
 	sess.beginHosting("child")
 
 	sub := sess.subscribeHosting()
-	if v, ok := hostingState(sub); !ok || !v {
-		t.Errorf("a client attaching while nested was told (%v, %v), want (true, true)", v, ok)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true}) {
+		t.Errorf("a client attaching while nested was told (%+v, %v), want ({Nested:true}, true)", v, ok)
 	}
 }
 

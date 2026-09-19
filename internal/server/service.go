@@ -497,14 +497,17 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				return err
 			}
 
-		case nested := <-hostingSub.ch:
+		case state := <-hostingSub.ch:
 			// A nested client attached inside this session, or the last one left. The client hands over
 			// its detach key while this is set, so ctrl-\ reaches the pty and detaches the inner
 			// session rather than this one. Sent from this loop because it is the only goroutine that
 			// may write to the stream.
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Hosting{
-					Hosting: &serverv1.Hosting{Nested: nested},
+					Hosting: &serverv1.Hosting{
+						Nested:        state.Nested,
+						AnnouncedOnly: state.OnlyAnnounced,
+					},
 				},
 			}); err != nil {
 				return err

@@ -676,6 +676,17 @@ message AttachResponse {
 message Hosting {
   // Whether a nested client is attached inside this session right now.
   bool nested = 1;
+  // Whether every nested client announced itself over the pty rather than telling the server.
+  //
+  // A client on the far side of an ssh cannot name a parent in its Open request, since CM_SESSION does
+  // not cross ssh, so it says so in its own output instead and the parent's pump reads it. That is the
+  // only way the parent can know, and it comes with a weakness the RPC path does not have: if the link
+  // drops, no withdrawal arrives and the parent goes on believing a client is there.
+  //
+  // So the parent's clients treat the two differently. The detach key is handed over either way, because
+  // a key that leaves the wrong session is the bug being fixed. The overlay's prefix key is kept while
+  // this is set, so a window whose announcement is never withdrawn still has a way to detach itself.
+  bool announced_only = 2;
 }
 
 // Query asks this client's terminal a question the server cannot answer itself.

@@ -2314,7 +2314,18 @@ func (*AttachResponse_Images) isAttachResponse_Event() {}
 type Hosting struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Whether a nested client is attached inside this session right now.
-	Nested        bool `protobuf:"varint,1,opt,name=nested,proto3" json:"nested,omitempty"`
+	Nested bool `protobuf:"varint,1,opt,name=nested,proto3" json:"nested,omitempty"`
+	// Whether every nested client announced itself over the pty rather than telling the server.
+	//
+	// A client on the far side of an ssh cannot name a parent in its Open request, since CM_SESSION does
+	// not cross ssh, so it says so in its own output instead and the parent's pump reads it. That is the
+	// only way the parent can know, and it comes with a weakness the RPC path does not have: if the link
+	// drops, no withdrawal arrives and the parent goes on believing a client is there.
+	//
+	// So the parent's clients treat the two differently. The detach key is handed over either way, because
+	// a key that leaves the wrong session is the bug being fixed. The overlay's prefix key is kept while
+	// this is set, so a window whose announcement is never withdrawn still has a way to detach itself.
+	AnnouncedOnly bool `protobuf:"varint,2,opt,name=announced_only,json=announcedOnly,proto3" json:"announced_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2352,6 +2363,13 @@ func (*Hosting) Descriptor() ([]byte, []int) {
 func (x *Hosting) GetNested() bool {
 	if x != nil {
 		return x.Nested
+	}
+	return false
+}
+
+func (x *Hosting) GetAnnouncedOnly() bool {
+	if x != nil {
+		return x.AnnouncedOnly
 	}
 	return false
 }
@@ -4899,9 +4917,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05query\x18\x06 \x01(\v2\x13.cm.server.v1.QueryH\x00R\x05query\x121\n" +
 	"\ahosting\x18\a \x01(\v2\x15.cm.server.v1.HostingH\x00R\ahosting\x12.\n" +
 	"\x06images\x18\b \x01(\v2\x14.cm.server.v1.ImagesH\x00R\x06imagesB\a\n" +
-	"\x05event\"!\n" +
+	"\x05event\"H\n" +
 	"\aHosting\x12\x16\n" +
-	"\x06nested\x18\x01 \x01(\bR\x06nested\"\x1b\n" +
+	"\x06nested\x18\x01 \x01(\bR\x06nested\x12%\n" +
+	"\x0eannounced_only\x18\x02 \x01(\bR\rannouncedOnly\"\x1b\n" +
 	"\x05Query\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"A\n" +
 	"\bDetached\x12\x18\n" +

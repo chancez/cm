@@ -382,6 +382,21 @@ type Session struct {
 	// still driving.
 	hosting map[string]int
 
+	// announced counts the clients that told this session's *pty* they were nested, rather than telling
+	// the server, keyed by the nonce each announced itself with.
+	//
+	// Separate from hosting for two reasons. The key is a nonce rather than a session, since a session ID
+	// from another host means nothing here, so it must not reach `cm list`'s hosting field. And what the
+	// two authorize differs: see hostingStateLocked. A set rather than a count, because one client is one
+	// nonce and a repeat of the same one is that client reconnecting after a server restart, not a second.
+	//
+	// Attribution is deliberately *not* suppressed for these, unlike hosting. The reasoning that justifies
+	// suppressing it there does apply -- this shell is blocked in the ssh for the whole interval -- but the
+	// derived values are the only thing a local consumer has for a session on another host: the OSC 7 that
+	// arrives carries the remote host, and `cm_launch.py` reads exactly that to open a split there. Taking
+	// it away would trade a fixed detach key for a broken split. See docs/ideas.md on a session's location.
+	announced map[string]struct{}
+
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
 	done      chan struct{}
@@ -849,6 +864,17 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	// whole reason the sequence exists rather than only the command.
 	if s.reports.Feed(data) {
 		s.noteReport()
+	}
+
+	// A client announcing that it is attached inside this session rides the same sequence, and is drained
+	// separately because it is not a statement about the shell. Read here rather than anywhere else for
+	// the reason the whole mechanism exists: a client on the far side of an ssh has no way to tell the
+	// server, so its own output is the only channel that reaches this session. See noteNesting.
+	//
+	// Fed regardless of nesting, like the trackers above: an announcement from a deeper hop passes through
+	// every pty on the way out, and each parent needs it to hand its own detach key on.
+	for _, n := range s.reports.TakeNesting() {
+		s.noteNesting(n)
 	}
 
 	// Terminal queries are deliberately *not* removed from the stream, and two earlier versions of
@@ -1698,12 +1724,39 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 	return s.title, s.cwd
 }
 
+// hostingState is what a parent's clients need to know about what is attached inside it.
+//
+// Two values rather than one because the two ways cm learns about a nested client carry different
+// confidence, and the clients act differently on them. See publishHosting.
+type hostingState struct {
+	// Nested reports that something is attached inside this session, by either route.
+	Nested bool
+	// OnlyAnnounced reports that everything nested announced itself over the pty rather than telling the
+	// server, so nothing guarantees a withdrawal will arrive.
+	OnlyAnnounced bool
+}
+
 // hostingSub receives changes in whether a nested attachment is running inside this session.
 //
 // Buffered with a depth of one and coalescing, like metaSub: what a client needs is the current state,
 // never the history of how it got there.
 type hostingSub struct {
-	ch chan bool
+	ch chan hostingState
+}
+
+// hostingStateLocked describes what is nested inside this session. Requires s.mu.
+//
+// The distinction it carries is what a client needs to decide how far to trust the state. An attachment
+// this server was *told* about ends when its stream does, so the withdrawal is guaranteed. An announced
+// one is a byte sequence that arrived on the pty, and a dropped ssh sends no farewell, so the parent can
+// be left believing a client is there. Both hand over the detach key, since a key that leaves the wrong
+// session is the whole bug; only the RPC-known kind hands over the overlay's prefix as well, which leaves
+// a stranded window able to detach itself. See the Hosting message in the proto.
+func (s *Session) hostingStateLocked() hostingState {
+	return hostingState{
+		Nested:        len(s.hosting) > 0 || len(s.announced) > 0,
+		OnlyAnnounced: len(s.hosting) == 0 && len(s.announced) > 0,
+	}
 }
 
 // publishHosting delivers the current hosting state to every subscriber.
@@ -1714,14 +1767,14 @@ type hostingSub struct {
 // a client believing nothing is nested while an inner client is still reading the pty. That is the
 // original bug back again, so the mutation and the send are kept in one critical section. Safe because a
 // send here can never block: the channel is buffered and a stale value is dropped first.
-func (s *Session) publishHosting(nested bool) {
+func (s *Session) publishHosting(state hostingState) {
 	for sub := range s.hostingSubs {
 		select {
 		case <-sub.ch:
 		default:
 		}
 		select {
-		case sub.ch <- nested:
+		case sub.ch <- state:
 		default:
 		}
 	}
@@ -1735,18 +1788,18 @@ func (s *Session) publishHosting(nested bool) {
 // the inner client believes it has. False is not seeded because it is the client's own default, and
 // sending it would cost an event on every attach to say nothing.
 func (s *Session) subscribeHosting() *hostingSub {
-	sub := &hostingSub{ch: make(chan bool, 1)}
+	sub := &hostingSub{ch: make(chan hostingState, 1)}
 
 	s.mu.Lock()
 	if s.hostingSubs == nil {
 		s.hostingSubs = make(map[*hostingSub]struct{})
 	}
 	s.hostingSubs[sub] = struct{}{}
-	nested := len(s.hosting) > 0
+	state := s.hostingStateLocked()
 	s.mu.Unlock()
 
-	if nested {
-		sub.ch <- nested
+	if state.Nested {
+		sub.ch <- state
 	}
 	return sub
 }
@@ -1771,12 +1824,58 @@ func (s *Session) unsubscribeHosting(sub *hostingSub) {
 func (s *Session) beginHosting(child string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	first := len(s.hosting) == 0
+	before := s.hostingStateLocked()
 	s.hosting[child]++
-	// Only the transition is published, since a client acts on "is anything nested" rather than on the
-	// count. Under the lock: see publishHosting for why the send belongs in this critical section.
-	if first {
-		s.publishHosting(true)
+	// Only a change is published, since a client acts on the state rather than on the count. Compared as a
+	// value rather than keyed on the count reaching one, because an RPC-known child arriving alongside an
+	// announced one changes what the clients may do with the prefix key without changing whether anything
+	// is nested. Under the lock: see publishHosting for why the send belongs in this critical section.
+	if after := s.hostingStateLocked(); after != before {
+		s.publishHosting(after)
+	}
+}
+
+// maxAnnouncedClients bounds how many announced clients one session tracks.
+//
+// An announcement is bytes in the output stream, so a session that prints one -- `cat` of a file holding
+// one, most honestly -- registers a client that will never withdraw. The bound keeps that from growing
+// without limit; what keeps the window usable is that an announced nesting leaves the prefix key alone.
+const maxAnnouncedClients = 8
+
+// noteNesting applies one announcement from the output stream.
+//
+// The counterpart of beginHosting and endHosting for a client that could not tell the server: over an ssh
+// there is no `CM_SESSION` to name a parent with, so the client says so in its own output and this is
+// where the parent hears it. See osc.Nesting.
+func (s *Session) noteNesting(n osc.Nesting) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	before := s.hostingStateLocked()
+	switch {
+	case n.Ended:
+		delete(s.announced, n.ID)
+	default:
+		if _, known := s.announced[n.ID]; known {
+			// The same client again, which is what a reconnect looks like: a client re-announces after a
+			// server restart, since the state was only ever in memory here. Idempotent by id for exactly
+			// that reason.
+			return
+		}
+		if len(s.announced) >= maxAnnouncedClients {
+			s.log.Warn("ignoring a nesting announcement, too many already", "session", s.label, "id", n.ID)
+			return
+		}
+		if s.announced == nil {
+			s.announced = make(map[string]struct{})
+		}
+		s.announced[n.ID] = struct{}{}
+	}
+
+	if after := s.hostingStateLocked(); after != before {
+		s.log.Info("nesting announced over the pty",
+			"session", s.label, "id", n.ID, "ended", n.Ended, "nested", after.Nested)
+		s.publishHosting(after)
 	}
 }
 
@@ -1789,16 +1888,18 @@ func (s *Session) beginHosting(child string) {
 func (s *Session) endHosting(child string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	before := s.hostingStateLocked()
 	if n := s.hosting[child]; n > 1 {
 		s.hosting[child] = n - 1
 	} else {
 		delete(s.hosting, child)
 	}
-	// The parent's clients take their detach key back here. Keyed on the count reaching zero rather
-	// than on this child, because two nested attachments in one window both hold the key: giving it
-	// back while the second is still running would detach the window on the next press.
-	if len(s.hosting) == 0 {
-		s.publishHosting(false)
+	// The parent's clients take their detach key back here. Keyed on the state rather than on this child,
+	// because two nested attachments in one window both hold the key: giving it back while the second is
+	// still running would detach the window on the next press. An announced client still there keeps the
+	// key handed over too, for the same reason.
+	if after := s.hostingStateLocked(); after != before {
+		s.publishHosting(after)
 	}
 }
 
