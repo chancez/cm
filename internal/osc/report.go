@@ -43,6 +43,31 @@ type Report struct {
 	Source string
 }
 
+// Nesting is a client saying that it is attached inside the session whose pty this is.
+//
+// Distinct from a Report, which is what a shell said about itself. This is what a *client* says about
+// itself, and it exists because a client cannot always tell the server: `CM_SESSION` does not cross an
+// ssh, so a `cm attach` on another host has no parent to name in its Open request. Its stdout is this
+// session's pty, so the one channel that does reach the parent is the byte stream.
+//
+// The parent needs this for the detach key. See Session.beginHosting.
+type Nesting struct {
+	// ID pairs an end with its begin, and is the announcing client's own nonce rather than a session
+	// reference: a remote session's ID means nothing on this host, and two hosts can mint the same one.
+	ID string
+	// Ended distinguishes a client leaving from a client arriving.
+	Ended bool
+}
+
+// maxPendingNesting bounds how many announcements one drain can carry.
+//
+// Announcements arrive as bytes in a session's output, so anything that prints them is a source: `cat`
+// of a file containing one is the honest case. Bounded here and again in the server, which keeps a
+// stream of junk from growing either the slice or the parent's map without limit. The consequence of a
+// spurious announcement is documented where it is acted on, and is why the prefix key stays with the
+// outer client while a nesting is only announced.
+const maxPendingNesting = 32
+
 // reportStates is the set a report may carry.
 //
 // A fixed set rather than any string, so a typo in a shell hook is ignored rather than becoming a state
@@ -66,6 +91,12 @@ type ReportTracker struct {
 	// last holds the most recent report, and has reports whether there has been one.
 	last Report
 	has  bool
+	// nests holds announcements not yet drained, in the order they arrived.
+	//
+	// A queue rather than last-one-wins like a report, because these do not describe one changing value:
+	// a begin and an end in the same chunk cancel out, and collapsing them would leave the parent
+	// believing a client that has already gone is still there.
+	nests []Nesting
 	// partial holds a trailing fragment that may be the start of a sequence.
 	partial []byte
 }
@@ -81,6 +112,19 @@ func (t *ReportTracker) Take() (Report, bool) {
 	r := t.last
 	t.last, t.has = Report{}, false
 	return r, true
+}
+
+// TakeNesting returns the announcements since the last call, oldest first, and clears them.
+//
+// Drained like Take and for the same reason: each one is an event the caller applies once. Returning
+// them in order matters here, unlike a report, because a begin and its end are not interchangeable.
+func (t *ReportTracker) TakeNesting() []Nesting {
+	if len(t.nests) == 0 {
+		return nil
+	}
+	out := t.nests
+	t.nests = nil
+	return out
 }
 
 // Feed consumes a chunk of shell output and reports whether a report was found.
@@ -119,7 +163,13 @@ func (t *ReportTracker) Feed(p []byte) bool {
 			break
 		}
 
-		if r, ok := parseReport(tail[len(reportIntro):end]); ok {
+		// A nesting announcement first, since it is the one payload that carries no state and would
+		// otherwise be read as a malformed report and discarded.
+		if n, ok := parseNesting(tail[len(reportIntro):end]); ok {
+			if len(t.nests) < maxPendingNesting {
+				t.nests = append(t.nests, n)
+			}
+		} else if r, ok := parseReport(tail[len(reportIntro):end]); ok {
 			t.last, t.has = r, true
 			found = true
 		}
@@ -154,6 +204,69 @@ func reportPrefixLen(buf []byte) int {
 		}
 	}
 	return 0
+}
+
+// NestingSequence returns the bytes a client writes to announce itself to whatever owns its stdout.
+//
+// Here rather than in the client so the writer and the reader are one file apart: the spelling is a
+// protocol between two processes that are usually different builds of cm, since the far side of an ssh
+// upgrades on its own schedule. An older parent ignores a payload it cannot parse, which is the
+// behaviour parseReport already documents for an unknown key.
+//
+// BEL terminated, matching what the shell integration emits and what every cm reader accepts.
+func NestingSequence(id string, ended bool) []byte {
+	state := "begin"
+	if ended {
+		state = "end"
+	}
+	return []byte(reportIntro + "client=" + state + ";id=" + id + "\a")
+}
+
+// parseNesting reads a nesting announcement, reporting whether the payload was one.
+//
+// Strict about the id on purpose. The value becomes a key in the parent's map of what is nested inside
+// it, and these bytes can come from anything that prints, so a bounded character set keeps a stray
+// sequence from putting arbitrary text there. Nonces cm mints are hex, well inside this.
+func parseNesting(params []byte) (Nesting, bool) {
+	var n Nesting
+	var sawClient bool
+	for _, field := range splitUnescaped(string(params), ';') {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "client":
+			switch unescapeCmdline(value) {
+			case "begin":
+				sawClient = true
+			case "end":
+				sawClient, n.Ended = true, true
+			}
+		case "id":
+			n.ID = unescapeCmdline(value)
+		}
+	}
+	if !sawClient || !validNestingID(n.ID) {
+		return Nesting{}, false
+	}
+	return n, true
+}
+
+// validNestingID reports whether an announced id is safe to use as a key.
+func validNestingID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // parseReport reads a report's parameters, which is everything between the introducer and the terminator.
