@@ -347,6 +347,15 @@ Three places, by kind:
   a session. `TestNoSelfExportedVariableBindsToAFlag` walks the whole command tree and fails on the next
   one, which is the guard that matters: the flag that collided has since been deleted, and the next
   variable will not have a flag anybody can remove.
+- **A zig build's target decides the released binary's glibc floor**, and the default target is the
+  build machine's. Zig's std picks glibc functions at comptime from the *target* version, so
+  libghostty built with the native target on an `ubuntu-24.04` runner compiled a call to
+  `arc4random_buf`, glibc 2.36, and cm 0.4.0 then exited with "GLIBC_2.36 not found" on Ubuntu 22.04
+  and its glibc 2.35. One symbol, both architectures, nothing in cm or ghostty naming it.
+  `GLIBC_FLOOR` in `mise.toml` is the floor and the Linux build sites pass it as `-Dtarget`; the
+  release workflow reads the built artifact with `objdump -T` and fails above it. That check is the
+  load-bearing part: the release already ran a smoke test, but on a runner whose glibc is newer than
+  anything this can break, so the bad artifact was published green. See `docs/libghostty.md`.
 - **Nothing true for only an instant belongs in an argv that is re-exec'd.** `syscall.Exec` makes it the
   process's reported command line for good, so `ps` shows it and anything recording a live command line
   replays it later. The resume position was a flag; it is `CM_RESUME_FROM_SEQ` now. See

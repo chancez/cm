@@ -15,7 +15,9 @@ where cm is the wrong choice.
 
 ## Install
 
-Binaries are published for macOS and Linux on both arm64 and x86_64.
+Binaries are published for macOS and Linux on both arm64 and x86_64. The Linux builds need glibc
+2.34 or newer, so Ubuntu 22.04, Debian 12 and RHEL 9 and later. On anything older, build from
+source.
 
 With [mise](https://mise.jdx.dev), which picks the right archive for your platform and keeps it
 updated:

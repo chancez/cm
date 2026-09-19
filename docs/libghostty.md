@@ -78,8 +78,10 @@ lagged while scrolling down stayed instant. Measured with a real `less` over a r
 half-page scroll, which is not worth giving up bounds and overflow checks in a parser whose input
 is whatever a program inside a session decides to print.
 
-Both build sites must agree: `mise.toml`'s `libghostty` task and `Dockerfile.test`. A timing
-assumption that holds in one and not the other is how a test passes locally and fails in CI.
+Every build site must agree on the optimize mode: `mise.toml`'s `libghostty` task,
+`Dockerfile.test`, and both workflows. A timing assumption that holds in one and not the other is
+how a test passes locally and fails in CI. The Linux sites pass one flag the mise task does not,
+`-Dtarget`, for the reason below.
 
 Two things guard this now, because a build flag is easy to drop and its symptom is easy to
 misattribute. `internal/vt/scroll_test.go` asserts on the *ratio* between scrolling up and down
@@ -90,6 +92,39 @@ half-page scroll at startup, so an installation built wrong says so instead of f
 The build emits `libghostty-vt.a`, a versioned dylib, headers, and pkg-config files under
 `zig-out`. Prefer the static archive so cm ships one binary with no runtime library path
 to manage.
+
+## The glibc floor is decided by the zig target, not by the runner
+
+A released Linux binary runs on glibc 2.34 and newer: Ubuntu 22.04+, Debian 12+, RHEL 9+.
+`GLIBC_FLOOR` in `mise.toml` holds the number, both workflows and `Dockerfile.test` read it, and
+release.yml checks the built artifact against it with `objdump -T` before publishing.
+
+The floor has to be stated because zig decides it silently. Zig's std selects glibc functions at
+comptime from the *target* glibc version, so building with the native target on an `ubuntu-24.04`
+runner, glibc 2.39, compiled a call to `arc4random_buf`, which appeared in glibc 2.36. That one
+symbol made cm 0.4.0 exit with "GLIBC_2.36 not found" on Ubuntu 22.04, whose glibc is 2.35, on both
+amd64 and arm64. Pinning the target is the whole fix, measured against the pinned ghostty ref:
+
+| target | symbol referenced |
+| --- | --- |
+| `x86_64-linux-gnu.2.39` | `arc4random_buf`, glibc 2.36 |
+| `x86_64-linux-gnu.2.34` | `getrandom`, glibc 2.25 |
+
+Nothing in ghostty calls either one directly, which is why no amount of reading cm or ghostty
+source explains the requirement. It comes from `std.Io.Threaded` and the version check in zig's
+`lib/std/c.zig`.
+
+2.34 rather than something older because the floor is a maximum over two link steps, and the zig
+one is no longer the higher: the Go and cgo link against the runner's own libc needs 2.34 for
+`pthread_create` and the rest of the pthread symbols, which moved into libc there. Lowering the
+floor further means doing that link against an older glibc too, either on an older image or with
+`zig cc` as the cgo compiler. Deferred rather than rejected; nobody has asked for RHEL 8.
+
+The check on the artifact is the part worth keeping. The release workflow's smoke test runs on the
+runner, whose glibc is newer than anything this can break, so a release that cannot start on a
+supported distribution otherwise looks entirely green. It was verified both ways against the Linux
+test image: a cm built there against the pinned archive references at most GLIBC_2.34 and passes,
+while the published v0.4.0 binary fails the same check and prints the symbol that causes it.
 
 ## Constraints to respect
 
