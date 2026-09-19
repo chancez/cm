@@ -186,12 +186,17 @@ func TestRunSessionFlushesAForwardedKeyAfterTheReconnect(t *testing.T) {
 	if got := string(h.stream.inputs()); got != "\x1c" {
 		t.Errorf("inputs = %q, want the held key flushed on the new connection", got)
 	}
-	if len(h.pending) != 0 {
-		t.Errorf("pending = %q after the flush, want it emptied", h.pending)
-	}
 
 	h.stream.exited(0)
 	overlayWaitFor(t, done, "the session to end")
+
+	// Read after the session has ended rather than beside the assertion above, which raced every run
+	// under -race. runSession clears pending on the line after the Send, and waitForRequests returns as
+	// soon as that Send has recorded the request, so the test read the field while runSession was still
+	// writing it.
+	if len(h.pending) != 0 {
+		t.Errorf("pending = %q after the flush, want it emptied", h.pending)
+	}
 }
 
 // While a command is in flight the loop keeps running, which is why it is dispatched rather than run

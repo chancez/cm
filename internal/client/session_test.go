@@ -95,6 +95,24 @@ func (s *fakeStream) waitForRequests(t *testing.T, n int) {
 	t.Fatalf("client sent %d messages within 5s, want at least %d", len(s.requests()), n)
 }
 
+// waitForDetach blocks until the client has asked to detach.
+//
+// The point a test may answer with an acknowledgement: replying before the request is what let the reply
+// race the keystroke that produced it. Fails rather than returning, since a Detach that never arrives is
+// the interesting failure and a silent return would hide it in whatever assertion came next.
+func (s *fakeStream) waitForDetach(t *testing.T) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.detaches() > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("client sent no Detach within 5s")
+}
+
 // requests returns a copy of what the client sent.
 func (s *fakeStream) requests() []*serverv1.AttachRequest {
 	s.mu.Lock()
@@ -699,6 +717,17 @@ func TestRunSessionDetachesOnTheDetachKey(t *testing.T) {
 	done := h.runAsync(context.Background())
 	// A keystroke, then the detach byte: the preceding byte must still be forwarded rather than dropped.
 	h.input <- []byte{'x', key.Byte}
+	// Waited for rather than assumed, and waited for the Detach itself because that is what the
+	// acknowledgement answers.
+	//
+	// Queueing the reply straight away leaves the loop with the keystroke and the reply both ready, and
+	// select picks between ready cases at random. The reply won 24 runs in 300 under -race, and the loop
+	// then took the unsolicited-Detached path and returned having forwarded nothing, which reads as
+	// "sent 0 detach events". Nothing at 500 runs with this wait.
+	//
+	// A request count is the weaker version of the same idea and does not fix it: the count includes the
+	// Open and the graphics answer, so it is satisfied before the keystroke has been looked at.
+	h.stream.waitForDetach(t)
 	// The server acknowledges, which is what releases the client.
 	h.stream.detached()
 
