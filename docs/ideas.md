@@ -410,6 +410,11 @@ A nested `cm attach` is known about because the nested client *announces* it -- 
 `Session.hosting`, and everything the nested detach key rests on. An ssh announces nothing, so cm knows
 nothing, and every consumer that needs to know reconstructs it from a side channel.
 
+Since this was written, a client that cannot reach the parent's server announces itself over the pty
+instead, as `client=begin` on cm's own OSC, which is what makes the detach key work beyond an ssh. That
+narrows the gap rather than closing it: the announcement says a cm client is there, not where the session
+is, and it has no collector, so a dropped link leaves it standing. Stage 1 below is what would collect it.
+
 What produced the entry: making a kitty split inherit an ssh session. That shipped in dotfiles by taking the
 host out of `cwd_uri`, which works and has two limits that no amount of care removes. ssh to the machine cm
 is running on is undetectable, because `osc.isLocalHost` compares the reported host to `os.Hostname()` and is

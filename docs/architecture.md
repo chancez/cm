@@ -392,10 +392,53 @@ Four details are load-bearing:
   released with whatever follows it, in order, so an escape typed just before a nested attach still
   arrives.
 
-The limit worth stating: this works within one server. A nested attach on another host over ssh cannot
-tell the outer server anything, so `Hosting` is never sent and the key behaves as it did, leaving the
-outer session. Same shape as metadata attribution, which also does nothing for a parent this server does
-not have.
+#### A client on another host announces itself instead
+
+Everything above rests on `Open.inside_session`, which is `CM_SESSION`, which does not cross an ssh. So a
+`cm attach` on another host has no parent to name, the outer server is told nothing, and ctrl-\ used to
+leave the outer session: for a per-window session, the window closed instead of the remote session being
+left.
+
+What reaches the parent in that case is the same thing a shell integration uses. The inner client's stdout
+*is* the parent's pty, so it writes `\033]25453;client=begin;id=<nonce>` when it attaches and the matching
+`client=end` when it leaves, and the parent's pump parses cm's own OSC out of the output stream where it
+already looks for reports. From there it is the existing mechanism: a second source feeding the same
+`Hosting` event.
+
+Four decisions in it, and the first is the one that shapes the rest.
+
+- **An announced nesting has no guaranteed withdrawal.** An attachment the server was told about ends when
+  its stream does, whatever happens to the client. An announcement is a byte sequence, and a dropped link,
+  a killed client, or a laptop going to sleep sends nothing, leaving the parent believing a client is
+  there. So `Hosting.announced_only` carries which kind it is, and the clients treat them differently: the
+  detach key is handed over either way, because a key that leaves the wrong session is the bug being
+  fixed, while the overlay's prefix key is kept by the outer client. That costs the inner client its
+  overlay and leaves a stranded window able to detach itself, where handing over both keys would leave it
+  answering nothing at all.
+- **The trigger is "I could not tell a server", not "I am on another host".** The client announces when
+  `inside_session` is empty, so the local path is untouched and nothing is counted twice. cm learns
+  nothing about ssh, which is the same reason the location entry in `docs/ideas.md` rejects a list of
+  commands cm would treat as session-hosting.
+- **Announced clients are keyed by a nonce and bounded.** A session ID from another host is not a reference
+  anything here can act on, so it stays out of `cm list`'s hosting field, which reports references a caller
+  can use. The nonce is random rather than a pid, because an ssh chain announces once per hop and every hop
+  passes through the outermost pty, where two hosts with the same pid would look like one client. The bound
+  is 8, because these arrive as ordinary output and `cat` of a file containing one is a real source.
+- **Said again on every connection.** The parent holds this in memory only, so a parent whose server
+  restarted has forgotten a client that is still attached. The client re-announces per connection with the
+  same nonce, which the parent deduplicates, exactly as the RPC path re-sends `inside_session` when it
+  reopens.
+
+What is still missing is a collector: something that discards an announcement whose client is gone. A
+prompt marker cannot do it, because during a nesting the child's OSC 133 travels the same pty and is
+indistinguishable from the parent shell's own. The reliable signal is the parent shell marking its command
+frames, which is the first stage of the location work in `docs/ideas.md`, and when that lands the prefix
+key can be handed over like the detach key.
+
+Metadata attribution is deliberately *not* frozen for an announced client, unlike a known one. The
+reasoning for freezing applies, but the derived values are the only thing a local consumer has for a
+session on another host: the OSC 7 that arrives carries the remote host, and the kitty launcher reads it to
+open a split there.
 
 ## Nested sessions work
 
