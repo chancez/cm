@@ -567,11 +567,25 @@ func (m *Manager) replayShimHistory(
 	// across calls. A scanner per chunk would see fragments and record nothing.
 	var replayScanner graphics.Scanner
 
+	// Where the replay got to, so an end that is not the normal one can say how much of the screen was
+	// rebuilt. The normal ends are the two breaks below, which reach fromSeq.
+	replayedTo := seq.Shim(st.OldestSeq)
+
 	for {
 		out, err := sub.Recv()
 		if err != nil {
 			// Reaching the end of what is retained is the normal exit, not a failure: whatever was
 			// written before this point is what the screen is rebuilt from.
+			//
+			// Logged when the stream ended early, because the consequence is a screen restored from part of
+			// its history and nothing else says so. ttrpc closes a stream whose consumer has not drained
+			// within a second, and this consumer feeds an emulator, so a slow enough replay truncates the
+			// screen it was rebuilding. Same for the replay timeout.
+			if replayedTo < fromSeq {
+				m.log.Warn("the replay of a shim's history ended early, so the restored screen is partial",
+					"session", rec.ID, "replayed_to", uint64(replayedTo), "wanted", uint64(fromSeq),
+					"error", err)
+			}
 			break
 		}
 		data := out.Data
@@ -616,7 +630,8 @@ func (m *Manager) replayShimHistory(
 				return fmt.Errorf("replaying output: %w", err)
 			}
 		}
-		if chunkStart+seq.Shim(len(data)) >= fromSeq {
+		replayedTo = chunkStart + seq.Shim(len(data))
+		if replayedTo >= fromSeq {
 			break
 		}
 	}

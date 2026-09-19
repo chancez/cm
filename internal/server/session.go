@@ -387,6 +387,9 @@ type Session struct {
 	done      chan struct{}
 	// stopPump ends the shim subscription, which is how Close stops consuming output.
 	stopPump context.CancelFunc
+	// pumpCtx is what that cancels, held so the pump can open a second subscription with the same
+	// lifetime after ttrpc has dropped the first. See resubscribe.
+	pumpCtx context.Context
 	// releasing records that this server is letting go of a still-live session, so the
 	// pump ending is not mistaken for the session ending.
 	releasing atomic.Bool
@@ -697,6 +700,7 @@ func newSession(
 		modelCols: uint16(rec.Cols),
 		done:      make(chan struct{}),
 		stopPump:  stopPump,
+		pumpCtx:   pumpCtx,
 	}
 
 	// Before the subscription, so nothing derived can land after the live stream has started.
@@ -738,6 +742,24 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 	for {
 		out, err := sub.Recv()
 		if err != nil {
+			// A stream ttrpc gave up on is not a session ending, and treating it as one stranded a live
+			// shell: finish asks the shim for an exit status, is told twenty times that it has not exited,
+			// and records exit code -1 with the log closed, while the shim and the shell carry on with
+			// nothing able to reach them.
+			//
+			// ttrpc closes a stream whose consumer has not drained within a second, and this consumer does
+			// real work per chunk: the log append, the graphics transform, feeding the emulator. See
+			// TestASlowConsumerLosesTheStream in internal/transport.
+			if transport.IsStreamFull(err) {
+				next, resubErr := s.resubscribe()
+				if resubErr != nil {
+					s.log.Error("resubscribing to the shim after a dropped output stream failed",
+						"session", s.id, "error", resubErr)
+					return
+				}
+				sub = next
+				continue
+			}
 			// The stream ends when the shell exits or the shim goes away. Either way this
 			// session is over; which one is recorded by finish via a State call.
 			return
@@ -745,6 +767,24 @@ func (s *Session) pump(sub shimv1.Shim_SubscribeClient) {
 
 		s.processChunk(out.Data, seq.Shim(out.Seq))
 	}
+}
+
+// resubscribe reopens the shim's output stream where the pump has consumed to.
+//
+// lastSeq is exactly that position and is what this field exists for: a restarting server resumes from
+// it, and a dropped stream is the same question asked within one process. The shim retains its log, so
+// the bytes the stream was carrying when it died arrive again rather than being lost.
+//
+// Called only from pump, on pump's goroutine, which is what makes clearing the held tail safe.
+func (s *Session) resubscribe() (shimv1.Shim_SubscribeClient, error) {
+	from := s.LastSeq()
+	// Dropped rather than kept, because lastSeq deliberately does not count a partial sequence held back
+	// for the next chunk. The shim will send those bytes again, so keeping this copy would prepend them to
+	// themselves and corrupt the sequence they were held to complete.
+	s.outPartial, s.outPartialSeq = nil, 0
+	s.log.Warn("the shim's output stream was dropped, resubscribing",
+		"session", s.id, "from_seq", uint64(from))
+	return s.shim.Subscribe(s.pumpCtx, &shimv1.SubscribeRequest{FromSeq: uint64(from)})
 }
 
 // processChunk is one chunk of shim output, from arrival to the model.
