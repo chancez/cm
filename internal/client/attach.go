@@ -498,6 +498,16 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// question would be corruption in the file.
 	var gfxProbe graphicsProbe
 
+	// Tell whatever owns this client's stdout that a client is attached here, when this client could not
+	// tell a server instead. Nil when there is nothing to say or nowhere to say it; see newNestingAnnouncer.
+	//
+	// Withdrawn on the way out rather than at the end of each connection, because the fact is about this
+	// process holding the terminal, which a reconnect does not interrupt. Deferred before the loop so every
+	// way of leaving it withdraws, including an upgrade: the replacement process announces itself with a
+	// nonce of its own, and the parent would otherwise keep this one forever.
+	nesting := newNestingAnnouncer(opts, tty, opts.screen)
+	defer nesting.withdraw()
+
 	starter := &serverStarter{start: opts.StartServer, stopped: opts.ServerStopped}
 
 	var outage outageState
@@ -542,6 +552,12 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		if gfxProbe.shouldAsk(tty.IsTerminal(), !opts.NoRestore, resumeFrom != nil) {
 			gfxProbe.ask(opts.screen, log)
 		}
+
+		// Said again on every connection, not only the first. A parent keeps this in memory only, so one
+		// whose server restarted has forgotten a client that is still here; announcing per connection is
+		// the same reason the Open above re-sends what this client is inside of. Deduplicated by nonce on
+		// the far side, so a repeat costs one sequence.
+		nesting.announce()
 
 		outcome, err := runSession(
 			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, in, &gfxProbe)
@@ -1110,10 +1126,15 @@ func runSession(
 				// the next keystroke is what the change has to affect. Anything the gate is withholding
 				// stays withheld and is released by the existing grace timer, in order, ahead of whatever
 				// is typed next.
-				if h.Nested != gate.suspended {
-					gate.suspended = h.Nested
+				//
+				// The prefix key follows only an attachment the server was told about. An announced one
+				// carries no promise of a withdrawal, so handing over both keys could leave this window with
+				// no way to reach cm at all; see inputGate.keepPrefix.
+				keepPrefix := h.Nested && h.AnnouncedOnly
+				if h.Nested != gate.suspended || keepPrefix != gate.keepPrefix {
+					gate.suspended, gate.keepPrefix = h.Nested, keepPrefix
 					opts.Log.Info("detach key handed to the innermost session",
-						"session", result.Session, "nested", h.Nested)
+						"session", result.Session, "nested", h.Nested, "announced_only", h.AnnouncedOnly)
 				}
 				continue
 			}

@@ -83,6 +83,15 @@ type inputGate struct {
 	// Separate from KeySpec.Disabled, which is the configured "no key detaches". This one comes
 	// and goes with the nesting and must not overwrite what the user configured.
 	suspended bool
+	// keepPrefix holds the overlay's prefix key back from a handover the detach key still makes.
+	//
+	// Set while the only thing nested announced itself over the pty rather than telling the server, which
+	// is what a `cm attach` beyond an ssh has to do. That state has no guaranteed withdrawal: a dropped
+	// link sends no farewell, so the parent can be left believing a client is there forever. Handing over
+	// both keys then would leave this window with no way to detach itself at all, since both are what cm
+	// is reachable by. So the detach key goes, because a key that leaves the wrong session is the bug being
+	// fixed, and ctrl-] stays, which costs the inner client its overlay and keeps this window usable.
+	keepPrefix bool
 	// held is a partial encoding of the key, kept until the rest arrives or the grace expires.
 	held []byte
 	// heldAt is when the current held bytes were first withheld, so the deadline is measured from the
@@ -108,7 +117,7 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Everything through, including anything withheld before the handover, and in the order it was
 	// typed. Nothing is held back either: a partial sequence has no one here to complete it, and the
 	// inner client needs the whole of it to recognize the key itself.
-	if g.suspended {
+	if g.suspended && !g.keepPrefix {
 		return gateDecision{Forward: buf}
 	}
 
@@ -117,6 +126,12 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// leaving is the one that cannot be undone by pressing something else, so it is the safer reading.
 	detachAt, _ := g.detach.find(buf)
 	prefixAt, prefixLen := g.prefix.find(buf)
+	if g.suspended {
+		// Handed over, so the detach key is an ordinary keystroke here and the inner client's own gate is
+		// what acts on it. Not a returned Forward of the whole read, because the prefix key is still this
+		// client's and may be later in the same read.
+		detachAt = -1
+	}
 	switch {
 	case detachAt >= 0 && (prefixAt < 0 || detachAt <= prefixAt):
 		return gateDecision{Forward: buf[:detachAt], Action: gateDetach}
@@ -131,7 +146,14 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Hold back a possible partial sequence until the rest arrives, or until the grace expires. The
 	// longer of the two, since a partial that could still become either key must wait for whichever needs
 	// more bytes: with the defaults both encode as ESC [ 9 ... and diverge only at the fourth byte.
-	if keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf)); keep > 0 && keep <= len(buf) {
+	keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf))
+	if g.suspended {
+		// Only the prefix is still this client's, so only its partials are worth waiting for. Withholding
+		// what could become a detach key would delay the inner client's own key by up to escapeGrace for
+		// no gain, since this client is not going to act on it.
+		keep = g.prefix.HoldBack(buf)
+	}
+	if keep > 0 && keep <= len(buf) {
 		g.held = append(g.held, buf[len(buf)-keep:]...)
 		if anchor.IsZero() {
 			g.heldAt = now
