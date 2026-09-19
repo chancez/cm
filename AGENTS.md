@@ -317,6 +317,18 @@ Three places, by kind:
   taken inside cm all replayed clean because none could see a writer that bypassed cm's own abstraction,
   and `kitty --dump-bytes` settled it in one run. When a capture and reality disagree, instrument the far
   end.
+- **A ttrpc stream cannot be left waiting, and a dependency can write to a terminal.** ttrpc buffers 64
+  messages per stream and closes it with `ErrStreamFull` if the consumer has not drained within a second;
+  v1.2.7 blocked instead, which is what every consumer here was written against. Both stalls are ordinary:
+  a client's loop writes to the terminal inline, so one kitty that stops reading stalls every cm client in
+  every one of its windows, and the pump feeds the emulator at 14ms for a reverse index. Reading the error
+  as the stream ending is the expensive part -- the pump concluded a live session had finished and recorded
+  exit code -1 while the shell carried on. The client absorbs the stall in `outQueue`, the pump resubscribes
+  from `lastSeq`, and `replayShimHistory` logs that the screen it restored is partial. The visible symptom
+  was ttrpc's own logging: containerd/log is logrus's standard logger, whose output is stderr, so a lost
+  stream printed itself into a session outside `internal/client.screen` and nothing reached any cm log.
+  `internal/transport` now detaches logrus in `init` and `LogTo` routes it. **A new dependency that writes
+  to stderr is a writer to a terminal cm owns.** See `docs/architecture.md`.
 - **Two sequence-number spaces exist** and mixing them corrupts output: the shim's numbering and the
   server's post-rewrite numbering differ in length. They are now distinct types in `internal/seq`, and
   `seqlog` is generic over the space, so the mistake is a compile error rather than a silent corruption:

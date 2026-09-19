@@ -1271,6 +1271,50 @@ reply queue. Keeping both would send two reports per resize and the model's woul
 turn. So the division is that the model decides *whether* a report is owed, since it tracks the mode the
 program set, and the server decides *when* one is sent.
 
+## A ttrpc stream cannot be left waiting
+
+**ttrpc closes a stream whose consumer has not drained within one second.** It buffers 64 messages per
+stream and, past that, waits a second for the consumer and then closes the stream with
+`ErrStreamFull`. The stream is dead at that point and cannot be resumed.
+
+This is not how the version cm was written against behaved. v1.2.7 delivered into an unbuffered channel
+and blocked, so a slow consumer applied backpressure all the way to the sender, which is what every
+consumer here assumed. v1.2.9 replaced that with the buffer and the timeout.
+`TestASlowConsumerLosesTheStream` in `internal/transport` pins the behavior against a real round trip,
+measured at exactly 64 messages delivered and then the error. When that test fails because a message
+arrives after the stall, ttrpc blocks again and the work below can go.
+
+Both of cm's streams have consumers that stall for longer than a second in ordinary use:
+
+- **A client's attach loop** writes to the terminal inline, so a terminal that stops draining blocks it.
+  One kitty that stops reading stalls every cm client in every one of its windows: that is why two
+  unrelated sessions reconnected 33ms apart with the server never having restarted. It also holds the
+  loop while the session picker is open, for as long as somebody is looking at it.
+- **The server's pump** appends to the log, transforms graphics and feeds the emulator per chunk, and
+  the emulator alone costs 14ms for a reverse index.
+
+The answers differ by direction, because what is recoverable differs.
+
+The client absorbs it. `internal/client.outQueue` sits between the stream and the loop: a goroutine
+drains the stream into it and never waits, so the stall is paid for in memory. Past `maxOutBacklog`,
+1 MB or about fifty screens, the backlog is replaced by a notice that output was dropped and the client
+repaints, which is the recovery a gap in the server's log already asks for. 1 MB rather than more because
+a larger backlog becomes a visible replay of stale output: writing it takes about 10ms, and past that a
+repaint is faster and more correct. The picker therefore needs no drain path of its own.
+
+The server resumes instead. A dropped subscription is not the session ending, and reading it as one is
+expensive: `finish` asks the shim for an exit status, is told twenty times that the shell has not exited,
+and records exit code -1 with the log closed, while the shim and the shell carry on with nothing able to
+reach them. So the pump resubscribes from `lastSeq`, which is the position that field exists to hold: the
+shim retains its log, so the bytes the dead stream was carrying arrive again. The held partial tail is
+dropped on the way, because `lastSeq` deliberately does not count bytes withheld for an unfinished
+sequence and the shim re-sends them; keeping the copy splices a truncated sequence in front of the real
+one.
+
+`replayShimHistory` is the third consumer, and it cannot resume: it says so in the log instead. It read
+every `Recv` error as the end of what the shim retained, so a replay ttrpc cut short restored a partial
+screen and nothing recorded that.
+
 ## One writer per stream
 
 **Exactly one writer per shared byte stream, and bytes cm injects wait for a sequence boundary.**
@@ -1306,6 +1350,15 @@ where nothing more is coming.
 Enforced rather than requested. `TestCommandLayerWritesNoEscapeSequences` fails if an escape literal
 appears in `cmd/cm`, because that is exactly how this happened: writing one there is easy and looks
 harmless. The command layer states policy, as `SetTitle` does, and constructs no bytes.
+
+**A dependency was the sixth writer.** ttrpc logs through containerd/log, which is logrus's standard
+logger, whose output is `os.Stderr` -- the attached client's terminal. A stream it gave up on printed
+`level=error msg="ttrpc: failed to handle message" error="ttrpc: stream buffer full"` into the middle of
+a session, outside `screen` and so able to land inside a sequence. Nothing about it reached any cm log
+either, so the corrupted screen was the only evidence. `internal/transport`'s `init` detaches logrus from
+stderr and `LogTo` routes the records into whichever log the process has; `TestALibraryNeverWritesToStderr`
+is the guard. The general rule: a new dependency that writes to stderr is a writer to a terminal cm owns,
+and the enforcement above only covers cm's own code.
 
 **The pty side has the same problem and now has the same kind of fix.** It has several writers too:
 client typing, a client's answer to a proxied query, cm's own emulator replies, and the in-band resize
