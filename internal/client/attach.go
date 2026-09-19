@@ -830,17 +830,21 @@ func runSession(
 
 	// Output arrives on its own goroutine so input handling is never blocked behind a
 	// slow write to the terminal.
-	out := make(chan outMsg, 16)
+	//
+	// Delivered into a queue rather than a channel, because a channel makes this goroutine wait when the
+	// loop is behind, and a ttrpc stream can no longer be left waiting: it is closed with
+	// "ttrpc: stream buffer full" one second later. See outQueue.
+	out := newOutQueue()
 	go func() {
-		defer close(out)
 		for {
 			resp, err := stream.Recv()
-			select {
-			case out <- outMsg{resp, err}:
-			case <-ctx.Done():
+			out.push(outMsg{resp: resp, err: err})
+			if err != nil {
 				return
 			}
-			if err != nil {
+			// Deliberately not selecting on ctx.Done() around the push: pushing cannot block, so the only
+			// way out of this loop is the stream ending, which cancelling the context does.
+			if ctx.Err() != nil {
 				return
 			}
 		}
@@ -976,6 +980,11 @@ func runSession(
 			}()
 		}
 		if resp.OpenPicker {
+			// Held inline, which stops this loop reading output for as long as somebody is looking at the
+			// picker. Safe only because outQueue absorbs that: the stream is drained by a goroutine that
+			// never waits on this loop, so it is not closed out from under the session, and a backlog past
+			// the cap becomes the repaint below rather than a lost stream.
+			//
 			// The terminal goes to a child process, so this process must stop reading it first and start
 			// again after: see terminalInput. The reader is shared across reconnects, which is why it is
 			// suspended rather than replaced.
@@ -1035,8 +1044,21 @@ func runSession(
 		case list := <-listDone:
 			ov.sessions(list.items, list.err)
 
-		case msg, ok := <-out:
+		case <-out.wake:
+			msg, ok := out.pop()
 			if !ok {
+				// A signal with nothing behind it, which the queue can produce when a message was taken on
+				// the previous pass. Nothing to do rather than the stream having ended.
+				continue
+			}
+			if msg.dropped {
+				// The loop was behind for long enough that the backlog passed its cap, so the bytes that
+				// would have established the current screen are gone. Repainting is the only recovery, and
+				// it is the same move a gap in the server's log makes: drop the position so the next attach
+				// is a fresh one rather than a resume.
+				*resumeFrom = nil
+				opts.Log.Info("output dropped while this client was behind, repainting from a fresh attach",
+					"session", result.Session)
 				return outcomeReconnect, nil
 			}
 			if msg.err != nil {
@@ -1382,12 +1404,6 @@ func runSession(
 // dial connects to the server's socket.
 func dial(socketPath string) (transport.Conn, serverv1.ServerClient, error) {
 	return transport.DialServer(socketPath)
-}
-
-// outMsg is one message from the server, or the error that ended the stream.
-type outMsg struct {
-	resp *serverv1.AttachResponse
-	err  error
 }
 
 // discardLogHandler drops every record, for a client that was given no logger.
