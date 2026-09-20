@@ -39,9 +39,13 @@ func newTestOverlay(t *testing.T, rows, cols uint16) (*overlay, *bytes.Buffer) {
 
 // sameResponse compares whole responses, treating a nil slice and an empty one as the same thing: a
 // caller reads len(Send), and a test that distinguished them would fail on a difference nothing can see.
+// Every field, which it did not always compare: SwitchTo, List and OpenPicker were left out, so any case
+// asserting one of them passed whatever the overlay decided. The move keys are where that showed, since a
+// wrong neighbour is a right-shaped response with the wrong reference in it.
 func sameResponse(a, b overlayResponse) bool {
 	return string(a.Send) == string(b.Send) &&
 		strings.Join(a.Run, "\x00") == strings.Join(b.Run, "\x00") &&
+		a.List == b.List && a.OpenPicker == b.OpenPicker && a.SwitchTo == b.SwitchTo &&
 		a.Detach == b.Detach && a.Repaint == b.Repaint
 }
 

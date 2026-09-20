@@ -470,6 +470,12 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 	// ref is what each attempt asks for. It starts as whatever the caller gave, so the first Open is the
 	// request the user made, and becomes an ID or a switch target as the loop learns better.
 	ref := opts.Session
+	// lastRef is the session this window was on before ref, which is what the overlay's l goes back to.
+	//
+	// Here rather than in the overlay because the overlay is rebuilt per connection and this outlives one,
+	// and it is per window rather than per session: two clients attached to the same session arrived from
+	// different places. Empty until the first switch, which is what makes l say so on a fresh window.
+	lastRef := ""
 
 	// Painted only by a client that owns a terminal and is willing to have it repainted. NoRestore marks
 	// the followers, which stream bytes to a pipe where an escape sequence is corruption rather than
@@ -574,11 +580,16 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		nesting.announce()
 
 		outcome, err := runSession(
-			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, in, &gfxProbe, nesting)
+			ctx, tty, cl, opts, ref, lastRef, &result, &resumeFrom, &pending, winch, in, &gfxProbe,
+			nesting)
 		conn.Close()
 
 		switch outcome {
 		case outcomeSwitch:
+			// Remembered as an ID rather than as the reference this attempt asked for, since a name can be
+			// moved by `cm bind` and the overlay's l has to come back to the same session. Only a switch
+			// records one: a reconnect is the same session, and a detach ends the window's history with it.
+			lastRef = paths.FormatSessionID(result.SessionID)
 			// The same process, the same terminal, the same input goroutine: only the session changes.
 			// Nothing is restored or re-rawed, so the screen goes straight from one session to the other,
 			// and `ps` keeps showing the command this window was started with.
@@ -765,6 +776,9 @@ func runSession(
 	// ID on a reconnect, and the target on a switch. Passed in rather than derived from result, so the
 	// loop that knows which of the three this is decides, and this function does not have to infer it.
 	ref string,
+	// lastRef is the session this window was on before ref, which the overlay's l switches back to. Empty
+	// until this client has switched once.
+	lastRef string,
 	result *Result,
 	resumeFrom **uint64,
 	pending *[]byte,
@@ -905,8 +919,10 @@ func runSession(
 		prefix:   opts.PrefixKey,
 		detach:   detachKey,
 		session:  result.Session,
-		canPick:  opts.OpenPicker != nil,
-		log:      opts.Log,
+		// Where l goes. Held by the loop, so it survives the reconnect that rebuilds this overlay.
+		lastSession: lastRef,
+		canPick:     opts.OpenPicker != nil,
+		log:         opts.Log,
 
 		barStyle:      styleOr(opts.BarStyle, DefaultBarStyle),
 		bodyStyle:     styleOr(opts.BodyStyle, DefaultBodyStyle),
@@ -1090,7 +1106,11 @@ func runSession(
 			ov.finish(cmd.out, cmd.err)
 
 		case list := <-listDone:
-			ov.sessions(list.items, list.err)
+			// Applied rather than only shown, because a move key decides where to go only once the list is
+			// here: n, p and l all resolve against it. The chooser's answer produces nothing to apply.
+			if outcome, done := applyOverlay(ov.sessions(list.items, list.err)); done {
+				return outcome, nil
+			}
 
 		case <-out.wake:
 			msg, ok := out.pop()

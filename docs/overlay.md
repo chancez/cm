@@ -16,6 +16,9 @@ Keys, all configurable through `prefix_key`:
 ```
 ctrl-]        open
 ctrl-] s      switch: choose a session from a list
+ctrl-] n      switch to the next session, in creation order, wrapping
+ctrl-] p      switch to the previous one
+ctrl-] l      switch back to the last session this window was on
 ctrl-] k      kill: choose one, then y to confirm
 ctrl-] b      name this session: type just the name
 ctrl-] d      detach
@@ -57,6 +60,33 @@ its argv, and the client then switches with machinery it already had. The obviou
 picker call the Switch RPC itself, has a race: the server would push the switch to a client that is blocked
 on the child, and the repaint afterwards discards the stream, so the window would silently not move. A file
 the parent reads after the child has exited has no such window.
+
+## Moving without choosing
+
+`s` is for when you know which session you want and there are several. `n`, `p` and `l` are for when you do
+not want to look at a list at all: two sessions and `l` alternates between them, which is screen's `ctrl-a a`
+and tmux's `last-window`. `ctrl-] ctrl-]` cannot be that key, since pressing an intercepted key twice is the
+only way to type it inside a session.
+
+Four decisions in them:
+
+- **Creation order for the ring**, which is what `cm ls` shows and what the store returns
+  (`ORDER BY created_at, id`). It is the only order a session has that nobody maintains: renaming one does
+  not move it, and a ring whose order shifts under the keys sends `n` somewhere different each time. It
+  wraps, as tmux's `next-window` does, because two sessions with no wrap means `n` works once and stops.
+- **All three ask the server for the list first**, including `l`. A neighbour depends on what exists now,
+  and the session `l` remembers can have ended: switching to one that has is an Open that fails on a window
+  with nothing left to draw. The list costs one request on the connection the client already holds, and it
+  turns a dead reference into a line of text. The cost is that the answer is asynchronous, which is why
+  `overlay.sessions` returns a response for the client to apply rather than only painting.
+- **The last session is the window's, not the server's.** It lives in the attach loop, which outlives the
+  reconnect that rebuilds the overlay, and it is recorded on a switch only: a reconnect is the same session,
+  and two clients attached to one session arrived from different places. Empty on the first session of a
+  window, where `l` says so rather than doing nothing.
+- **An ID, not a name.** `cm bind` can move a name onto another session between the switch and the way back.
+
+Both failure lines are said rather than swallowed: "no other session to switch to" and "the session you came
+from has ended". A key that silently does nothing reads as the overlay being broken.
 
 ## Escape goes up, ctrl-c goes out
 

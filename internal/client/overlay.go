@@ -51,6 +51,13 @@ type overlay struct {
 	// session is what the bar shows, and it is a label rather than a reference: what a command acts on is
 	// carried in the child's CM_SESSION by the runner.
 	session string
+	// lastSession is the session this client was on before this one, as a reference, or empty.
+	//
+	// Held by the attach loop across switches rather than looked up, because it is this window's history
+	// and nothing else's: two clients on the same session came from different places, and the server
+	// records neither. Empty on the first session a client attaches to, which is what makes l say so
+	// rather than doing nothing.
+	lastSession string
 	// canPick reports that the caller can hand the terminal to the full picker, which every caller that is
 	// not `cm attach` cannot.
 	canPick bool
@@ -71,6 +78,8 @@ type overlay struct {
 	prompt promptKind
 	// pick is the chooser, set while mode is overlayPick.
 	pick *picker
+	// move is which neighbour is being looked for, set while mode is overlayMove.
+	move moveKind
 	// confirm is a command held until one keypress approves it, and confirmWhat describes it.
 	confirm     []string
 	confirmWhat string
@@ -98,6 +107,12 @@ const (
 	overlayPrompt
 	// overlayPick is a session being chosen from a list.
 	overlayPick
+	// overlayMove is a list asked for so the neighbour of this session can be worked out: n, p or l.
+	//
+	// A mode of its own rather than a chooser with the selection pre-made, because there is nothing to
+	// choose: the list is arithmetic here, and the only thing on screen is a line saying what is being
+	// waited for. It is also what makes a late answer discardable, exactly as the chooser's is.
+	overlayMove
 	// overlayConfirm is a command waiting for one key to approve it.
 	overlayConfirm
 	// overlayRunning is a command dispatched and not yet finished.
@@ -203,6 +218,10 @@ func (o *overlay) reset() {
 	o.status = ""
 	o.body = nil
 	o.pick = nil
+	// Redundant for discarding a late answer, and said so rather than left looking load-bearing: sessions
+	// keys on the mode, which an escape has already changed, so removing this line fails no test. It is
+	// here so the field does not describe a move that is over.
+	o.move = moveNone
 	o.confirm = nil
 	o.confirmWhat = ""
 	o.helping = false
@@ -305,9 +324,10 @@ func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 		o.pickKey(key, resp)
 	case overlayConfirm:
 		o.confirmKey(key, resp)
-	case overlayRunning:
-		// Ignored rather than queued. A keystroke typed while a command runs would otherwise act on the
-		// result screen that is about to appear, which is not what the user was answering.
+	case overlayMove, overlayRunning:
+		// Ignored rather than queued. A keystroke typed while a command or a list is in flight would
+		// otherwise act on the result screen that is about to appear, which is not what the user was
+		// answering. Escape still steps out, since back runs before this.
 	case overlayResult:
 		// Any key dismisses, and the key is not acted on: the user is closing a message, and treating that
 		// keystroke as a new action would run something they did not choose. Escape does not arrive here at
@@ -347,6 +367,20 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		o.startPick("switch to", pickSwitch, resp)
 	case 'k':
 		o.startPick("kill", pickKill, resp)
+	case 'n':
+		o.startMove(moveNext, resp)
+	case 'p':
+		o.startMove(movePrev, resp)
+	case 'l':
+		// Said rather than ignored. A key that does nothing on the first session of a window reads as the
+		// overlay being broken, and this is the one action whose availability depends on what the user has
+		// already done.
+		if o.lastSession == "" {
+			o.status = "no session visited before this one"
+			o.mode = overlayResult
+			return
+		}
+		o.startMove(moveLast, resp)
 	case 'b':
 		// A name is new text, so this one really does need typing. Only the name, though: the verb is the
 		// keypress.
@@ -385,6 +419,8 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 			o.prefix.Name)
 		o.body = []string{
 			"s  switch session    b  name this session",
+			"n  next session      p  previous session",
+			"l  last visited session",
 			"k  kill a session    d  detach",
 			// The way back is named here because it is the thing a reader cannot guess: the picker takes the
 			// whole screen and this bar is gone by then, so its own notice is the only other place it appears.
@@ -456,22 +492,146 @@ func (o *overlay) startPick(prompt string, action pickAction, resp *overlayRespo
 	resp.List = true
 }
 
-// sessions fills the chooser with what the server reported, which the caller fetched.
-func (o *overlay) sessions(items []pickItem, err error) {
-	if o.mode != overlayPick || o.pick == nil {
+// moveKind is which session a move key is looking for.
+type moveKind int
+
+const (
+	// moveNone is no move in progress.
+	moveNone moveKind = iota
+	// moveNext and movePrev step through the list the server returns, which is creation order and wraps.
+	//
+	// Creation order because it is the only order a session has that nobody has to maintain: it is what
+	// `cm ls` shows, it does not change when a session is renamed or when its command exits, and a ring
+	// whose order moves under the keys would send n somewhere different each time. tmux's window order is
+	// the same idea with indices attached.
+	moveNext
+	movePrev
+	// moveLast is the session this client was on before this one, which makes l a toggle: the switch it
+	// performs sets the same value to where it came from.
+	moveLast
+)
+
+// startMove asks for the session list so a move key can be resolved against it.
+//
+// The list rather than a switch straight to a remembered reference, including for l. A session can have
+// ended since, and switching to one that has is an Open that fails on a window with nothing left to draw;
+// the list is the cheap way to find out, one request on a connection this client already holds, and it is
+// what turns a dead reference into a line of text instead.
+func (o *overlay) startMove(kind moveKind, resp *overlayResponse) {
+	o.mode = overlayMove
+	o.move = kind
+	o.pick = nil
+	o.body = nil
+	o.status = "looking for the " + kind.what() + "..."
+	resp.List = true
+}
+
+// what names the session a move is looking for, for the line on screen and for what goes wrong.
+func (k moveKind) what() string {
+	switch k {
+	case moveNext:
+		return "next session"
+	case movePrev:
+		return "previous session"
+	case moveLast:
+		return "last visited session"
+	}
+	return "session"
+}
+
+// sessions applies a session list the caller fetched, and reports anything the client must do about it.
+//
+// A response rather than nothing, which is what this returned while the chooser was its only caller: a
+// move key cannot act until the list arrives, so the switch it decides on has to leave here. The caller
+// runs it through the same applyOverlay a keypress goes through.
+func (o *overlay) sessions(items []pickItem, err error) overlayResponse {
+	var resp overlayResponse
+	switch {
+	case o.mode == overlayMove:
+		// Taken before the state is cleared, and passed down rather than read from the field further in. It
+		// was a field read in applyMove first, which cleared it here and then found moveNone: l fell through
+		// to the neighbour arithmetic and switched to the session after this one instead of the one it
+		// remembered. The test for a session that has ended is what caught it.
+		kind := o.move
+		o.move, o.mode = moveNone, overlayResult
+		if err != nil {
+			o.status = "listing sessions: " + err.Error()
+			o.paint()
+			return resp
+		}
+		o.applyMove(kind, items, &resp)
+		o.paint()
+		return resp
+	case o.mode != overlayPick || o.pick == nil:
 		// The overlay moved on while the list was in flight, which an escape does. Dropped rather than
 		// painted over whatever is on screen now.
 		o.log.Debug("a session list arrived after its picker closed", "err", err, "items", len(items))
-		return
+		return resp
 	}
 	o.pick.loading = false
 	if err != nil {
 		o.pick.err = err.Error()
 		o.paint()
-		return
+		return resp
 	}
 	o.pick.items = items
 	o.paint()
+	return resp
+}
+
+// applyMove picks the session a move key was after and switches to it, or says why it did not.
+//
+// The move is resolved here rather than when the key was pressed because the answer is only true of this
+// list: a neighbour depends on what exists now, and the session l remembers may have ended.
+func (o *overlay) applyMove(kind moveKind, items []pickItem, resp *overlayResponse) {
+	target, ok := o.moveTarget(kind, items)
+	switch {
+	case !ok && kind == moveLast:
+		// The reference is this window's history, so there is no label to call it by: the list is the only
+		// thing that has one and it no longer holds the session.
+		o.status = "the session you came from has ended"
+	case !ok:
+		o.status = "no other session to switch to"
+	default:
+		resp.SwitchTo = target.Ref
+		o.close(resp)
+	}
+}
+
+// moveTarget is the arithmetic: which listed session a move key means.
+//
+// Exhaustively against the current session's position rather than by remembering an index, because the
+// list is a second old at most but the session it describes may have been created after the last one:
+// an index kept across keypresses would walk somewhere nobody asked for.
+func (o *overlay) moveTarget(kind moveKind, items []pickItem) (pickItem, bool) {
+	if kind == moveLast {
+		for _, it := range items {
+			if it.Ref == o.lastSession && !it.Current {
+				return it, true
+			}
+		}
+		return pickItem{}, false
+	}
+
+	at := -1
+	for i, it := range items {
+		if it.Current {
+			at = i
+			break
+		}
+	}
+	// One session, or a list this client is not in, which a kill of the current session can produce
+	// between the key and the answer. Nothing to step to either way.
+	if at < 0 || len(items) < 2 {
+		return pickItem{}, false
+	}
+	step := 1
+	if kind == movePrev {
+		step = -1
+	}
+	// Wraps, as tmux's next-window does: with two sessions and no wrap, n works once and then stops,
+	// which is the case this is mostly used in.
+	return items[((at+step)%len(items)+len(items))%len(items)], true
 }
 
 // pickKey applies one keypress to the chooser and acts on a choice.

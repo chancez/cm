@@ -341,8 +341,11 @@ type harness struct {
 	// outRead is the read end of the terminal's output pipe.
 	outRead *os.File
 
-	opts       Options
-	result     Result
+	opts   Options
+	result Result
+	// lastRef is what Attach's loop would have remembered from a previous switch, which is where the
+	// overlay's l goes back to. Empty is a window that has not switched yet.
+	lastRef    string
 	resumeFrom *uint64
 	pending    []byte
 	winch      chan os.Signal
@@ -465,7 +468,7 @@ func (h *harness) run(ctx context.Context) (outcome, error) {
 		gfx = &graphicsProbe{}
 	}
 	// The harness feeds the channels directly, so there is no reader to suspend: see newTestInput.
-	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, &h.result,
+	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, h.lastRef, &h.result,
 		&h.resumeFrom, &h.pending, h.winch, newTestInput(h.input, h.inputErr), gfx, h.nesting)
 }
 
