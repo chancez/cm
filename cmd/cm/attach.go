@@ -90,15 +90,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 			if err != nil {
 				return err
 			}
-			if dir == "" && remoteDialer == nil {
-				// Default to the caller's cwd so a new session starts where the user is,
-				// which is what a terminal emulator opening a window expects.
-				//
-				// Not for a remote, where this directory is a path on the wrong machine: it either does not
-				// exist there or, worse, exists and is something else. Left empty so the server there
-				// decides, and an explicit --dir is passed through as the remote path it must be.
-				dir, _ = os.Getwd()
-			}
+			// Where a created session starts: the caller's cwd here, nothing for a remote, whose paths are
+			// not this machine's. See globals.sessionDir, which run shares so the two cannot diverge again.
+			dir = g.sessionDir(dir)
 			cfg, err := g.config()
 			if err != nil {
 				return err

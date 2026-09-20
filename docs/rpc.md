@@ -226,6 +226,15 @@ ssh and a shim inherits the server's directory. Measured both ways, because an a
 it look otherwise: a server started by the proxy has cwd `$HOME` and its sessions land there, while one
 started by hand in some directory puts its sessions in that directory.
 
+Both rules live in one function each, `globals.sessionDir` and `globals.sessionEnvFor`, and that is a
+correction rather than tidiness. `cm attach` and `cm run` build their own `Open`, nothing made the two agree,
+and the rules had been applied to attach only: a `cm run --remote` session started in *this* machine's working
+directory and was handed this machine's entire environment, the local `CM_RUNTIME_DIR`, an `SSH_AUTH_SOCK`
+naming a socket that exists only here, and whatever credentials the calling shell had exported. Found by
+reading `env` inside a session `cm run --remote` had created rather than by reasoning about the code, which is
+the only reason it was found at all. The same shape as the `--tag` bug, which worked everywhere except
+`--no-attach` for exactly this reason.
+
 The environment takes sshd's posture rather than this client's: `sessionenv.CrossHostVars` is `TERM`,
 `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and the locale variables that ssh's own `SendEnv`
 forwards. Nothing else. A shell on another host builds its own `PATH` and `HOME`, and forwarding this one's

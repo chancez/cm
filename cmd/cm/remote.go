@@ -208,6 +208,31 @@ func (g *globals) pointAtServer(opts *client.Options) error {
 	return nil
 }
 
+// sessionDir returns the working directory a session this invocation creates should start in.
+//
+// The caller's cwd locally, so a new session starts where the user is, which is what a terminal emulator
+// opening a window expects. Nothing for a remote, because this process's cwd is a path on the wrong machine:
+// it either does not exist there or, worse, exists and is something else. Empty lets the far server decide,
+// which in practice means $HOME. An explicit --dir is passed through untouched either way, as the remote path
+// it must be.
+//
+// One function rather than the same condition in each command, because that is exactly how the rule got half
+// applied: attach had it and run did not, so `cm run --remote` created its session in this machine's working
+// directory. Observed in `cm list` against the far server, where the CWD column read
+// ~/projects/cm/.worktrees/remote-ssh.
+func (g *globals) sessionDir(dir string) string {
+	if dir != "" || g.remote != "" {
+		return dir
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		// Deliberately not an error. A deleted or unreadable cwd is no reason to refuse to create a session,
+		// and empty means the same thing it means for a remote: let the server choose.
+		return ""
+	}
+	return cwd
+}
+
 // clientHostname names this machine, for a session created on another one.
 //
 // Empty when the hostname cannot be read, and applyRemote then omits the variable rather than exporting a
@@ -251,7 +276,7 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	// host builds its own PATH and HOME, and what it cannot know is the terminal drawing its output, plus
 	// the one thing cm supplies rather than forwards, which is the name of the machine watching.
 	// Explicit --env still wins, and comes last for that reason.
-	opts.Env = append(sessionenv.CrossHost(environ, clientHost), env...)
+	opts.Env = crossHostEnv(environ, env, clientHost)
 
 	// Recorded as well as spawned, or `cm get-env` would report the variable as one this client no longer
 	// has and a shell applying that diff would unset what the session was born with. Recording it is also

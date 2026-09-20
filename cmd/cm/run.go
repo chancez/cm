@@ -84,9 +84,9 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					return err
 				}
 			}
-			if dir == "" {
-				dir, _ = os.Getwd()
-			}
+			// Where a created session starts, which is not this machine's cwd when the server is on
+			// another one. See globals.sessionDir, and the half-applied rule it exists to end.
+			dir = g.sessionDir(dir)
 			sessionTags, err := tags.ParseAll(tagArgs)
 			if err != nil {
 				return err
@@ -111,7 +111,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					dir:     dir,
 					command: args,
 					persist: persist,
-					env:     sessionEnv(env),
+					env:     g.sessionEnvFor(os.Environ(), env),
 					tags:    sessionTags,
 				})
 				if err != nil {

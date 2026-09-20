@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/chancez/cm/internal/sessionenv"
 )
 
 // A small environment rather than the process's own, which matters more than it looks. These tests
@@ -87,5 +89,47 @@ func TestSessionEnvDoesNotReadTheProcessEnvironment(t *testing.T) {
 		if strings.HasPrefix(kv, "CM_TEST_LEAK_CANARY=") {
 			t.Fatalf("sessionEnvFrom() read the process environment: %q", kv)
 		}
+	}
+}
+
+// A session created on another machine gets sshd's posture, whichever command creates it.
+//
+// The regression this guards: `cm run --remote` built its own Open and called sessionEnv, so a session on the
+// far host got this machine's entire environment while `cm attach --remote` got the short cross-host list.
+// Observed rather than reasoned about, by reading the environment inside a session `cm run --remote` created:
+// the local sandbox's CM_RUNTIME_DIR and CM_CONFIG were in it, along with an SSH_AUTH_SOCK naming a socket
+// that exists only here, and any credential in the calling shell would have crossed with them.
+func TestSessionEnvForARemoteSendsOnlyWhatCrossesAHost(t *testing.T) {
+	environ := []string{
+		"TERM=xterm-kitty",
+		"LANG=en_US.UTF-8",
+		"PATH=/opt/homebrew/bin",
+		"HOME=/Users/someone",
+		"CM_RUNTIME_DIR=/tmp/cm-sandbox/t1/r",
+		"SSH_AUTH_SOCK=/Users/someone/.cache/ssh/agent.sock",
+		"AWS_SECRET_ACCESS_KEY=hunter2",
+	}
+
+	g := &globals{remote: "ssh://work"}
+	got := g.sessionEnvFor(environ, []string{"FOO=bar"})
+	want := []string{
+		"TERM=xterm-kitty",
+		"LANG=en_US.UTF-8",
+		sessionenv.ClientHostVar + "=" + clientHostname(),
+		"FOO=bar",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionEnvFor() = %q, want %q", got, want)
+	}
+}
+
+// And without a remote the environment is unchanged, which is the half that makes the flag's absence provable
+// rather than assumed: every session created on this machine still resembles the client that created it.
+func TestSessionEnvForThisMachineIsTheOrdinaryOne(t *testing.T) {
+	g := &globals{}
+	got := g.sessionEnvFor(fakeClientEnv, []string{"FOO=baz"})
+	want := sessionEnvFrom(fakeClientEnv, []string{"FOO=baz"})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionEnvFor() = %q, want %q", got, want)
 	}
 }

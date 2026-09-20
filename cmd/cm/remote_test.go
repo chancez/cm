@@ -444,3 +444,37 @@ func TestCompletionNeverStartsARemoteServer(t *testing.T) {
 		t.Errorf("the completion command %q asks the remote to start a server", args)
 	}
 }
+
+// A session's directory comes from the machine it will run on.
+//
+// The regression: attach had this rule and run did not, so `cm run --remote` created its session in this
+// machine's working directory, which on the far host is a path that either does not exist or is something
+// else. Seen in `cm list` against the remote server, where the CWD column read the local worktree.
+//
+// All three branches, because the wrong one is silent in each direction: no --dir locally must still follow
+// the user, no --dir remotely must defer to the far server, and an explicit --dir must be untouched either
+// way rather than being replaced by a local path.
+func TestSessionDirComesFromTheMachineThatWillRunIt(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() = %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		remote string
+		dir    string
+		want   string
+	}{
+		{name: "local default", dir: "", want: cwd},
+		{name: "local explicit", dir: "/some/path", want: "/some/path"},
+		{name: "remote default", remote: "ssh://work", dir: "", want: ""},
+		{name: "remote explicit", remote: "ssh://work", dir: "/srv/build", want: "/srv/build"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &globals{remote: tc.remote}
+			if got := g.sessionDir(tc.dir); got != tc.want {
+				t.Errorf("sessionDir(%q) with remote %q = %q, want %q", tc.dir, tc.remote, got, tc.want)
+			}
+		})
+	}
+}
