@@ -43,9 +43,38 @@ function cm_report --argument-names state detail
     end
 end
 
-# Deliberately no fish_prompt hook. A shell at its prompt is idle, not blocked, so reporting blocked there
-# would mark every session blocked forever and make the state useless to wait for. Blocked cannot be
-# detected from outside the program that is blocked, which is why this defines the cheap way to say it and
-# leaves the saying to whatever knows.
+# No hook reports *state*, and that is still deliberate. A shell at its prompt is idle, not blocked, so
+# reporting blocked there would mark every session blocked forever and make the state useless to wait for.
+# Blocked cannot be detected from outside the program that is blocked, which is why this defines the cheap
+# way to say it and leaves the saying to whatever knows.
+
+# The hooks below report something else: which command this shell is running, as a frame that opens when it
+# starts and closes when it returns. What needs it, and why it is not derived from OSC 133, is in the zsh
+# script and in docs/ideas.md on a session's location.
+#
+# fish is the one shell with both events, so the close is precise here: fish_postexec fires when the command
+# returns rather than when the next prompt is drawn.
+set -g _cm_frame_salt (random)(random)
+set -g _cm_frame_n 0
+set -g _cm_frame_id ""
+
+# Escaped like a report's detail, since a semicolon separates fields on the wire, and newlines collapsed so a
+# multi-line command cannot put one in a value that reaches `cm list --json`.
+function _cm_frame_enter --on-event fish_preexec --argument-names cmd
+    set cmd (string replace --all -- '\\' '\\\\' $cmd)
+    set cmd (string replace --all -- ';' '\\;' $cmd)
+    set cmd (string join ' ' (string split \n -- $cmd))
+    set -g _cm_frame_n (math $_cm_frame_n + 1)
+    set -g _cm_frame_id "$_cm_frame_salt-$_cm_frame_n"
+    printf '\033]25453;frame=enter;id=%s;argv=%s\007' $_cm_frame_id (string sub -l 256 -- "$cmd") > /dev/tty 2>/dev/null
+end
+
+# Guarded on a frame being open, since an empty command line at the prompt raises fish_postexec with nothing
+# to close.
+function _cm_frame_exit --on-event fish_postexec
+    test -n "$_cm_frame_id"; or return 0
+    printf '\033]25453;frame=exit;id=%s\007' $_cm_frame_id > /dev/tty 2>/dev/null
+    set -g _cm_frame_id ""
+end
 
 end
