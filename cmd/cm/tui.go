@@ -63,15 +63,16 @@ to the selected session instead of nesting an attachment inside it.`,
 				return fmt.Errorf("%s tui needs a terminal; use %s ls to list sessions", paths.Name, paths.Name)
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-
 			// One connection for the whole life of the picker, unlike every other command's withServer. A
 			// refresh a second through a fresh connection would pay for the dial each time, and this is the
 			// one caller that outlives its first request.
-			conn, cl, err := connectServer(cmd.Context(), dirs)
+			//
+			// Through g.connect rather than connectServer, which is the same distinction withServer draws:
+			// whichever server this invocation named. Dialing the socket directly was a bug with the worst
+			// possible shape, since the picker went on listing *this* machine's sessions under --remote and
+			// the only clue was the sessions being the wrong ones. That is exactly what this flag's
+			// classification exists to prevent, and a command in remoteCapable that dials locally defeats it.
+			conn, cl, err := g.connect(cmd.Context())
 			if err != nil {
 				return err
 			}
