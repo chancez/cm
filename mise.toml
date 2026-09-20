@@ -40,6 +40,17 @@ GLIBC_FLOOR = "2.34"
 GOBIN = "{{config_root}}/bin/tools"
 _.path = ["{{config_root}}/bin/tools"]
 
+# Task scripts are POSIX sh, not bash, because mise runs them with `sh` and that is dash on Debian and
+# Ubuntu while it is bash on macOS. So a bash-ism works here and fails there, silently until somebody builds
+# on Linux: `set -o pipefail` in every task below made `mise run libghostty` die with "Illegal option -o
+# pipefail" on a host that had bash 5.1 installed and simply was not using it.
+#
+# CI did not catch it because the workflows reimplement the libghostty build rather than running this task,
+# so the task itself has no coverage anywhere. Worth knowing before trusting that a change here works.
+#
+# A task that genuinely needs bash can ask for it with `shell = "bash -c"`, which mise honours. None does:
+# there is not one pipeline in this file, so pipefail was protecting nothing and costing portability.
+
 [tasks.build]
 description = "Build the cm binary"
 run = "go build -o bin/cm ./cmd/cm"
@@ -63,7 +74,7 @@ depends = ["build"]
 # the old binary or the new one, never a partial write. The temp file must be on the same filesystem for
 # rename to work, which is why it is created next to the target rather than in /tmp.
 run = """
-set -euo pipefail
+set -eu
 prefix="${PREFIX:-$HOME/.local}"
 bindir="$prefix/bin"
 mkdir -p "$bindir"
@@ -89,7 +100,7 @@ description = "Remove cm from PREFIX (default ~/.local)"
 # leaves running servers and shims alone, since they hold their own inode. Stop them first with
 # `cm server stop` if that is what you want.
 run = """
-set -euo pipefail
+set -eu
 prefix="${PREFIX:-$HOME/.local}"
 target="$prefix/bin/cm"
 if [ -e "$target" ]; then
@@ -125,7 +136,7 @@ description = "Validate the plugin marketplace manifests"
 #
 # Skipped rather than failed when claude is absent, so a contributor without it can still run `check`.
 run = """
-set -euo pipefail
+set -eu
 if ! command -v claude >/dev/null; then
   echo "claude not installed, skipping plugin manifest validation"
   exit 0
@@ -154,7 +165,7 @@ description = "Run the tests on Linux in Docker, with libghostty"
 #
 # Slow to build the first time, since it compiles libghostty with zig. Cached after that.
 run = """
-set -euo pipefail
+set -eu
 docker build -f Dockerfile.test -t cm-test:latest .
 docker run --rm cm-test:latest
 """
@@ -165,7 +176,7 @@ description = "Check the Linux build compiles, in Docker"
 # libghostty and cross toolchain. The image already builds one, so this reuses it and asks only whether the
 # Linux-specific files compile -- which a macOS-only run never checks.
 run = """
-set -euo pipefail
+set -eu
 docker build -f Dockerfile.test -t cm-test:latest .
 docker run --rm cm-test:latest go build ./...
 """
@@ -203,7 +214,7 @@ description = "Fetch and build libghostty-vt (needed once VT state lands)"
 # half-page, which is not worth giving up bounds and overflow checks in a parser whose input is
 # whatever a program inside a session decides to print.
 run = """
-set -euo pipefail
+set -eu
 if [ ! -d "$GHOSTTY_DIR/.git" ]; then
   git clone https://github.com/ghostty-org/ghostty.git "$GHOSTTY_DIR"
 fi
