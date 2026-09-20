@@ -410,10 +410,14 @@ A nested `cm attach` is known about because the nested client *announces* it -- 
 `Session.hosting`, and everything the nested detach key rests on. An ssh announces nothing, so cm knows
 nothing, and every consumer that needs to know reconstructs it from a side channel.
 
-Since this was written, a client that cannot reach the parent's server announces itself over the pty
-instead, as `client=begin` on cm's own OSC, which is what makes the detach key work beyond an ssh. That
-narrows the gap rather than closing it: the announcement says a cm client is there, not where the session
-is, and it has no collector, so a dropped link leaves it standing. Stage 1 below is what would collect it.
+**Stages 1 and most of 2 have shipped.** A client that cannot reach the parent's server announces itself
+over the pty as `client=begin`, the shell integration marks each command as a frame, and the stack is
+reported as `location` by `cm info --json` and `cm list --json`. A frame closing collects the announcements
+made inside it, which is what stops a dropped ssh leaving a parent believing a client is there. The
+decisions are recorded in `docs/architecture.md` under command frames, including three places this entry
+guessed differently: the sequence is spelled `frame=enter` rather than `enter=ssh`, since the kind of thing
+a command is belongs to whoever reads the argv; no `host` is derived, because extracting one means parsing
+ssh's flags; and the id is a per-shell salt and counter, because a pid is not unique across hosts.
 
 What produced the entry: making a kitty split inherit an ssh session. That shipped in dotfiles by taking the
 host out of `cwd_uri`, which works and has two limits that no amount of care removes. ssh to the machine cm
@@ -438,15 +442,16 @@ its `cm report` yet.
 
 The shape, in three stages that are worth deciding separately:
 
-1. *A location stack in cm, announced by the local shell.* cm's shell integration emits
-   `\033]25453;enter=ssh;argv=<escaped>;id=<nonce>\007` from `preexec` and the matching `exit=` from
-   `precmd`, over the sequence cm already owns and parses. A bare `printf`, so it costs nothing per command
-   and works with no server running. This alone fixes both limits above, because the argv is what was typed
-   and the announcement does not care whether the host differs.
-2. *Expose and persist it.* `cm info --json` grows the stack, and `cm attach --like <ref>` reproduces the
-   top of it, which leaves `cm_launch.py` with no ssh knowledge at all. The persistence half is the same
-   plumbing the derived-state work is already doing, since a location held only in memory is lost on a
-   server restart.
+1. *A location stack in cm, announced by the local shell.* **Shipped.** The integration emits a frame per
+   command from its prompt hooks, over the sequence cm already owns and parses. A bare `printf`, so it costs
+   nothing per command and works with no server running. This fixes both limits above, because the argv is
+   what was typed and the announcement does not care whether the host differs.
+2. *Expose and persist it.* **Exposed, not persisted.** `location` is in `cm info --json` and
+   `cm list --json`. What is left is `cm attach --like <ref>`, which would reproduce the top of the stack and
+   leave `cm_launch.py` with no ssh knowledge at all, and persistence: the stack is in memory only, so a
+   server restart loses it, and a session whose ssh is still running comes back reporting no location until
+   the next command. Persisting it wants care rather than plumbing, since a stored frame describes a command
+   that may have exited with the previous server.
 3. *Optional remote participation.* Needed only for ssh chains, where the second hop is made from a shell
    cm's integration is dormant in: `zsh.sh` gates on `CM_SESSION`, which does not cross ssh. A distinct
    variable should carry it rather than forwarding `CM_SESSION`, which is a session *reference* a remote
@@ -460,17 +465,15 @@ timeout and no reaping: a dropped connection kills the remote shell without an e
 survives and its `precmd` fires when the ssh command returns, so the frame beneath is always collected.
 Only the deepest frame can be stranded, and the next parent exit takes it.
 
-*What it would pay for beyond splits.* `cm list` could report where a session actually is instead of a stale
-local path. The host prefix now hand-rolled in both `zsh/title.zsh` and the nvim title module exists only
-because nothing publishes the location. And `cwd_is_local` would stop being a hostname comparison standing in
-for a fact.
+*What is left to pay for it.* No consumer reads `location` yet. `cm_launch.py` still reconstructs the host
+from `cwd_uri`, the host prefix is still hand-rolled in both `zsh/title.zsh` and the nvim title module, and
+`cwd_is_local` is still a hostname comparison standing in for a fact. Each of those is now a change in the
+consumer rather than a missing concept in cm, which is the part that had to come first.
 
-*What would justify building it* is wanting ssh-to-self or exact aliases badly enough to pay for a new
-concept, or a second consumer appearing -- `cm list`, the title, or a remote-aware picker. Until then the
-`cwd_uri` host covers the common case in configuration, and the limits are documented where they bite. What
-should *not* be built is the shape considered and rejected first: a list of commands cm treats as
+What should *not* be built is the shape considered and rejected first: a list of commands cm treats as
 session-hosting, `ssh` and `mosh` and `docker exec` and so on. It would work, and it makes cm hold an opinion
-about what programs mean, which announcement does not.
+about what programs mean, which announcement does not. Nothing in what shipped derives anything from an argv,
+and a `host` field was left out for the same reason.
 
 ## Output delivery
 

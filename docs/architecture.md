@@ -458,16 +458,66 @@ Three decisions in it.
 The notice overwrites the session's bottom row, so clearing it owes a repaint from cm's model, exactly as
 the outage notice does. See `paintBottomRow`, which both share.
 
-What is still missing is a collector: something that discards an announcement whose client is gone, so the
-escape is a fallback rather than the answer. A prompt marker cannot do it, because during a nesting the
-child's OSC 133 travels the same pty and is indistinguishable from the parent shell's own. The reliable
-signal is the parent shell marking its command frames, which is the first stage of the location work in
-`docs/ideas.md`.
+The collector for an announcement whose client is gone is command frames, below, which makes the escape a
+fallback rather than the answer.
 
 Metadata attribution is deliberately *not* frozen for an announced client, unlike a known one. The
 reasoning for freezing applies, but the derived values are the only thing a local consumer has for a
 session on another host: the OSC 7 that arrives carries the remote host, and the kitty launcher reads it to
 open a split there.
+
+### Command frames, and where a session is
+
+A session holds a stack of the commands its shells are running. The shell integration opens a frame at its
+preexec hook and closes it at the next prompt, over cm's own OSC, and the stack is what `cm info --json` and
+`cm list --json` report as `location`.
+
+Two things wanted it, and the second is why it is a stack rather than a value.
+
+**A collector.** An announced nesting has no guaranteed withdrawal, so a dropped ssh used to leave a parent
+believing a client was there until its server restarted. An announcement now binds to the frame that was
+open when it arrived, and closing a frame discards it along with the frames above. That needs no timeout and
+no probing: the ssh dies without a word, but the *local* shell survives, and its prompt hook closing the
+frame the ssh ran in is the event. Only the deepest frame can be stranded and the next close one level out
+takes it.
+
+**A location.** cm had a cwd and a busy flag, both single values derived from bytes, and no notion of "this
+session is inside something, entered by this command". The frames are that, in order: the ssh that was typed
+here, then what is running over there, because the far side's shell writes its own frames through the same
+pty.
+
+Five decisions worth keeping.
+
+- **Announced by the shell rather than derived.** kitty's integration does send the command line, as
+  `cmdline=` on OSC 133;C, and `internal/osc/command.go` parses it, then clears it when a prompt marker
+  arrives. Keeping it instead means deciding whether a prompt mid-command is a nested shell or a shell that
+  prompted after an interrupt, and OSC 133 carries nothing to tell those apart. An announcement has an id
+  and does not have to be guessed at.
+- **The id is minted per shell, not from a pid.** Frames from two shells share one pty once an ssh is
+  involved, and two hosts can hand out the same pid, so a pid would let a remote frame close a local one.
+  Each shell mints a salt at startup and counts from it.
+- **An unmatched close does nothing.** The far side may have been running before cm was watching, so a close
+  naming a frame this session never saw is ordinary rather than corruption. That tolerance is also what lets
+  bash announce a frame it never opened, which is what an empty line there produces.
+- **cm derives nothing from the argv.** It does not know which of these commands is an ssh, and no `host`
+  field is offered, because extracting one means parsing ssh's flags and jump hosts: the same opinion about
+  what a program means that was rejected when a list of session-hosting commands was ruled out. What the
+  argv *does* give is the alias as typed, which the OSC 7 host cannot -- that carries the name the remote
+  calls itself, so `chance-work-mbp` arrives as `CHANCEZ-M-2YPG.local` and ssh-to-self arrives as local.
+- **Bounded, and in the direction that keeps the outermost.** These are bytes in a session's output like
+  everything else here, so a frame past the bound is ignored rather than displacing the oldest: the frames
+  that say where the session went are the ones worth keeping.
+
+bash needed a different shape and it is the part most likely to be broken by a later edit. bash has no
+preexec, so the open is printed from `PS0`, which bash expands in a *subshell*: an id minted there never
+reaches the shell that has to close the frame. The first version did exactly that, every frame carried the
+same id, and nothing ever closed. The prompt hook owns the id now and `PS0` only prints it. `PS0` also needs
+bash 4.4, so the frame hooks are not installed on the 3.2 that macOS ships, where cm falls back to the cwd
+and the busy flag.
+
+The tests for this are through real interactive shells on a real pty, in `internal/shellinit`, because every
+hook here depends on interactivity: a `shell -c script` run exercises none of them and passes with all three
+uninstalled.
 
 ## Nested sessions work
 
