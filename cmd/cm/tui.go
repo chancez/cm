@@ -25,6 +25,7 @@ func newTUICommand(g *globals) *cobra.Command {
 		refresh    time.Duration
 		tagArgs    []string
 		chosenFile string
+		backKey    string
 	)
 	cmd := &cobra.Command{
 		Use:   "tui",
@@ -82,7 +83,13 @@ to the selected session instead of nesting an attachment inside it.`,
 			// occasionally what someone wants: it is the detach key that goes to the wrong client, and
 			// saying so is more use than declining.
 			var notice string
-			if inside := insideCmSession(); inside != "" {
+			switch inside := insideCmSession(); {
+			case backKey != "":
+				// Says where the way out is, which the help line has no room for: it already reaches column 89
+				// of 100. The two cases are exclusive in practice, since a client opening this clears
+				// CM_SESSION for the child, so ordering them is a formality rather than a preference.
+				notice = fmt.Sprintf("%s or q goes back to the session", backKey)
+			case inside != "":
 				notice = fmt.Sprintf(
 					"running inside %s: attaching from here nests, and the detach key will detach this window", inside)
 			}
@@ -101,6 +108,7 @@ to the selected session instead of nesting an attachment inside it.`,
 				Notice:   notice,
 				Preview:  preview,
 				Switch:   switchTo,
+				BackKey:  backKey,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.
 				Refresh: &refresh,
@@ -122,6 +130,12 @@ to the selected session instead of nesting an attachment inside it.`,
 	// Hidden because it is a handover between two cm processes rather than something to type: an attached
 	// client passes it when its overlay opens the picker, and reads the answer back when this exits.
 	_ = f.MarkHidden("chosen-file")
+	f.StringVar(&backKey, "back-key", "",
+		"the key that leaves this picker for the session that opened it, in prefix_key's spelling")
+	// Hidden for the same reason, and stated by the client rather than read from the config here: whichever
+	// client opened this knows what it actually intercepts, and a picker that re-derived it would offer the
+	// wrong key to anyone who set prefix_key on the command line. Same pattern as --session-ref to a shim.
+	_ = f.MarkHidden("back-key")
 	return cmd
 }
 

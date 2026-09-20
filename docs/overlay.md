@@ -22,6 +22,7 @@ ctrl-] d      detach
 ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
 ctrl-] t      the full picker: cm tui, with its filter and preview pane
+              ctrl-] there comes back, so the round trip is one key each way
 ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        back one level; from the top, out of the overlay
@@ -46,6 +47,10 @@ docs/tui.md called the right answer when it hit the same wall from the other sid
 the outer client -- the picker's own startup notice has always warned about exactly that. `s` moves the
 window instead. The binding is enabled by the caller supplying a way to switch, so it is absent rather
 than inert when there is nobody to move.
+
+The way back out is the prefix key on its own, which the client passes the picker as `--back-key` rather
+than letting it read `prefix_key`: a client given `--prefix-key` on the command line has nothing in a
+config file saying so. See docs/tui.md.
 
 **A way for the choice to come back.** The picker writes the chosen session to a file the client named on
 its argv, and the client then switches with machinery it already had. The obvious alternative, having the

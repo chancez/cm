@@ -198,3 +198,30 @@ stream, so the window would silently not move.
 The key is in the expanded help only. Measured: the short line reaches column 89 of 100, "s switch here"
 takes it past the width, the help is not truncated, and the overflow silently eats the columns to its
 right. It sits in the existing attach column for the same reason.
+
+## The way back is the key that opened it
+
+`ctrl-] t` goes out to the list and the prefix key alone comes back, so the round trip is one key each
+way. It leaves by the same exit `q` is: the client takes the terminal back and repaints. Nothing new
+happens on this side of it, which is the point -- a second way to end the process rather than a second
+way to end a session.
+
+Three things decide its shape:
+
+- **The caller names the key** (`--back-key`, hidden, from the client's own `KeySpec`), rather than this
+  process reading `prefix_key`. A client given `--prefix-key` on the command line has nothing in a config
+  file saying so, and a picker offering the wrong key is offering one that never arrives. Same pattern as
+  `--session-ref` to a shim.
+- **It is absent without a caller**, like the switch binding. It only arrives because the client stopped
+  reading the terminal to run this; a picker run from a shell has an outer client still intercepting its
+  prefix, so the key would silently do nothing. That is also the top-level `cm tui` case, where detaching
+  at the list still detaches the window: fixing it means the list announcing itself the way a nested client
+  does, which hands over both intercepted keys, and is not done here.
+- **It beats the filter**, unlike every other binding. A control combination cannot be part of a name
+  being typed, and having to press escape first to leave is the friction this key exists to remove. The
+  cost, stated: `prefix_key` can be set to a key the filter field uses, and `ctrl-u` there is
+  delete-to-start. Somebody who configured that has already given cm the key everywhere else in the
+  session.
+
+It is named in the startup notice rather than on the short help line, which has no room: the line already
+reaches column 89 of 100, and the notice is where somebody who has just pressed `ctrl-] t` is looking.

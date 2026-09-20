@@ -120,6 +120,18 @@ type Options struct {
 	Attach AttachFunc
 	// Switch moves the caller to a session, or is nil when there is no caller to move. See SwitchFunc.
 	Switch SwitchFunc
+	// BackKey is the key that leaves the picker for the session that opened it, in cm's spelling
+	// ("ctrl-]"), or empty for no such key.
+	//
+	// The caller's own prefix key, so the way out is the inverse of the ctrl-] t that opened this. Named
+	// by the caller rather than assumed here for two reasons: prefix_key is configurable, and the key only
+	// reaches this process when a client is waiting on it, having released the terminal to run it. A
+	// picker run from a shell must not offer it, because the outer client intercepts its prefix and the
+	// key would silently do nothing.
+	//
+	// Leaving is the same exit q already is: the caller takes the terminal back and repaints. See
+	// backBinding.
+	BackKey string
 	// Tags filters the list, in the form `cm ls --tag` takes. Applied on the server for every
 	// refresh, so a session that gains a matching tag appears without a restart.
 	Tags []string

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
 )
 
@@ -22,7 +23,12 @@ import (
 // screen. The alternative, having the picker call the Switch RPC itself, works but has a race worth
 // avoiding: the server would push the switch to this client while it is blocked on the child, and the
 // reconnect that repaints afterwards would discard the event, so the window would silently not move.
-func overlayPicker(g *globals, dirs paths.Dirs) func(context.Context) (string, error) {
+//
+// prefixKey is the key this client intercepts, passed on so the picker can offer it as the way back:
+// ctrl-] t goes out to the list and ctrl-] comes back. Stated rather than left to the child, which would
+// have to re-read the configuration and would get it wrong for a client given --prefix-key on the command
+// line. The key reaches the child at all only because this process has stopped reading the terminal.
+func overlayPicker(g *globals, dirs paths.Dirs, prefixKey string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		exe, err := os.Executable()
 		if err != nil {
@@ -39,8 +45,7 @@ func overlayPicker(g *globals, dirs paths.Dirs) func(context.Context) (string, e
 		chosen.Close()
 		defer os.Remove(path)
 
-		argv := forwardedDirFlags(g)
-		argv = append(argv, "tui", "--chosen-file", path)
+		argv := pickerArgv(g, path, prefixKey)
 
 		// Not CommandContext, for the reason runAttachChild gives: cancelling kills the child, and a picker
 		// killed mid-frame leaves the terminal in whatever mode bubbletea had it in. A signal reaches it
@@ -68,6 +73,31 @@ func overlayPicker(g *globals, dirs paths.Dirs) func(context.Context) (string, e
 		}
 		return strings.TrimSpace(string(ref)), nil
 	}
+}
+
+// pickerArgv builds the command line for the picker this client hands the terminal to.
+//
+// Its own function so a test can read it without a terminal or a child process, which is what the
+// attachment argv next door already does and for the same reason: the order matters, and the directory
+// flags are the isolation.
+func pickerArgv(g *globals, chosenPath, backKey string) []string {
+	argv := forwardedDirFlags(g)
+	argv = append(argv, "tui", "--chosen-file", chosenPath)
+	if backKey != "" {
+		argv = append(argv, "--back-key", backKey)
+	}
+	return argv
+}
+
+// pickerBackKey reports the key to offer the picker as its way back, or empty when there is none.
+//
+// A disabled prefix key has no name worth passing on: with nothing to open the overlay there is no route
+// to the picker from here at all, and the picker would be advertising a key nobody can press.
+func pickerBackKey(prefix client.KeySpec) string {
+	if prefix.Disabled {
+		return ""
+	}
+	return prefix.Name
 }
 
 // forwardedDirFlags repeats the directory and config flags this process was given.

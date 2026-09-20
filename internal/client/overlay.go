@@ -386,7 +386,9 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		o.body = []string{
 			"s  switch session    b  name this session",
 			"k  kill a session    d  detach",
-			"t  the full picker, with a preview pane",
+			// The way back is named here because it is the thing a reader cannot guess: the picker takes the
+			// whole screen and this bar is gone by then, so its own notice is the only other place it appears.
+			"t  the full picker; " + o.prefix.Name + " there comes back",
 			"q  send " + o.detach.Name + " to the program",
 			":  any cm command    ctrl-c  leave the overlay",
 			"in a list: type to filter, ctrl-j/ctrl-k to move, enter to choose",

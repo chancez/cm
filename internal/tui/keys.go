@@ -1,6 +1,10 @@
 package tui
 
-import "charm.land/bubbles/v2/key"
+import (
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+)
 
 // keyMap is the picker's own bindings, separate from the list's navigation and filter keys.
 //
@@ -10,6 +14,7 @@ import "charm.land/bubbles/v2/key"
 type keyMap struct {
 	Attach       key.Binding
 	Switch       key.Binding
+	Back         key.Binding
 	New          key.Binding
 	Kill         key.Binding
 	Rename       key.Binding
@@ -35,6 +40,12 @@ func defaultKeys() keyMap {
 			key.WithHelp("s", "switch here"),
 			key.WithDisabled(),
 		),
+		// Back returns to the session that opened this picker, and carries no key of its own: the caller
+		// names one and backBinding fills it in. Empty and disabled otherwise, which is the case that must
+		// not offer a key -- run from a shell there is no client waiting, and the outer client intercepts
+		// its prefix before this process could see it, so a binding here would describe a key that never
+		// arrives.
+		Back: key.NewBinding(key.WithDisabled()),
 		New: key.NewBinding(
 			key.WithKeys("n"),
 			key.WithHelp("n", "new session"),
@@ -101,6 +112,48 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Attach, k.Switch, k.New},
 		{k.Kill, k.Rename},
-		{k.Preview, k.Help, k.Quit},
+		// Back sits with quit because that is what it is a spelling of, and in the expanded help rather
+		// than on the short line for the width reason above: the line already reaches column 89 of 100.
+		// The startup notice says it instead, which is where somebody who has just pressed ctrl-] t is
+		// looking anyway.
+		{k.Preview, k.Help, k.Quit, k.Back},
 	}
+}
+
+// backBinding is the caller's key for returning to the session it opened this picker from.
+//
+// spec is cm's spelling, "ctrl-<key>", which is what KeySpec.Name holds. Translated here rather than
+// passed in bubbletea's form because the caller is a cm client talking about its own prefix key, and a
+// command layer that had to know charm's key names to configure a picker would be knowing the wrong
+// thing.
+//
+// A spec that is not a ctrl- combination leaves the binding disabled. The only caller passes a parsed
+// KeySpec, so this covers "none", which is a prefix key the user turned off: with no way to open the
+// overlay there is no way to arrive here, and offering the key anyway would be describing one that
+// cannot be pressed.
+func backBinding(spec string) key.Binding {
+	k := teaKey(spec)
+	if k == "" {
+		return key.NewBinding(key.WithDisabled())
+	}
+	return key.NewBinding(
+		key.WithKeys(k),
+		key.WithHelp(spec, "back to the session"),
+	)
+}
+
+// teaKey translates cm's spelling of an intercepted key into bubbletea's, or returns empty when the
+// spec is not one.
+//
+// The two differ only in the separator, ctrl-] against ctrl+], and in nothing else that a cm spec can
+// express: ParseKeySpec accepts a single character or a name that resolves to one byte, and bubbletea
+// names ctrl plus NUL "ctrl+space", which is the same name cm took the byte from.
+// TestTeaKeyMatchesBubbletea pairs the two so a rename upstream fails here rather than silently
+// unbinding the key.
+func teaKey(spec string) string {
+	rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(spec)), "ctrl-")
+	if !ok || rest == "" {
+		return ""
+	}
+	return "ctrl+" + rest
 }

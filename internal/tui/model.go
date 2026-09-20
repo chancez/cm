@@ -122,6 +122,9 @@ func newModel(ctx context.Context, opts Options) model {
 	if opts.Switch != nil {
 		keys.Switch.SetEnabled(true)
 	}
+	if opts.BackKey != "" {
+		keys.Back = backBinding(opts.BackKey)
+	}
 
 	return model{
 		ctx:      ctx,
@@ -331,8 +334,19 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m.renameKey(msg)
 	}
 
-	// While a filter is being typed every key belongs to it, checked before the picker's own bindings
-	// rather than after. Otherwise typing a session name into the filter runs commands: "n" would
+	// The way back is the exception to the filter rule below, because it is the caller's prefix key: a
+	// control combination, so no name being typed can contain it, and the one key whose whole job is to
+	// get out of here. A filter half typed is not a reason to have to press escape first.
+	//
+	// The cost, stated because it is reachable: prefix_key can be set to a key the filter field uses, and
+	// ctrl-u there is delete-to-start. Somebody who configured that has already given the key to cm
+	// everywhere else in the session, so cm keeps it here too rather than being the one place it is not.
+	if key.Matches(msg, m.keys.Back) {
+		return m, tea.Quit
+	}
+
+	// While a filter is being typed every other key belongs to it, checked before the picker's own
+	// bindings rather than after. Otherwise typing a session name into the filter runs commands: "n" would
 	// create a session, "x" would offer to kill one, and "q" would quit in the middle of a word.
 	if m.list.FilterState() == list.Filtering {
 		var cmd tea.Cmd
