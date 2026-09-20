@@ -615,21 +615,86 @@ conversation intact is a different thing from one that comes back empty in the r
 the first feature that would have cm store something a program asked it to remember, which is a small but
 real widening of what cm claims to know.
 
-**`cm attach --remote ssh://user@host`.** Run the client locally against a server on another machine, so
-local terminal features -- the clipboard, notifications, the emulator's own keybindings -- keep working
-while the session lives remotely. `ssh host cm attach` already covers the plain case and is why this has not
-been needed, but everything in that session belongs to the remote terminal.
+**`cm --remote ssh://user@host`.** Run the client locally against a server on another machine, so local
+terminal features -- the clipboard, notifications, the emulator's own keybindings -- keep working while the
+session lives remotely. `ssh host cm attach` already covers the plain case and is why this has not been
+needed, but everything in that session belongs to the remote terminal.
 
-The transport is not the hard part: ttrpc's `Serve` takes any `net.Listener`, and tunnelling the socket over
-ssh needs no protocol change. Authentication is: `docs/rpc.md` records that remote access would mean
-building auth rather than inheriting gRPC's credential ecosystem, and names this as the decision most likely
-to be revisited. Tunnelling over ssh sidesteps that entirely by borrowing ssh's authentication, which is
-what makes the `ssh://` form the version worth building -- it is a client-side convenience over a tunnel
-rather than a network service.
+The requirement that shapes it: the session must belong to a cm server *on the remote*. Anything that put
+the shim there while the bookkeeping stayed here would leave a host holding processes it cannot enumerate,
+which is the one outcome worth designing against.
 
-The parts that genuinely need thought are elsewhere: which end resolves `--dir` and the session's
-environment, what a dropped link does to the resume loop that already handles a server restart, and whether
-`cm list` shows local and remote sessions in one table or keeps them apart.
+Authentication is why the `ssh://` form is the version worth building. `docs/rpc.md` records that a network
+cm would mean building auth rather than inheriting gRPC's credential ecosystem; a tunnel borrows ssh's
+instead, so this stays a client-side convenience rather than a network service. "A cm that listens on the
+network" below is the other thing and is still ruled out.
+
+*Decided.* Three choices, in the order they constrain the rest.
+
+**A client dials the remote directly; the local server is not involved.** The alternative, a local server
+holding one link per remote and re-serving it, buys a single `cm ls` across hosts and one shared connection,
+and costs a local server that models sessions it does not own, two colliding name and ID namespaces, a
+second hop per RPC, and every remote attachment dropping when the local server restarts. An ssh
+`ControlMaster` recovers most of the shared-connection benefit with none of that, and cross-host listing can
+be a client-side fan-out later.
+
+**The transport is a stdio proxy, `ssh host cm server proxy`**, with the remote cm dialing its own socket and
+shuttling bytes to its stdin and stdout. This needs no protocol change, which is a measured fact rather than
+an expectation: `ttrpc.NewClient` takes a `net.Conn`, and the only unix-specific code in ttrpc v1.2.9 is
+`unixcreds_linux.go`, a server-side handshaker cm does not use. So a `net.Conn` over a child process's pipes
+is a valid client connection. `docker system dial-stdio` is the same pattern.
+
+Three things then fall out rather than being built. Autostart is the remote's own `connectServer`, so a
+server appears on the remote when needed. `ServerStopped` is the remote's file, so a deliberately stopped
+remote server stays stopped. And the proxy collects itself when the link dies, since ssh hands the remote
+command a dead stdin. `ssh -L unix:...` forwarding gets none of these: a forward is established before
+anything runs, so it cannot start a server, and it needs the remote socket path first, which is another
+round trip.
+
+**A remote-created session gets sshd's posture, not this client's environment.** `Open.env` carries the
+client's whole environment today via `sessionenv.Inherit`, which across hosts means a macOS `PATH`, `HOME`
+and `TERMINFO` on a Linux remote, plus `SSH_AUTH_SOCK` and `KITTY_LISTEN_ON` naming sockets that do not
+exist there. Under `--remote` only the terminal-describing variables cross, plus explicit `--env`, and the
+remote login builds the rest. `--dir` goes the same way: unset sends empty and lets the remote decide, and a
+value given is a remote path used verbatim. `cmd/cm/attach.go` defaults it to `os.Getwd()`, and sending that
+would create sessions in directories that do not exist.
+
+Scope is every command that goes through `withServer`, with the machine-local ones refusing and saying to
+run `ssh host cm ...` instead: `doctor`, `server`, `shim`, `logs`, `upgrade`, `config`. A half-answer about
+the wrong machine is worse than a refusal.
+
+*What the existing code already gives.* The client's reconnect loop re-dials forever and treats a failure
+after the first connection as an outage waited out however long it takes, with the notice, the resume from
+`lastSeq`, and the repaint when the notice clears. A dropped ssh link is that path unchanged, so
+link-dropping behavior is inherited rather than written. `Options.SocketPath` becoming a dialer, and
+`StartServer` already existing as a hook, is the whole seam.
+
+*Measured, loopback.* 137ms for a fresh ssh connection against 10 to 20ms through a `ControlMaster`, next to
+about 23ms for a local cm invocation. Multiplexing is not optional for the short commands, and a real host
+adds WAN round trips to the fresh-connection figure. The local side should also set `ServerAliveInterval`
+rather than trusting the user's ssh config: without it a NAT-dropped connection hangs instead of erroring,
+and the client sits in an attach that looks live and answers nothing.
+
+*Three things that will bite.* `CM_REMOTE` belongs in `sessionenv.NoInherit` while staying out of
+`noEnvFlags`, which makes it the first variable where those two lists disagree. Binding it to the flag is
+wanted, so a window can be pointed at a host once; inheriting it is not, because `cm attach` forwards its
+environment into the session it creates, so every cm inside a remote session would hop out again, to a third
+host or, ssh-to-self, into recursion.
+
+`Open.inside_session` must not be sent to a remote server. It names a session on the *local* server, so
+remotely it resolves to nothing or, worse, collides with an unrelated remote session of the same name. The
+local parent whose pty the client writes to still needs its detach key suspended, so `--remote` wants the
+announcement over the pty rather than the RPC field. That is the same asymmetry recorded under "A session's
+location, announced rather than derived" above, in the other direction: ssh into cm loses `CM_SESSION`,
+while a remote attach from inside cm has it and has the wrong server to send it to.
+
+Two facts stop being true across a link. `Open.client_pid`'s own comment says it is meaningful only on the
+same host, so `cm clients` on the remote would print a pid naming an unrelated process there. And
+`cmd/cm/sessionref.go` resolves a name through the *local* sqlite to build a path, for `cm logs shim` and the
+overlay picker, which must refuse under `--remote` rather than answer from the wrong machine.
+
+`KITTY_LISTEN_ON` is a known limit rather than a bug to fix: a kitten inside a remote session cannot reach
+the local kitty. kitty's own `ssh` kitten forwards it, and cm should not try to.
 
 **A kitty wrapper for spawning windows.** A `cmk` or `kitten cm` that creates a kitty window or tab with a
 cm session already in it, so an agent could give each sub-agent its own visible tab instead of a headless
