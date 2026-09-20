@@ -395,7 +395,18 @@ type Session struct {
 	// derived values are the only thing a local consumer has for a session on another host: the OSC 7 that
 	// arrives carries the remote host, and `cm_launch.py` reads exactly that to open a split there. Taking
 	// it away would trade a fixed detach key for a broken split. See docs/ideas.md on a session's location.
-	announced map[string]struct{}
+	announced map[string]string
+
+	// frames is the stack of command frames the shells writing to this pty have opened, outermost first.
+	//
+	// One entry per command in flight, which for one shell is at most one; the depth comes from an ssh, where
+	// the far side's shell writes its own frames through this same pty. That is what makes the stack a
+	// location: the frames name, in order, what this session is currently inside.
+	//
+	// Bounded, because these arrive as ordinary output like everything else here. Past the bound a frame is
+	// ignored rather than dropping the oldest, so the outermost frames -- the ones that say where the session
+	// went -- survive a stream of junk.
+	frames []sessionFrame
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -873,6 +884,13 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	//
 	// Fed regardless of nesting, like the trackers above: an announcement from a deeper hop passes through
 	// every pty on the way out, and each parent needs it to hand its own detach key on.
+	// Frames before announcements, which is the ordering that matters when both arrive in one chunk: a client
+	// announcing itself inside a command has to find that command's frame already open, or it binds to
+	// nothing and becomes uncollectable.
+	for _, f := range s.reports.TakeFrames() {
+		s.noteFrame(f)
+	}
+
 	for _, n := range s.reports.TakeNesting() {
 		s.noteNesting(n)
 	}
@@ -1724,6 +1742,20 @@ func (s *Session) Metadata() (title string, cwd osc.Cwd) {
 	return s.title, s.cwd
 }
 
+// sessionFrame is one command frame on a session's stack.
+type sessionFrame struct {
+	// id is what the shell minted, and what its close names.
+	id string
+	// argv is the command line the shell reported, bounded and stripped by internal/osc.
+	argv string
+}
+
+// maxSessionFrames bounds how deep a session's frame stack goes.
+//
+// Deep enough for an ssh chain nobody would type by hand, and shallow enough that a stream of frames cannot
+// grow this without limit. A frame arriving past the bound is ignored, which keeps the outermost ones.
+const maxSessionFrames = 16
+
 // hostingState is what a parent's clients need to know about what is attached inside it.
 //
 // Two values rather than one because the two ways cm learns about a nested client carry different
@@ -1867,9 +1899,18 @@ func (s *Session) noteNesting(n osc.Nesting) {
 			return
 		}
 		if s.announced == nil {
-			s.announced = make(map[string]struct{})
+			s.announced = make(map[string]string)
 		}
-		s.announced[n.ID] = struct{}{}
+		// Bound to the frame that is open, which is what makes this collectable: the client announcing itself
+		// is running *inside* that command, so the command returning means the client is gone whether it said
+		// so or not. Empty when no frame is open, which is a parent whose shell has no cm integration loaded;
+		// such an announcement stands until the server restarts, and the escape on the detach key is what
+		// covers that. See noteFrame.
+		frame := ""
+		if n := len(s.frames); n > 0 {
+			frame = s.frames[n-1].id
+		}
+		s.announced[n.ID] = frame
 	}
 
 	if after := s.hostingStateLocked(); after != before {
@@ -1877,6 +1918,90 @@ func (s *Session) noteNesting(n osc.Nesting) {
 			"session", s.label, "id", n.ID, "ended", n.Ended, "nested", after.Nested)
 		s.publishHosting(after)
 	}
+}
+
+// noteFrame applies one command frame from the output stream.
+//
+// A frame opening pushes; a frame closing pops it and everything above it, which is the rule that needs no
+// timeout. A dropped ssh kills the remote shell without any close of its own, but the *local* shell survives
+// and its prompt hook closes the frame the ssh ran in, so the frames above it go with it. Only the deepest
+// frame can be stranded, and the next close one level out takes it.
+//
+// A close naming an id not on the stack does nothing, deliberately. Two shells write to this pty once an ssh
+// is involved, and one of them may have started before cm was watching, so an unmatched close is ordinary
+// rather than a sign of corruption.
+func (s *Session) noteFrame(f osc.Frame) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	before := s.hostingStateLocked()
+
+	if !f.Ended {
+		if len(s.frames) >= maxSessionFrames {
+			s.log.Warn("ignoring a command frame, the stack is full",
+				"session", s.label, "id", f.ID, "depth", len(s.frames))
+			return
+		}
+		s.frames = append(s.frames, sessionFrame{id: f.ID, argv: f.Argv})
+		return
+	}
+
+	at := -1
+	for i := len(s.frames) - 1; i >= 0; i-- {
+		if s.frames[i].id == f.ID {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return
+	}
+
+	// Everything from the closed frame up is gone, and so is any client that announced itself inside one of
+	// them. That is the collection this whole mechanism exists for.
+	closed := make(map[string]bool, len(s.frames)-at)
+	for _, fr := range s.frames[at:] {
+		closed[fr.id] = true
+	}
+	s.frames = s.frames[:at]
+
+	for id, frame := range s.announced {
+		if frame != "" && closed[frame] {
+			delete(s.announced, id)
+			s.log.Info("dropped a nesting announcement with the command it was made in",
+				"session", s.label, "client", id, "frame", frame)
+		}
+	}
+
+	if after := s.hostingStateLocked(); after != before {
+		s.publishHosting(after)
+	}
+}
+
+// Location returns the commands this session is currently inside, outermost first.
+//
+// The argv is what the shell reported and nothing is derived from it: cm does not know that one of these is
+// an ssh, which is the same reason docs/ideas.md rejected a list of commands cm would treat as
+// session-hosting. A consumer that launched the command knows what it means and can read the argv.
+func (s *Session) Location() []LocationFrame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.frames) == 0 {
+		return nil
+	}
+	out := make([]LocationFrame, 0, len(s.frames))
+	for _, f := range s.frames {
+		out = append(out, LocationFrame{ID: f.id, Argv: f.argv})
+	}
+	return out
+}
+
+// LocationFrame is one entry of a session's location, as a caller outside this package sees it.
+type LocationFrame struct {
+	// ID is the frame's own identifier, which pairs an open with its close.
+	ID string
+	// Argv is the command line the shell reported.
+	Argv string
 }
 
 // endHosting records that a nested attachment to child has finished.
