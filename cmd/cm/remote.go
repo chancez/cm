@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -244,6 +245,87 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	// a local session hands the detach key to the inner client the same as a local nesting does, over the pty
 	// rather than through an RPC, and three presses escape a handover nothing is acting on.
 	opts.InsideSession = ""
+}
+
+// completionReadyTimeout bounds asking whether a shared connection is up.
+//
+// Local work only: `ssh -O check` talks to the control socket and never to the network, so this is a bound on
+// a process starting rather than on a link. Short because it runs on a keystroke, and because a check that
+// has not answered in a tenth of a second is not going to make the completion feel fast anyway.
+const completionReadyTimeout = 100 * time.Millisecond
+
+// completionSource says where a completion should get its names, and whether it should bother.
+//
+// Three outcomes rather than two, because a remote has two: this machine, a remote whose connection is
+// already up, and a remote whose connection is not. The last one completes nothing.
+//
+// A tab press is the one place where being slow is worse than being unhelpful. Locally a completion costs
+// about 20ms; against a remote whose connection is shared and live it is about 65ms, which is still under
+// what a keystroke can absorb; opening a connection for it costs 170ms on loopback and a full ssh handshake
+// on a real link, which is where a shell stops feeling like a shell. So the rule is fast or nothing.
+//
+// Never the *local* server's names when a remote was named, which is the outcome this exists to prevent: the
+// wrong host's session completed into a `cm kill` is a mistake a user cannot see they are making.
+func (g *globals) completionSource(ctx context.Context) (dial func(context.Context) (transport.Conn, serverv1.ServerClient, error), ok bool) {
+	d, err := g.remoteDialerFor(true)
+	if err != nil {
+		return nil, false
+	}
+	if d == nil {
+		return nil, true
+	}
+	if !d.connectionIsUp(ctx) {
+		return nil, false
+	}
+	return d.Dial, true
+}
+
+// dialFor opens a connection using what completionSource returned: its dialer, or this machine's socket.
+func (g *globals) dialFor(
+	ctx context.Context,
+	dial func(context.Context) (transport.Conn, serverv1.ServerClient, error),
+) (transport.Conn, serverv1.ServerClient, error) {
+	if dial != nil {
+		return dial(ctx)
+	}
+	dirs, err := g.dirs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return dialServer(dirs)
+}
+
+// connectionIsUp reports whether this target's shared connection is already established.
+//
+// `ssh -O check` against the control socket, which is a local operation: it asks the master process whether
+// it is there and never touches the network. False when nothing is shared, when the socket is stale, and
+// when the configured ssh command does not understand -O, all of which mean the same thing here, that a
+// completion cannot be served quickly.
+//
+// Output is captured rather than inherited, which matters more here than usual: a completion's stdout is
+// parsed by the shell, and ssh writes "Master running (pid=...)" on success.
+func (d *remoteDialer) connectionIsUp(ctx context.Context) bool {
+	path := d.target.ControlPath(d.controlDir)
+	if path == "" {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, completionReadyTimeout)
+	defer cancel()
+
+	name, args := d.program()
+	args = append(args, "-O", "check", "-o", "ControlPath="+path, d.target.SSHHost())
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout, cmd.Stderr = nil, nil
+	return cmd.Run() == nil
+}
+
+// program returns the ssh command to run and its own arguments.
+func (d *remoteDialer) program() (string, []string) {
+	if len(d.command) == 0 {
+		return remote.Scheme, nil
+	}
+	return d.command[0], append([]string{}, d.command[1:]...)
 }
 
 // sshCommandLine returns the ssh command line to use, or nil for plain ssh.

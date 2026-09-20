@@ -160,17 +160,13 @@ func completeTagKeys(g *globals) func(*cobra.Command, []string, string) ([]strin
 
 // tagKeys lists the distinct tag keys across all sessions.
 func tagKeys(ctx context.Context, g *globals) ([]string, error) {
-	// Nothing rather than this machine's names when a remote is named. A completion is not worth an ssh: a
-	// fresh connection costs 137ms, on a keystroke, for every tab press. Offering the local server's names
-	// instead is worse than offering none, because the wrong name would be completed into a `cm kill`.
-	if g.remote != "" {
+	// See globals.completionSource: the remote's keys when its connection is already shared, and none rather
+	// than this machine's when it is not.
+	dial, ok := g.completionSource(ctx)
+	if !ok {
 		return nil, nil
 	}
-	dirs, err := g.dirs()
-	if err != nil {
-		return nil, err
-	}
-	conn, cl, err := dialServer(dirs)
+	conn, cl, err := g.dialFor(ctx, dial)
 	if err != nil {
 		return nil, err
 	}

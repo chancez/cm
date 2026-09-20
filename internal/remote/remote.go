@@ -219,6 +219,14 @@ func (d Dialing) program() (string, []string) {
 	return d.Command[0], d.Command[1:]
 }
 
+// SSHHost is how ssh is told which host to reach, as user@host or bare host.
+func (t Target) SSHHost() string {
+	if t.User != "" {
+		return t.User + "@" + t.Host
+	}
+	return t.Host
+}
+
 // ProxyCommand returns the program and arguments that connect to this target's cm server.
 func (t Target) ProxyCommand(d Dialing) (string, []string) {
 	name, args := d.program()
@@ -269,11 +277,7 @@ func (t Target) ProxyCommand(d Dialing) (string, []string) {
 		args = append(args, "-p", strconv.Itoa(t.Port))
 	}
 
-	host := t.Host
-	if t.User != "" {
-		host = t.User + "@" + t.Host
-	}
-	args = append(args, host)
+	args = append(args, t.SSHHost())
 
 	// After a --, so a remote whose command needs no quoting cannot be read as more ssh options.
 	args = append(args, "--", t.command(), "server", "proxy")
@@ -304,11 +308,7 @@ func (t Target) SuggestionWith(command, sshFlags []string, args ...string) strin
 	if t.Port != 0 {
 		parts = append(parts, "-p", strconv.Itoa(t.Port))
 	}
-	if t.User != "" {
-		parts = append(parts, t.User+"@"+t.Host)
-	} else {
-		parts = append(parts, t.Host)
-	}
+	parts = append(parts, t.SSHHost())
 	parts = append(parts, t.command())
 	return strings.Join(append(parts, args...), " ")
 }

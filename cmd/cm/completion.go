@@ -83,18 +83,15 @@ func completeSessionNames(g *globals) func(*cobra.Command, []string, string) ([]
 
 // sessionNames lists session names matching a prefix, described so the shell can show state.
 func sessionNames(ctx context.Context, g *globals, prefix string) ([]string, error) {
-	// Nothing rather than this machine's names when a remote is named. A completion is not worth an ssh: a
-	// fresh connection costs 137ms, on a keystroke, for every tab press. Offering the local server's names
-	// instead is worse than offering none, because the wrong name would be completed into a `cm kill`.
-	if g.remote != "" {
+	// Where the names come from, and whether asking is quick enough to do on a keystroke. See
+	// globals.completionSource: a remote whose connection is already shared answers in about 65ms, and one
+	// that would have to be opened completes nothing rather than stalling the shell.
+	dial, ok := g.completionSource(ctx)
+	if !ok {
 		return nil, nil
 	}
-	dirs, err := g.dirs()
-	if err != nil {
-		return nil, err
-	}
 
-	conn, cl, err := dialServer(dirs)
+	conn, cl, err := g.dialFor(ctx, dial)
 	if err != nil {
 		return nil, err
 	}

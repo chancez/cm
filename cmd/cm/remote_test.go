@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -308,5 +311,66 @@ func TestPointAtServerFollowsTheRemote(t *testing.T) {
 	if localOpts.Dial != nil || localOpts.SocketPath == "" {
 		t.Errorf("a local follower got Dial=%v SocketPath=%q, want a path and no dialer",
 			localOpts.Dial != nil, localOpts.SocketPath)
+	}
+}
+
+// Completion asks this machine when no remote is named, which is the case that must not regress: the flag
+// existing changes nothing about a local shell.
+func TestCompletionSourceIsLocalWithoutARemote(t *testing.T) {
+	g := &globals{}
+	dial, ok := g.completionSource(t.Context())
+	if !ok {
+		t.Fatal("completionSource() refused, so a local completion offers nothing")
+	}
+	if dial != nil {
+		t.Error("completionSource() returned a dialer for a local server, want the socket path")
+	}
+}
+
+// And offers nothing rather than this machine's names when a remote is named but its connection is not up.
+// The wrong host's session completed into a `cm kill` is a mistake a user cannot see they are making, and
+// opening a connection on a keystroke is the other thing this refuses to do.
+func TestCompletionSourceRefusesAColdRemote(t *testing.T) {
+	// A host that does not resolve, so the check cannot succeed however long it waits. The control socket
+	// does not exist either, which is the first thing that stops this.
+	g := &globals{remote: "ssh://cm-test-nonexistent.invalid", configPath: "/nonexistent.toml"}
+
+	began := time.Now()
+	dial, ok := g.completionSource(t.Context())
+	if ok {
+		t.Error("completionSource() accepted a remote with no shared connection")
+	}
+	if dial != nil {
+		t.Error("completionSource() returned a dialer for a cold remote")
+	}
+	// Fast, because this runs on a keystroke. The bound is the one the code sets plus room for a process to
+	// start, not a number picked to make the test pass: a check that took longer than this would be the
+	// stall the whole rule exists to avoid.
+	if waited := time.Since(began); waited > completionReadyTimeout+2*time.Second {
+		t.Errorf("completionSource() took %v on a cold remote, which is a stall on a keystroke", waited)
+	}
+}
+
+// A malformed remote completes nothing rather than falling back to this machine, for the same reason: the
+// names would be from somewhere other than where the user pointed.
+func TestCompletionSourceRefusesAMalformedRemote(t *testing.T) {
+	g := &globals{remote: "http://work", configPath: "/nonexistent.toml"}
+	if _, ok := g.completionSource(t.Context()); ok {
+		t.Error("completionSource() accepted a malformed remote, so completion would use the local server")
+	}
+}
+
+// Sharing turned off means no completion from a remote at all, since there is no connection to be already up
+// and opening one is what this refuses to do.
+func TestCompletionSourceRefusesWhenSharingIsOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cm.toml")
+	body := "[remote]\nconnection_persist = \"0\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v, want nil", err)
+	}
+
+	g := &globals{remote: "ssh://work", configPath: path}
+	if _, ok := g.completionSource(t.Context()); ok {
+		t.Error("completionSource() accepted a remote with sharing off")
 	}
 }

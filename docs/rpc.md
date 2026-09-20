@@ -252,6 +252,17 @@ Starting a server on the far end is the first dial's job and no later dial's. `r
 stopped on the remote. The client's own recovery path asks explicitly through `StartServer` when its policy
 allows, which is the same division the local client has, and the two commands are distinguishable in `ps`.
 
+**Completion is fast or nothing.** A tab press is the one place where being slow is worse than being
+unhelpful, so a completion against a remote asks it only when the shared connection is *already* up, checked
+with `ssh -O check`, which talks to the control socket and never to the network. Warm that costs about 65ms,
+against 20ms locally, which a keystroke absorbs. Cold it offers nothing rather than opening a connection for
+170ms on loopback and a full handshake on a real link.
+
+What it never does is fall back to this machine's names. A completion is read as a list of things the command
+will act on, so the wrong host's session completed into a `cm kill` is a mistake the user cannot see they are
+making; an empty list is merely unhelpful. With `connection_persist = 0` there is never a shared connection,
+so a remote never completes, which follows from the rule rather than being a second one.
+
 Four ssh options are passed because each prevents something that would otherwise be rare and
 baffling rather than a clean failure. `-T`, because `RequestTTY` in a user's config overrides ssh's
 no-pty default and a pty's line discipline rewrites `\n` as `\r\n`, corrupting every message. `-e none`,
