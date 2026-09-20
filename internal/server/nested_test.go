@@ -273,9 +273,13 @@ func publishedHosting(sub *hostingSub) (hostingState, bool) {
 // client keeps intercepting ctrl-\, which for a per-window session closes the window instead of leaving
 // the inner session.
 //
-// Only the transitions are published, and that is asserted rather than assumed: a second child arriving
-// says nothing new, and telling a client twice is how a coalescing channel ends up delivering a stale
-// value after the state has already moved on.
+// Every change is published, including a second child arriving and one of two leaving, and the count is why:
+// a client cannot otherwise tell a press that left a level from one that went nowhere. Measured with four
+// levels nested, where the client's escape counted three working presses as unanswered and detached the
+// window with a live client still inside it.
+//
+// What must hold through the middle of a chain is the handover itself, so that is asserted separately from
+// the count rather than inferred from "nothing was published".
 func TestHostingTransitionsAreToldToClients(t *testing.T) {
 	sess := newNestedTestSession(t, nil)
 	sub := sess.subscribeHosting()
@@ -285,19 +289,23 @@ func TestHostingTransitionsAreToldToClients(t *testing.T) {
 	}
 
 	sess.beginHosting("child-a")
-	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true}) {
-		t.Errorf("after the first nested attach, told (%+v, %v), want ({Nested:true}, true)", v, ok)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true, Count: 1}) {
+		t.Errorf("after the first nested attach, told (%+v, %v), want ({Nested:true Count:1}, true)", v, ok)
 	}
 
 	sess.beginHosting("child-b")
-	if v, ok := publishedHosting(sub); ok {
-		t.Errorf("a second nested attach published %+v, want nothing: the state did not change", v)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true, Count: 2}) {
+		t.Errorf("after a second nested attach, told (%+v, %v), want ({Nested:true Count:2}, true)", v, ok)
 	}
 
 	sess.endHosting("child-a")
-	if v, ok := publishedHosting(sub); ok {
-		t.Errorf("one of two nested attachments ending published %+v, want nothing: the other still "+
-			"holds the detach key", v)
+	v, ok := publishedHosting(sub)
+	if !ok || v != (hostingState{Nested: true, Count: 1}) {
+		t.Errorf("one of two nested attachments ending told (%+v, %v), want ({Nested:true Count:1}, true)",
+			v, ok)
+	}
+	if !v.Nested {
+		t.Error("the handover lifted while the other attachment still held the detach key")
 	}
 
 	sess.endHosting("child-b")
@@ -323,8 +331,8 @@ func TestHostingIsSeededOnSubscribe(t *testing.T) {
 	sess.beginHosting("child")
 
 	sub := sess.subscribeHosting()
-	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true}) {
-		t.Errorf("a client attaching while nested was told (%+v, %v), want ({Nested:true}, true)", v, ok)
+	if v, ok := publishedHosting(sub); !ok || v != (hostingState{Nested: true, Count: 1}) {
+		t.Errorf("a client attaching while nested was told (%+v, %v), want ({Nested:true Count:1}, true)", v, ok)
 	}
 }
 

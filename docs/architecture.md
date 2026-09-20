@@ -380,10 +380,17 @@ Four details are load-bearing:
 - **A fact, not an instruction.** The server says whether anything is nested; what to do with it is the
   client's, because the key is configured client side and a read-only follower or `cm read --follow` has
   none to hand over.
-- **Only the transitions are published, and the state is seeded on subscribe.** A client attaching while
-  a nested attach is already running has to be told on arrival: the inner client holds the parent's pty
-  rather than the connection, so it survives a server restart or a dropped stream, and a window coming
+- **Every change is published, count included, and the state is seeded on subscribe.** A client attaching
+  while a nested attach is already running has to be told on arrival: the inner client holds the parent's
+  pty rather than the connection, so it survives a server restart or a dropped stream, and a window coming
   back would otherwise hold a key the inner client believes is its own.
+
+  The count is published rather than only the boolean, and only the boolean is what this originally sent.
+  Measured with four levels nested: each press leaves one level while the aggregate stays nested, so the
+  outer client saw no change, counted three *working* presses as unanswered, and its escape detached the
+  window with a live client still inside it. That is the failure this whole mechanism exists to prevent,
+  reintroduced by the escape. A client resets its press count on any change in the count, so a press that
+  achieves something can never accumulate toward the escape.
 - **Published under the session's lock**, unlike metadata. This value is a level rather than a snapshot,
   and two nested attachments transition independently, so a send outside the lock can reorder a child
   ending against another starting and leave a client believing nothing is nested while an inner client is
@@ -448,6 +455,10 @@ Three decisions in it.
   detach the inner session and then close the window, which is what this whole mechanism exists to prevent.
   The count resets whenever the nesting changes, and a press the inner client acts on *is* a change, so
   reaching three requires a handover that is not moving.
+
+  "Changes" has to mean the count, not the boolean, and getting that wrong is what made the escape dangerous
+  in a chain. See the count in the Hosting event above: four levels, three presses, and the window left with
+  a client still nested.
 - **The notice is the safety, not decoration.** It is what makes the third press a deliberate answer to
   something on screen rather than the tail of a burst, and it is why two presses stay silent: one press is
   the ordinary way to leave a nested session, and a line on every nested detach would be noise on the common

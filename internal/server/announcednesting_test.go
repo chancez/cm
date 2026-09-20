@@ -25,7 +25,7 @@ func TestAnnouncedNestingIsPublishedToTheParentsClients(t *testing.T) {
 	sub := sess.subscribeHosting()
 
 	sess.processChunk(append([]byte("remote output"), announce("9f3c2a", false)...), 0)
-	want := hostingState{Nested: true, OnlyAnnounced: true}
+	want := hostingState{Nested: true, OnlyAnnounced: true, Count: 1}
 	if got, ok := publishedHosting(sub); !ok || got != want {
 		t.Errorf("after a client announced itself, told (%+v, %v), want (%+v, true)", got, ok, want)
 	}
@@ -75,18 +75,31 @@ func TestRepeatedAnnouncementIsTheSameClient(t *testing.T) {
 }
 
 // An ssh chain announces once per hop, and each hop is its own client.
+//
+// The count is what the clients act on: each hop arriving or leaving is published even though the aggregate
+// stays nested throughout, because a client cannot otherwise tell a press that left a level from one that
+// went nowhere. What must not change while any hop remains is the handover itself.
 func TestTwoAnnouncedClientsAreDistinct(t *testing.T) {
 	sess := newNestedTestSession(t, &fakeTerminal{})
 	sub := sess.subscribeHosting()
 
 	sess.processChunk(announce("hop1", false), 0)
-	if _, ok := publishedHosting(sub); !ok {
-		t.Fatal("the first hop published nothing")
+	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true, Count: 1}) {
+		t.Fatalf("the first hop told (%+v, %v), want ({Nested:true OnlyAnnounced:true Count:1}, true)", got, ok)
 	}
+
 	sess.processChunk(announce("hop2", false), 0)
+	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true, Count: 2}) {
+		t.Fatalf("the second hop told (%+v, %v), want a count of 2", got, ok)
+	}
+
 	sess.processChunk(announce("hop2", true), 0)
-	if got, ok := publishedHosting(sub); ok {
-		t.Errorf("the second hop coming and going published %+v, want nothing: the first still holds the key", got)
+	got, ok := publishedHosting(sub)
+	if !ok || got != (hostingState{Nested: true, OnlyAnnounced: true, Count: 1}) {
+		t.Fatalf("the second hop leaving told (%+v, %v), want a count of 1", got, ok)
+	}
+	if !got.Nested {
+		t.Error("the handover lifted while the first hop was still there")
 	}
 
 	sess.processChunk(announce("hop1", true), 0)
@@ -104,19 +117,19 @@ func TestKnownNestingAlongsideAnAnnouncedOneIsPublished(t *testing.T) {
 	sub := sess.subscribeHosting()
 
 	sess.processChunk(announce("9f3c2a", false), 0)
-	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true}) {
-		t.Fatalf("after the announcement, told (%+v, %v), want ({Nested:true OnlyAnnounced:true}, true)", got, ok)
+	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true, Count: 1}) {
+		t.Fatalf("after the announcement, told (%+v, %v), want a count of 1 and announced only", got, ok)
 	}
 
 	sess.beginHosting("child")
-	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true}) {
-		t.Errorf("with a known child as well, told (%+v, %v), want ({Nested:true}, true)", got, ok)
+	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, Count: 2}) {
+		t.Errorf("with a known child as well, told (%+v, %v), want ({Nested:true Count:2}, true)", got, ok)
 	}
 
 	sess.endHosting("child")
-	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true}) {
-		t.Errorf("with only the announced one left, told (%+v, %v), want "+
-			"({Nested:true OnlyAnnounced:true}, true)", got, ok)
+	if got, ok := publishedHosting(sub); !ok || got != (hostingState{Nested: true, OnlyAnnounced: true, Count: 1}) {
+		t.Errorf("with only the announced one left, told (%+v, %v), want a count of 1 and announced only",
+			got, ok)
 	}
 }
 
@@ -130,7 +143,7 @@ func TestAnnouncedNestingIsSeededOnSubscribe(t *testing.T) {
 	sess.processChunk(announce("9f3c2a", false), 0)
 
 	sub := sess.subscribeHosting()
-	want := hostingState{Nested: true, OnlyAnnounced: true}
+	want := hostingState{Nested: true, OnlyAnnounced: true, Count: 1}
 	if got, ok := publishedHosting(sub); !ok || got != want {
 		t.Errorf("a client attaching while announced-nested was told (%+v, %v), want (%+v, true)", got, ok, want)
 	}
@@ -152,7 +165,7 @@ func TestAnnouncementSplitAcrossChunks(t *testing.T) {
 	}
 	sess.processChunk(sequence[cut:], seq.Shim(cut))
 
-	want := hostingState{Nested: true, OnlyAnnounced: true}
+	want := hostingState{Nested: true, OnlyAnnounced: true, Count: 1}
 	if got, ok := publishedHosting(sub); !ok || got != want {
 		t.Errorf("after the rest arrived, told (%+v, %v), want (%+v, true)", got, ok, want)
 	}

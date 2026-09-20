@@ -507,6 +507,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 					Hosting: &serverv1.Hosting{
 						Nested:        state.Nested,
 						AnnouncedOnly: state.OnlyAnnounced,
+						NestedCount:   uint32(state.Count),
 					},
 				},
 			}); err != nil {

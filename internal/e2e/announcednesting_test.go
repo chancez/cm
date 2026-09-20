@@ -152,3 +152,88 @@ func TestDetachKeyEscapesANestingThatIsNotAnswering(t *testing.T) {
 	}
 	outer.waitExit(10 * time.Second)
 }
+
+// Several announced levels at once, each press leaving exactly one.
+//
+// Confirmed by hand first, over a real ssh with several nested cm sessions, and then this test found what
+// the hand test had not: at four levels the third press detached the *outer* window while a live client was
+// still nested. The escape on the detach key counted every forwarded press, and a press that legitimately
+// left one level of several did not look like a change to the outer client, because the aggregate stayed
+// nested. Three working presses therefore reached the escape. The fix is the count in the Hosting event; the
+// symptom is what this asserts.
+//
+// Four levels rather than two, because two never reaches the escape and would have passed throughout.
+//
+// `env -u CM_SESSION` at each level is what makes every inner client announce rather than telling the
+// server, standing in for an ssh chain without needing hosts.
+func TestDetachKeyLeavesOneAnnouncedLevelPerPress(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	outer := attachOnPty(t, e, "outer", "--", "/bin/sh")
+	outer.waitReady()
+
+	levels := []string{"l1", "l2", "l3"}
+	for _, name := range levels {
+		outer.typeLine("env -u CM_SESSION " + e.bin + " attach " + name + " -- /bin/sh")
+		e.waitFor("the "+name+" client to attach", 20*time.Second, func() bool {
+			s, ok := e.session(name)
+			return ok && s.Clients == 1
+		})
+	}
+
+	// Every level's announcement reaches the outermost session, since each one writes through its parent's
+	// pty all the way out.
+	e.waitFor("the outer session to hear all three announcements", 10*time.Second, func() bool {
+		s, ok := e.session("outer")
+		return ok && s.AnnouncedClients == 3
+	})
+
+	// A marker from the innermost shell, which also orders the announcements against the first press.
+	outer.typeLine("echo INNER_READY")
+	outer.waitForOutput("INNER_READY", 20*time.Second)
+
+	// One press per level, innermost first.
+	for i := len(levels) - 1; i >= 0; i-- {
+		name := levels[i]
+		outer.detachKey()
+		e.waitFor("the "+name+" client to detach", 15*time.Second, func() bool {
+			s, ok := e.session(name)
+			return ok && s.Clients == 0
+		})
+	}
+
+	// The outer client is still here, which is the assertion this test exists for: before the count was
+	// published, the third press detached it with a live client still nested. Waited rather than sampled
+	// because a client that painted a notice reconnects to repaint and reads zero for an instant; what must
+	// not happen is it staying zero.
+	e.waitFor("the outer client to still be attached", 10*time.Second, func() bool {
+		s, ok := e.session("outer")
+		return ok && s.Clients == 1
+	})
+
+	// And it still owns the terminal, which a count cannot say.
+	outer.typeLine("echo OUTER_ALIVE")
+	outer.waitForOutput("OUTER_ALIVE", 20*time.Second)
+	for _, name := range levels {
+		if s, _ := e.session(name); s.State != "running" {
+			t.Errorf("%s state = %q, want running: detaching must not end a session", name, s.State)
+		}
+	}
+
+	// And the next press leaves the outermost, by then holding no handover at all.
+	pressed := false
+	deadline := time.Now().Add(scaleTimeout(15 * time.Second))
+	for time.Now().Before(deadline) {
+		outer.detachKey()
+		if s, ok := e.session("outer"); ok && s.Clients == 0 {
+			pressed = true
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !pressed {
+		t.Fatal("the outer client never detached once every announced client had gone")
+	}
+	outer.waitExit(10 * time.Second)
+}

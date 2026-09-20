@@ -1766,6 +1766,14 @@ type hostingState struct {
 	// OnlyAnnounced reports that everything nested announced itself over the pty rather than telling the
 	// server, so nothing guarantees a withdrawal will arrive.
 	OnlyAnnounced bool
+	// Count is how many clients are nested, by either route.
+	//
+	// Published because a client cannot otherwise tell a press that achieved something from one that went
+	// nowhere. In a chain each press detaches one level, and the *aggregate* stays nested throughout, so a
+	// client watching only Nested sees no change and counts a working press as unanswered. Measured before
+	// this existed: four levels, three presses, and the third detached the outer window while a live client
+	// was still nested, which is the failure the handover exists to prevent. See inputGate.nestedPresses.
+	Count int
 }
 
 // hostingSub receives changes in whether a nested attachment is running inside this session.
@@ -1785,9 +1793,16 @@ type hostingSub struct {
 // session is the whole bug; only the RPC-known kind hands over the overlay's prefix as well, which leaves
 // a stranded window able to detach itself. See the Hosting message in the proto.
 func (s *Session) hostingStateLocked() hostingState {
+	// Summed rather than counting keys, because attaching twice to one child is legal and each attachment
+	// is a level a press can leave.
+	count := len(s.announced)
+	for _, n := range s.hosting {
+		count += n
+	}
 	return hostingState{
 		Nested:        len(s.hosting) > 0 || len(s.announced) > 0,
 		OnlyAnnounced: len(s.hosting) == 0 && len(s.announced) > 0,
+		Count:         count,
 	}
 }
 

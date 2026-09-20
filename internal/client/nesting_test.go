@@ -22,7 +22,7 @@ func TestInputGateNestingHandsOverBothKeys(t *testing.T) {
 	}
 
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
-	g.setSuspended(true)
+	g.setNesting(true, 1)
 
 	if dec := g.feed([]byte{prefix.Byte}, t0); string(dec.Forward) != string([]byte{prefix.Byte}) ||
 		dec.Action != gateNone {
@@ -41,7 +41,7 @@ func TestInputGateNestingHandsOverBothKeys(t *testing.T) {
 // will do; the third acts here.
 func TestInputGateNestedPressesEscalate(t *testing.T) {
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
-	g.setSuspended(true)
+	g.setNesting(true, 1)
 
 	if dec := g.feed([]byte("\x1c"), t0); string(dec.Forward) != "\x1c" || dec.Action != gateNone {
 		t.Fatalf("first press = %+v, want it forwarded silently", dec)
@@ -62,19 +62,19 @@ func TestInputGateNestedPressesEscalate(t *testing.T) {
 func TestInputGateNestedPressCountResetsWithTheHandover(t *testing.T) {
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
 
-	g.setSuspended(true)
+	g.setNesting(true, 1)
 	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
 		t.Fatalf("press while nested = %+v, want it forwarded silently", dec)
 	}
 
 	// The inner client acted on it and left.
-	g.setSuspended(false)
+	g.setNesting(false, 0)
 	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateDetach {
 		t.Fatalf("press after the handover ended = %+v, want an ordinary detach", dec)
 	}
 
 	// And a second nesting starts from zero rather than from one press in.
-	g.setSuspended(true)
+	g.setNesting(true, 1)
 	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
 		t.Errorf("first press of a new handover = %+v, want it forwarded silently", dec)
 	}
@@ -87,7 +87,7 @@ func TestInputGateNestedPressCountResetsWithTheHandover(t *testing.T) {
 // notice standing between the second press and the third.
 func TestInputGateCountsOnePressPerRead(t *testing.T) {
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
-	g.setSuspended(true)
+	g.setNesting(true, 1)
 
 	if dec := g.feed([]byte("\x1c\x1c\x1c\x1c"), t0); dec.Action != gateNone {
 		t.Errorf("four keys in one read = %+v, want them forwarded silently: a burst is one press", dec)
@@ -219,5 +219,30 @@ func TestNewNestingIDIsParseable(t *testing.T) {
 		if strings.ContainsAny(id, ";=\x1b\a") {
 			t.Fatalf("id %q contains a byte that delimits the sequence", id)
 		}
+	}
+}
+
+// A press that leaves one level of several resets the count, so the escape stays out of reach while live
+// clients remain.
+//
+// Measured before this existed, with four levels nested: the aggregate stays nested while each press leaves
+// one of them, so every working press looked unanswered and the third detached the outer window with a live
+// client still inside it. That is the failure the handover exists to prevent, reintroduced by its own escape.
+func TestInputGateNestedPressCountResetsWhenALevelGoes(t *testing.T) {
+	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
+	g.setNesting(true, 3)
+
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
+		t.Fatalf("first press = %+v, want it forwarded silently", dec)
+	}
+	// The innermost level acted on it and left. Still nested, one fewer.
+	g.setNesting(true, 2)
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
+		t.Fatalf("press after a level left = %+v, want it forwarded silently, not a warning", dec)
+	}
+	g.setNesting(true, 1)
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
+		t.Errorf("third press with a level leaving each time = %+v, want it forwarded silently: the escape "+
+			"must not be reachable while clients are still nested", dec)
 	}
 }

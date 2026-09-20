@@ -108,8 +108,16 @@ type inputGate struct {
 	// would be the obvious spelling and is unsafe: holding ctrl-\ repeats at about 30/s once the keyboard's
 	// initial delay expires, so a stuck key would detach the inner session and then close the window, which
 	// is the failure this whole mechanism exists to prevent. A count that resets whenever the nesting
-	// changes cannot do that, because a press the inner client acts on ends the handover and clears it.
+	// changes cannot do that, because a press the inner client acts on changes the nesting and clears it.
 	nestedPresses int
+	// nestedCount is how many clients the server last said were nested, which is what "the nesting changed"
+	// is measured against.
+	//
+	// The boolean is not enough, and this was measured rather than reasoned: with four levels nested, the
+	// aggregate stays nested while each press leaves one of them, so every working press looked unanswered
+	// and the third one detached the outer window with a live client still inside it. That is the failure the
+	// handover exists to prevent, reintroduced by its own escape.
+	nestedCount int
 	// held is a partial encoding of the key, kept until the rest arrives or the grace expires.
 	held []byte
 	// heldAt is when the current held bytes were first withheld, so the deadline is measured from the
@@ -186,16 +194,16 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	return gateDecision{Forward: buf}
 }
 
-// setSuspended records whether something is nested inside this session, which is what hands the keys over.
+// setNesting records what is nested inside this session, which is what hands the keys over.
 //
 // A method rather than an assignment so the press count cannot be left behind. Reset on every change,
-// including one handover replacing another: a press the inner client acted on is what ends a handover, so
-// a count that survived into the next one would bring the escape within reach of a single keystroke.
-func (g *inputGate) setSuspended(nested bool) {
-	if g.suspended == nested {
+// including one level of several going: a press the inner client acted on changes the count, and a count
+// that survived that would bring the escape within reach while live clients remain.
+func (g *inputGate) setNesting(nested bool, count int) {
+	if g.suspended == nested && g.nestedCount == count {
 		return
 	}
-	g.suspended = nested
+	g.suspended, g.nestedCount = nested, count
 	g.nestedPresses = 0
 }
 

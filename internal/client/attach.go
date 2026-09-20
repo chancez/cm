@@ -1139,10 +1139,13 @@ func runSession(
 				// Both intercepted keys go over, whichever way the nesting was learned. An announced one is
 				// less trustworthy, since no withdrawal is guaranteed, and that is answered by the escape on
 				// the detach key rather than by keeping a key back: see inputGate.nestedPresses.
-				if h.Nested != gate.suspended {
-					gate.setSuspended(h.Nested)
+				// Compared including the count, so a chain losing one level is a change even though the
+				// aggregate is still nested. Without that, a press that left a level looked unanswered.
+				if h.Nested != gate.suspended || int(h.NestedCount) != gate.nestedCount {
+					gate.setNesting(h.Nested, int(h.NestedCount))
 					opts.Log.Info("detach key handed to the innermost session",
-						"session", result.Session, "nested", h.Nested, "announced_only", h.AnnouncedOnly)
+						"session", result.Session, "nested", h.Nested,
+						"count", h.NestedCount, "announced_only", h.AnnouncedOnly)
 				}
 				if !h.Nested && nested.clear() {
 					// The notice overwrote the session's bottom row and cm's model is the only thing that

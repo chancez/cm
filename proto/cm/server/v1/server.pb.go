@@ -2329,6 +2329,14 @@ type Hosting struct {
 	// that the cases are hard to tell apart. What this is still worth is a log line that says which route a
 	// handover came from, which is the first question when one of them is wrong.
 	AnnouncedOnly bool `protobuf:"varint,2,opt,name=announced_only,json=announcedOnly,proto3" json:"announced_only,omitempty"`
+	// How many clients are nested right now, by either route.
+	//
+	// A client needs the count, not just the boolean, to tell a press that achieved something from one that
+	// went nowhere. In a chain each press leaves one level while the aggregate stays nested, so a client
+	// watching only `nested` counts a working press as unanswered and its escape becomes reachable while live
+	// clients remain: measured at four levels, where the third press detached the outer window with one still
+	// attached. Published on every change for that reason, rather than only on the transition.
+	NestedCount   uint32 `protobuf:"varint,3,opt,name=nested_count,json=nestedCount,proto3" json:"nested_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2375,6 +2383,13 @@ func (x *Hosting) GetAnnouncedOnly() bool {
 		return x.AnnouncedOnly
 	}
 	return false
+}
+
+func (x *Hosting) GetNestedCount() uint32 {
+	if x != nil {
+		return x.NestedCount
+	}
+	return 0
 }
 
 // Query asks this client's terminal a question the server cannot answer itself.
@@ -5016,10 +5031,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05query\x18\x06 \x01(\v2\x13.cm.server.v1.QueryH\x00R\x05query\x121\n" +
 	"\ahosting\x18\a \x01(\v2\x15.cm.server.v1.HostingH\x00R\ahosting\x12.\n" +
 	"\x06images\x18\b \x01(\v2\x14.cm.server.v1.ImagesH\x00R\x06imagesB\a\n" +
-	"\x05event\"H\n" +
+	"\x05event\"k\n" +
 	"\aHosting\x12\x16\n" +
 	"\x06nested\x18\x01 \x01(\bR\x06nested\x12%\n" +
-	"\x0eannounced_only\x18\x02 \x01(\bR\rannouncedOnly\"\x1b\n" +
+	"\x0eannounced_only\x18\x02 \x01(\bR\rannouncedOnly\x12!\n" +
+	"\fnested_count\x18\x03 \x01(\rR\vnestedCount\"\x1b\n" +
 	"\x05Query\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"A\n" +
 	"\bDetached\x12\x18\n" +

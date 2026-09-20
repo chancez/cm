@@ -97,7 +97,7 @@ func TestClosingAFrameCollectsTheAnnouncementMadeInIt(t *testing.T) {
 	sess.processChunk(frame("local-1", "kitten ssh white cm attach books", false), 0)
 	sess.processChunk(announce("remote-client", false), 0)
 
-	want := hostingState{Nested: true, OnlyAnnounced: true}
+	want := hostingState{Nested: true, OnlyAnnounced: true, Count: 1}
 	if got, ok := publishedHosting(sub); !ok || got != want {
 		t.Fatalf("after the announcement, told (%+v, %v), want (%+v, true)", got, ok, want)
 	}

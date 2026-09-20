@@ -690,6 +690,14 @@ message Hosting {
   // that the cases are hard to tell apart. What this is still worth is a log line that says which route a
   // handover came from, which is the first question when one of them is wrong.
   bool announced_only = 2;
+  // How many clients are nested right now, by either route.
+  //
+  // A client needs the count, not just the boolean, to tell a press that achieved something from one that
+  // went nowhere. In a chain each press leaves one level while the aggregate stays nested, so a client
+  // watching only `nested` counts a working press as unanswered and its escape becomes reachable while live
+  // clients remain: measured at four levels, where the third press detached the outer window with one still
+  // attached. Published on every change for that reason, rather than only on the transition.
+  uint32 nested_count = 3;
 }
 
 // Query asks this client's terminal a question the server cannot answer itself.
