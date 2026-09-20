@@ -640,6 +640,118 @@ func TestSessionFieldNamesMatchWhatIsAccepted(t *testing.T) {
 	}
 }
 
+// Everything in the JSON is also printable, which is the half that got missed.
+//
+// The incident: `location` and `announced_clients` were added to the JSON and to nothing else, so
+// `cm info <session>` showed neither and `--field location` was an error, while `cm list --json` had them
+// all along. TestSessionJSONKeys pins the JSON and TestSessionFieldNamesMatchWhatIsAccepted pins the
+// fields, and a value present in one and absent from the other passes both.
+//
+// Asserted from the JSON towards the fields rather than the reverse, since that is the direction things get
+// added: the server grows a value, toSessionJSON exposes it, and the printer is where it is forgotten.
+func TestEveryJSONValueIsAlsoAField(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeJSON(&buf, toSessionJSON(sampleWireSession("work"))); err != nil {
+		t.Fatalf("writeJSON() error = %v", err)
+	}
+	var keys map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &keys); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+
+	// The JSON keys that deliberately have no field of their own, each with what covers it instead. A new
+	// entry here is a decision, which is the point of spelling them out rather than skipping unmatched keys.
+	exempt := map[string]string{
+		// Spelled "pid" as a field, which predates the JSON and is what scripts pass.
+		"shell_pid": "pid",
+		// Folded into the state field, which prints "exited(1)": one value for a person, two for a parser.
+		"exit_code": "state",
+		// A list of structs with no useful one-line spelling. --json is where this is read, and the count is
+		// in the clients field.
+		"attached_clients": "clients",
+	}
+
+	fields := make(map[string]bool, len(SessionFieldNames()))
+	for _, name := range SessionFieldNames() {
+		fields[name] = true
+	}
+
+	for key := range keys {
+		if fields[key] {
+			continue
+		}
+		covered, ok := exempt[key]
+		if !ok {
+			t.Errorf("JSON key %q has no --field, so cm info does not show it; add it to sessionFields "+
+				"or list it as exempt", key)
+			continue
+		}
+		if !fields[covered] {
+			t.Errorf("JSON key %q is exempt as %q, but no such field exists", key, covered)
+		}
+	}
+}
+
+// The location prints as one line for a person, outermost first.
+func TestPrintSessionInfoReportsLocation(t *testing.T) {
+	s := sampleWireSession("work")
+	s.Location = []*serverv1.LocationFrame{
+		{Id: "local-1", Argv: "kitten ssh white"},
+		{Id: "remote-1", Argv: "nvim notes.md"},
+	}
+
+	var buf bytes.Buffer
+	if err := printSessionInfo(&buf, s, "location"); err != nil {
+		t.Fatalf("printSessionInfo() error = %v", err)
+	}
+	if got, want := buf.String(), "kitten ssh white > nvim notes.md\n"; got != want {
+		t.Errorf("--field location = %q, want %q", got, want)
+	}
+}
+
+func TestFormatLocation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		frames []locationJSON
+		want   string
+	}{
+		{
+			name: "a session at its prompt is inside nothing",
+			want: "",
+		},
+		{
+			name:   "one command",
+			frames: []locationJSON{{ID: "a", Argv: "nvim notes.md"}},
+			want:   "nvim notes.md",
+		},
+		{
+			name: "a stack reads inward",
+			frames: []locationJSON{
+				{ID: "a", Argv: "kitten ssh white"},
+				{ID: "b", Argv: "ssh black"},
+				{ID: "c", Argv: "tail -f log"},
+			},
+			want: "kitten ssh white > ssh black > tail -f log",
+		},
+		{
+			// A frame whose shell reported no command line, which bash with history disabled produces. It
+			// holds a place rather than vanishing, so a two-deep location does not read as one-deep.
+			name: "a frame with no argv",
+			frames: []locationJSON{
+				{ID: "a", Argv: "ssh white"},
+				{ID: "b"},
+			},
+			want: "ssh white > ?",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatLocation(tc.frames); got != tc.want {
+				t.Errorf("formatLocation() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A session hosting a nested attach says so where a person is looking.
 //
 // The annotation is what makes the frozen directory readable. While a session hosts a nested attach its

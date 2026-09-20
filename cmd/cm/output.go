@@ -777,7 +777,34 @@ func sessionFields(s *serverv1.Session) []struct {
 		// Space-separated, since a session name cannot contain a space and `--field hosting` is read
 		// by a script that would otherwise have to strip punctuation.
 		{"hosting", strings.Join(j.Hosting, " ")},
+		{"announced_clients", fmt.Sprint(j.AnnouncedClients)},
+		// The stack outermost first, joined with " > " so it reads as a path inward:
+		//
+		//   location  kitten ssh white > nvim notes.md
+		//
+		// A command line can contain the separator, so this is for a person rather than for a parser, and
+		// the JSON output carries the frames as a list for anything that wants the structure. Same trade as
+		// tags above, which renders a map as "k=v,k" here.
+		{"location", formatLocation(j.Location)},
 	}
+}
+
+// formatLocation renders a frame stack as one line, outermost first.
+//
+// Argv rather than id, because the id is a nonce a shell minted and means nothing to a reader. A frame whose
+// shell reported no command line prints as "?" rather than as a gap, since an empty entry would make a
+// two-deep location look one-deep: bash with history disabled produces exactly that, and so does a frame
+// closed by a shell cm never saw open.
+func formatLocation(frames []locationJSON) string {
+	argvs := make([]string, 0, len(frames))
+	for _, f := range frames {
+		if f.Argv == "" {
+			argvs = append(argvs, "?")
+			continue
+		}
+		argvs = append(argvs, f.Argv)
+	}
+	return strings.Join(argvs, " > ")
 }
 
 // SessionFieldNames lists the fields `cm info --field` accepts, for the flag's help.

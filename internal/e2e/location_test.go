@@ -57,6 +57,13 @@ func TestLocationComesFromTheShellsOwnHooks(t *testing.T) {
 		return ok && len(s.Location) == 1 && s.Location[0].Argv == "sleep 30"
 	})
 
+	// The same value where a person looks for it. Asserted here rather than only in cmd/cm, because the
+	// field was missing for a release while the JSON had it: `cm list --json` reported a location and
+	// `cm info` showed none, which reads as the feature not working.
+	if got, want := e.mustRun("info", "loc", "--field", "location"), "sleep 30\n"; got != want {
+		t.Errorf("cm info --field location = %q, want %q", got, want)
+	}
+
 	// And the frame closes when the command ends, which is the half that makes the stack a location rather
 	// than a growing list.
 	e.mustRun("signal", "loc", "int")

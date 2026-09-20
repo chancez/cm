@@ -412,7 +412,7 @@ nothing, and every consumer that needs to know reconstructs it from a side chann
 
 **Stages 1 and most of 2 have shipped.** A client that cannot reach the parent's server announces itself
 over the pty as `client=begin`, the shell integration marks each command as a frame, and the stack is
-reported as `location` by `cm info --json` and `cm list --json`. A frame closing collects the announcements
+reported as `location` by `cm info` and `cm list --json`. A frame closing collects the announcements
 made inside it, which is what stops a dropped ssh leaving a parent believing a client is there. The
 decisions are recorded in `docs/architecture.md` under command frames, including three places this entry
 guessed differently: the sequence is spelled `frame=enter` rather than `enter=ssh`, since the kind of thing
@@ -446,8 +446,9 @@ The shape, in three stages that are worth deciding separately:
    command from its prompt hooks, over the sequence cm already owns and parses. A bare `printf`, so it costs
    nothing per command and works with no server running. This fixes both limits above, because the argv is
    what was typed and the announcement does not care whether the host differs.
-2. *Expose and persist it.* **Exposed, not persisted.** `location` is in `cm info --json` and
-   `cm list --json`. What is left is `cm attach --like <ref>`, which would reproduce the top of the stack and
+2. *Expose and persist it.* **Exposed, not persisted.** `location` is in `cm info`, `--field location`, and
+   `cm list --json`. Not a `cm list` column: the table is already wide and an argv is long, so the stack
+   would either dominate it or be truncated to uselessness. What is left is `cm attach --like <ref>`, which would reproduce the top of the stack and
    leave `cm_launch.py` with no ssh knowledge at all, and persistence: the stack is in memory only, so a
    server restart loses it, and a session whose ssh is still running comes back reporting no location until
    the next command. The symptom is worth stating exactly, since it is the one a reader will meet: after a

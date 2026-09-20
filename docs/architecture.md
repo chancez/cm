@@ -480,8 +480,10 @@ open a split there.
 ### Command frames, and where a session is
 
 A session holds a stack of the commands its shells are running. The shell integration opens a frame at its
-preexec hook and closes it at the next prompt, over cm's own OSC, and the stack is what `cm info --json` and
-`cm list --json` report as `location`.
+preexec hook and closes it at the next prompt, over cm's own OSC, and the stack is what `cm info` and
+`cm list --json` report as `location`. `cm info` and `--field location` render it as one line joined with
+" > ", outermost first; the JSON carries the frames as a list, since a command line can contain the
+separator.
 
 Two things wanted it, and the second is why it is a stack rather than a value.
 
