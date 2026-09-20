@@ -477,6 +477,21 @@ The shape, in three stages that are worth deciding separately:
    collects one belongs to the shell where the ssh was typed. What it would add is depth in the location for
    a bare remote shell, which is a reporting nicety rather than a correctness fix.
 
+   The symptom, measured, so this is concrete rather than abstract: a local session that runs
+   `kitten ssh white` and then `cm attach foo` inside that ssh reports its location as `kitten ssh white`
+   alone. White's login shell has no `CM_SESSION`, so no hooks, so the `cm attach` level is missing from the
+   middle of the stack while `announced_clients` counts the client. If `foo`'s own shell loads the
+   integration, its frames stack above, and the location reads `kitten ssh white > <what foo is running>`
+   with the hop between the two absent.
+
+   *Rejected: cm emitting the frame itself.* A client already writes its announcement to that same stream
+   and could open a frame beside it, needing nothing on the far side. Two reasons against. The local case
+   would double: `preexec` does not filter, so a `cm attach foo` typed in a cm session is already framed by
+   the shell, and gating cm's copy on `inside_session` suppresses it today but not once this stage sets a
+   variable on a host where `CM_SESSION` stays unset. And every frame now means "a shell said it ran this",
+   which is what makes the collector's rule sound: closing a frame discards the frames above because they
+   came from shells further in. A frame from a client has no such relationship to the ones above it.
+
 *Why a stack is tractable here, unlike the OSC 133 version.* There is one pty and one pump goroutine feeding
 the trackers chunk by chunk, so announcements from any depth arrive in a total order. Exits carry the id of
 their enter, so nothing has to be inferred. And a parent's exit discards its descendants, which needs no
