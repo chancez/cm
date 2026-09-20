@@ -277,3 +277,42 @@ func TestStartupErrorEndsOnTheReason(t *testing.T) {
 		t.Errorf("error = %q, want it to end on what the program said", err)
 	}
 }
+
+// A cm predating `cm server proxy` is named as such, because the words it does produce send the reader
+// looking for a typo in something they did not type. This is the failure a first `--remote` against a host
+// that has not been upgraded actually produces.
+func TestStartupErrorNamesAnOldRemote(t *testing.T) {
+	for _, said := range []string{
+		`cm: unknown flag: --start`,
+		`Error: unknown command "proxy" for "cm server"`,
+	} {
+		_, _, err := dialCommand(t.Context(), "sh", "-c", `echo `+quoteForShell(said)+` >&2; exit 1`)
+		if err == nil {
+			t.Fatalf("dialCommand() error = nil, want an error for %q", said)
+		}
+		if !strings.Contains(err.Error(), "too old") {
+			t.Errorf("error %q does not say the remote cm is too old", err)
+		}
+		if !strings.Contains(err.Error(), "cm server proxy") {
+			t.Errorf("error %q does not name what the remote needs", err)
+		}
+	}
+}
+
+// And an unrelated failure gets no such advice, since the point of the hint is that it is specific.
+func TestStartupErrorDoesNotBlameTheVersionForEverything(t *testing.T) {
+	_, _, err := dialCommand(t.Context(), "sh", "-c",
+		`echo "ssh: Could not resolve hostname work" >&2; exit 255`)
+	if err == nil {
+		t.Fatal("dialCommand() error = nil, want an error")
+	}
+	if strings.Contains(err.Error(), "too old") {
+		t.Errorf("error %q blames the remote's version for a name that does not resolve", err)
+	}
+}
+
+// quoteForShell wraps a string in single quotes for `sh -c`, which the messages above need because they
+// contain double quotes of their own.
+func quoteForShell(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

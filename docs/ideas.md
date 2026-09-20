@@ -629,11 +629,17 @@ cm would mean building auth rather than inheriting gRPC's credential ecosystem; 
 instead, so this stays a client-side convenience rather than a network service. "A cm that listens on the
 network" below is the other thing and is still ruled out.
 
-**The transport exists.** `transport.DialServerVia` dials `ssh host cm server proxy` and returns the same
-client a local dial does, verified end to end against a sandboxed server over real ssh. `docs/rpc.md` holds
-that design and its measurements. What is left is the client and command wiring below.
+**Built.** `cm --remote ssh://host` works for every command, `cm attach` included, verified against a
+sandboxed server over real ssh and in a throwaway terminal. `docs/rpc.md` holds the design, the
+measurements, and what crosses the link.
 
-*Decided.* Two choices shape the rest.
+What is left is smaller than what is done: a `cm ls` that shows several hosts at once, which is a
+client-side fan-out over configured remotes rather than anything in the protocol; a config file section so a
+host can be named once instead of spelled out per command. The detach key for a `--remote` attach *nested
+inside* a local session was the third, and is done: a client announces itself over the parent's pty when its
+`Open` names no parent, which is exactly the remote case.
+
+*Decided, and the reasons are worth keeping.*
 
 **A client dials the remote directly; the local server is not involved.** The alternative, a local server
 holding one link per remote and re-serving it, buys a single `cm ls` across hosts and one shared connection,

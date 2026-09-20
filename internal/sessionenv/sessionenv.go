@@ -111,6 +111,55 @@ var NoInherit = []string{
 	"CM_REMOTE",
 }
 
+// CrossHostVars lists the variables a session created on *another machine* is given.
+//
+// Almost nothing, and that is sshd's posture rather than a shortcoming. A shell on another host builds its
+// own PATH, HOME, SHELL and the rest from that machine's login; handing it this one's would put a macOS
+// PATH in front of a Linux shell and point HOME at a directory that is not there. What the remote genuinely
+// cannot know is the terminal the bytes will be drawn by, which is here, so that is what crosses.
+//
+// The locale variables are on sshd's own default SendEnv list, and they belong for the same reason: they
+// decide what bytes a program in the session emits, and those bytes are rendered here.
+//
+// Two absences are deliberate. TERMINFO names a directory on this machine, so sending it points the remote
+// at terminal descriptions it cannot read. And everything in DefaultCapture that names a socket --
+// KITTY_LISTEN_ON, SSH_AUTH_SOCK, DISPLAY -- is a local endpoint the remote cannot reach; a kitten inside a
+// remote session not being able to talk to this kitty is a known limit, and kitty's own ssh kitten is what
+// solves it for anyone who needs it.
+//
+// A trailing "*" matches by prefix.
+var CrossHostVars = []string{
+	"TERM",
+	"COLORTERM",
+	"TERM_PROGRAM",
+	"TERM_PROGRAM_VERSION",
+	"LANG",
+	"LC_*",
+}
+
+// CrossHost returns the environment a session created on another machine takes from this client.
+//
+// The counterpart of Inherit, and the opposite policy: Inherit forwards everything a client has because the
+// session is on the same machine and resembling its creator is the point, while this forwards a short list
+// because the two machines share nothing but a terminal. See CrossHostVars.
+//
+// Input is KEY=VALUE entries as os.Environ produces them, and order is preserved so a spawn is reproducible.
+func CrossHost(environ []string) []string {
+	keep := NewMatcher(CrossHostVars)
+
+	out := make([]string, 0, len(CrossHostVars))
+	for _, kv := range environ {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if keep.Match(k) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // Inherit returns the environment a newly created session takes from its client: everything the
 // client has, less NoInherit.
 //

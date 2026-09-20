@@ -86,9 +86,17 @@ matters for another multiplexer, which sees the key first and never passes it on
 			if err != nil {
 				return err
 			}
-			if dir == "" {
+			target, err := g.remoteTarget()
+			if err != nil {
+				return err
+			}
+			if dir == "" && target == nil {
 				// Default to the caller's cwd so a new session starts where the user is,
 				// which is what a terminal emulator opening a window expects.
+				//
+				// Not for a remote, where this directory is a path on the wrong machine: it either does not
+				// exist there or, worse, exists and is something else. Left empty so the server there
+				// decides, and an explicit --dir is passed through as the remote path it must be.
 				dir, _ = os.Getwd()
 			}
 			cfg, err := g.config()
@@ -190,6 +198,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 				// reading the bytes passing through it as reports about itself.
 				InsideSession: insideCmSession(),
 			}
+			if target != nil {
+				applyRemote(&opts, target, os.Environ(), env)
+			}
 			// Nil unless this process replaced one that was already attached, so an ordinary attach
 			// still repaints.
 			opts.ResumeFrom = resumeFrom
@@ -259,8 +270,14 @@ func runAttach(
 ) error {
 	// Attaching must work whether or not a server happens to be running, which is what
 	// lets the user never think about one.
-	if err := ensureServer(ctx, dirs); err != nil {
-		return err
+	//
+	// Skipped for a remote, where the dialer's first connection carries --start and does this job inside the
+	// same ssh. Doing both would pay for two handshakes to reach one server, and the second would be asking
+	// a server that is already answering to start.
+	if opts.Dial == nil {
+		if err := ensureServer(ctx, dirs); err != nil {
+			return err
+		}
 	}
 
 	tty, err := client.OpenTTY(os.Stdin, os.Stdout)

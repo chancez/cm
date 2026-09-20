@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/remote"
+	"github.com/chancez/cm/internal/sessionenv"
+	"github.com/chancez/cm/internal/transport"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // remoteTarget reports the remote server this invocation names, or nil for this machine's.
@@ -20,6 +25,152 @@ func (g *globals) remoteTarget() (*remote.Target, error) {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// remoteDialer opens connections to a remote cm server for a client that reconnects.
+//
+// Stateful because the decision to start a server belongs to the first contact and to nothing after it.
+// `cm attach --remote host work` on a host with no server running should bring one up, which is what
+// "creating one if needed" means; every dial after that is a reconnect during an outage, and one that
+// started a server would defeat `cm server stop` on the remote from any window that happened to retry.
+// After the first, starting is the client's own decision, which it makes through StartServer below.
+//
+// No locking, because the two methods are called from the same loop in client.Attach: the dial at the top
+// of each attempt, and the starter from the outage path inside it, never concurrently. A mutex here would
+// suggest otherwise.
+type remoteDialer struct {
+	target     remote.Target
+	haveDialed bool
+}
+
+// Dial opens a connection, starting a server on the far end only on the first attempt.
+func (d *remoteDialer) Dial(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
+	start := !d.haveDialed
+	d.haveDialed = true
+
+	name, args := d.target.ProxyCommand(start)
+	conn, cl, _, err := transport.DialServerVia(ctx, name, args...)
+	return conn, cl, err
+}
+
+// StartServer brings a server up on the far end, for the client's recovery path.
+//
+// A connection opened and dropped, rather than a command of its own, because `cm server proxy --start` is
+// already exactly this: the proxy starts a server and then has nothing more to do than be closed. It costs
+// one extra ssh on a path that only runs after an outage has outlasted the quiet period.
+func (d *remoteDialer) StartServer(ctx context.Context) error {
+	name, args := d.target.ProxyCommand(true)
+	conn, _, _, err := transport.DialServerVia(ctx, name, args...)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// serverFor connects to the server an attachment's Options names.
+//
+// Its dialer when it has one, this machine's socket otherwise, so the two paths that do part of an
+// attachment's work outside client.Attach -- creating a session without attaching, and detaching from one --
+// reach the same server the attachment would have. A local dial there is how `cm run --remote` would have
+// created its session on the wrong machine.
+func serverFor(
+	ctx context.Context,
+	dirs paths.Dirs,
+	opts client.Options,
+) (transport.Conn, serverv1.ServerClient, error) {
+	if opts.Dial != nil {
+		return opts.Dial(ctx)
+	}
+	return dialServer(dirs)
+}
+
+// ensureServer starts a server for this invocation if none is running, wherever that server belongs.
+//
+// The counterpart of connect for the callers that want a server to exist before doing something else, and
+// the reason it is a method: `ensureServer(ctx, dirs)` starts one on *this* machine, which under --remote is
+// a server nobody asked for while the request goes to another host.
+func (g *globals) ensureServer(ctx context.Context) error {
+	target, err := g.remoteTarget()
+	if err != nil {
+		return err
+	}
+	if target != nil {
+		return (&remoteDialer{target: *target}).StartServer(ctx)
+	}
+
+	dirs, err := g.dirs()
+	if err != nil {
+		return err
+	}
+	return ensureServer(ctx, dirs)
+}
+
+// pointAtServer tells an attachment which server to connect to, local or remote.
+//
+// For the followers, which build their own Options rather than going through attach's assembly: `cm read
+// --follow` and `cm send --follow` are attachments in every respect that matters here, and they were the
+// last place where a --remote invocation could have streamed a *local* session of the same name.
+//
+// Deliberately no StartServer, matching what a follower does locally: it never brings a server into being,
+// because by the time it runs the command has already talked to one. The first dial still starts a remote
+// server if there is somehow none, which is remoteDialer's own policy and costs nothing when one is there.
+func (g *globals) pointAtServer(opts *client.Options) error {
+	target, err := g.remoteTarget()
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		dirs, err := g.dirs()
+		if err != nil {
+			return err
+		}
+		opts.SocketPath = dirs.ServerSocket()
+		return nil
+	}
+
+	dialer := &remoteDialer{target: *target}
+	opts.Dial = dialer.Dial
+	return nil
+}
+
+// applyRemote points an attachment at a cm server on another machine.
+//
+// Everything it changes is something that was resolved locally and is wrong across a link, gathered here
+// rather than spread through the option assembly so the whole policy can be read at once and so a local
+// attach is provably untouched: nothing below runs unless there is a remote.
+// environ is passed in rather than read here, following sessionEnvFrom: a test asserting on the whole
+// resulting environment would otherwise depend on the developer's own, and print it on failure.
+func applyRemote(opts *client.Options, target *remote.Target, environ, env []string) {
+	dialer := &remoteDialer{target: *target}
+	opts.Dial = dialer.Dial
+	// Replaces the local recovery, which spawns a server process here. There is nothing on this machine to
+	// recover: the server that matters is on the far end, and this asks it to come back.
+	opts.StartServer = dialer.StartServer
+	// Dropped rather than reimplemented. The marker it reads is a file in *this* machine's runtime
+	// directory, so honoring it here would let a local `cm server stop` suppress recovery of a remote
+	// server that was never stopped. The remote's own marker is honored where it lives, by the
+	// `cm server proxy --start` that reads it.
+	opts.ServerStopped = nil
+	// The socket path is this machine's and now names nothing relevant. Cleared so a reader of a log line
+	// or a panic is not shown a path that was never dialed.
+	opts.SocketPath = ""
+
+	// sshd's posture rather than this client's environment. See sessionenv.CrossHost: a shell on another
+	// host builds its own PATH and HOME, and what it cannot know is the terminal drawing its output.
+	// Explicit --env still wins, and comes last for that reason.
+	opts.Env = append(sessionenv.CrossHost(environ), env...)
+
+	// Not sent to a server that has never heard of it. InsideSession names a session on the *local* server,
+	// which is where this client is running; the Open goes to the remote one, where the name either resolves
+	// to nothing or, worse, matches an unrelated session and makes it stop attributing its own output to
+	// itself.
+	//
+	// Clearing it is also what makes the local parent hear about this client, which reads backwards and is
+	// the whole design: newNestingAnnouncer announces over this client's own output precisely when Open named
+	// no parent, since that is the case where no server knows the nesting. So a --remote attach nested inside
+	// a local session hands the detach key to the inner client the same as a local nesting does, over the pty
+	// rather than through an RPC, and three presses escape a handover nothing is acting on.
+	opts.InsideSession = ""
 }
 
 // machineLocal lists the commands that are about the machine they run on.
@@ -75,7 +226,8 @@ var remoteCapable = map[string]bool{
 	"wait":    true,
 	"report":  true,
 	"get-env": true,
-	// Input and output, minus the streaming forms: see remotePending and refusePendingFlag.
+	// Input and output, including the --follow forms, which attach the way `cm attach` does and so needed
+	// the same dialer. See globals.pointAtServer.
 	"send": true,
 	"read": true,
 	// Names, tags, and what a client is pointed at.
@@ -95,23 +247,21 @@ var remoteCapable = map[string]bool{
 	"version": true,
 	// Stopping a server is an RPC, unlike starting or replacing one, so it works wherever the server is.
 	"server stop": true,
+	// The attachment itself, and the picker that hands a session to one. The terminal stays here and the
+	// session is there, which is the whole point of --remote rather than a limitation of it.
+	"attach": true,
+	"tui":    true,
 }
 
 // remotePending lists the commands that will work against a remote but do not yet.
 //
-// Separate from machineLocal because the reason is different and so is what to do about it: these are
-// waiting on the client side of the work rather than being local by nature, and the entry disappears when
-// each is wired. They refuse rather than quietly acting on the local server, which is the bug this list
-// exists to prevent: `cm attach --remote host work` that attached to a *local* session named work would
-// look like it worked.
+// Empty, and kept rather than deleted because it is the right home for the next one: a command that is
+// remote-capable in principle and not yet wired belongs here rather than in machineLocal, which says
+// something permanent, and rather than nowhere, which would let it act on the local server while the user
+// asked about another. attach and tui lived here until they were wired.
 //
-// The value is the ssh options a suggested command needs. attach wants a terminal on the far end, and ssh
-// allocates none for a command.
-var remotePending = map[string][]string{
-	"attach": {"-t"},
-	// Hands the session it picks to a `cm attach` child, so it is pending for the same reason.
-	"tui": {"-t"},
-}
+// The value is the ssh options a suggested command needs, "-t" for anything interactive.
+var remotePending = map[string][]string{}
 
 // checkRemote reports why this command cannot act on the remote it was given.
 //
@@ -146,27 +296,6 @@ func (g *globals) checkRemote(cmd *cobra.Command, args []string) error {
 			cmd.CommandPath(), t.Suggestion(words...))
 	}
 	return nil
-}
-
-// refusePendingFlag reports that one flag's path is not wired for a remote yet.
-//
-// For a command that is remote-capable except down one branch: `cm read` and `cm send` answer over RPC, and
-// their --follow streams through internal/client, which has no remote dialer yet. Refusing the combination
-// is the difference between a message and following the *local* server's session of the same name. Nil when
-// there is no remote, so a call site is one guard beside the other flag checks.
-func (g *globals) refusePendingFlag(cmd *cobra.Command, args []string, flag string) error {
-	if g.remote == "" {
-		return nil
-	}
-	t, err := g.remoteTarget()
-	if err != nil {
-		return err
-	}
-	return fmt.Errorf(
-		"%s --%s cannot use --remote yet, because it streams the way an attachment does;\n"+
-			"run it through ssh yourself for now:\n    %s",
-		cmd.CommandPath(), flag,
-		t.Suggestion(append(append(commandWords(cmd), args...), "--"+flag)...))
 }
 
 // commandKey names a command the way the lists above spell it: its path without the program name.

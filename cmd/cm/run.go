@@ -99,7 +99,9 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			if err != nil {
 				return err
 			}
-			if err := ensureServer(cmd.Context(), dirs); err != nil {
+			// Wherever this invocation's server is, so `cm run --remote` does not start one here and then
+			// create its session there. See globals.ensureServer.
+			if err := g.ensureServer(cmd.Context()); err != nil {
 				return err
 			}
 
@@ -139,7 +141,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 						defer closeLog.Close()
 					}
 					return runInExistingSession(
-						cmd.Context(), dirs, ref, args, detach, timeout, quiet, raw,
+						cmd.Context(), g, ref, args, detach, timeout, quiet, raw,
 						match, matchRaw, logger)
 				}
 
@@ -427,7 +429,7 @@ func (e *exitCodeError) ExitCode() int { return e.code }
 // sending, so nothing the command prints at the start is missed, and it already knows when to stop.
 func runInExistingSession(
 	ctx context.Context,
-	dirs paths.Dirs,
+	g *globals,
 	name string,
 	command []string,
 	detach bool,
@@ -446,7 +448,7 @@ func runInExistingSession(
 	// Detached, or asked to say nothing: send and return without watching. `--detach` means "do not wait", and
 	// that reading is the same whether the session was created or reused.
 	if detach || quiet {
-		conn, cl, err := dialServer(dirs)
+		conn, cl, err := g.dial(ctx)
 		if err != nil {
 			return err
 		}
@@ -483,22 +485,22 @@ func runInExistingSession(
 		// output the caller wanted and read as truncation. Reading afterwards prints a complete view of
 		// what the session has, which is what --match is for on a shell that cannot say when a command
 		// ended.
-		return sendMatchThenRead(ctx, dirs, name, data, enter, match, matchRaw, timeout, raw)
+		return sendMatchThenRead(ctx, g, name, data, enter, match, matchRaw, timeout, raw)
 	}
 
-	return sendAndFollow(ctx, dirs, name, data, enter, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
+	return sendAndFollow(ctx, g, name, data, enter, serverv1.WaitState_WAIT_STATE_IDLE, timeout, raw, log)
 }
 
 // sendMatchThenRead sends input, waits for a pattern, and prints the session's recent output.
 func sendMatchThenRead(
 	ctx context.Context,
-	dirs paths.Dirs,
+	g *globals,
 	name, data, enter, match string,
 	matchRaw bool,
 	timeout time.Duration,
 	raw bool,
 ) error {
-	conn, cl, err := dialServer(dirs)
+	conn, cl, err := g.dial(ctx)
 	if err != nil {
 		return err
 	}

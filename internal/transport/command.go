@@ -269,6 +269,9 @@ func (c *commandConn) startupError(cause error, partial string) error {
 	} else if partial = strings.TrimSpace(partial); partial != "" {
 		fmt.Fprintf(&sb, ": it said %q", partial)
 	}
+	if looksTooOld(said) {
+		sb.WriteString("\nthe cm on the far end is too old for this: it needs a build with `cm server proxy`")
+	}
 
 	// A bare EOF is dropped once the cause is named, because it adds a word that means nothing to whoever
 	// reads this: "ssh: Could not resolve hostname work: EOF" ends on the least informative part of itself.
@@ -278,6 +281,21 @@ func (c *commandConn) startupError(cause error, partial string) error {
 		return errors.New(sb.String())
 	}
 	return fmt.Errorf("%s: %w", sb.String(), cause)
+}
+
+// looksTooOld reports whether what the child said is a cm that does not know this subcommand.
+//
+// Matching on cobra's own words, which is not something to do lightly, and is right here for a reason the
+// banner cannot cover: the protocol number exists for two proxies that disagree, and a cm predating the
+// proxy *entirely* rejects the argv before any of that code runs. `unknown flag: --start` on its own sends
+// the reader looking for a typo in something they did not type.
+//
+// Additive, so a false positive costs one sentence of advice and nothing else, which is what makes a text
+// match acceptable where it would not be if behavior depended on it.
+func looksTooOld(said string) bool {
+	return strings.Contains(said, "unknown flag") ||
+		strings.Contains(said, "unknown command") ||
+		strings.Contains(said, "unknown shorthand flag")
 }
 
 // parseProxyBanner reads the banner line a proxy opens with.

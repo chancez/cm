@@ -151,11 +151,6 @@ follower connects, which for a fast command can be all of it.`,
 			if matchRaw && match == "" {
 				return errors.New("--match-raw only applies with --match")
 			}
-			if follow {
-				if err := g.refusePendingFlag(cmd, args, "follow"); err != nil {
-					return err
-				}
-			}
 			if match != "" && follow {
 				// Refused rather than resolved. --follow stops when its wait resolves, and a match
 				// resolving mid-command would cut the stream off partway through output the caller was
@@ -197,7 +192,7 @@ follower connects, which for a fast command can be all of it.`,
 				if closeLog != nil {
 					defer closeLog.Close()
 				}
-				return sendAndFollow(cmd.Context(), dirs, name, data, enter, state, timeout, raw, logger)
+				return sendAndFollow(cmd.Context(), g, name, data, enter, state, timeout, raw, logger)
 			}
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				// The same wait `cm wait` issues, through the same server, so it is exposed the same way: a

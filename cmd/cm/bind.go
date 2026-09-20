@@ -191,6 +191,11 @@ func completeBoundNames(g *globals) func(*cobra.Command, []string, string) ([]st
 		if len(args) > 0 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
+		// Nothing rather than this machine's names when a remote is named, for the reason sessionNames
+		// gives: an ssh per tab press, or the wrong host's names completed into a command.
+		if g.remote != "" {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
 		dirs, err := g.dirs()
 		if err != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp

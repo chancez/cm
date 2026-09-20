@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/sessionenv"
 )
 
@@ -110,14 +114,18 @@ func TestMachineLocalCommandRefusesARemote(t *testing.T) {
 	}
 }
 
-// A command that is not wired yet refuses too, and says that rather than that it is local, because the two
-// are different facts and only one of them will still be true next month.
+// The not-wired-yet refusal still works, tested by putting something in the list rather than by relying on
+// an entry being there: remotePending is empty now that attach and tui are wired, and a test over an empty
+// map would pass while proving nothing. The mechanism has to keep working for the next entry.
 func TestPendingCommandSaysItIsNotWiredYet(t *testing.T) {
 	commands := runnableCommands(t)
-	cmd, ok := commands["attach"]
+	cmd, ok := commands["list"]
 	if !ok {
-		t.Fatal("`cm attach` is missing, so this test is asserting nothing")
+		t.Fatal("`cm list` is missing, so this test is asserting nothing")
 	}
+
+	remotePending["list"] = []string{"-t"}
+	t.Cleanup(func() { delete(remotePending, "list") })
 
 	g := &globals{remote: "ssh://work"}
 	err := g.checkRemote(cmd, []string{"build"})
@@ -127,9 +135,9 @@ func TestPendingCommandSaysItIsNotWiredYet(t *testing.T) {
 	if !strings.Contains(err.Error(), "yet") {
 		t.Errorf("error %q does not say this is not wired yet", err)
 	}
-	// -t, because the suggested command runs an interactive cm on the far end and ssh allocates no pty for
-	// a command. Without it the suggestion fails in a way that looks like cm's fault.
-	if !strings.Contains(err.Error(), "ssh -t work cm attach build") {
+	// -t, because a pending command is one that would be interactive, and ssh allocates no pty for a
+	// command. Without it the suggestion fails in a way that looks like cm's fault.
+	if !strings.Contains(err.Error(), "ssh -t work cm list build") {
 		t.Errorf("error %q does not suggest an ssh with a terminal", err)
 	}
 }
@@ -138,7 +146,7 @@ func TestPendingCommandSaysItIsNotWiredYet(t *testing.T) {
 // refused would pass every test above while making --remote useless.
 func TestRemoteCapableCommandIsAllowed(t *testing.T) {
 	commands := runnableCommands(t)
-	for _, name := range []string{"list", "kill", "send", "wait", "tag", "server stop"} {
+	for _, name := range []string{"list", "kill", "send", "wait", "tag", "server stop", "attach", "tui"} {
 		cmd, ok := commands[name]
 		if !ok {
 			t.Fatalf("`cm %s` is missing, so this test is asserting nothing", name)
@@ -198,5 +206,109 @@ func TestRemoteBindsFromTheEnvironment(t *testing.T) {
 	if noEnvFlags["remote"] {
 		t.Error("--remote is in noEnvFlags, so CM_REMOTE no longer works; " +
 			"it is kept out on purpose, and sessionenv.NoInherit is what stops a session keeping it")
+	}
+}
+
+// A remote attachment does not send this machine's environment to a shell on another one.
+//
+// What crosses is what describes the terminal; a macOS PATH in front of a Linux shell, or a HOME naming a
+// directory that is not there, is the failure this avoids. Explicit --env still arrives, and last, so it
+// wins.
+func TestApplyRemoteSendsSshdsEnvironmentNotThisOne(t *testing.T) {
+	// A whole environment, given rather than taken from this process, so the assertion below is about the
+	// policy and not about whatever the developer has exported.
+	environ := []string{
+		"TERM=xterm-kitty",
+		"PATH=/opt/homebrew/bin:/usr/bin",
+		"HOME=/Users/someone",
+		"KITTY_LISTEN_ON=unix:/tmp/kitty-1",
+		"SSH_AUTH_SOCK=/tmp/agent.1",
+		"LC_ALL=en_US.UTF-8",
+		"AWS_SECRET_ACCESS_KEY=hunter2",
+	}
+
+	opts := client.Options{Env: []string{"PATH=/local", "HOME=/local"}}
+	target := remote.Target{Host: "work"}
+	applyRemote(&opts, &target, environ, []string{"FOO=bar"})
+
+	want := []string{"TERM=xterm-kitty", "LC_ALL=en_US.UTF-8", "FOO=bar"}
+	if !slices.Equal(opts.Env, want) {
+		t.Errorf("Env = %q, want %q", opts.Env, want)
+	}
+}
+
+// And the local-only parts of an attachment are taken off rather than left pointing at this machine.
+func TestApplyRemoteReplacesWhatIsLocal(t *testing.T) {
+	opts := client.Options{
+		SocketPath:    "/tmp/cm-501/server.sock",
+		StartServer:   func(context.Context) error { return nil },
+		ServerStopped: func() bool { return true },
+		// Set from CM_SESSION by a client running inside a local session. It names a session on the local
+		// server, so a remote server would resolve it to nothing or to something unrelated.
+		InsideSession: "work",
+	}
+	target := remote.Target{Host: "work"}
+	applyRemote(&opts, &target, nil, nil)
+
+	if opts.Dial == nil {
+		t.Error("Dial is nil, so the attachment would still dial a socket on this machine")
+	}
+	if opts.SocketPath != "" {
+		t.Errorf("SocketPath = %q, want it cleared", opts.SocketPath)
+	}
+	if opts.InsideSession != "" {
+		t.Errorf("InsideSession = %q, want it cleared for a remote server", opts.InsideSession)
+	}
+	if opts.ServerStopped != nil {
+		t.Error("ServerStopped is set, so a local `cm server stop` would suppress recovery of a remote server")
+	}
+	if opts.StartServer == nil {
+		t.Error("StartServer is nil, so a client whose remote server died could not ask for it back")
+	}
+}
+
+// The first dial asks the far end to start a server and later ones do not, which is what "creating one if
+// needed" means without letting a reconnect defeat `cm server stop` on the remote.
+func TestRemoteDialerStartsOnlyOnTheFirstDial(t *testing.T) {
+	d := &remoteDialer{target: remote.Target{Host: "work"}}
+
+	_, first := d.target.ProxyCommand(!d.haveDialed)
+	d.haveDialed = true
+	_, second := d.target.ProxyCommand(!d.haveDialed)
+
+	if !slices.Contains(first, "--start") {
+		t.Errorf("the first dial runs %q, which does not ask for a server", first)
+	}
+	if slices.Contains(second, "--start") {
+		t.Errorf("a later dial runs %q, which would start a server a stop had just stopped", second)
+	}
+	// And the recovery path asks explicitly, which is the client's decision rather than the dialer's.
+	_, recovery := d.target.ProxyCommand(true)
+	if !slices.Contains(recovery, "--start") {
+		t.Errorf("the recovery command %q does not ask for a server", recovery)
+	}
+}
+
+// A follower is pointed at the same server, which is the last place a --remote invocation could have
+// streamed a local session of the same name.
+func TestPointAtServerFollowsTheRemote(t *testing.T) {
+	var remoteOpts client.Options
+	g := &globals{remote: "ssh://work"}
+	if err := g.pointAtServer(&remoteOpts); err != nil {
+		t.Fatalf("pointAtServer() error = %v, want nil", err)
+	}
+	if remoteOpts.Dial == nil || remoteOpts.SocketPath != "" {
+		t.Errorf("a remote follower got Dial=%v SocketPath=%q, want a dialer and no path",
+			remoteOpts.Dial != nil, remoteOpts.SocketPath)
+	}
+
+	var localOpts client.Options
+	local := &globals{}
+	if err := local.pointAtServer(&localOpts); err != nil {
+		t.Fatalf("pointAtServer() error = %v, want nil", err)
+	}
+	if localOpts.Dial != nil || localOpts.SocketPath == "" {
+		t.Errorf("a local follower got Dial=%v SocketPath=%q, want a path and no dialer",
+			localOpts.Dial != nil, localOpts.SocketPath)
 	}
 }

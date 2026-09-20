@@ -173,6 +173,49 @@ commands, and it belongs in the user's own ssh config rather than in cm's argv: 
 own has to live somewhere, and ssh's `%C` is a 64-character hash against a runtime directory already 55
 bytes on this machine, which is 124 bytes against the 103 a unix socket allows.
 
+**Both ends need a build with `cm server proxy`.** There is no older-remote story and cannot be one: an
+older cm has no proxy at all, so nothing there can serve the connection. The protocol number in the banner
+covers two *proxies* that disagree, which is a later problem; a cm predating the subcommand rejects the argv
+before any of that code runs, and cobra's words for that are `unknown flag: --start` or `unknown command
+"proxy"`, which send the reader looking for a typo in something they did not type. So the dialer recognises
+those and adds a line naming the real cause. Matching on another library's message text is acceptable only
+because the hint is additive: a false positive costs one sentence.
+
+**What crosses, and what does not.** A remote attachment is a local terminal and a remote session, so each
+thing an attachment needs comes from wherever it actually lives. The terminal's size, its raw mode, the
+detach and prefix keys, the graphics probe and every query reply stay here, because they are about the
+terminal. The session's directory and environment come from the far end: an unset `--dir` is sent empty so
+the remote server decides, which in practice means `$HOME`, since the server is started by the proxy over
+ssh and a shim inherits the server's directory. Measured both ways, because an already-running server makes
+it look otherwise: a server started by the proxy has cwd `$HOME` and its sessions land there, while one
+started by hand in some directory puts its sessions in that directory.
+
+The environment takes sshd's posture rather than this client's: `sessionenv.CrossHostVars` is `TERM`,
+`COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and the locale variables that ssh's own `SendEnv`
+forwards. Nothing else. A shell on another host builds its own `PATH` and `HOME`, and forwarding this one's
+would put a macOS `PATH` in front of a Linux shell. `TERMINFO` is excluded deliberately, since it names a
+directory here, and so is everything naming a socket: `KITTY_LISTEN_ON`, `SSH_AUTH_SOCK`, `DISPLAY`. A
+kitten inside a remote session therefore cannot reach the local kitty, which is a known limit rather than a
+bug to fix; kitty's own ssh kitten is what solves it for anyone who needs it.
+
+`Open.inside_session` is not sent to a remote server. It names a session on the *local* one, so remotely it
+resolves to nothing or, worse, matches an unrelated session and stops it attributing its own output to
+itself. Clearing it is also what makes the local parent hear about the client, which reads backwards: a client
+announces itself over its own output exactly when its `Open` named no parent, since that is the case no server
+knows about. So the detach key reaches a `--remote` client nested in a local session over the pty instead of
+through an RPC. See "A client on another host announces itself instead" in [architecture.md](architecture.md).
+
+**A dropped link is a server restart.** The client's reconnect loop calls `Options.Dial` once per attempt,
+so an ssh that dies arrives as a dial that failed, which is a state that path already handles: the outage
+notice, the resume from `lastSeq`, the repaint when the notice clears. Verified by killing the client's ssh
+while attached, in a throwaway terminal: the window kept its contents, a new ssh replaced the dead one
+inside the quiet period with no notice shown, and typing worked immediately afterwards.
+
+Starting a server on the far end is the first dial's job and no later dial's. `remoteDialer` passes
+`--start` once; a reconnect does not, so an outage cannot resurrect a server that `cm server stop` has just
+stopped on the remote. The client's own recovery path asks explicitly through `StartServer` when its policy
+allows, which is the same division the local client has, and the two commands are distinguishable in `ps`.
+
 Four ssh options are passed because each prevents something that would otherwise be rare and
 baffling rather than a clean failure. `-T`, because `RequestTTY` in a user's config overrides ssh's
 no-pty default and a pty's line discipline rewrites `\n` as `\r\n`, corrupting every message. `-e none`,

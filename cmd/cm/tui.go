@@ -149,6 +149,12 @@ func attachArgv(g *globals, readOnly bool) func(ref string) []string {
 		if g.configPath != "" {
 			argv = append(argv, "--config", g.configPath)
 		}
+		// Carried, or the picker would list a remote's sessions and then attach to whatever this machine
+		// has under the chosen name. That is the silent wrong answer this flag's classification exists to
+		// prevent, and here it would be one process removed from anything that could report it.
+		if g.remote != "" {
+			argv = append(argv, "--remote", g.remote)
+		}
 		argv = append(argv, "attach")
 		if readOnly {
 			argv = append(argv, "--read-only")

@@ -49,12 +49,11 @@ func warnIfTerminal(w *os.File) {
 //
 // Read-only always. A follower must not be able to disturb the session it is watching, and this is called from
 // commands whose stdin is not the session's input.
-func followSession(ctx context.Context, dirs paths.Dirs, session string, raw bool, log *slog.Logger) error {
+func followSession(ctx context.Context, g *globals, session string, raw bool, log *slog.Logger) error {
 	opts := client.Options{
-		Log:        log,
-		Session:    session,
-		SocketPath: dirs.ServerSocket(),
-		ReadOnly:   true,
+		Log:      log,
+		Session:  session,
+		ReadOnly: true,
 		// No detach key: this is not an interactive attachment, and reserving a keystroke from a stream being
 		// piped would swallow a byte of output.
 		DetachKey: client.KeySpec{Name: "none", Disabled: true},
@@ -62,6 +61,10 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 		// printed by the caller or deliberately not wanted.
 		NoRestore: true,
 		Output:    followWriter(raw),
+	}
+	// Which server, this machine's or the one --remote names. See globals.pointAtServer.
+	if err := g.pointAtServer(&opts); err != nil {
+		return err
 	}
 
 	// Cooked, so ctrl-c still reaches this process. A follower sends no input, so raw mode would buy
@@ -123,7 +126,7 @@ func followSession(ctx context.Context, dirs paths.Dirs, session string, raw boo
 // stream picks up at the session's current position. In practice they line up, because the tail ends where the
 // session is now, which is where the stream begins.
 func printTailThenFollow(
-	ctx context.Context, dirs paths.Dirs, session string, tail []byte, raw bool, log *slog.Logger,
+	ctx context.Context, g *globals, session string, tail []byte, raw bool, log *slog.Logger,
 ) error {
 	if _, err := os.Stdout.Write(tail); err != nil {
 		return err
@@ -135,7 +138,7 @@ func printTailThenFollow(
 			return err
 		}
 	}
-	return followSession(ctx, dirs, session, raw, log)
+	return followSession(ctx, g, session, raw, log)
 }
 
 // followWriter returns where a follower's output goes.
@@ -180,14 +183,16 @@ func followWarning() string {
 // command is done.
 func sendAndFollow(
 	ctx context.Context,
-	dirs paths.Dirs,
+	g *globals,
 	session, data, enter string,
 	until serverv1.WaitState,
 	timeout time.Duration,
 	raw bool,
 	log *slog.Logger,
 ) error {
-	if err := ensureServer(ctx, dirs); err != nil {
+	// Wherever this invocation's server is: a --remote send must not start one here. See
+	// globals.ensureServer.
+	if err := g.ensureServer(ctx); err != nil {
 		return err
 	}
 
@@ -207,7 +212,7 @@ func sendAndFollow(
 	streamed := make(chan error, 1)
 	attached := make(chan struct{})
 	go func() {
-		streamed <- followSessionSignalling(streamCtx, dirs, session, attached, raw, log, func(next uint64) {
+		streamed <- followSessionSignalling(streamCtx, g, session, attached, raw, log, func(next uint64) {
 			seenMu.Lock()
 			seen = next
 			reached := target != 0 && seen >= target
@@ -231,7 +236,7 @@ func sendAndFollow(
 		return ctx.Err()
 	}
 
-	conn, cl, err := dialServer(dirs)
+	conn, cl, err := g.dial(ctx)
 	if err != nil {
 		return err
 	}
@@ -323,22 +328,25 @@ func sendAndFollow(
 // than a visible failure. OnAttached fires on the server's Opened reply, which is unconditional and always
 // first.
 func followSessionSignalling(
-	ctx context.Context, dirs paths.Dirs, session string, ready chan<- struct{}, raw bool, log *slog.Logger,
+	ctx context.Context, g *globals, session string, ready chan<- struct{}, raw bool, log *slog.Logger,
 	onOutput func(uint64),
 ) error {
 	var once sync.Once
 	opts := client.Options{
-		Log:        log,
-		Session:    session,
-		SocketPath: dirs.ServerSocket(),
-		ReadOnly:   true,
-		DetachKey:  client.KeySpec{Name: "none", Disabled: true},
-		NoRestore:  true,
-		Output:     followWriter(raw),
+		Log:       log,
+		Session:   session,
+		ReadOnly:  true,
+		DetachKey: client.KeySpec{Name: "none", Disabled: true},
+		NoRestore: true,
+		Output:    followWriter(raw),
 		OnAttached: func() {
 			once.Do(func() { close(ready) })
 		},
 		OnOutput: onOutput,
+	}
+	// Which server, this machine's or the one --remote names. See globals.pointAtServer.
+	if err := g.pointAtServer(&opts); err != nil {
+		return err
 	}
 
 	// Cooked, for the same reason as followSession above: this streams output and sends no input.
@@ -384,11 +392,17 @@ func followSessionSignalling(
 // purpose.
 func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
 	// opts carries the logger already, since this is called from attach, which opens one.
-	if err := ensureServer(ctx, dirs); err != nil {
-		return err
+	//
+	// Both halves follow the Options rather than this machine: a remote attachment creating a session must
+	// create it on the far end, and a local dial here is how `cm run --remote` would have created it on the
+	// wrong one. See serverFor, and runAttach for why a remote needs no separate start.
+	if opts.Dial == nil {
+		if err := ensureServer(ctx, dirs); err != nil {
+			return err
+		}
 	}
 
-	conn, cl, err := dialServer(dirs)
+	conn, cl, err := serverFor(ctx, dirs, opts)
 	if err != nil {
 		return err
 	}

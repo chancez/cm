@@ -92,8 +92,22 @@ func (o Options) Open(session string) *serverv1.Open {
 
 // Options configures an attachment.
 type Options struct {
-	// SocketPath is the server's socket.
+	// SocketPath is the server's socket. Ignored when Dial is set.
 	SocketPath string
+	// Dial opens a connection to the server, for a server that is not reachable through a socket path on
+	// this machine.
+	//
+	// Nil dials SocketPath, which is every local caller, so this changes nothing for them. Set by a client
+	// with --remote, where the connection is a program: see internal/transport.DialServerVia.
+	//
+	// A hook rather than a transport this package selects, because choosing one means knowing about ssh,
+	// remote references and where a cm binary lives on another machine, none of which is this package's
+	// business. What it needs is a connection, and a function is the smallest way to say so.
+	//
+	// Called once per attempt of the reconnect loop, including every retry during an outage, which is what
+	// makes a dropped link behave exactly like a server restart: the same loop, the same notice, the same
+	// resume from lastSeq.
+	Dial func(context.Context) (transport.Conn, serverv1.ServerClient, error)
 	// Session to attach to. Empty asks the server to allocate a name.
 	Session string
 	// ReadOnly follows the session without sending input.
@@ -512,7 +526,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 
 	var outage outageState
 	for {
-		conn, cl, err := dial(opts.SocketPath)
+		conn, cl, err := opts.connect(ctx)
 		if err != nil {
 			// A first attempt that cannot reach the server is a hard failure: there is no session on
 			// screen to preserve and no reason to think one is coming. Once connected, the same error
@@ -1458,6 +1472,18 @@ func runSession(
 // dial connects to the server's socket.
 func dial(socketPath string) (transport.Conn, serverv1.ServerClient, error) {
 	return transport.DialServer(socketPath)
+}
+
+// connect opens a connection to the server this attachment is for.
+//
+// One place deciding between the two, so the reconnect loop reads the same whether the server is on this
+// machine or another: a remote link dropping and a local server restarting arrive here identically, as a
+// dial that failed.
+func (o *Options) connect(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
+	if o.Dial != nil {
+		return o.Dial(ctx)
+	}
+	return dial(o.SocketPath)
 }
 
 // discardLogHandler drops every record, for a client that was given no logger.
