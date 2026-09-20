@@ -629,7 +629,11 @@ cm would mean building auth rather than inheriting gRPC's credential ecosystem; 
 instead, so this stays a client-side convenience rather than a network service. "A cm that listens on the
 network" below is the other thing and is still ruled out.
 
-*Decided.* Three choices, in the order they constrain the rest.
+**The transport exists.** `transport.DialServerVia` dials `ssh host cm server proxy` and returns the same
+client a local dial does, verified end to end against a sandboxed server over real ssh. `docs/rpc.md` holds
+that design and its measurements. What is left is the client and command wiring below.
+
+*Decided.* Two choices shape the rest.
 
 **A client dials the remote directly; the local server is not involved.** The alternative, a local server
 holding one link per remote and re-serving it, buys a single `cm ls` across hosts and one shared connection,
@@ -637,19 +641,6 @@ and costs a local server that models sessions it does not own, two colliding nam
 second hop per RPC, and every remote attachment dropping when the local server restarts. An ssh
 `ControlMaster` recovers most of the shared-connection benefit with none of that, and cross-host listing can
 be a client-side fan-out later.
-
-**The transport is a stdio proxy, `ssh host cm server proxy`**, with the remote cm dialing its own socket and
-shuttling bytes to its stdin and stdout. This needs no protocol change, which is a measured fact rather than
-an expectation: `ttrpc.NewClient` takes a `net.Conn`, and the only unix-specific code in ttrpc v1.2.9 is
-`unixcreds_linux.go`, a server-side handshaker cm does not use. So a `net.Conn` over a child process's pipes
-is a valid client connection. `docker system dial-stdio` is the same pattern.
-
-Three things then fall out rather than being built. Autostart is the remote's own `connectServer`, so a
-server appears on the remote when needed. `ServerStopped` is the remote's file, so a deliberately stopped
-remote server stays stopped. And the proxy collects itself when the link dies, since ssh hands the remote
-command a dead stdin. `ssh -L unix:...` forwarding gets none of these: a forward is established before
-anything runs, so it cannot start a server, and it needs the remote socket path first, which is another
-round trip.
 
 **A remote-created session gets sshd's posture, not this client's environment.** `Open.env` carries the
 client's whole environment today via `sessionenv.Inherit`, which across hosts means a macOS `PATH`, `HOME`

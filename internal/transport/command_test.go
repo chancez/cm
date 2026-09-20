@@ -265,3 +265,15 @@ func readFull(conn *commandConn, p []byte) (int, error) {
 	}
 	return read, nil
 }
+
+// The message ends on the reason rather than on the word EOF, which is what the pipe reports and says
+// nothing: "ssh: Could not resolve hostname work: EOF" ends on its least informative part.
+func TestStartupErrorEndsOnTheReason(t *testing.T) {
+	_, _, err := dialCommand(t.Context(), "sh", "-c", `echo "could not resolve hostname work" >&2; exit 255`)
+	if err == nil {
+		t.Fatal("dialCommand() error = nil, want an error")
+	}
+	if !strings.HasSuffix(err.Error(), "could not resolve hostname work") {
+		t.Errorf("error = %q, want it to end on what the program said", err)
+	}
+}

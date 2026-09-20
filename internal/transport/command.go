@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -262,10 +263,19 @@ func (c *commandConn) startupError(cause error, partial string) error {
 	if state := c.cmd.ProcessState; state != nil && state.Exited() {
 		fmt.Fprintf(&sb, " and exited with status %d", state.ExitCode())
 	}
-	if msg := c.said(); msg != "" {
-		fmt.Fprintf(&sb, ": %s", msg)
+	said := c.said()
+	if said != "" {
+		fmt.Fprintf(&sb, ": %s", said)
 	} else if partial = strings.TrimSpace(partial); partial != "" {
 		fmt.Fprintf(&sb, ": it said %q", partial)
+	}
+
+	// A bare EOF is dropped once the cause is named, because it adds a word that means nothing to whoever
+	// reads this: "ssh: Could not resolve hostname work: EOF" ends on the least informative part of itself.
+	// Any other cause is kept, since a deadline or a read error is a different failure and the message would
+	// otherwise not say which.
+	if errors.Is(cause, io.EOF) && said != "" {
+		return errors.New(sb.String())
 	}
 	return fmt.Errorf("%s: %w", sb.String(), cause)
 }

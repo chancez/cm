@@ -130,6 +130,66 @@ so the stream types were already nearly portable.
 by construction, so there is no remote case to serve, and the shim is the process that multiplies per
 session, which is where a heavier transport's memory cost would land.
 
+## Reaching a server on another machine
+
+A client dials a program instead of a socket, and the program is `ssh host cm server proxy`, which
+connects to the remote's own socket and shuttles bytes to its stdio. `transport.DialCommand` builds the
+connection and `transport.DialServerVia` returns the same `serverv1.ServerClient` a local dial does, so
+nothing above the transport can tell the difference.
+
+This costs no protocol change, and that is measured rather than assumed: `ttrpc.NewClient` takes a
+`net.Conn`, and the only unix-specific code in ttrpc v1.2.9 is `unixcreds_linux.go`, a server-side
+credentials handshaker cm does not use. A pair of pipes is as good a client connection as a socket.
+
+Authentication is why this shape and not another. cm has none of its own, and building it is what the
+gRPC note below defers; a tunnel borrows ssh's instead, so remote access needs no listener, no
+certificates, and no new trust decision. "A cm that listens on the network" in `docs/ideas.md` is the
+thing this deliberately is not.
+
+A cm subcommand rather than `ssh -L` forwarding the socket, for two reasons that are not stylistic. A
+forward is established before anything runs on the remote, so nothing there can start a server, and it
+needs the remote's socket path, which costs a round trip to learn. Running cm on the remote gets both for
+free: it knows its own paths, and `--start` reuses the same `ensureServer` a local command uses.
+
+The connection completes a one-line handshake before it is usable, `cm-proxy <protocol> <version>`, so a
+successful dial means a server answered rather than a process started. Without it the only signal is the
+first RPC failing, and the client's reconnect loop reads a successful dial as a reason to keep waiting: a
+mistyped hostname would be waited on forever instead of reported. The protocol number is separate from
+cm's version, so upgrading one machine at a time stays possible, and a mismatch is a refusal naming both.
+
+Measured on this machine, over ssh to localhost:
+
+| | |
+|---|---|
+| ssh connect, remote proxy, and handshake | 153-169ms |
+| unary round trip, steady state | 592-677us |
+| unary round trip over a local unix socket | 17.8us |
+| a fresh ssh connection | 137ms |
+| an ssh command through an existing `ControlMaster` | 10-20ms |
+
+So the link costs about 35 times a local call and is still well under a millisecond, while *connecting*
+costs more than everything else put together. That makes ssh multiplexing worth having for the short
+commands, and it belongs in the user's own ssh config rather than in cm's argv: a `ControlPath` of cm's
+own has to live somewhere, and ssh's `%C` is a 64-character hash against a runtime directory already 55
+bytes on this machine, which is 124 bytes against the 103 a unix socket allows.
+
+Four ssh options are passed because each prevents something that would otherwise be rare and
+baffling rather than a clean failure. `-T`, because `RequestTTY` in a user's config overrides ssh's
+no-pty default and a pty's line discipline rewrites `\n` as `\r\n`, corrupting every message. `-e none`,
+because ssh acts on `~` after a newline and this stream is arbitrary binary, so a message containing
+`\n~.` would kill the link from inside. `BatchMode=yes`, because a passphrase prompt reads and writes
+`/dev/tty` directly, bypassing the pipes and landing on the terminal an attached client is painting.
+And `ServerAliveInterval`, so a link dropped by a NAT or a sleeping laptop is an error rather than a
+hang in an attachment that looks live and answers nothing.
+
+The child's stderr is captured rather than inherited or discarded, and both alternatives have incidents
+behind them: an inherited stderr is a second writer to a terminal cm owns, and a discarded one made every
+way a server can fail to start look identical. It is held as an `*os.File` rather than an `io.Writer`,
+because os/exec creates a copying goroutine for anything else and `Wait` then waits for every process
+holding that pipe rather than for the child. Measured at 8.01s for a grandchild with eight seconds left
+to live, after the child had already been killed; an ssh with a `ProxyCommand` or `ProxyJump` is exactly
+that shape.
+
 ### Why there is no gRPC implementation yet
 
 Attempted, and stopped at a real obstacle rather than a matter of effort. `protoc-gen-go-grpc` generates
