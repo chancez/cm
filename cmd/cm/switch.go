@@ -71,13 +71,9 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 				replace = cfg.RebindReplaces
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer: switching implies a window is attached to something, and a
 			// server started here holds nothing to switch.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Switch(ctx, &serverv1.SwitchRequest{
 					Session:    session,
 					Target:     target,

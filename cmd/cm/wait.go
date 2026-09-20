@@ -145,14 +145,10 @@ to whichever finishes first instead of polling for it.`,
 				return err
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// withServer starts a server if none is running, which is right rather than a shortcut: a
 			// session outlives its server, so a wait issued while the server is down should adopt the
 			// session and answer, not fail. That is the same path an upgrade takes.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				// Before the wait rather than after it, so a server that cannot satisfy this says so now
 				// instead of at the end of a timeout.
 				note, cerr := checkWaitCapability(ctx, cl, target)

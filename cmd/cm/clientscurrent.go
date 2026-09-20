@@ -69,14 +69,10 @@ its input is dropped, so it never types.`,
 			if err := paths.ValidateSessionRef(name); err != nil {
 				return err
 			}
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer, matching the rest of this group: a server that was just
 			// started has never heard of the session and would report it as having nothing attached,
 			// which reads as an answer rather than as the absence of one.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.List(ctx, &serverv1.ListRequest{})
 				if err != nil {
 					return err

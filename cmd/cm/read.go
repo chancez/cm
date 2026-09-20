@@ -116,6 +116,11 @@ already ended, since boundaries live with the running session.`,
 				return errors.New("--lines cannot be combined with --since-commands or --last-output; " +
 					"a command boundary and a line count are different bounds on the same read")
 			}
+			if follow {
+				if err := g.refusePendingFlag(cmd, args, "follow"); err != nil {
+					return err
+				}
+			}
 			if timeout > 0 && !follow {
 				// Refused rather than ignored. Everything except --follow returns as soon as the server
 				// answers, so a timeout there would only ever bound an RPC that is already prompt, and a
@@ -142,7 +147,7 @@ already ended, since boundaries live with the running session.`,
 			if closeLog != nil {
 				defer closeLog.Close()
 			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
 				if err != nil {
 					return err

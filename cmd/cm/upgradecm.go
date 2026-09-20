@@ -103,7 +103,7 @@ reports how many builds the running shims span.`,
 				AlreadyOn:     map[string]uint32{},
 			}
 
-			err = withServer(ctx, dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			err = withServer(ctx, g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				status, serr := cl.Status(ctx, &serverv1.StatusRequest{})
 				if serr != nil {
 					return serr

@@ -70,14 +70,10 @@ type statusJSON struct {
 func runStatus(cmd *cobra.Command, g *globals, asJSON bool) error {
 	out := statusJSON{ClientVersion: paths.Version()}
 
-	dirs, err := g.dirs()
-	if err != nil {
-		return err
-	}
-
 	// Asked only if a server is already there, like `cm version`: starting one so a report can describe it
-	// would change what is being reported.
-	conn, cl, derr := dialServer(dirs)
+	// would change what is being reported. Whichever server this invocation names, so --remote reports on
+	// the far end rather than on this machine.
+	conn, cl, derr := g.dial(cmd.Context())
 	if derr == nil {
 		defer conn.Close()
 		resp, rerr := cl.Status(cmd.Context(), &serverv1.StatusRequest{})

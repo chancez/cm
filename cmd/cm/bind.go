@@ -59,13 +59,9 @@ than ending someone's shell.`,
 				return err
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer, matching `cm tag`: binding a name implies a session exists,
 			// and a server started here has never heard of it.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Bind(ctx, &serverv1.BindRequest{
 					Name:    name,
 					Session: session,
@@ -121,11 +117,7 @@ there is no way to make a shell unreachable by taking a name away from it.`,
 		ValidArgsFunction: completeBoundNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Unbind(ctx, &serverv1.UnbindRequest{Name: name})
 				if err != nil {
 					return err

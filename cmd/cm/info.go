@@ -41,11 +41,7 @@ line, so a selector plus a field is a list of that field across the group:
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
 			}
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
 				if err != nil {
 					return err

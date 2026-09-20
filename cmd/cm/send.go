@@ -151,6 +151,11 @@ follower connects, which for a fast command can be all of it.`,
 			if matchRaw && match == "" {
 				return errors.New("--match-raw only applies with --match")
 			}
+			if follow {
+				if err := g.refusePendingFlag(cmd, args, "follow"); err != nil {
+					return err
+				}
+			}
 			if match != "" && follow {
 				// Refused rather than resolved. --follow stops when its wait resolves, and a match
 				// resolving mid-command would cut the stream off partway through output the caller was
@@ -194,7 +199,7 @@ follower connects, which for a fast command can be all of it.`,
 				}
 				return sendAndFollow(cmd.Context(), dirs, name, data, enter, state, timeout, raw, logger)
 			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				// The same wait `cm wait` issues, through the same server, so it is exposed the same way: a
 				// --wait blocked or a --match against a server predating either runs the whole timeout and
 				// reports nothing about why. One rule, in waitTarget.needsCapability, rather than a second

@@ -63,13 +63,9 @@ query.`,
 			if _, err := tags.ParseSelector(tagArgs); err != nil {
 				return err
 			}
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer: listing clients of a server that is not running should say
 			// there are none, not start one and then report that it has none.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.List(ctx, &serverv1.ListRequest{Tags: tagArgs})
 				if err != nil {
 					return err

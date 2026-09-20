@@ -103,7 +103,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 				return err
 			}
 
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				id, created, err := startRun(ctx, cl, runOptions{
 					session: session,
 					dir:     dir,

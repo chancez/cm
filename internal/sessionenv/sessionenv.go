@@ -99,6 +99,16 @@ var NoInherit = []string{
 	// would export a resume position to every cm command inside it, and a resume suppresses both the
 	// screen repaint and the sizing.
 	"CM_RESUME_FROM_SEQ",
+
+	// Which machine's cm server a command should talk to. Set in a shell or a window so every cm inside it
+	// follows, which is what makes it worth having as a variable at all, and exactly what a session must
+	// not keep: `cm attach --remote ssh://work` creates a session whose shell is on work, and a shell that
+	// inherited this would send every cm command run inside it back out over ssh. To a third machine if the
+	// remote's own config names one, and for a remote that is this machine, into a session inside a session.
+	//
+	// This is the first variable that belongs here while staying *out* of noEnvFlags: binding it to the
+	// --remote flag is wanted, and inheriting it is not. The two lists answer different questions.
+	"CM_REMOTE",
 }
 
 // Inherit returns the environment a newly created session takes from its client: everything the

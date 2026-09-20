@@ -125,13 +125,9 @@ needs a process to receive it.`,
 				return err
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer, matching `cm report` and `cm tag`: signalling a session
 			// implies one exists, and starting a server here would create one that has never heard of it.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names, _, err := sessionTargets(ctx, cl, sessionArg, tagArgs)
 				if err != nil {
 					return err

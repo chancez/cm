@@ -93,13 +93,9 @@ this safe to call without checking first.`,
 				}
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer: detaching implies clients exist, and starting a server here
 			// would create one that has never heard of the session and report it detached.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names := args
 				switch {
 				case all:
@@ -119,10 +115,11 @@ this safe to call without checking first.`,
 				case len(tagArgs) > 0:
 					// A selector matching nothing is an error, unlike --all on an empty server: it is
 					// usually a typo, and exiting 0 would let a script report success having done nothing.
-					names, err = resolveSelector(ctx, cl, tagArgs)
+					resolved, err := resolveSelector(ctx, cl, tagArgs)
 					if err != nil {
 						return err
 					}
+					names = resolved
 					if len(names) == 0 {
 						return fmt.Errorf("no sessions match %s", describeSelectors(tagArgs))
 					}

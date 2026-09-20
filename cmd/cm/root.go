@@ -17,6 +17,12 @@ type globals struct {
 	runtimeDir string
 	stateDir   string
 	configPath string
+	// remote names a cm server on another machine. Empty is this machine's.
+	//
+	// Held here rather than per command because it decides which server *every* command talks to, and
+	// because the directories beside it become the remote's business when it is set: a remote's runtime
+	// directory is resolved by the cm running there, from its own environment and its own config.
+	remote string
 }
 
 // dirs resolves the directories to use, letting flags override the environment.
@@ -76,7 +82,12 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return bindEnv(cmd)
+			if err := bindEnv(cmd); err != nil {
+				return err
+			}
+			// After bindEnv, because --remote can come from the environment, and here rather than in each
+			// command, because a command that forgot the check would answer about the wrong machine.
+			return g.checkRemote(cmd, args)
 		},
 	}
 
@@ -92,6 +103,9 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		"directory for the database and logs ($"+paths.Env("STATE_DIR")+")")
 	pf.StringVar(&g.configPath, "config", "",
 		"configuration file ($"+paths.Env("CONFIG")+")")
+	pf.StringVar(&g.remote, "remote", "",
+		"a cm server on another machine, as ssh://[user@]host[:port][/path/to/cm] ($"+
+			paths.Env("REMOTE")+")")
 
 	root.AddCommand(
 		newAttachCommand(g),

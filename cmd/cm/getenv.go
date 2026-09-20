@@ -66,11 +66,7 @@ fails rather than falling back.`,
 				return err
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.GetEnv(ctx, &serverv1.GetEnvRequest{Session: session})
 				if err != nil {
 					return err

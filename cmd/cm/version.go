@@ -76,8 +76,10 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 
 	// Asked only if a server is already there. Starting one to ask its version would make a diagnostic
 	// change what it reports on, and "no server is running" is a useful answer in its own right.
-	if dirs, err := g.dirs(); err == nil {
-		conn, cl, derr := dialServer(dirs)
+	// Whichever server this invocation names, which for --remote is the one on the far end: a report about
+	// a remote server that described the local one would be worse than no report.
+	{
+		conn, cl, derr := g.dial(cmd.Context())
 		if derr == nil {
 			defer conn.Close()
 			// Doctor carries the server's version and needs no session to exist. A dedicated RPC would be

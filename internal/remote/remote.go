@@ -197,6 +197,33 @@ func (t Target) ProxyCommand(start bool) (string, []string) {
 	return Scheme, args
 }
 
+// Suggestion renders the ssh command a user would type to run cm on this target themselves.
+//
+// For the commands that refuse to act on another machine, where the refusal is only useful if it says how
+// to get the answer. Built here rather than formatted at the call site so it stays right for a target with
+// a port or a cm somewhere unusual, which is exactly when a user cannot guess it.
+func (t Target) Suggestion(args ...string) string {
+	return t.SuggestionWith(nil, args...)
+}
+
+// SuggestionWith is Suggestion with extra ssh options, for a command that needs something of ssh itself.
+//
+// -t is the one that matters: an interactive cm on the far end needs a pty, and ssh allocates none for a
+// command, so a suggested `ssh host cm attach` without it would fail in a way that looks like cm's fault.
+func (t Target) SuggestionWith(sshFlags []string, args ...string) string {
+	parts := append([]string{Scheme}, sshFlags...)
+	if t.Port != 0 {
+		parts = append(parts, "-p", strconv.Itoa(t.Port))
+	}
+	if t.User != "" {
+		parts = append(parts, t.User+"@"+t.Host)
+	} else {
+		parts = append(parts, t.Host)
+	}
+	parts = append(parts, t.command())
+	return strings.Join(append(parts, args...), " ")
+}
+
 // command is the cm to run on the remote.
 func (t Target) command() string {
 	if t.Command == "" {

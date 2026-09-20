@@ -73,13 +73,9 @@ session's screen to work out what is running.`,
 				return errors.New("no tags given; pass key=value, --remove key, or --replace")
 			}
 
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
 			// Deliberately not ensureServer, matching `cm report`: tagging a session implies one
 			// exists, and starting a server here would create one that has never heard of it.
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.Tag(ctx, &serverv1.TagRequest{
 					Session: name,
 					Set:     set,

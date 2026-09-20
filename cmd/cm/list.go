@@ -41,11 +41,7 @@ belongs to several groupings at once while its name only says one thing.`,
 			if _, err := tags.ParseSelector(tagArgs); err != nil {
 				return err
 			}
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix, Tags: tagArgs})
 				if err != nil {
 					return err

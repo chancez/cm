@@ -87,11 +87,7 @@ selector matching nothing is an error rather than a silent success.`,
 					return err
 				}
 			}
-			dirs, err := g.dirs()
-			if err != nil {
-				return err
-			}
-			return withServer(cmd.Context(), dirs, func(ctx context.Context, cl serverv1.ServerClient) error {
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names := args
 				switch {
 				case all:
@@ -113,10 +109,11 @@ selector matching nothing is an error rather than a silent success.`,
 					// Unlike --all, a selector matching nothing is an error. --all on an empty server is a
 					// satisfied request, while a selector that matched nothing is usually a typo, and
 					// exiting 0 there would let a teardown script report success having killed nothing.
-					names, err = resolveSelector(ctx, cl, tagArgs)
+					resolved, err := resolveSelector(ctx, cl, tagArgs)
 					if err != nil {
 						return err
 					}
+					names = resolved
 					if len(names) == 0 {
 						return fmt.Errorf("no sessions match %s", describeSelectors(tagArgs))
 					}
