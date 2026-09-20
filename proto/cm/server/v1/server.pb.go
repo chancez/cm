@@ -3816,8 +3816,18 @@ type LocationFrame struct {
 	// frame from another across two calls, and so a repeated argv is not mistaken for one frame.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// The command line the shell reported, bounded and stripped of control characters by the server. Empty
-	// when the shell could not report one, which is bash with history disabled.
-	Argv          string `protobuf:"bytes,2,opt,name=argv,proto3" json:"argv,omitempty"`
+	// when the shell could not report one, which is bash with history disabled, and empty on an entry that
+	// describes a client rather than a command.
+	Argv string `protobuf:"bytes,2,opt,name=argv,proto3" json:"argv,omitempty"`
+	// The session a nested client attached to, set only on an entry that is a client.
+	//
+	// The one entry no shell can report: `cm tui` picks a session after the command line is fixed, so the argv
+	// of the entry before this one says how the host was reached and nothing says which session was chosen.
+	// Empty from a client too old to say, which is still counted in announced_clients.
+	//
+	// Advisory. It was resolved against another host's server, so it is a label for a reader rather than a
+	// reference this host can act on.
+	Session       string `protobuf:"bytes,3,opt,name=session,proto3" json:"session,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3862,6 +3872,13 @@ func (x *LocationFrame) GetId() string {
 func (x *LocationFrame) GetArgv() string {
 	if x != nil {
 		return x.Argv
+	}
+	return ""
+}
+
+func (x *LocationFrame) GetSession() string {
+	if x != nil {
+		return x.Session
 	}
 	return ""
 }
@@ -5152,10 +5169,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"3\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"M\n" +
 	"\rLocationFrame\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04argv\x18\x02 \x01(\tR\x04argv\"W\n" +
+	"\x04argv\x18\x02 \x01(\tR\x04argv\x12\x18\n" +
+	"\asession\x18\x03 \x01(\tR\asession\"W\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12\x16\n" +

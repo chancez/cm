@@ -350,6 +350,9 @@ type harness struct {
 	inputErr   chan error
 	// gfx is the graphics probe the loop is given. Nil means one that never asked, which claims nothing.
 	gfx *graphicsProbe
+	// nesting is the announcer the loop is given. Nil for most cases, which is a client with nothing to
+	// announce and the state every method tolerates; the cases about the announcement set it.
+	nesting *nestingAnnouncer
 }
 
 // newHarness prepares a runSession call against a pipe-backed TTY.
@@ -463,7 +466,7 @@ func (h *harness) run(ctx context.Context) (outcome, error) {
 	}
 	// The harness feeds the channels directly, so there is no reader to suspend: see newTestInput.
 	return runSession(ctx, h.tty, h.client, h.opts, h.result.Session, &h.result,
-		&h.resumeFrom, &h.pending, h.winch, newTestInput(h.input, h.inputErr), gfx)
+		&h.resumeFrom, &h.pending, h.winch, newTestInput(h.input, h.inputErr), gfx, h.nesting)
 }
 
 // runAsync calls runSession on its own goroutine, for cases that must interact while it runs.

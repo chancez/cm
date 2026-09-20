@@ -395,7 +395,7 @@ type Session struct {
 	// derived values are the only thing a local consumer has for a session on another host: the OSC 7 that
 	// arrives carries the remote host, and `cm_launch.py` reads exactly that to open a split there. Taking
 	// it away would trade a fixed detach key for a broken split. See docs/ideas.md on a session's location.
-	announced map[string]string
+	announced map[string]announcedClient
 
 	// frames is the stack of command frames the shells writing to this pty have opened, outermost first.
 	//
@@ -1750,6 +1750,21 @@ type sessionFrame struct {
 	argv string
 }
 
+// announcedClient is one client that announced itself over this session's pty.
+type announcedClient struct {
+	// frame is the command frame that was open when the announcement arrived, and empty when none was.
+	//
+	// This is the collector: closing that frame discards the announcement, since the client was running
+	// inside the command that returned. Empty means nothing can collect it, which is a parent whose shell
+	// has no cm integration loaded.
+	frame string
+	// session is what the client said it attached to, and empty from one too old to say.
+	//
+	// Only a label. It was resolved against another host's server, so nothing here looks it up, and
+	// Location is the one thing that reads it.
+	session string
+}
+
 // maxSessionFrames bounds how deep a session's frame stack goes.
 //
 // Deep enough for an ssh chain nobody would type by hand, and shallow enough that a stream of frames cannot
@@ -1903,10 +1918,20 @@ func (s *Session) noteNesting(n osc.Nesting) {
 	case n.Ended:
 		delete(s.announced, n.ID)
 	default:
-		if _, known := s.announced[n.ID]; known {
+		if prev, known := s.announced[n.ID]; known {
 			// The same client again, which is what a reconnect looks like: a client re-announces after a
 			// server restart, since the state was only ever in memory here. Idempotent by id for exactly
 			// that reason.
+			//
+			// The session it names is taken again though, because a repeat is also how a client corrects
+			// itself: it announces before its Open and again with the name the server gave, which for a pick
+			// out of `cm tui` is the difference between "@a7k2m9x4" and "books". A switch arrives the same
+			// way. The frame stays as it was, since the client has not moved within this session, and the
+			// count has not changed, so nothing is published.
+			if n.Session != "" && n.Session != prev.session {
+				prev.session = n.Session
+				s.announced[n.ID] = prev
+			}
 			return
 		}
 		if len(s.announced) >= maxAnnouncedClients {
@@ -1914,7 +1939,7 @@ func (s *Session) noteNesting(n osc.Nesting) {
 			return
 		}
 		if s.announced == nil {
-			s.announced = make(map[string]string)
+			s.announced = make(map[string]announcedClient)
 		}
 		// Bound to the frame that is open, which is what makes this collectable: the client announcing itself
 		// is running *inside* that command, so the command returning means the client is gone whether it said
@@ -1925,7 +1950,7 @@ func (s *Session) noteNesting(n osc.Nesting) {
 		if n := len(s.frames); n > 0 {
 			frame = s.frames[n-1].id
 		}
-		s.announced[n.ID] = frame
+		s.announced[n.ID] = announcedClient{frame: frame, session: n.Session}
 	}
 
 	if after := s.hostingStateLocked(); after != before {
@@ -1980,11 +2005,11 @@ func (s *Session) noteFrame(f osc.Frame) {
 	}
 	s.frames = s.frames[:at]
 
-	for id, frame := range s.announced {
-		if frame != "" && closed[frame] {
+	for id, a := range s.announced {
+		if a.frame != "" && closed[a.frame] {
 			delete(s.announced, id)
 			s.log.Info("dropped a nesting announcement with the command it was made in",
-				"session", s.label, "client", id, "frame", frame)
+				"session", s.label, "client", id, "frame", a.frame, "nested_session", a.session)
 		}
 	}
 
@@ -2001,22 +2026,61 @@ func (s *Session) noteFrame(f osc.Frame) {
 func (s *Session) Location() []LocationFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.frames) == 0 {
+	if len(s.frames) == 0 && len(s.announced) == 0 {
 		return nil
 	}
-	out := make([]LocationFrame, 0, len(s.frames))
+
+	// An announced client sits after the frame it was bound to, which is the position the collector already
+	// records. Interleaved here rather than emitted as a frame by the client that announced: a frame means a
+	// shell said it ran this, and the collector's rule that closing one discards the frames above it holds
+	// because those came from shells further in. See docs/ideas.md on a session's location for the rest of
+	// why cm does not write frames of its own.
+	byFrame := make(map[string][]LocationFrame, len(s.announced))
+	for id, a := range s.announced {
+		// Nothing to say about a client too old to name its session. It is still counted in
+		// AnnouncedClients, which is what the detach handover runs on.
+		if a.session == "" {
+			continue
+		}
+		byFrame[a.frame] = append(byFrame[a.frame], LocationFrame{ID: id, Session: a.session})
+	}
+	// Map order is not an order. Sorted by what a reader sees first, then by the nonce, so two clients in one
+	// frame come out the same way on every call: a location that reshuffles between two `cm list` runs looks
+	// like the sessions moved.
+	for _, entries := range byFrame {
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Session != entries[j].Session {
+				return entries[i].Session < entries[j].Session
+			}
+			return entries[i].ID < entries[j].ID
+		})
+	}
+
+	out := make([]LocationFrame, 0, len(s.frames)+len(s.announced))
 	for _, f := range s.frames {
 		out = append(out, LocationFrame{ID: f.id, Argv: f.argv})
+		out = append(out, byFrame[f.id]...)
 	}
+	// Bound to no frame, so there is no position to place them at, and innermost is the honest end: the
+	// ordinary case is a parent whose shell has no cm integration, where there are no frames at all and this
+	// is the whole location. See noteNesting on why that announcement cannot be collected.
+	out = append(out, byFrame[""]...)
 	return out
 }
 
 // LocationFrame is one entry of a session's location, as a caller outside this package sees it.
 type LocationFrame struct {
-	// ID is the frame's own identifier, which pairs an open with its close.
+	// ID is the frame's own identifier, which pairs an open with its close. An announced client's nonce
+	// takes this place for the entry that describes it, since both are opaque and both identify the entry.
 	ID string
-	// Argv is the command line the shell reported.
+	// Argv is the command line the shell reported. Empty on an entry that is a client rather than a command.
 	Argv string
+	// Session names what a nested client attached to, and is set only on such an entry.
+	//
+	// The entry a location gains that no shell could report: `cm tui` picks a session after the command line
+	// is fixed, so the argv above this one says how the host was reached and nothing says which session was
+	// chosen. Advisory, since the reference was resolved on another host.
+	Session string
 }
 
 // endHosting records that a nested attachment to child has finished.

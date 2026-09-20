@@ -9,8 +9,14 @@ import (
 	"github.com/chancez/cm/internal/seq"
 )
 
-// announce returns the bytes a nested client writes to say it is there.
-func announce(id string, ended bool) []byte { return osc.NestingSequence(id, ended) }
+// announce returns the bytes a nested client writes to say it is there, naming no session.
+//
+// Most of these tests are about the handover rather than about the label, and a client too old to name its
+// session sends exactly this, so it is also the compatibility case.
+func announce(id string, ended bool) []byte { return osc.NestingSequence(id, "", ended) }
+
+// announceSession is the same with the session the client attached to, which is what a current client sends.
+func announceSession(id, session string) []byte { return osc.NestingSequence(id, session, false) }
 
 // A client that cannot name its parent is heard through the output stream instead.
 //

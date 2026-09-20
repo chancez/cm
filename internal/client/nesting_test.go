@@ -132,7 +132,7 @@ func TestNestingAnnouncerWritesThroughTheScreen(t *testing.T) {
 	n.announce()
 	n.withdraw()
 
-	want := string(osc.NestingSequence("abc123", false)) + string(osc.NestingSequence("abc123", true))
+	want := string(osc.NestingSequence("abc123", "", false)) + string(osc.NestingSequence("abc123", "", true))
 	if got := buf.String(); got != want {
 		t.Errorf("written = %q, want %q", got, want)
 	}
@@ -147,7 +147,7 @@ func TestNestingAnnouncerRepeatsOneNonce(t *testing.T) {
 	n.announce()
 	n.announce()
 
-	one := string(osc.NestingSequence("abc123", false))
+	one := string(osc.NestingSequence("abc123", "", false))
 	if got := buf.String(); got != one+one {
 		t.Errorf("written = %q, want the same announcement twice", got)
 	}
@@ -211,7 +211,7 @@ func TestNewNestingIDIsParseable(t *testing.T) {
 	for i := 0; i < 64; i++ {
 		id := newNestingID()
 		var tr osc.ReportTracker
-		tr.Feed(osc.NestingSequence(id, false))
+		tr.Feed(osc.NestingSequence(id, "", false))
 		got := tr.TakeNesting()
 		if len(got) != 1 || got[0].ID != id {
 			t.Fatalf("an announcement carrying id %q parsed as %+v", id, got)
@@ -244,5 +244,81 @@ func TestInputGateNestedPressCountResetsWhenALevelGoes(t *testing.T) {
 	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
 		t.Errorf("third press with a level leaving each time = %+v, want it forwarded silently: the escape "+
 			"must not be reachable while clients are still nested", dec)
+	}
+}
+
+// The announcement names the session, which is the whole point of it for a reader: the nonce says a client is
+// there and cannot say where it went.
+func TestNestingAnnouncerNamesItsSession(t *testing.T) {
+	var buf bytes.Buffer
+	n := &nestingAnnouncer{id: "abc123", session: "books", out: newAnnouncerScreen(t, &buf)}
+
+	n.announce()
+
+	want := string(osc.NestingSequence("abc123", "books", false))
+	if got := buf.String(); got != want {
+		t.Errorf("written = %q, want %q", got, want)
+	}
+}
+
+// The reference a client attaches with is often not a name, so the name the server gives replaces it.
+//
+// The case this exists for: `cm tui` attaches by ID deliberately, so without this a window that reached a
+// remote session through the picker reports "@a7k2m9x4" as its location where a person wanted "books".
+func TestNestingAnnouncerRefinesToTheServersName(t *testing.T) {
+	var buf bytes.Buffer
+	n := &nestingAnnouncer{id: "abc123", session: "@a7k2m9x4", out: newAnnouncerScreen(t, &buf)}
+
+	n.announce()
+	n.refine("books")
+
+	want := string(osc.NestingSequence("abc123", "@a7k2m9x4", false)) +
+		string(osc.NestingSequence("abc123", "books", false))
+	if got := buf.String(); got != want {
+		t.Errorf("written = %q, want the announcement then the refinement: %q", got, want)
+	}
+}
+
+// Silent when it changes nothing, which is the ordinary attach by name: the reference and the session's name
+// are the same string, and a second sequence per connection would be noise on the common path.
+func TestNestingAnnouncerRefinementIsSilentWhenItAddsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		to   string
+	}{
+		{name: "the same name", to: "books"},
+		{name: "no name at all", to: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			n := &nestingAnnouncer{id: "abc123", session: "books", out: newAnnouncerScreen(t, &buf)}
+
+			n.announce()
+			n.refine(tc.to)
+
+			want := string(osc.NestingSequence("abc123", "books", false))
+			if got := buf.String(); got != want {
+				t.Errorf("written = %q, want one announcement: %q", got, want)
+			}
+		})
+	}
+}
+
+// A nil announcer is the ordinary case for a client with nothing to announce, and every method tolerates it.
+func TestNestingAnnouncerRefineToleratesNil(t *testing.T) {
+	var n *nestingAnnouncer
+	n.refine("books")
+}
+
+// The reference the caller gave is what an announcement carries before any server has answered, so a parent
+// knows where a client went even if the Open never completes.
+func TestNewNestingAnnouncerStartsFromTheRequestedSession(t *testing.T) {
+	tty := ptyTTY(t)
+	got := newNestingAnnouncer(Options{Session: "books"}, tty, newAnnouncerScreen(t, &bytes.Buffer{}))
+	if got == nil {
+		t.Fatal("newNestingAnnouncer() = nil, want an announcer")
+	}
+	if got.session != "books" {
+		t.Errorf("session = %q, want books", got.session)
 	}
 }

@@ -27,6 +27,12 @@ type nestingAnnouncer struct {
 	// hop and every hop's announcement passes through the outermost pty, so two hosts with the same pid
 	// would look like one client to the parent that hears both.
 	id string
+	// session is what this client attached to, for a reader of the parent's location rather than for cm.
+	//
+	// Starts as the reference the caller gave and is refined to the session's own name once the server
+	// answers, which is not a nicety: `cm tui` attaches by ID on purpose, so without the refinement the
+	// flow this exists for reports "@a7k2m9x4" where a person wanted "books". See refine.
+	session string
 	// out is where the announcement goes: the one writer for this client's terminal, so an announcement
 	// cannot land inside a half-written sequence.
 	out *screen
@@ -51,7 +57,24 @@ func newNestingAnnouncer(opts Options, tty *TTY, scr *screen) *nestingAnnouncer 
 	if !opts.readsTerminal(tty) || !opts.overlayEnabled(tty) {
 		return nil
 	}
-	return &nestingAnnouncer{id: newNestingID(), out: scr}
+	return &nestingAnnouncer{id: newNestingID(), session: opts.Session, out: scr}
+}
+
+// refine replaces the announced session with the name the server gave, and re-announces if it changed.
+//
+// Called when an Open answers, which is the first moment this client knows what the session is called
+// rather than how it was asked for. Worth a second sequence because the reference a client attaches with is
+// often not a name: `cm tui` uses the ID deliberately, and the ID is exactly what a person reading a
+// location cannot use. A switch reaches here again through the next Open, which is what keeps the parent's
+// view following a client that moved.
+//
+// Silent when nothing changed, which is the ordinary attach by name.
+func (n *nestingAnnouncer) refine(session string) {
+	if n == nil || session == "" || session == n.session {
+		return
+	}
+	n.session = session
+	n.write(false)
 }
 
 // announce says this client is attached, and is called again on every reconnect.
@@ -84,7 +107,7 @@ func (n *nestingAnnouncer) write(ended bool) {
 	// Errors are dropped rather than reported: a terminal that cannot be written to is already failing in
 	// louder ways, and an announcement that does not arrive costs the detach key handover rather than the
 	// attachment.
-	_ = n.out.inject(osc.NestingSequence(n.id, ended))
+	_ = n.out.inject(osc.NestingSequence(n.id, n.session, ended))
 }
 
 // newNestingID draws a nonce for one client.

@@ -55,6 +55,14 @@ type Nesting struct {
 	// ID pairs an end with its begin, and is the announcing client's own nonce rather than a session
 	// reference: a remote session's ID means nothing on this host, and two hosts can mint the same one.
 	ID string
+	// Session is what the client attached to, as it referred to it, and is for a reader rather than for
+	// cm: a reference resolved against another host's server is not one this host can act on.
+	//
+	// Empty from a client too old to send it, and empty on an end, where the id is what pairs. It exists
+	// because the id alone cannot say where a window went, and there are two flows where nothing else can:
+	// `cm tui` over ssh and `cm --remote <host> tui` both choose the session after the command line is
+	// fixed, so no argv anywhere names it. See Session.Location in internal/server.
+	Session string
 	// Ended distinguishes a client leaving from a client arriving.
 	Ended bool
 }
@@ -266,12 +274,20 @@ func reportPrefixLen(buf []byte) int {
 // behaviour parseReport already documents for an unknown key.
 //
 // BEL terminated, matching what the shell integration emits and what every cm reader accepts.
-func NestingSequence(id string, ended bool) []byte {
+//
+// The session is omitted when empty and on an end, where the id is what pairs a withdrawal with its
+// announcement. Omitted rather than sent empty so an older parent, which ignores the key, and a newer one
+// reading a client that has nothing to say see the same bytes.
+func NestingSequence(id, session string, ended bool) []byte {
 	state := "begin"
 	if ended {
 		state = "end"
 	}
-	return []byte(reportIntro + "client=" + state + ";id=" + id + "\a")
+	s := reportIntro + "client=" + state + ";id=" + id
+	if !ended && session != "" {
+		s += ";session=" + escapeCmdline(session)
+	}
+	return []byte(s + "\a")
 }
 
 // parseNesting reads a nesting announcement, reporting whether the payload was one.
@@ -297,12 +313,39 @@ func parseNesting(params []byte) (Nesting, bool) {
 			}
 		case "id":
 			n.ID = unescapeCmdline(value)
+		case "session":
+			n.Session = unescapeCmdline(value)
 		}
 	}
 	if !sawClient || !validNestingID(n.ID) {
 		return Nesting{}, false
 	}
+	// Sanitized rather than validated as a reference, unlike the id. A reference is a name or an @id and
+	// this one was resolved against another host's server, so the shapes cm accepts locally are not the
+	// bound; what matters is that it travels into `cm info` output, so control bytes and length are. A
+	// nonsense value displays as nonsense, which is the same tolerance a frame's argv has.
+	n.Session = sanitizeSessionRef(n.Session)
 	return n, true
+}
+
+// maxNestingSession bounds an announced session reference.
+//
+// Shorter than a command line because that is all a reference can be: `ValidateSessionName` caps a name well
+// inside this, and an ID with its sigil is nine bytes. Generous enough that a longer name from a future build
+// is truncated rather than dropped.
+const maxNestingSession = 128
+
+// sanitizeSessionRef makes an announced reference safe to carry and bounded in size.
+func sanitizeSessionRef(ref string) string {
+	if len(ref) > maxNestingSession {
+		ref = ref[:maxNestingSession]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, ref)
 }
 
 // FrameSequence returns the bytes a shell writes to open or close a command frame.

@@ -2,6 +2,7 @@ package osc
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -9,18 +10,35 @@ import (
 // far side of an ssh upgrades on its own schedule. Pinned so a change to the spelling is deliberate.
 func TestNestingSequenceIsStable(t *testing.T) {
 	tests := []struct {
-		name  string
-		id    string
-		ended bool
-		want  string
+		name    string
+		id      string
+		session string
+		ended   bool
+		want    string
 	}{
 		{name: "begin", id: "9f3c2a", want: "\x1b]25453;client=begin;id=9f3c2a\a"},
 		{name: "end", id: "9f3c2a", ended: true, want: "\x1b]25453;client=end;id=9f3c2a\a"},
+		{
+			// The session a client attached to, which is what makes a parent able to say where a window went.
+			name: "begin with a session", id: "9f3c2a", session: "books",
+			want: "\x1b]25453;client=begin;id=9f3c2a;session=books\a",
+		},
+		{
+			// Escaped, since a semicolon separates fields on the wire. A name cannot contain one, but a
+			// reference is a string this process was handed rather than one it validated.
+			name: "begin with a session needing escapes", id: "9f3c2a", session: "a;b\\c",
+			want: "\x1b]25453;client=begin;id=9f3c2a;session=a\\;b\\\\c\a",
+		},
+		{
+			// Dropped on an end, where the id is what pairs the withdrawal with the announcement.
+			name: "end ignores the session", id: "9f3c2a", session: "books", ended: true,
+			want: "\x1b]25453;client=end;id=9f3c2a\a",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(NestingSequence(tt.id, tt.ended)); got != tt.want {
-				t.Errorf("NestingSequence(%q, %v) = %q, want %q", tt.id, tt.ended, got, tt.want)
+			if got := string(NestingSequence(tt.id, tt.session, tt.ended)); got != tt.want {
+				t.Errorf("NestingSequence(%q, %q, %v) = %q, want %q", tt.id, tt.session, tt.ended, got, tt.want)
 			}
 		})
 	}
@@ -30,10 +48,10 @@ func TestNestingSequenceIsStable(t *testing.T) {
 // if the reader disagreed with the writer.
 func TestNestingSequenceRoundTrips(t *testing.T) {
 	var tr ReportTracker
-	tr.Feed(NestingSequence("abc123", false))
-	tr.Feed(NestingSequence("abc123", true))
+	tr.Feed(NestingSequence("abc123", "a;b", false))
+	tr.Feed(NestingSequence("abc123", "", true))
 
-	want := []Nesting{{ID: "abc123"}, {ID: "abc123", Ended: true}}
+	want := []Nesting{{ID: "abc123", Session: "a;b"}, {ID: "abc123", Ended: true}}
 	if got := tr.TakeNesting(); !reflect.DeepEqual(got, want) {
 		t.Errorf("TakeNesting() = %+v, want %+v", got, want)
 	}
@@ -64,6 +82,36 @@ func TestReportTrackerReadsNesting(t *testing.T) {
 			name:  "fields in any order",
 			input: "\x1b]25453;id=9f3c2a;client=begin\x07",
 			want:  []Nesting{{ID: "9f3c2a"}},
+		},
+		{
+			name: "session named",
+			// The label a parent needs to say where a window went, since the id is a nonce.
+			input: "\x1b]25453;client=begin;id=9f3c2a;session=books\x07",
+			want:  []Nesting{{ID: "9f3c2a", Session: "books"}},
+		},
+		{
+			name:  "session with an escaped separator",
+			input: "\x1b]25453;client=begin;id=9f3c2a;session=a\\;b\x07",
+			want:  []Nesting{{ID: "9f3c2a", Session: "a;b"}},
+		},
+		{
+			name: "session ID as the reference",
+			// What `cm tui` announces before its Open answers, since the picker attaches by ID.
+			input: "\x1b]25453;client=begin;id=9f3c2a;session=@a7k2m9x4\x07",
+			want:  []Nesting{{ID: "9f3c2a", Session: "@a7k2m9x4"}},
+		},
+		{
+			name: "control bytes are stripped from the session",
+			// These bytes can come from anything that prints, and this value travels into `cm info` output.
+			// A BEL is not among them and must not be tested for: it terminates the sequence, so a value
+			// containing one is truncated there rather than carried and stripped.
+			input: "\x1b]25453;client=begin;id=9f3c2a;session=bo\x01ok\x7fs\x07",
+			want:  []Nesting{{ID: "9f3c2a", Session: "books"}},
+		},
+		{
+			name:  "an over-long session is truncated rather than dropped",
+			input: "\x1b]25453;client=begin;id=9f3c2a;session=" + strings.Repeat("n", maxNestingSession+20) + "\x07",
+			want:  []Nesting{{ID: "9f3c2a", Session: strings.Repeat("n", maxNestingSession)}},
 		},
 		{
 			name: "unknown keys ignored",
@@ -180,7 +228,7 @@ func TestNestingAndReportsCoexist(t *testing.T) {
 func TestPendingNestingIsBounded(t *testing.T) {
 	var tr ReportTracker
 	for i := 0; i < maxPendingNesting*3; i++ {
-		tr.Feed(NestingSequence("a1", false))
+		tr.Feed(NestingSequence("a1", "", false))
 	}
 	if got := len(tr.TakeNesting()); got != maxPendingNesting {
 		t.Errorf("pending announcements = %d, want %d", got, maxPendingNesting)

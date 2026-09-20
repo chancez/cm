@@ -201,3 +201,157 @@ func TestAFrameAndAnAnnouncementInOneChunkBind(t *testing.T) {
 			got)
 	}
 }
+
+// A client that announced itself appears in the location, at the command it was announced inside.
+//
+// The flow this exists for, and the only one where nothing else can say it: `kitten ssh white -t cm tui` and
+// `cm --remote ssh://white tui` both pick a session after the command line is fixed, so the frame says how
+// the host was reached and the announcement is the only thing that knows which session was chosen.
+func TestLocationNamesAnAnnouncedClientsSession(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("local-1", "kitten ssh white -t cm tui", false), 0)
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+
+	want := []LocationFrame{
+		{ID: "local-1", Argv: "kitten ssh white -t cm tui"},
+		{ID: "remote-client", Session: "books"},
+	}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+}
+
+// The far side's own frames stack above the client, which is what makes the whole thing read as a path.
+func TestLocationPlacesAnAnnouncedClientBeforeTheFramesAboveIt(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("local-1", "kitten ssh white -t cm tui", false), 0)
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+	sess.processChunk(frame("remote-1", "nvim notes.md", false), 0)
+
+	want := []LocationFrame{
+		{ID: "local-1", Argv: "kitten ssh white -t cm tui"},
+		{ID: "remote-client", Session: "books"},
+		{ID: "remote-1", Argv: "nvim notes.md"},
+	}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+}
+
+// With no frame to bind to there is no position, and the announcement is the whole location.
+//
+// The ordinary case for it: a parent whose shell has no cm integration loaded, where nothing reports frames
+// and this is the only thing that says the window is showing a session somewhere else.
+func TestLocationReportsAnAnnouncedClientWithNoFrame(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+
+	want := []LocationFrame{{ID: "remote-client", Session: "books"}}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+}
+
+// A client too old to name its session is counted and not placed, since there is nothing to show.
+func TestLocationSkipsAnAnnouncementWithNoSession(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("local-1", "ssh white", false), 0)
+	sess.processChunk(announce("old-client", false), 0)
+
+	want := []LocationFrame{{ID: "local-1", Argv: "ssh white"}}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+	if got := sess.AnnouncedClients(); got != 1 {
+		t.Errorf("AnnouncedClients() = %d, want 1: an unnamed client still holds the detach key", got)
+	}
+}
+
+// A repeat corrects the name, which is how a client that attached by ID says what the session is called.
+//
+// `cm tui` attaches by ID, so the first announcement carries "@a7k2m9x4" and the second, after the Open
+// answers, carries the name. Without taking the second the location shows an ID nobody can read.
+func TestARepeatedAnnouncementUpdatesTheSession(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+	sub := sess.subscribeHosting()
+
+	sess.processChunk(frame("local-1", "kitten ssh white -t cm tui", false), 0)
+	sess.processChunk(announceSession("remote-client", "@a7k2m9x4"), 0)
+	if _, ok := publishedHosting(sub); !ok {
+		t.Fatal("the announcement published nothing")
+	}
+
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+
+	want := []LocationFrame{
+		{ID: "local-1", Argv: "kitten ssh white -t cm tui"},
+		{ID: "remote-client", Session: "books"},
+	}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+	// One client, so nothing about the handover changed and nothing should have been published: a
+	// republished level would reset every client's escape counter for a client that only renamed itself.
+	if got, ok := publishedHosting(sub); ok {
+		t.Errorf("the repeat published %+v, want nothing", got)
+	}
+	if got := sess.AnnouncedClients(); got != 1 {
+		t.Errorf("AnnouncedClients() = %d, want 1: a repeat is one client, not two", got)
+	}
+}
+
+// A client whose name went away keeps the one it had, since a repeat carrying nothing says nothing.
+func TestARepeatWithNoSessionKeepsTheNameAlready(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+	sess.processChunk(announce("remote-client", false), 0)
+
+	want := []LocationFrame{{ID: "remote-client", Session: "books"}}
+	if got := sess.Location(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Location() = %+v, want %+v", got, want)
+	}
+}
+
+// Two clients in one frame come out in a fixed order, because map order is not an order.
+//
+// Ordinary rather than exotic: an ssh chain announces once per hop through the outermost pty, so a parent
+// holding several is the case the nonce exists for. A location that reshuffles between two `cm list` calls
+// reads as the sessions having moved.
+func TestLocationOrdersSeveralAnnouncedClients(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		sess := newNestedTestSession(t, &fakeTerminal{})
+		sess.processChunk(frame("local-1", "ssh white", false), 0)
+		sess.processChunk(announceSession("c2", "work"), 0)
+		sess.processChunk(announceSession("c1", "books"), 0)
+
+		want := []LocationFrame{
+			{ID: "local-1", Argv: "ssh white"},
+			{ID: "c1", Session: "books"},
+			{ID: "c2", Session: "work"},
+		}
+		if got := sess.Location(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Location() = %+v, want %+v", got, want)
+		}
+	}
+}
+
+// Collection still takes the client with its command, which is what the session label must not have broken.
+func TestClosingAFrameRemovesTheClientFromTheLocation(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("local-1", "kitten ssh white -t cm tui", false), 0)
+	sess.processChunk(announceSession("remote-client", "books"), 0)
+	sess.processChunk(frame("local-1", "", true), 0)
+
+	if got := sess.Location(); got != nil {
+		t.Errorf("Location() = %+v, want nil", got)
+	}
+	if got := sess.AnnouncedClients(); got != 0 {
+		t.Errorf("AnnouncedClients() = %d, want 0", got)
+	}
+}

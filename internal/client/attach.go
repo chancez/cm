@@ -574,7 +574,7 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 		nesting.announce()
 
 		outcome, err := runSession(
-			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, in, &gfxProbe)
+			ctx, tty, cl, opts, ref, &result, &resumeFrom, &pending, winch, in, &gfxProbe, nesting)
 		conn.Close()
 
 		switch outcome {
@@ -775,6 +775,11 @@ func runSession(
 	// gfx is the terminal's outstanding graphics question, shared across reconnects because the terminal is
 	// the same one: a reply arriving after a dropped connection still answers what was asked before it.
 	gfx *graphicsProbe,
+	// nesting is this client's announcement to whatever owns its stdout, shared across reconnects because
+	// the fact it states is about this process. Passed in only so the session's own name can replace the
+	// reference this attempt asked with, which the Open below is the first thing to know. Nil whenever there
+	// is nothing to announce, and every method tolerates that.
+	nesting *nestingAnnouncer,
 ) (outcome, error) {
 	// Defaulted again rather than relied on from Attach. Attach fills this in, but this function is
 	// also driven directly by its tests, which is the whole reason the loop body is separable, and a
@@ -826,6 +831,10 @@ func runSession(
 	}
 	result.Session = opened.Session
 	result.SessionID = opened.SessionId
+	// Now that the session has a name, say it. The announcement made before this connection carried the
+	// reference this attempt asked with, which for a pick out of `cm tui` is an ID, and an ID is what a
+	// person reading the parent's location cannot use. Silent unless it changed.
+	nesting.refine(opened.Session)
 	// Signalled here, after Opened and before anything else is read, so a caller ordering work after the
 	// attachment cannot race the first output.
 	if opts.OnAttached != nil {

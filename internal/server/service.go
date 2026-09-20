@@ -1023,7 +1023,8 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// so a stored one would come back after a restart claiming the session is inside something that
 			// exited with the previous server.
 			for _, f := range sess.Location() {
-				item.Location = append(item.Location, &serverv1.LocationFrame{Id: f.ID, Argv: f.Argv})
+				item.Location = append(item.Location,
+					&serverv1.LocationFrame{Id: f.ID, Argv: f.Argv, Session: f.Session})
 			}
 
 			// Same argument as Hosting: an attachment is live state and nothing about it is worth

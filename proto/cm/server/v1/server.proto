@@ -1112,8 +1112,18 @@ message LocationFrame {
   // frame from another across two calls, and so a repeated argv is not mistaken for one frame.
   string id = 1;
   // The command line the shell reported, bounded and stripped of control characters by the server. Empty
-  // when the shell could not report one, which is bash with history disabled.
+  // when the shell could not report one, which is bash with history disabled, and empty on an entry that
+  // describes a client rather than a command.
   string argv = 2;
+  // The session a nested client attached to, set only on an entry that is a client.
+  //
+  // The one entry no shell can report: `cm tui` picks a session after the command line is fixed, so the argv
+  // of the entry before this one says how the host was reached and nothing says which session was chosen.
+  // Empty from a client too old to say, which is still counted in announced_clients.
+  //
+  // Advisory. It was resolved against another host's server, so it is a label for a reader rather than a
+  // reference this host can act on.
+  string session = 3;
 }
 
 message KillRequest {
