@@ -1,6 +1,8 @@
 package transport
 
 import (
+	"context"
+
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -20,6 +22,27 @@ func DialServer(socketPath string) (Conn, serverv1.ServerClient, error) {
 		return nil, nil, err
 	}
 	return cl, serverv1.NewServerClient(cl), nil
+}
+
+// DialServerVia connects to a cm server through a program and returns a typed client.
+//
+// The remote counterpart of DialServer, and the same seam: a caller holding serverv1.ServerClient cannot
+// tell which of the two produced it, which is what lets every command work against a server on another
+// machine without knowing one exists. See DialCommand for what the program has to do, and docs/rpc.md for
+// why remote access is a tunnel rather than a listener.
+//
+// Also reports the remote's version, which has nowhere else to come from: a local client learns a
+// server's build from Status, and this is known one round trip earlier, in time to explain a refusal.
+func DialServerVia(
+	ctx context.Context,
+	name string,
+	args ...string,
+) (Conn, serverv1.ServerClient, string, error) {
+	cl, version, err := DialCommand(ctx, name, args...)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return cl, serverv1.NewServerClient(cl), version, nil
 }
 
 // DialShim connects to a session's shim and returns a typed client.
