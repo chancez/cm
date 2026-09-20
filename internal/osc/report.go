@@ -101,8 +101,8 @@ const maxFrameArgv = 256
 // Announcements arrive as bytes in a session's output, so anything that prints them is a source: `cat`
 // of a file containing one is the honest case. Bounded here and again in the server, which keeps a
 // stream of junk from growing either the slice or the parent's map without limit. The consequence of a
-// spurious announcement is documented where it is acted on, and is why the prefix key stays with the
-// outer client while a nesting is only announced.
+// spurious announcement is documented where it is acted on, and is answered by the escape on the detach key
+// rather than by keeping a key back: see inputGate.nestedPresses.
 const maxPendingNesting = 32
 
 // reportStates is the set a report may carry.

@@ -1901,7 +1901,9 @@ func (s *Session) beginHosting(child string) {
 //
 // An announcement is bytes in the output stream, so a session that prints one -- `cat` of a file holding
 // one, most honestly -- registers a client that will never withdraw. The bound keeps that from growing
-// without limit; what keeps the window usable is that an announced nesting leaves the prefix key alone.
+// without limit; what keeps the window usable is the escape on the detach key, three presses leaving a
+// handover nobody is acting on. Both intercepted keys go over for an announced nesting as much as for one
+// the server was told about, so there is no key held back to fall back on.
 const maxAnnouncedClients = 8
 
 // noteNesting applies one announcement from the output stream.
