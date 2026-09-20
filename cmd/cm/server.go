@@ -52,7 +52,136 @@ for development.`,
 	}
 	cmd.AddCommand(newServerStopCommand(g))
 	cmd.AddCommand(newServerRestartCommand(g))
+	cmd.AddCommand(newServerProxyCommand(g))
 	return cmd
+}
+
+// newServerProxyCommand builds `cm server proxy`, the far end of a client on another machine.
+//
+// It forwards one connection between its own standard input and output and this machine's server socket,
+// so `ssh host cm server proxy` is a dialable cm server. That the transport is a program rather than a
+// socket is invisible to both ends: see transport.DialCommand.
+//
+// A cm subcommand rather than `ssh -L` forwarding the socket, and the difference is not stylistic. A
+// forward is established before anything runs on the remote, so nothing there can start a server, and it
+// needs the remote's socket path, which costs a round trip to learn. This runs on the remote, so it knows
+// its own paths and can start its own server.
+//
+// Hidden because nobody types it: it is what `--remote` runs, and its stdout is a protocol rather than
+// anything to read.
+func newServerProxyCommand(g *globals) *cobra.Command {
+	var start bool
+
+	cmd := &cobra.Command{
+		Use:   "proxy",
+		Short: "Forward a connection on stdin and stdout to this machine's server",
+		Long: `Forward a connection on stdin and stdout to this machine's server.
+
+For a cm client on another machine, which runs this over ssh and speaks to the
+server behind it. Not useful to run by hand: stdout carries a protocol.`,
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dirs, err := g.dirs()
+			if err != nil {
+				return err
+			}
+			return runServerProxy(cmd.Context(), dirs, os.Stdin, os.Stdout, start)
+		},
+	}
+	// Off by default, because starting a server is a decision with a policy behind it and that policy
+	// lives in the client: it waits out a quiet period before trying, and leaves a server that was stopped
+	// on purpose stopped, neither of which this end can see. A proxy that always started one would defeat
+	// `cm server stop` on the remote from any window that happened to reconnect.
+	//
+	// Set for a first connection, where it is what "creating one if needed" means, and left off for the
+	// reconnects an outage produces.
+	cmd.Flags().BoolVar(&start, "start", false,
+		"start a server if none is running, instead of failing")
+	return cmd
+}
+
+// runServerProxy forwards one connection between a remote client and this machine's server.
+func runServerProxy(
+	ctx context.Context,
+	dirs paths.Dirs,
+	in io.Reader,
+	out io.Writer,
+	start bool,
+) error {
+	conn, err := dialServerSocket(ctx, dirs, start)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Written only now that there is a server behind it, because that is what the banner claims. The
+	// dialer treats it as the moment the connection became usable, so announcing any earlier would report
+	// a server that might not exist. See transport.ProxyBanner.
+	if _, err := io.WriteString(out, transport.ProxyBanner(paths.Version())); err != nil {
+		return fmt.Errorf("announcing this proxy: %w", err)
+	}
+
+	toServer := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(conn, in)
+		// Half-closed rather than closed, so what the server has already written still reaches the client.
+		// A detach is the client saying goodbye and the acknowledgement of it is on the way back.
+		if uc, ok := conn.(*net.UnixConn); ok {
+			_ = uc.CloseWrite()
+		}
+		toServer <- err
+	}()
+
+	// This direction decides when the proxy is over: the server closing its side is the end of the
+	// conversation, whether it came from a detach or from the server shutting down.
+	if _, err := io.Copy(out, conn); err != nil {
+		return fmt.Errorf("forwarding to the client: %w", err)
+	}
+	// Read without blocking rather than waited for. That goroutine is parked in a read on stdin that only
+	// the client closing will end, and there is nothing left to forward anyway, but an error it already
+	// hit is still worth reporting.
+	select {
+	case err := <-toServer:
+		if err != nil {
+			return fmt.Errorf("forwarding to the server: %w", err)
+		}
+	default:
+	}
+	return nil
+}
+
+// dialServerSocket connects to this machine's server socket, optionally starting one.
+//
+// A raw connection rather than the typed client every other command gets, because a proxy forwards bytes
+// and never decodes a message: the RPC is between the two ends it sits between.
+func dialServerSocket(ctx context.Context, dirs paths.Dirs, start bool) (net.Conn, error) {
+	conn, err := net.Dial("unix", dirs.ServerSocket())
+	if err == nil {
+		return conn, nil
+	}
+	if !start {
+		// Named as a remote fact, since this message is read on the *other* machine, where "no server is
+		// running" would sound like the local one.
+		return nil, fmt.Errorf("no cm server is running on %s: %w", hostnameOrUnknown(), err)
+	}
+
+	if err := ensureServer(ctx, dirs); err != nil {
+		return nil, err
+	}
+	conn, err = net.Dial("unix", dirs.ServerSocket())
+	if err != nil {
+		return nil, fmt.Errorf("connecting to server: %w", err)
+	}
+	return conn, nil
+}
+
+// hostnameOrUnknown names this machine for a message that will be read somewhere else.
+func hostnameOrUnknown() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "this host"
 }
 
 func newServerRestartCommand(g *globals) *cobra.Command {
