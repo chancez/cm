@@ -6,10 +6,14 @@
 package remote
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chancez/cm/internal/paths"
 )
@@ -144,12 +148,75 @@ func (t Target) String() string {
 	return sb.String()
 }
 
-// ProxyCommand returns the program and arguments that connect to this target's cm server.
+// ControlPersist is how long a shared ssh connection outlives the command that opened it.
 //
-// start asks the remote to bring a server up if none is running. See `cm server proxy` for why that is a
-// decision the caller makes rather than something the far end always does.
-func (t Target) ProxyCommand(start bool) (string, []string) {
-	args := []string{
+// The number is a trade with two visible ends. Measured on loopback, a fresh connection costs 120 to 150ms
+// and one through an existing master costs 10 to 30ms, so anything that expires between two cm commands
+// pays the full price twice; and a master that lingers is an ssh process the user did not start, holding a
+// connection to a host they may have finished with.
+//
+// A minute covers a burst of commands, which is how cm is actually used -- a list, a send, a read, a kill --
+// while being short enough that an idle laptop is not holding connections open to somewhere.
+const ControlPersist = 60 * time.Second
+
+// ControlPath returns where a shared connection to this target keeps its control socket.
+//
+// Empty when multiplexing cannot be used, which callers treat as "do not ask for it" rather than as an
+// error: a slow connection is worse than a fast one and better than a failure.
+//
+// cm computes the name rather than using ssh's own %C token, and that is the difference between having this
+// feature and not. %C is a 64-character hash, which under a runtime directory already 55 bytes on macOS
+// makes a 124-byte socket path against the 103 a unix socket allows. Eight bytes of the same information
+// fit: 68 bytes, measured. The hash covers everything that decides which connection this is, so two
+// targets differing only in port do not share one.
+func (t Target) ControlPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", t.User, t.Host, t.Port)))
+	path := filepath.Join(dir, "ssh-"+hex.EncodeToString(sum[:4]))
+	// Checked rather than assumed, because a deep TMPDIR can still overflow it and the failure would be an
+	// opaque EINVAL from ssh rather than anything naming a length. paths.MaxSocketPathLen holds the limit.
+	if paths.CheckSocketPath(path) != nil {
+		return ""
+	}
+	return path
+}
+
+// Dialing is how cm reaches a remote, as distinct from which remote it is.
+type Dialing struct {
+	// Command is the ssh command line to run, empty for plain ssh.
+	//
+	// A command line rather than a program, because the useful overrides are several words: `kitten ssh`,
+	// or an `ssh -F` naming another config. Split on whitespace by whoever supplies it; there is no shell
+	// quoting, which is worth knowing before putting a path with a space in it here.
+	//
+	// Whatever it is receives cm's own ssh options, so it has to accept them and has to pass bytes through
+	// unaltered. A wrapper that allocates a pty corrupts the protocol rather than failing, which is why the
+	// proxy opens with a banner: a mangled stream is reported as "expected a cm proxy, got ..." on the first
+	// connection instead of as a strange session later.
+	Command []string
+	// ControlDir is where a shared connection keeps its control socket, empty for a connection of this
+	// command's own. Sharing is what makes a remote usable rather than merely possible: every cm command is
+	// one ssh, and without it each pays a fresh connection.
+	ControlDir string
+	// Start asks the remote to bring a server up if none is running. See `cm server proxy` for why that is
+	// the caller's decision rather than something the far end always does.
+	Start bool
+}
+
+// program returns the command to run and any arguments that belong to it.
+func (d Dialing) program() (string, []string) {
+	if len(d.Command) == 0 {
+		return Scheme, nil
+	}
+	return d.Command[0], d.Command[1:]
+}
+
+// ProxyCommand returns the program and arguments that connect to this target's cm server.
+func (t Target) ProxyCommand(d Dialing) (string, []string) {
+	name, args := d.program()
+	args = append(args,
 		// No pty, and said here rather than relied on. A command over ssh gets none by default, but
 		// RequestTTY in a user's config overrides that default, and a pty would translate this protocol's
 		// bytes: \n becomes \r\n on the way through a terminal line discipline, which corrupts every
@@ -171,13 +238,26 @@ func (t Target) ProxyCommand(start bool) (string, []string) {
 		// and the client's reconnect loop takes over, which is the behavior a server restart already has.
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
+	)
+	// One shared connection per target, reused by every cm command and kept for a while after the last one.
+	// Every cm command against a remote is an ssh, so without this each pays a fresh connection: 120 to
+	// 150ms against 10 to 30ms, measured on loopback, where a real host's handshake is slower still.
+	//
+	// ControlMaster=auto rather than yes, so whichever command runs first becomes the master and the rest
+	// attach to it, with no ordering to arrange and nothing to clean up: the socket lives in cm's runtime
+	// directory, which is swept with the rest of it.
+	//
+	// This overrides a ControlPath the user's own ssh config may set, which means cm keeps its own master
+	// rather than joining theirs. Deliberate: finding theirs means parsing their config or paying an `ssh -G`
+	// on every invocation, and a second master for one host costs a process, while guessing wrong costs
+	// correctness. Whoever wants only theirs can pass an empty controlDir.
+	if path := t.ControlPath(d.ControlDir); path != "" {
+		args = append(args,
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath="+path,
+			"-o", fmt.Sprintf("ControlPersist=%d", int(ControlPersist.Seconds())),
+		)
 	}
-	// Deliberately no ControlMaster or ControlPath. Multiplexing is worth a lot here, measured at 137ms for
-	// a fresh connection against 10 to 20ms through an existing one, but it belongs in the user's ssh config
-	// rather than in cm's argv: a ControlPath of cm's own would have to live somewhere, and under the
-	// runtime directory it does not fit. ssh's %C is a 64-character hash, and this machine's runtime
-	// directory is already 55 bytes, so the socket would be 124 bytes against the 103 a unix socket allows.
-	// paths.MaxSocketPathLen is that limit and the failure is a bare EINVAL.
 
 	if t.Port != 0 {
 		args = append(args, "-p", strconv.Itoa(t.Port))
@@ -191,10 +271,10 @@ func (t Target) ProxyCommand(start bool) (string, []string) {
 
 	// After a --, so a remote whose command needs no quoting cannot be read as more ssh options.
 	args = append(args, "--", t.command(), "server", "proxy")
-	if start {
+	if d.Start {
 		args = append(args, "--start")
 	}
-	return Scheme, args
+	return name, args
 }
 
 // Suggestion renders the ssh command a user would type to run cm on this target themselves.
@@ -202,16 +282,19 @@ func (t Target) ProxyCommand(start bool) (string, []string) {
 // For the commands that refuse to act on another machine, where the refusal is only useful if it says how
 // to get the answer. Built here rather than formatted at the call site so it stays right for a target with
 // a port or a cm somewhere unusual, which is exactly when a user cannot guess it.
-func (t Target) Suggestion(args ...string) string {
-	return t.SuggestionWith(nil, args...)
+func (t Target) Suggestion(command []string, args ...string) string {
+	return t.SuggestionWith(command, nil, args...)
 }
 
 // SuggestionWith is Suggestion with extra ssh options, for a command that needs something of ssh itself.
 //
 // -t is the one that matters: an interactive cm on the far end needs a pty, and ssh allocates none for a
 // command, so a suggested `ssh host cm attach` without it would fail in a way that looks like cm's fault.
-func (t Target) SuggestionWith(sshFlags []string, args ...string) string {
-	parts := append([]string{Scheme}, sshFlags...)
+func (t Target) SuggestionWith(command, sshFlags []string, args ...string) string {
+	if len(command) == 0 {
+		command = []string{Scheme}
+	}
+	parts := append(append([]string{}, command...), sshFlags...)
 	if t.Port != 0 {
 		parts = append(parts, "-p", strconv.Itoa(t.Port))
 	}

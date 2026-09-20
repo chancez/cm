@@ -2,6 +2,7 @@ package remote
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -104,7 +105,7 @@ func TestProxyCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v, want nil", err)
 	}
-	name, args := target.ProxyCommand(false)
+	name, args := target.ProxyCommand(Dialing{})
 	if name != "ssh" {
 		t.Errorf("program = %q, want %q", name, "ssh")
 	}
@@ -129,8 +130,112 @@ func TestProxyCommandWithEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v, want nil", err)
 	}
-	_, args := target.ProxyCommand(true)
+	_, args := target.ProxyCommand(Dialing{Start: true})
 	if !reflect.DeepEqual(args, want) {
 		t.Errorf("args =\n%q\nwant\n%q", args, want)
+	}
+}
+
+// One shared connection per target, so every cm command after the first is cheap. Measured on loopback at
+// 120 to 150ms for a fresh connection against 10 to 30ms through an existing one, which is the difference
+// between a remote being usable and merely possible.
+func TestProxyCommandSharesAConnection(t *testing.T) {
+	target, err := Parse("ssh://work")
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want nil", err)
+	}
+	_, args := target.ProxyCommand(Dialing{ControlDir: "/tmp/cmtest"})
+
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"ControlMaster=auto",
+		"ControlPath=/tmp/cmtest/ssh-",
+		"ControlPersist=60",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("args %q do not ask for %q", joined, want)
+		}
+	}
+}
+
+// Two targets that differ at all get their own connection, so a command meant for one host cannot ride a
+// connection to another. The port is the case worth asserting: same host, different server.
+func TestControlPathDistinguishesTargets(t *testing.T) {
+	paths := map[string]string{}
+	for _, ref := range []string{
+		"ssh://work",
+		"ssh://work:2222",
+		"ssh://other@work",
+		"ssh://elsewhere",
+	} {
+		target, err := Parse(ref)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v, want nil", ref, err)
+		}
+		path := target.ControlPath("/tmp/cmtest")
+		if path == "" {
+			t.Fatalf("ControlPath() for %q is empty, so multiplexing is off for a path that fits", ref)
+		}
+		if other, clash := paths[path]; clash {
+			t.Errorf("%q and %q share the control socket %q", ref, other, path)
+		}
+		paths[path] = ref
+	}
+}
+
+// A directory that would overflow the socket limit turns multiplexing off rather than producing a path that
+// fails at bind with an opaque EINVAL. The same hazard is why cm does not use ssh's own %C token.
+func TestControlPathRefusesAPathThatWouldNotBind(t *testing.T) {
+	target, err := Parse("ssh://work")
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want nil", err)
+	}
+	deep := "/" + strings.Repeat("d", 100)
+	if got := target.ControlPath(deep); got != "" {
+		t.Errorf("ControlPath(%d-byte dir) = %q, want empty", len(deep), got)
+	}
+	if got := target.ControlPath(""); got != "" {
+		t.Errorf("ControlPath(\"\") = %q, want empty", got)
+	}
+}
+
+// A configured command replaces ssh and keeps cm's options, since those are what make the byte stream
+// survive: a wrapper is expected to be ssh-compatible, and one that is not fails at the banner rather than
+// corrupting a session.
+func TestProxyCommandHonorsAConfiguredCommand(t *testing.T) {
+	target, err := Parse("ssh://work")
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want nil", err)
+	}
+
+	name, args := target.ProxyCommand(Dialing{Command: []string{"kitten", "ssh"}})
+	if name != "kitten" {
+		t.Errorf("program = %q, want %q", name, "kitten")
+	}
+	want := []string{
+		"ssh",
+		"-T",
+		"-e", "none",
+		"-o", "BatchMode=yes",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"work",
+		"--", "cm", "server", "proxy",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("args =\n%q\nwant\n%q", args, want)
+	}
+}
+
+// And the suggestion a refusal prints uses it too, so a copied command matches how cm itself connects.
+func TestSuggestionHonorsAConfiguredCommand(t *testing.T) {
+	target, err := Parse("ssh://work")
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want nil", err)
+	}
+	got := target.Suggestion([]string{"kitten", "ssh"}, "doctor")
+	want := "kitten ssh work cm doctor"
+	if got != want {
+		t.Errorf("Suggestion() = %q, want %q", got, want)
 	}
 }

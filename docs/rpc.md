@@ -168,10 +168,46 @@ Measured on this machine, over ssh to localhost:
 | an ssh command through an existing `ControlMaster` | 10-20ms |
 
 So the link costs about 35 times a local call and is still well under a millisecond, while *connecting*
-costs more than everything else put together. That makes ssh multiplexing worth having for the short
-commands, and it belongs in the user's own ssh config rather than in cm's argv: a `ControlPath` of cm's
-own has to live somewhere, and ssh's `%C` is a 64-character hash against a runtime directory already 55
-bytes on this machine, which is 124 bytes against the 103 a unix socket allows.
+costs more than everything else put together.
+
+**One shared connection per target**, which is what turns that around. cm passes `ControlMaster=auto` with a
+`ControlPath` of its own and `ControlPersist`, so the first command opens a connection and the rest use it
+until it has been idle a minute. Measured end to end, `cm ls --remote` against a sandboxed server on
+loopback:
+
+| | |
+|---|---|
+| first command, connection and all | 170ms |
+| each one after it | 60-70ms |
+| an ssh round trip through the master | 10-20ms |
+| the same, running a full remote cm | 40-50ms |
+
+The last two rows are the point: with the connection shared, the link is about 15ms and the rest is *two cm
+startups*, the local one at about 20ms and the remote one at about 30ms. Making a short remote command
+faster than roughly 65ms therefore means not starting a remote cm per command, which is the resident-proxy
+shape `docs/ideas.md` rejects, rather than anything about ssh.
+
+cm computes the socket name itself rather than using ssh's `%C`, and that is the difference between having
+this and not: `%C` is a 64-character hash, which under a runtime directory already 55 bytes on macOS gives a
+124-byte path against the 103 a unix socket allows. Eight bytes of the same hash fit in 68. A directory that
+would still overflow turns multiplexing off rather than producing a path that fails at `bind` with an opaque
+`EINVAL`.
+
+Two consequences worth knowing. cm's `-o ControlPath` overrides one the user's ssh config may set, so cm
+keeps its own master rather than joining theirs: finding theirs means parsing their config or paying an
+`ssh -G` per invocation, and a second master for one host costs a process while guessing wrong costs
+correctness. And a master outlives the command that made it by `ControlPersist`, so an ssh process holding a
+connection exists for a minute after the last cm command. Both are why `--ssh-command` exists.
+
+**`--ssh-command` replaces ssh**, as a command line rather than a program, because the useful overrides are
+several words: `kitten ssh`, which does its own connection reuse, or an `ssh -F` naming another config. It
+is split on whitespace with no shell quoting, which is a limit rather than an oversight: a shell parse would
+invite quoting bugs into an argv that reaches a process, for a case nobody has yet.
+
+Whatever is configured still receives cm's own ssh options, so it has to accept them and has to pass bytes
+through unaltered. A wrapper that allocates a pty corrupts the protocol rather than failing, and the banner
+is what makes that survivable: the first connection reports "expected a cm proxy, got ..." instead of a
+session that behaves strangely later.
 
 **Both ends need a build with `cm server proxy`.** There is no older-remote story and cannot be one: an
 older cm has no proxy at all, so nothing there can serve the connection. The protocol number in the banner

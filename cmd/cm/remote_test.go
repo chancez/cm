@@ -228,8 +228,7 @@ func TestApplyRemoteSendsSshdsEnvironmentNotThisOne(t *testing.T) {
 	}
 
 	opts := client.Options{Env: []string{"PATH=/local", "HOME=/local"}}
-	target := remote.Target{Host: "work"}
-	applyRemote(&opts, &target, environ, []string{"FOO=bar"})
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, environ, []string{"FOO=bar"})
 
 	want := []string{"TERM=xterm-kitty", "LC_ALL=en_US.UTF-8", "FOO=bar"}
 	if !slices.Equal(opts.Env, want) {
@@ -247,8 +246,7 @@ func TestApplyRemoteReplacesWhatIsLocal(t *testing.T) {
 		// server, so a remote server would resolve it to nothing or to something unrelated.
 		InsideSession: "work",
 	}
-	target := remote.Target{Host: "work"}
-	applyRemote(&opts, &target, nil, nil)
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, nil, nil)
 
 	if opts.Dial == nil {
 		t.Error("Dial is nil, so the attachment would still dial a socket on this machine")
@@ -272,9 +270,9 @@ func TestApplyRemoteReplacesWhatIsLocal(t *testing.T) {
 func TestRemoteDialerStartsOnlyOnTheFirstDial(t *testing.T) {
 	d := &remoteDialer{target: remote.Target{Host: "work"}}
 
-	_, first := d.target.ProxyCommand(!d.haveDialed)
+	_, first := d.target.ProxyCommand(remote.Dialing{Start: !d.haveDialed})
 	d.haveDialed = true
-	_, second := d.target.ProxyCommand(!d.haveDialed)
+	_, second := d.target.ProxyCommand(remote.Dialing{Start: !d.haveDialed})
 
 	if !slices.Contains(first, "--start") {
 		t.Errorf("the first dial runs %q, which does not ask for a server", first)
@@ -283,7 +281,7 @@ func TestRemoteDialerStartsOnlyOnTheFirstDial(t *testing.T) {
 		t.Errorf("a later dial runs %q, which would start a server a stop had just stopped", second)
 	}
 	// And the recovery path asks explicitly, which is the client's decision rather than the dialer's.
-	_, recovery := d.target.ProxyCommand(true)
+	_, recovery := d.target.ProxyCommand(remote.Dialing{Start: true})
 	if !slices.Contains(recovery, "--start") {
 		t.Errorf("the recovery command %q does not ask for a server", recovery)
 	}

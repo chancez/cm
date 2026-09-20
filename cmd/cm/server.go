@@ -17,7 +17,6 @@ import (
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
-	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/server"
 	"github.com/chancez/cm/internal/sessionenv"
 	"github.com/chancez/cm/internal/store"
@@ -533,12 +532,14 @@ func withServer(
 
 // connect opens a connection to whichever server this invocation named.
 func (g *globals) connect(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
-	target, err := g.remoteTarget()
+	d, err := g.remoteDialerFor(false)
 	if err != nil {
 		return nil, nil, err
 	}
-	if target != nil {
-		return connectRemoteServer(ctx, *target)
+	if d != nil {
+		// A one-shot command, so this dialer's only Dial is its first and carries --start: the same
+		// "create one if needed" every local command gets from connectServer.
+		return d.Dial(ctx)
 	}
 
 	dirs, err := g.dirs()
@@ -554,14 +555,12 @@ func (g *globals) connect(ctx context.Context) (transport.Conn, serverv1.ServerC
 // one. Remotely the distinction is the same one `cm server proxy --start` draws, so it costs nothing extra
 // here.
 func (g *globals) dial(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
-	target, err := g.remoteTarget()
+	d, err := g.remoteDialerFor(true)
 	if err != nil {
 		return nil, nil, err
 	}
-	if target != nil {
-		name, args := target.ProxyCommand(false)
-		conn, cl, _, err := transport.DialServerVia(ctx, name, args...)
-		return conn, cl, err
+	if d != nil {
+		return d.Dial(ctx)
 	}
 
 	dirs, err := g.dirs()
@@ -569,27 +568,6 @@ func (g *globals) dial(ctx context.Context) (transport.Conn, serverv1.ServerClie
 		return nil, nil, err
 	}
 	return dialServer(dirs)
-}
-
-// connectRemoteServer connects to a cm server on another machine, starting one there if needed.
-//
-// Starting one is asked for here, unconditionally, because this is a one-shot command rather than a client
-// that loops: it matches what every local command gets from connectServer, and it is what "creating one if
-// needed" means. An attached client is the case that must not, since it reconnects across outages and would
-// otherwise defeat `cm server stop` on the remote; see `cm server proxy --start`.
-func connectRemoteServer(
-	ctx context.Context,
-	target remote.Target,
-) (transport.Conn, serverv1.ServerClient, error) {
-	name, args := target.ProxyCommand(true)
-	// The remote's version is deliberately discarded here. `cm status` reports it for anyone who asks, and
-	// the one decision it drives at dial time, refusing a proxy protocol this build does not speak, is made
-	// inside the handshake where the message can name both numbers.
-	conn, cl, _, err := transport.DialServerVia(ctx, name, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn, cl, nil
 }
 
 // dialServer connects to a running server without starting one.

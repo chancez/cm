@@ -86,11 +86,11 @@ matters for another multiplexer, which sees the key first and never passes it on
 			if err != nil {
 				return err
 			}
-			target, err := g.remoteTarget()
+			remoteDialer, err := g.remoteDialerFor(false)
 			if err != nil {
 				return err
 			}
-			if dir == "" && target == nil {
+			if dir == "" && remoteDialer == nil {
 				// Default to the caller's cwd so a new session starts where the user is,
 				// which is what a terminal emulator opening a window expects.
 				//
@@ -198,8 +198,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 				// reading the bytes passing through it as reports about itself.
 				InsideSession: insideCmSession(),
 			}
-			if target != nil {
-				applyRemote(&opts, target, os.Environ(), env)
+			if remoteDialer != nil {
+				applyRemote(&opts, remoteDialer, os.Environ(), env)
 			}
 			// Nil unless this process replaced one that was already attached, so an ordinary attach
 			// still repaints.

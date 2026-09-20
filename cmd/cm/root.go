@@ -17,6 +17,12 @@ type globals struct {
 	runtimeDir string
 	stateDir   string
 	configPath string
+	// sshCommand is the ssh command line used to reach a remote, empty for plain ssh.
+	//
+	// A command line rather than a program: the useful overrides are several words, such as `kitten ssh`,
+	// which reuses connections of its own, or an `ssh -F` naming another config. Split on whitespace, with
+	// no shell quoting, which is stated in the flag's help rather than left to be discovered.
+	sshCommand string
 	// remote names a cm server on another machine. Empty is this machine's.
 	//
 	// Held here rather than per command because it decides which server *every* command talks to, and
@@ -106,6 +112,9 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 	pf.StringVar(&g.remote, "remote", "",
 		"a cm server on another machine, as ssh://[user@]host[:port][/path/to/cm] ($"+
 			paths.Env("REMOTE")+")")
+	pf.StringVar(&g.sshCommand, "ssh-command", "",
+		"command reaching a --remote, split on spaces, ssh by default ($"+
+			paths.Env("SSH_COMMAND")+")")
 
 	root.AddCommand(
 		newAttachCommand(g),

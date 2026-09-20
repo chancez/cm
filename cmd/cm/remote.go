@@ -39,16 +39,28 @@ func (g *globals) remoteTarget() (*remote.Target, error) {
 // of each attempt, and the starter from the outage path inside it, never concurrently. A mutex here would
 // suggest otherwise.
 type remoteDialer struct {
-	target     remote.Target
+	target remote.Target
+	// command is the ssh command line, empty for plain ssh. See remote.Dialing.Command.
+	command []string
+	// controlDir is where a shared ssh connection keeps its control socket, empty for a connection of this
+	// command's own. See remote.Target.ControlPath.
+	controlDir string
+	// noStart suppresses asking the far end for a server, for the callers that must not bring one into being:
+	// a report describing a server, and a request to stop one.
+	noStart    bool
 	haveDialed bool
 }
 
 // Dial opens a connection, starting a server on the far end only on the first attempt.
 func (d *remoteDialer) Dial(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
-	start := !d.haveDialed
+	start := !d.noStart && !d.haveDialed
 	d.haveDialed = true
 
-	name, args := d.target.ProxyCommand(start)
+	name, args := d.target.ProxyCommand(remote.Dialing{
+		Command:    d.command,
+		ControlDir: d.controlDir,
+		Start:      start,
+	})
 	conn, cl, _, err := transport.DialServerVia(ctx, name, args...)
 	return conn, cl, err
 }
@@ -59,12 +71,43 @@ func (d *remoteDialer) Dial(ctx context.Context) (transport.Conn, serverv1.Serve
 // already exactly this: the proxy starts a server and then has nothing more to do than be closed. It costs
 // one extra ssh on a path that only runs after an outage has outlasted the quiet period.
 func (d *remoteDialer) StartServer(ctx context.Context) error {
-	name, args := d.target.ProxyCommand(true)
+	name, args := d.target.ProxyCommand(remote.Dialing{
+		Command:    d.command,
+		ControlDir: d.controlDir,
+		Start:      true,
+	})
 	conn, _, _, err := transport.DialServerVia(ctx, name, args...)
 	if err != nil {
 		return err
 	}
 	return conn.Close()
+}
+
+// remoteDialerFor builds a dialer for the remote this invocation names, or nil when the server is local.
+//
+// The one place that decides where a shared ssh connection lives, which is this machine's runtime directory:
+// the control socket is a local socket to a local ssh, so it belongs with cm's other sockets and is swept
+// with them. Created here because a remote-only command otherwise never makes that directory, and ssh cannot
+// bind a socket in a directory that is not there.
+//
+// A directory that cannot be made is not fatal. Multiplexing is an optimisation, and one fresh connection
+// per command is how this worked before it existed, so the dialer just goes without.
+func (g *globals) remoteDialerFor(noStart bool) (*remoteDialer, error) {
+	target, err := g.remoteTarget()
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, nil
+	}
+
+	d := &remoteDialer{target: *target, command: g.sshCommandLine(), noStart: noStart}
+	if dirs, err := g.dirs(); err == nil {
+		if err := dirs.Ensure(); err == nil {
+			d.controlDir = dirs.Runtime
+		}
+	}
+	return d, nil
 }
 
 // serverFor connects to the server an attachment's Options names.
@@ -90,12 +133,12 @@ func serverFor(
 // the reason it is a method: `ensureServer(ctx, dirs)` starts one on *this* machine, which under --remote is
 // a server nobody asked for while the request goes to another host.
 func (g *globals) ensureServer(ctx context.Context) error {
-	target, err := g.remoteTarget()
+	d, err := g.remoteDialerFor(false)
 	if err != nil {
 		return err
 	}
-	if target != nil {
-		return (&remoteDialer{target: *target}).StartServer(ctx)
+	if d != nil {
+		return d.StartServer(ctx)
 	}
 
 	dirs, err := g.dirs()
@@ -115,11 +158,11 @@ func (g *globals) ensureServer(ctx context.Context) error {
 // because by the time it runs the command has already talked to one. The first dial still starts a remote
 // server if there is somehow none, which is remoteDialer's own policy and costs nothing when one is there.
 func (g *globals) pointAtServer(opts *client.Options) error {
-	target, err := g.remoteTarget()
+	d, err := g.remoteDialerFor(false)
 	if err != nil {
 		return err
 	}
-	if target == nil {
+	if d == nil {
 		dirs, err := g.dirs()
 		if err != nil {
 			return err
@@ -128,8 +171,7 @@ func (g *globals) pointAtServer(opts *client.Options) error {
 		return nil
 	}
 
-	dialer := &remoteDialer{target: *target}
-	opts.Dial = dialer.Dial
+	opts.Dial = d.Dial
 	return nil
 }
 
@@ -140,8 +182,7 @@ func (g *globals) pointAtServer(opts *client.Options) error {
 // attach is provably untouched: nothing below runs unless there is a remote.
 // environ is passed in rather than read here, following sessionEnvFrom: a test asserting on the whole
 // resulting environment would otherwise depend on the developer's own, and print it on failure.
-func applyRemote(opts *client.Options, target *remote.Target, environ, env []string) {
-	dialer := &remoteDialer{target: *target}
+func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []string) {
 	opts.Dial = dialer.Dial
 	// Replaces the local recovery, which spawns a server process here. There is nothing on this machine to
 	// recover: the server that matters is on the far end, and this asks it to come back.
@@ -171,6 +212,15 @@ func applyRemote(opts *client.Options, target *remote.Target, environ, env []str
 	// a local session hands the detach key to the inner client the same as a local nesting does, over the pty
 	// rather than through an RPC, and three presses escape a handover nothing is acting on.
 	opts.InsideSession = ""
+}
+
+// sshCommandLine returns the configured ssh command line, or nil for plain ssh.
+//
+// strings.Fields rather than a shell parse, which is a limit worth stating rather than hiding: `kitten ssh`
+// and `ssh -F /etc/other` both work, and a path with a space in it does not. A shell parse would invite
+// quoting bugs into an argv that reaches a process, for a case nobody has.
+func (g *globals) sshCommandLine() []string {
+	return strings.Fields(g.sshCommand)
 }
 
 // machineLocal lists the commands that are about the machine they run on.
@@ -287,13 +337,13 @@ func (g *globals) checkRemote(cmd *cobra.Command, args []string) error {
 	if sshFlags, pending := remotePending[name]; pending {
 		return fmt.Errorf(
 			"%s cannot use --remote yet; run it through ssh yourself for now:\n    %s",
-			cmd.CommandPath(), t.SuggestionWith(sshFlags, words...))
+			cmd.CommandPath(), t.SuggestionWith(g.sshCommandLine(), sshFlags, words...))
 	}
 	if machineLocal[name] {
 		return fmt.Errorf(
 			"%s is about the machine it runs on, so it cannot be pointed at a remote; run it there instead:\n"+
 				"    %s",
-			cmd.CommandPath(), t.Suggestion(words...))
+			cmd.CommandPath(), t.Suggestion(g.sshCommandLine(), words...))
 	}
 	return nil
 }
