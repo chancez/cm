@@ -346,6 +346,11 @@ terminal is replaced: `TERM`, `COLORTERM`, `TERMINFO`, `TERM_PROGRAM`, `TERM_PRO
 `VTE_VERSION`, `DISPLAY`, `WAYLAND_DISPLAY`, and the `SSH_*` connection and agent variables. See
 `internal/sessionenv` for the exact list.
 
+`CM_CLIENT_HOST` is in the same list and is the one entry cm sets rather than reads. It names the machine
+whose client created or last attached the session, and only when that machine is not this one, so a prompt in
+a `--remote` session can show the host. Being captured is what retires it: attaching the same session where
+it lives records no client host, so the diff removes it. See `docs/rpc.md`.
+
 A session's shell captures these once, when it starts, and nothing outside a process can change its
 environment afterwards. Reattaching from a different terminal, or from the same terminal after it
 restarted, leaves the shell describing a terminal that no longer exists. kitty's `KITTY_LISTEN_ON`

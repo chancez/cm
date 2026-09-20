@@ -234,6 +234,41 @@ directory here, and so is everything naming a socket: `KITTY_LISTEN_ON`, `SSH_AU
 kitten inside a remote session therefore cannot reach the local kitty, which is a known limit rather than a
 bug to fix; kitty's own ssh kitten is what solves it for anyone who needs it.
 
+One variable goes the other way, and it is the only thing cm supplies rather than forwards: `CM_CLIENT_HOST`
+holds the name of the machine whose client created or last attached the session, and is set only when that
+machine is not the one the session is on. Without it a remote shell has no way to know it is being watched
+from somewhere else, since the server unsets `SSH_CLIENT`, `SSH_CONNECTION` and `SSH_TTY` from itself so a
+shim cannot inherit them, and the symptom is a prompt on `work` that reads exactly like a local one.
+
+A claim rather than an observation, which is the opposite of `SSH_CONNECTION`. sshd reports the socket it
+accepted because it cannot trust what a client says about itself; cm's client is the user's own process, so a
+client that lied here would be lying to that user's prompt. What the claim buys is a *name*: it survives a
+reconnect, where an ssh source port does not, and it is the same under any transport, so a future gRPC
+transport fills the same variable rather than introducing a second concept. An observed peer address is
+`docs/ideas.md`, not this.
+
+Presence is the signal, so the variable is omitted rather than set to a placeholder when `os.Hostname` fails.
+That requirement came from measuring a real prompt: starship 1.26.0's `hostname` module tests whether a name
+is set and not what it holds, and its `detect_env_vars` is an `AND` with `ssh_only` rather than an `OR`, so
+the config that works is
+
+```toml
+[hostname]
+ssh_only = false
+detect_env_vars = ["SSH_CONNECTION", "CM_CLIENT_HOST"]
+```
+
+with `ssh_only` off, not on. Exact parity, because `ssh_only`'s own detection on that version is
+`SSH_CONNECTION` alone: `SSH_CLIENT` and `SSH_TTY` each show nothing. The value is `os.Hostname` verbatim,
+domain included, since every prompt already has its own trimming setting and a cm that trimmed first would
+leave no way back to the full name.
+
+It is in `sessionenv.DefaultCapture`, which buys two things beyond being recorded. `cm get-env` retires it
+when the same session is attached on the host itself, through the same removal machinery that retires a dead
+`KITTY_LISTEN_ON`. And a server started from a shell inside a remote session drops it instead of handing it
+to every session created afterwards, which is the `SSH_CLIENT` incident in `sessionenv.ClientValues` with a
+different name on it.
+
 `Open.inside_session` is not sent to a remote server. It names a session on the *local* one, so remotely it
 resolves to nothing or, worse, matches an unrelated session and stops it attributing its own output to
 itself. Clearing it is also what makes the local parent hear about the client, which reads backwards: a client

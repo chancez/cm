@@ -865,6 +865,21 @@ marks a variable that lives in the session environment for tmux's own use, and `
 it, so it never reaches a spawned process. cm has no equivalent of "tracked but not handed to the
 shell".
 
+**Tell a session the address its client connects from, not just the name.** `CM_CLIENT_HOST` is a name the
+client claims about itself, which is what a prompt wants and all cm has today. An *observed* address is also
+available and was left out on purpose. Under ssh, sshd puts its own four-tuple in `SSH_CONNECTION` in the
+environment of `cm server proxy` on the far host, so the proxy could report it in the handshake banner for the
+client to hand back; the gRPC transport, if it happens, has a real peer address at the server. Both are real,
+just different: ssh's describes the ssh link and gRPC's describes cm's own connection.
+
+What stops it being worth doing now is the consumer and the lifetime, not the plumbing. Nothing asks for an
+address, and a prompt showing one would be worse than showing a name. And an address describes one
+connection: a `--remote` attachment redials on every outage and gets a new source port, so a value baked into
+a shell at spawn is wrong after the first reconnect. If it is ever added it belongs in `ClientEnv`, which
+`cm get-env` already refreshes per attach, rather than in what the session is born with, and it should be
+named for the fact rather than the transport, as `CM_CLIENT_HOST` is. The banner would need a protocol bump
+and a field, which is the one real cost.
+
 ## Operational
 
 **Let leadership follow a window across a re-exec.** `resumeState` already carries a returning window's

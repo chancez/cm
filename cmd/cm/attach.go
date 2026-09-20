@@ -199,7 +199,7 @@ matters for another multiplexer, which sees the key first and never passes it on
 				InsideSession: insideCmSession(),
 			}
 			if remoteDialer != nil {
-				applyRemote(&opts, remoteDialer, os.Environ(), env)
+				applyRemote(&opts, remoteDialer, os.Environ(), env, clientHostname())
 			}
 			// Nil unless this process replaced one that was already attached, so an ordinary attach
 			// still repaints.

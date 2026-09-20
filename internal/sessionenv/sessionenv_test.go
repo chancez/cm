@@ -247,6 +247,84 @@ func TestDefaultCaptureCoversTheStaleCases(t *testing.T) {
 	}
 }
 
+// A session on another machine gets the terminal, the locale, and the name of the machine watching it.
+//
+// Nothing else, and the client host is the only value cm supplies rather than forwards: everything a
+// terminal cannot be inferred from belongs to the far host. The order is asserted along with the contents
+// because a later entry wins at exec, and --env is appended after this by the caller.
+func TestCrossHostSendsTheTerminalAndTheWatchingMachine(t *testing.T) {
+	got := CrossHost([]string{
+		"TERM=xterm-kitty",
+		"COLORTERM=truecolor",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		// Local to this machine and unreachable from the other one, whatever the session would like.
+		"KITTY_LISTEN_ON=unix:/tmp/kitty-1",
+		"SSH_AUTH_SOCK=/tmp/agent.1",
+		"TERMINFO=/opt/homebrew/share/terminfo",
+		// The far host builds these itself, and this machine's are wrong there.
+		"PATH=/opt/homebrew/bin",
+		"HOME=/Users/someone",
+		"AWS_SECRET_ACCESS_KEY=hunter2",
+	}, "laptop.local")
+
+	want := []string{
+		"TERM=xterm-kitty",
+		"COLORTERM=truecolor",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		ClientHostVar + "=laptop.local",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CrossHost() = %q, want %q", got, want)
+	}
+}
+
+// An unknown hostname omits the variable rather than exporting a placeholder.
+//
+// Because presence is the signal: starship 1.26.0's hostname module takes
+// detect_env_vars = ["SSH_CONNECTION", "CM_CLIENT_HOST"] and tests whether the name is set rather than what
+// it holds, so an empty value would put a hostname in a prompt that is nowhere near another machine.
+func TestCrossHostOmitsAnUnknownWatchingMachine(t *testing.T) {
+	got := CrossHost([]string{"TERM=xterm-kitty"}, "")
+	want := []string{"TERM=xterm-kitty"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CrossHost() = %q, want %q", got, want)
+	}
+}
+
+// A server drops the client host rather than handing it to every session it later creates.
+//
+// The SSH_CLIENT incident with a different name on it: a server started from a shell inside a remote session
+// inherits this, every shim inherits the server's environment, and a name the creating client does not have
+// is never overwritten. Every session on that host would then claim to be watched from a machine that has
+// never seen it. Membership of DefaultCapture is what makes this true, so this is the guard on that.
+func TestClientValuesDropsTheWatchingMachine(t *testing.T) {
+	environ := []string{"PATH=/usr/bin", ClientHostVar + "=laptop.local"}
+	got := ClientValues(environ, NewMatcher(DefaultCapture))
+	want := []string{ClientHostVar}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ClientValues() = %v, want %v", got, want)
+	}
+}
+
+// And `cm get-env` retires it when the same session is attached on the host itself.
+//
+// A session created from a laptop and later attached where it lives is no longer watched from anywhere else,
+// and a shell keeping the variable would keep saying otherwise for the rest of its life. Compute reports a
+// captured name the current client does not have as a removal, which is the same machinery that retires a
+// dead KITTY_LISTEN_ON.
+func TestComputeRetiresTheWatchingMachine(t *testing.T) {
+	got := Compute(
+		map[string]string{"TERM": "xterm-kitty"},
+		map[string]string{"TERM": "xterm-kitty", ClientHostVar: "laptop.local"},
+		NewMatcher(DefaultCapture))
+	want := Diff{Set: map[string]string{}, Unset: []string{ClientHostVar}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Compute() = %+v, want %+v", got, want)
+	}
+}
+
 func TestInherit(t *testing.T) {
 	got := Inherit([]string{
 		"PATH=/client/bin:/usr/bin",

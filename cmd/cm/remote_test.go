@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -231,11 +232,50 @@ func TestApplyRemoteSendsSshdsEnvironmentNotThisOne(t *testing.T) {
 	}
 
 	opts := client.Options{Env: []string{"PATH=/local", "HOME=/local"}}
-	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, environ, []string{"FOO=bar"})
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, environ, []string{"FOO=bar"}, "laptop")
 
-	want := []string{"TERM=xterm-kitty", "LC_ALL=en_US.UTF-8", "FOO=bar"}
+	want := []string{"TERM=xterm-kitty", "LC_ALL=en_US.UTF-8", sessionenv.ClientHostVar + "=laptop", "FOO=bar"}
 	if !slices.Equal(opts.Env, want) {
 		t.Errorf("Env = %q, want %q", opts.Env, want)
+	}
+}
+
+// The name of the machine watching is both spawned and recorded, and recording it is not optional.
+//
+// A shell on the far host has no other way to know it is being watched from somewhere else, since a server
+// unsets the three SSH_ names from itself and CrossHostVars sends only the terminal and the locale. A prompt
+// gated on this is the point: `cm attach --remote ssh://work` otherwise looks exactly like a local session.
+//
+// Recorded as well, because the variable is in DefaultCapture, so a get-env diff built from a client that
+// did not report it would unset what the session was born with. See sessionenv.ClientHostVar.
+func TestApplyRemoteNamesTheMachineWatching(t *testing.T) {
+	opts := client.Options{ClientEnv: map[string]string{"TERM": "xterm-kitty"}}
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, []string{"TERM=xterm-kitty"}, nil, "laptop")
+
+	wantEnv := []string{"TERM=xterm-kitty", sessionenv.ClientHostVar + "=laptop"}
+	if !slices.Equal(opts.Env, wantEnv) {
+		t.Errorf("Env = %q, want %q", opts.Env, wantEnv)
+	}
+	wantRecorded := map[string]string{"TERM": "xterm-kitty", sessionenv.ClientHostVar: "laptop"}
+	if !maps.Equal(opts.ClientEnv, wantRecorded) {
+		t.Errorf("ClientEnv = %v, want %v", opts.ClientEnv, wantRecorded)
+	}
+}
+
+// An unknown hostname sets nothing, rather than exporting a value a prompt would print.
+//
+// clientHostname returns "" when os.Hostname fails, and presence is what a prompt tests: starship 1.26.0's
+// hostname module takes detect_env_vars and checks whether the name is set, not what it holds. A placeholder
+// would also be indistinguishable from a machine actually called that.
+func TestApplyRemoteWithoutAHostnameSetsNothing(t *testing.T) {
+	opts := client.Options{}
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, []string{"TERM=xterm-kitty"}, nil, "")
+
+	if !slices.Equal(opts.Env, []string{"TERM=xterm-kitty"}) {
+		t.Errorf("Env = %q, want just the terminal", opts.Env)
+	}
+	if opts.ClientEnv != nil {
+		t.Errorf("ClientEnv = %v, want nothing recorded", opts.ClientEnv)
 	}
 }
 
@@ -249,7 +289,7 @@ func TestApplyRemoteReplacesWhatIsLocal(t *testing.T) {
 		// server, so a remote server would resolve it to nothing or to something unrelated.
 		InsideSession: "work",
 	}
-	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, nil, nil)
+	applyRemote(&opts, &remoteDialer{target: remote.Target{Host: "work"}}, nil, nil, "laptop")
 
 	if opts.Dial == nil {
 		t.Error("Dial is nil, so the attachment would still dial a socket on this machine")

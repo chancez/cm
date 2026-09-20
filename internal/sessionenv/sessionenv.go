@@ -58,7 +58,44 @@ var DefaultCapture = []string{
 	"SSH_CONNECTION",
 	"SSH_CLIENT",
 	"SSH_TTY",
+
+	// What cm itself sets in a session it created on another machine. Captured for two reasons beyond
+	// tidiness, both of which a comment is needed for because neither is visible here.
+	//
+	// It goes stale exactly as the rest of this list does: a session created from another machine and
+	// later attached on the host itself is no longer being watched from anywhere else, and Compute emits
+	// a removal for a captured name a client does not have, so `cm get-env` retires it.
+	//
+	// And ClientValues reads this list, so a server started from a shell inside a remote session drops it
+	// instead of handing it to every session created afterwards. That is the SSH_CLIENT incident this
+	// function's own comment records, with a different name on it.
+	ClientHostVar,
 }
+
+// ClientHostVar names the machine whose client created or last attached a session, when that machine is not
+// this one.
+//
+// It exists because a shell on another host has no way to know it is being watched from somewhere else, and
+// a prompt is the main thing that wants to know: CrossHostVars sends only the terminal and the locale, and a
+// server unsets SSH_CLIENT, SSH_CONNECTION and SSH_TTY from itself so a shim cannot inherit them. The
+// symptom was `cm attach --remote ssh://work` giving a prompt indistinguishable from a local one.
+//
+// Set only when a session is reached across machines, so presence alone is the signal and a prompt needs no
+// comparison. Measured against starship 1.26.0, which is what made presence the requirement rather than a
+// convenience: its hostname module takes detect_env_vars = ["SSH_CONNECTION", "CM_CLIENT_HOST"] and tests
+// whether a name is set, not what it holds, so an empty value would light up a local prompt. Hence the
+// variable is omitted rather than set to a placeholder when the hostname is unknown.
+//
+// A claim rather than an observation, which is the opposite of what SSH_CONNECTION is and is deliberate.
+// sshd reports the socket it accepted because it cannot trust what a client says about itself; cm's client
+// is the user's own process and a client that lied here would be lying to that user's prompt. What this
+// buys is a name where an address would need one: the value survives a reconnect, where an ssh source port
+// does not, and it is the same under any transport. See docs/rpc.md, and docs/ideas.md for the observed
+// address a transport with a real peer could add alongside it.
+//
+// Deliberately absent from NoInherit. A session started from inside a remote one is on the same host and is
+// reached through the same link, so inheriting this is correct rather than stale.
+var ClientHostVar = paths.Env("CLIENT_HOST")
 
 // NoInherit lists the variables a session does *not* take from the client that created it, even
 // though everything else is forwarded.
@@ -143,11 +180,15 @@ var CrossHostVars = []string{
 // session is on the same machine and resembling its creator is the point, while this forwards a short list
 // because the two machines share nothing but a terminal. See CrossHostVars.
 //
+// clientHost names the machine this client runs on, and is the one value cm supplies rather than forwards.
+// Empty leaves it out entirely, which is what a failed os.Hostname must produce: see ClientHostVar, where
+// presence is the whole signal a prompt reads.
+//
 // Input is KEY=VALUE entries as os.Environ produces them, and order is preserved so a spawn is reproducible.
-func CrossHost(environ []string) []string {
+func CrossHost(environ []string, clientHost string) []string {
 	keep := NewMatcher(CrossHostVars)
 
-	out := make([]string, 0, len(CrossHostVars))
+	out := make([]string, 0, len(CrossHostVars)+1)
 	for _, kv := range environ {
 		k, _, ok := strings.Cut(kv, "=")
 		if !ok || k == "" {
@@ -156,6 +197,9 @@ func CrossHost(environ []string) []string {
 		if keep.Match(k) {
 			out = append(out, kv)
 		}
+	}
+	if clientHost != "" {
+		out = append(out, ClientHostVar+"="+clientHost)
 	}
 	return out
 }

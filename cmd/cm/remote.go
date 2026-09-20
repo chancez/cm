@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -207,14 +208,32 @@ func (g *globals) pointAtServer(opts *client.Options) error {
 	return nil
 }
 
+// clientHostname names this machine, for a session created on another one.
+//
+// Empty when the hostname cannot be read, and applyRemote then omits the variable rather than exporting a
+// placeholder. "unknown" would be indistinguishable from a host actually called that, and a prompt gated on
+// the variable existing would print it: see sessionenv.ClientHostVar, where presence is the signal.
+//
+// os.Hostname verbatim, domain and all. Trimming is the shell's decision and every prompt already has a
+// setting for it, starship's trim_at being one, while a cm that trimmed first would leave no way back to the
+// full name.
+func clientHostname() string {
+	host, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
 // applyRemote points an attachment at a cm server on another machine.
 //
 // Everything it changes is something that was resolved locally and is wrong across a link, gathered here
 // rather than spread through the option assembly so the whole policy can be read at once and so a local
 // attach is provably untouched: nothing below runs unless there is a remote.
-// environ is passed in rather than read here, following sessionEnvFrom: a test asserting on the whole
-// resulting environment would otherwise depend on the developer's own, and print it on failure.
-func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []string) {
+// environ and clientHost are passed in rather than read here, following sessionEnvFrom: a test asserting on
+// the whole resulting environment would otherwise depend on the developer's own machine, and print it on
+// failure.
+func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []string, clientHost string) {
 	opts.Dial = dialer.Dial
 	// Replaces the local recovery, which spawns a server process here. There is nothing on this machine to
 	// recover: the server that matters is on the far end, and this asks it to come back.
@@ -229,9 +248,22 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	opts.SocketPath = ""
 
 	// sshd's posture rather than this client's environment. See sessionenv.CrossHost: a shell on another
-	// host builds its own PATH and HOME, and what it cannot know is the terminal drawing its output.
+	// host builds its own PATH and HOME, and what it cannot know is the terminal drawing its output, plus
+	// the one thing cm supplies rather than forwards, which is the name of the machine watching.
 	// Explicit --env still wins, and comes last for that reason.
-	opts.Env = append(sessionenv.CrossHost(environ), env...)
+	opts.Env = append(sessionenv.CrossHost(environ, clientHost), env...)
+
+	// Recorded as well as spawned, or `cm get-env` would report the variable as one this client no longer
+	// has and a shell applying that diff would unset what the session was born with. Recording it is also
+	// what retires it: attaching the same session from the host itself records no client host, so the diff
+	// removes it rather than leaving a shell claiming to be watched from a machine that is no longer
+	// looking. See sessionenv.ClientHostVar and sessionenv.Compute.
+	if clientHost != "" {
+		if opts.ClientEnv == nil {
+			opts.ClientEnv = make(map[string]string, 1)
+		}
+		opts.ClientEnv[sessionenv.ClientHostVar] = clientHost
+	}
 
 	// Not sent to a server that has never heard of it. InsideSession names a session on the *local* server,
 	// which is where this client is running; the Open goes to the remote one, where the name either resolves
