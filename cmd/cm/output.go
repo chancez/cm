@@ -116,6 +116,16 @@ type sessionJSON struct {
 	// wrong -- a client that died with its link never withdrew -- and it is what a window that will not
 	// detach looks like from outside.
 	AnnouncedClients uint32 `json:"announced_clients"`
+	// Location is what this session is currently inside, outermost first, as its shells reported it.
+	//
+	// One entry per command in flight: for one shell at most one, and deeper once an ssh is involved, since
+	// the far side's shell writes its own frames through the same pty. Empty rather than null for a session
+	// sitting at its prompt, like Tags and Hosting.
+	//
+	// What it is for that cwd_uri is not: the argv is the command as typed, so an ssh alias survives here
+	// where the directory carries only the host the remote calls itself. Nothing in cm derives one from the
+	// other, and cm does not know which of these commands is an ssh.
+	Location []locationJSON `json:"location"`
 	// AttachedClients describes each client attached now, alongside the Clients count above.
 	//
 	// Added because diagnosing a lost session meant reconstructing what was attached from `ps` and
@@ -123,6 +133,14 @@ type sessionJSON struct {
 	// shim outlives servers by design, a healthy install spans several builds at once: one incident
 	// had twelve across twenty-six sessions. Empty rather than null, like Tags and Hosting.
 	AttachedClients []attachedClientJSON `json:"attached_clients"`
+}
+
+// locationJSON is the JSON shape of one command a session is inside.
+type locationJSON struct {
+	// ID is the frame's own identifier, so two frames running the same command are distinguishable.
+	ID string `json:"id"`
+	// Argv is the command line the shell reported, empty when it could not report one.
+	Argv string `json:"argv"`
 }
 
 // attachedClientJSON is the JSON shape of one attached client.
@@ -176,6 +194,12 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 
 	// Empty rather than null, like the two above.
+	location := make([]locationJSON, 0, len(s.Location))
+	for _, f := range s.Location {
+		location = append(location, locationJSON{ID: f.GetId(), Argv: f.GetArgv()})
+	}
+
+	// Empty rather than null, like the two above.
 	clients := make([]attachedClientJSON, 0, len(s.AttachedClients))
 	for _, c := range s.AttachedClients {
 		clients = append(clients, attachedClientJSON{
@@ -212,6 +236,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		Tags:                sessionTags,
 		Hosting:             hosting,
 		AnnouncedClients:    s.AnnouncedClients,
+		Location:            location,
 		AttachedClients:     clients,
 	}
 }

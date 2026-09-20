@@ -1074,6 +1074,21 @@ message Session {
   // from elsewhere is the way out.
   uint32 announced_clients = 25;
 
+  // What this session is currently inside, outermost first, as the shells writing to its pty reported it.
+  //
+  // One entry per command in flight. For one shell that is at most one; the depth comes from an ssh, where
+  // the far side's shell writes its own frames through the same pty, so the list reads as a path: the ssh
+  // that was typed here, then what is running over there.
+  //
+  // Nothing is derived from the command line. cm does not know which of these is an ssh and does not try,
+  // which is the same reason docs/ideas.md rejected keeping a list of commands cm would treat as
+  // session-hosting: a consumer that launched the command knows what it means. The alias as typed is in the
+  // argv, which is the part the OSC 7 host cannot give -- that carries the remote's own name for itself.
+  //
+  // Not persisted. These describe commands running right now, and a stored frame would come back after a
+  // restart claiming a session is inside something that exited with the previous server.
+  repeated LocationFrame location = 26;
+
   // The clients attached right now, one entry each.
   //
   // Alongside the count above rather than replacing it: clients is what a status line wants and is
@@ -1081,6 +1096,16 @@ message Session {
   // An attachment is live state, and a stored one would come back after a restart describing a
   // client that left with the previous server.
   repeated AttachedClient attached_clients = 21;
+}
+
+// LocationFrame is one command a session is inside.
+message LocationFrame {
+  // The frame's own identifier, minted by the shell that opened it. Present so a consumer can tell one
+  // frame from another across two calls, and so a repeated argv is not mistaken for one frame.
+  string id = 1;
+  // The command line the shell reported, bounded and stripped of control characters by the server. Empty
+  // when the shell could not report one, which is bash with history disabled.
+  string argv = 2;
 }
 
 message KillRequest {

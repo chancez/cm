@@ -555,6 +555,11 @@ type sessionJSON struct {
 	// AnnouncedClients counts the clients attached inside this session that announced themselves over its
 	// pty rather than telling the server, which is what a `cm attach` beyond an ssh has to do.
 	AnnouncedClients int `json:"announced_clients"`
+	// Location is what the session is inside, outermost first, as its shells reported it.
+	Location []struct {
+		ID   string `json:"id"`
+		Argv string `json:"argv"`
+	} `json:"location"`
 	// AttachedClients is one entry per client, carrying the pid a test needs to kill one without letting
 	// it say goodbye.
 	AttachedClients []struct {

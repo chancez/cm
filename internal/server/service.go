@@ -1018,6 +1018,13 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// outside. See Session.announced.
 			item.AnnouncedClients = uint32(sess.AnnouncedClients())
 
+			// Live for the same reason, and the one worth stating: a frame describes a command running now,
+			// so a stored one would come back after a restart claiming the session is inside something that
+			// exited with the previous server.
+			for _, f := range sess.Location() {
+				item.Location = append(item.Location, &serverv1.LocationFrame{Id: f.ID, Argv: f.Argv})
+			}
+
 			// Same argument as Hosting: an attachment is live state and nothing about it is worth
 			// persisting. Kept alongside the count rather than replacing it, since a count is what a
 			// status line wants and this is what a diagnosis wants.

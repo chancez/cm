@@ -98,6 +98,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		// Counted separately from hosting, which names sessions: an announced client is a nonce on another
 		// host, and this is the one nesting state that can be stale.
 		"announced_clients",
+		// Where the session is, which the cwd cannot say once an ssh is involved.
+		"location",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
 	}
@@ -132,7 +134,8 @@ func TestSessionJSONValues(t *testing.T) {
 		ReportedSource: "my-agent",
 		Tags:           map[string]string{"project": "cm", "review": ""},
 		// Empty rather than nil, like Tags, so a script indexing into it needs no null check.
-		Hosting: []string{},
+		Hosting:  []string{},
+		Location: []locationJSON{},
 		// Also empty rather than nil. The fixture describes a session whose clients the server did not
 		// report, which is what an older server looks like; TestSessionJSONReportsAttachedClients
 		// covers the populated case.
@@ -146,6 +149,26 @@ func TestSessionJSONValues(t *testing.T) {
 	// instant and the zone separately, so the fixture states the instant and the zone stops mattering.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
+	}
+}
+
+// The location reaches the JSON in order, outermost first, which is what makes it readable as a path.
+//
+// The case it serves: a window whose session has ssh'd somewhere. The directory carries the host the remote
+// calls itself, which does not survive an alias or ssh-to-self; the argv here is the command as typed.
+func TestSessionJSONReportsLocation(t *testing.T) {
+	wire := sampleWireSession("work")
+	wire.Location = []*serverv1.LocationFrame{
+		{Id: "local-1", Argv: "kitten ssh white"},
+		{Id: "remote-1", Argv: "nvim notes.md"},
+	}
+
+	want := []locationJSON{
+		{ID: "local-1", Argv: "kitten ssh white"},
+		{ID: "remote-1", Argv: "nvim notes.md"},
+	}
+	if got := toSessionJSON(wire).Location; !reflect.DeepEqual(got, want) {
+		t.Errorf("location = %+v, want %+v", got, want)
 	}
 }
 
