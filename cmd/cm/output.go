@@ -135,12 +135,19 @@ type sessionJSON struct {
 	AttachedClients []attachedClientJSON `json:"attached_clients"`
 }
 
-// locationJSON is the JSON shape of one command a session is inside.
+// locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
 type locationJSON struct {
-	// ID is the frame's own identifier, so two frames running the same command are distinguishable.
+	// ID is the entry's own identifier, so two entries alike in every other way are distinguishable: a
+	// frame's is what the shell minted, a client's is the nonce it announced with.
 	ID string `json:"id"`
-	// Argv is the command line the shell reported, empty when it could not report one.
+	// Argv is the command line the shell reported, empty when it could not report one and empty on an entry
+	// that is a client.
 	Argv string `json:"argv"`
+	// Session names what a nested client attached to, and is set only on an entry that is a client.
+	//
+	// Empty on every frame, so a consumer tells the two kinds apart by which of these is set rather than by
+	// position. Advisory: the reference was resolved on the host the client dialed.
+	Session string `json:"session"`
 }
 
 // attachedClientJSON is the JSON shape of one attached client.
@@ -196,7 +203,8 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	// Empty rather than null, like the two above.
 	location := make([]locationJSON, 0, len(s.Location))
 	for _, f := range s.Location {
-		location = append(location, locationJSON{ID: f.GetId(), Argv: f.GetArgv()})
+		location = append(location,
+			locationJSON{ID: f.GetId(), Argv: f.GetArgv(), Session: f.GetSession()})
 	}
 
 	// Empty rather than null, like the two above.
@@ -798,11 +806,16 @@ func sessionFields(s *serverv1.Session) []struct {
 func formatLocation(frames []locationJSON) string {
 	argvs := make([]string, 0, len(frames))
 	for _, f := range frames {
-		if f.Argv == "" {
+		switch {
+		case f.Session != "":
+			// A client rather than a command, printed as the session it went to. Bare, since that is what a
+			// person reading this wants to see and the JSON carries the field that says which kind it is.
+			argvs = append(argvs, f.Session)
+		case f.Argv == "":
 			argvs = append(argvs, "?")
-			continue
+		default:
+			argvs = append(argvs, f.Argv)
 		}
-		argvs = append(argvs, f.Argv)
 	}
 	return strings.Join(argvs, " > ")
 }

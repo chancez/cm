@@ -734,6 +734,17 @@ func TestFormatLocation(t *testing.T) {
 			want: "kitten ssh white > ssh black > tail -f log",
 		},
 		{
+			// A client rather than a command, which is the entry no shell can report: the frame above says
+			// how the host was reached and this says which session was picked once there.
+			name: "a client attached inside a command",
+			frames: []locationJSON{
+				{ID: "a", Argv: "kitten ssh white -t cm tui"},
+				{ID: "nonce1", Session: "books"},
+				{ID: "b", Argv: "nvim notes.md"},
+			},
+			want: "kitten ssh white -t cm tui > books > nvim notes.md",
+		},
+		{
 			// A frame whose shell reported no command line, which bash with history disabled produces. It
 			// holds a place rather than vanishing, so a two-deep location does not read as one-deep.
 			name: "a frame with no argv",
@@ -991,5 +1002,23 @@ func TestJSONTimestampsAreNullWhenUnset(t *testing.T) {
 	// would then vary per run.
 	if !strings.Contains(got, `"created_at": "`) || strings.Contains(got, `.000000`) {
 		t.Errorf("created_at is not a plain RFC 3339 timestamp:\n%s", got)
+	}
+}
+
+// A client entry reaches the JSON with its session set and no argv, which is how a consumer tells the two
+// kinds of entry apart without counting positions.
+func TestSessionJSONReportsAnAnnouncedClientInTheLocation(t *testing.T) {
+	wire := sampleWireSession("work")
+	wire.Location = []*serverv1.LocationFrame{
+		{Id: "local-1", Argv: "kitten ssh white -t cm tui"},
+		{Id: "nonce1", Session: "books"},
+	}
+
+	want := []locationJSON{
+		{ID: "local-1", Argv: "kitten ssh white -t cm tui"},
+		{ID: "nonce1", Session: "books"},
+	}
+	if got := toSessionJSON(wire).Location; !reflect.DeepEqual(got, want) {
+		t.Errorf("location = %+v, want %+v", got, want)
 	}
 }
