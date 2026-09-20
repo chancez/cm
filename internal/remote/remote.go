@@ -148,7 +148,7 @@ func (t Target) String() string {
 	return sb.String()
 }
 
-// ControlPersist is how long a shared ssh connection outlives the command that opened it.
+// DefaultControlPersist is how long a shared ssh connection outlives the command that opened it.
 //
 // The number is a trade with two visible ends. Measured on loopback, a fresh connection costs 120 to 150ms
 // and one through an existing master costs 10 to 30ms, so anything that expires between two cm commands
@@ -157,7 +157,7 @@ func (t Target) String() string {
 //
 // A minute covers a burst of commands, which is how cm is actually used -- a list, a send, a read, a kill --
 // while being short enough that an idle laptop is not holding connections open to somewhere.
-const ControlPersist = 60 * time.Second
+const DefaultControlPersist = 60 * time.Second
 
 // ControlPath returns where a shared connection to this target keeps its control socket.
 //
@@ -200,6 +200,12 @@ type Dialing struct {
 	// command's own. Sharing is what makes a remote usable rather than merely possible: every cm command is
 	// one ssh, and without it each pays a fresh connection.
 	ControlDir string
+	// ControlPersist is how long that connection outlives the command, zero or less for no sharing at all.
+	//
+	// No default applied here, so this package holds no policy a caller cannot see: DefaultControlPersist is
+	// the value to pass, and the config file is where it is chosen. Zero meaning "do not share" is what lets
+	// one setting cover both a host where ControlMaster is unwelcome and a host where a minute is too short.
+	ControlPersist time.Duration
 	// Start asks the remote to bring a server up if none is running. See `cm server proxy` for why that is
 	// the caller's decision rather than something the far end always does.
 	Start bool
@@ -251,11 +257,11 @@ func (t Target) ProxyCommand(d Dialing) (string, []string) {
 	// rather than joining theirs. Deliberate: finding theirs means parsing their config or paying an `ssh -G`
 	// on every invocation, and a second master for one host costs a process, while guessing wrong costs
 	// correctness. Whoever wants only theirs can pass an empty controlDir.
-	if path := t.ControlPath(d.ControlDir); path != "" {
+	if path := t.ControlPath(d.ControlDir); path != "" && d.ControlPersist > 0 {
 		args = append(args,
 			"-o", "ControlMaster=auto",
 			"-o", "ControlPath="+path,
-			"-o", fmt.Sprintf("ControlPersist=%d", int(ControlPersist.Seconds())),
+			"-o", fmt.Sprintf("ControlPersist=%d", int(d.ControlPersist.Seconds())),
 		)
 	}
 

@@ -144,7 +144,7 @@ func TestProxyCommandSharesAConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v, want nil", err)
 	}
-	_, args := target.ProxyCommand(Dialing{ControlDir: "/tmp/cmtest"})
+	_, args := target.ProxyCommand(Dialing{ControlDir: "/tmp/cmtest", ControlPersist: DefaultControlPersist})
 
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
@@ -237,5 +237,25 @@ func TestSuggestionHonorsAConfiguredCommand(t *testing.T) {
 	want := "kitten ssh work cm doctor"
 	if got != want {
 		t.Errorf("Suggestion() = %q, want %q", got, want)
+	}
+}
+
+// A zero persist shares nothing, which is the switch as well as the duration: a host where ControlMaster is
+// unwelcome and a host where a minute is too short are one setting at different values.
+func TestProxyCommandWithoutSharing(t *testing.T) {
+	target, err := Parse("ssh://work")
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want nil", err)
+	}
+	for _, d := range []Dialing{
+		// Asked for no sharing, with somewhere to put a socket.
+		{ControlDir: "/tmp/cmtest", ControlPersist: 0},
+		// Asked for sharing, with nowhere to put one: the caller could not make the directory.
+		{ControlDir: "", ControlPersist: DefaultControlPersist},
+	} {
+		_, args := target.ProxyCommand(d)
+		if joined := strings.Join(args, " "); strings.Contains(joined, "Control") {
+			t.Errorf("args %q ask for a shared connection, want none for %+v", joined, d)
+		}
 	}
 }

@@ -410,3 +410,44 @@ gone unconditionally. See [persistence.md](persistence.md) for how restore works
 - **`max_bytes`** applies regardless of `max_lines`, so one very long line cannot fill the disk.
 - **`expire_after`** and **`forget_unpersisted_after`** bound how long records are kept. Both reject
   zero, which would delete a session's record the moment it ended.
+
+## [remote]
+
+How cm reaches a server on another machine, for `--remote ssh://host`. See
+[rpc.md](rpc.md) for the transport itself and its measurements.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `ssh_command` | a command line, split on spaces | `ssh` |
+| `connection_persist` | Go duration; `0` shares nothing | `1m` |
+
+- **`ssh_command`** replaces ssh. A command line rather than a program, because the useful
+  overrides are several words: `kitten ssh`, which reuses connections of its own, or an
+  `ssh -F` naming another config. Overridden by `--ssh-command` and `$CM_SSH_COMMAND`, as
+  flags and the environment override every setting here.
+
+  Whatever it is still receives cm's own ssh options, so it has to accept them and has to
+  pass bytes through unaltered. A wrapper that allocates a pty corrupts the protocol rather
+  than failing, because a terminal line discipline rewrites the newlines in it. That is
+  survivable rather than mysterious: the proxy opens with a banner, so the first connection
+  reports `expected a cm proxy, got ...` instead of a session that misbehaves later.
+
+  There is no shell quoting, so a path containing a space cannot be written here.
+
+- **`connection_persist`** is how long one shared ssh connection to a host outlives the
+  command that opened it. Sharing takes a `cm ls --remote` from 170ms to 60-70ms, measured on
+  loopback, and what it leaves behind is one ssh process per host holding a connection for
+  this long after the last cm command.
+
+  `0` turns sharing off, which is why this is a duration rather than a switch and a duration:
+  a host where `ControlMaster` is unwelcome and a host where a minute is too short are the
+  same setting at different values.
+
+  cm keeps its own connection rather than joining one the user's `~/.ssh/config` sets up,
+  because finding theirs means parsing their config or paying an `ssh -G` on every
+  invocation. Setting this to `0` is how to use only theirs.
+
+There is deliberately **no default remote**. A setting naming one would point every cm command
+in every shell at another host, including the ones that answer about sessions, and the local
+behavior of a command is not something a config file should change invisibly. `$CM_REMOTE`
+points one shell or one window at a host, which is the scope that fits.

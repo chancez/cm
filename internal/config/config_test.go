@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/chancez/cm/internal/remote"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -476,5 +477,77 @@ func TestKeepDatabaseBackupsForValidation(t *testing.T) {
 		if _, err := cfg.KeepDatabaseBackupsFor(); err == nil {
 			t.Errorf("KeepDatabaseBackupsFor(%q) = nil error, want a rejection", spec)
 		}
+	}
+}
+
+// The remote settings come out of the file, and connection_persist's zero is a real answer rather than an
+// absent one: it means do not share a connection, which is what someone on a host where ControlMaster is
+// unwelcome needs to be able to say.
+func TestRemoteSettings(t *testing.T) {
+	tests := []struct {
+		name        string
+		toml        string
+		wantCommand string
+		wantPersist time.Duration
+		wantErr     bool
+	}{
+		{
+			name:        "unset",
+			toml:        "",
+			wantCommand: "",
+			wantPersist: remote.DefaultControlPersist,
+		},
+		{
+			name:        "both",
+			toml:        "[remote]\nssh_command = \"kitten ssh\"\nconnection_persist = \"5m\"\n",
+			wantCommand: "kitten ssh",
+			wantPersist: 5 * time.Minute,
+		},
+		{
+			name:        "sharing off",
+			toml:        "[remote]\nconnection_persist = \"0\"\n",
+			wantPersist: 0,
+		},
+		{
+			name:    "not a duration",
+			toml:    "[remote]\nconnection_persist = \"soon\"\n",
+			wantErr: true,
+		},
+		{
+			name:    "negative",
+			toml:    "[remote]\nconnection_persist = \"-1m\"\n",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cm.toml")
+			if err := os.WriteFile(path, []byte(tt.toml), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v, want nil", err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			// A setting this build does not know is a warning rather than an error, so an unknown key would
+			// pass every assertion below. Checked so a renamed field is caught here.
+			if unknown := cfg.UnknownSettings(); len(unknown) != 0 {
+				t.Errorf("UnknownSettings() = %q, want none", unknown)
+			}
+
+			persist, err := cfg.RemoteConnectionPersist()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RemoteConnectionPersist() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if persist != tt.wantPersist {
+				t.Errorf("RemoteConnectionPersist() = %v, want %v", persist, tt.wantPersist)
+			}
+			if cfg.Remote.SSHCommand != tt.wantCommand {
+				t.Errorf("Remote.SSHCommand = %q, want %q", cfg.Remote.SSHCommand, tt.wantCommand)
+			}
+		})
 	}
 }

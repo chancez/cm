@@ -17,6 +17,7 @@ import (
 
 	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/sessionenv"
 )
@@ -96,6 +97,37 @@ type Config struct {
 
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
+	Remote  RemoteConfig  `toml:"remote"`
+}
+
+// RemoteConfig is how cm reaches a server on another machine.
+//
+// Deliberately no default remote. A setting naming one would point *every* cm command in every shell at
+// another host, including the ones that answer about sessions, and the local behavior of a command is not
+// something a config file should be able to change invisibly. CM_REMOTE already points one shell or one
+// window at a host, which is the scope that makes sense for it.
+//
+// If per-host settings are ever wanted, they belong under a sub-table rather than by turning this one into a
+// map: `[remote.hosts.work]` beside these keys stays readable and leaves these as the defaults.
+type RemoteConfig struct {
+	// SSHCommand is the command line that reaches a remote, empty for plain ssh.
+	//
+	// Overridden by --ssh-command and CM_SSH_COMMAND, as flags and the environment override every other
+	// setting here. Several words are expected: `kitten ssh`, or an `ssh -F` naming another config. See
+	// remote.Dialing.Command for what a replacement has to do, which is accept ssh's options and pass bytes
+	// through unaltered.
+	SSHCommand string `toml:"ssh_command"`
+
+	// ConnectionPersist is how long one shared ssh connection outlives the command that opened it.
+	//
+	// Zero turns sharing off, which is the reason this is a duration rather than a bool plus a duration: a
+	// host where ControlMaster is unwelcome and a host where a minute is too short are the same setting at
+	// different values.
+	//
+	// The cost of each choice is measured rather than guessed. Sharing takes a `cm ls --remote` from 170ms to
+	// 60-70ms, and what it leaves behind is one ssh process per host holding a connection for this long after
+	// the last command. See docs/rpc.md.
+	ConnectionPersist string `toml:"connection_persist"`
 }
 
 // OverlayConfig is how the overlay is drawn.
@@ -432,6 +464,25 @@ func (c *Config) ForgetUnpersistedAfter() (time.Duration, error) {
 		// it reads the exit status back from the record after the command finishes.
 		return 0, fmt.Errorf("forget_unpersisted_after must be positive, got %q",
 			c.Persist.ForgetUnpersistedAfter)
+	}
+	return d, nil
+}
+
+// RemoteConnectionPersist returns how long a shared ssh connection to a remote is kept, zero for no sharing.
+//
+// Named for the question rather than the field, as KeepShimLogsFor is. Zero is a real answer here and means
+// "do not share", so an unset value has to be distinguishable from a set one: an empty string is unset.
+func (c *Config) RemoteConnectionPersist() (time.Duration, error) {
+	if c.Remote.ConnectionPersist == "" {
+		return remote.DefaultControlPersist, nil
+	}
+	d, err := time.ParseDuration(c.Remote.ConnectionPersist)
+	if err != nil {
+		return 0, fmt.Errorf("remote.connection_persist: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf(
+			"remote.connection_persist cannot be negative, got %q", c.Remote.ConnectionPersist)
 	}
 	return d, nil
 }

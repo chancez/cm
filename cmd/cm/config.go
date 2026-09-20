@@ -11,6 +11,7 @@ import (
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/remote"
 )
 
 func newConfigCommand(g *globals) *cobra.Command {
@@ -74,6 +75,11 @@ type configJSON struct {
 	// default that ends a session is one worth being able to read back.
 	RebindReplaces bool     `json:"rebind_replaces"`
 	EnvCapture     []string `json:"env_capture"`
+	// The remote settings, reported for the same reason the retentions are: "my setting does nothing" is what
+	// this command answers, and a connection shared for a minute by default is a process the user did not
+	// start, so being able to read back whether it is on matters.
+	RemoteSSHCommand        string `json:"remote_ssh_command"`
+	RemoteConnectionPersist string `json:"remote_connection_persist"`
 	// UnknownSettings are settings in the file this build does not know, which everything else ignores
 	// with a warning. Empty on a healthy install.
 	UnknownSettings []string `json:"unknown_settings"`
@@ -99,6 +105,11 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	// The origin of the built-in resolution, which only paths knows: XDG_RUNTIME_DIR and XDG_STATE_HOME both
 	// produce an absolute path, so a directory they chose is indistinguishable from the default once resolved.
 	_, origin, err := paths.DefaultWithOrigin()
+	if err != nil {
+		return err
+	}
+
+	remotePersist, err := cfg.RemoteConnectionPersist()
 	if err != nil {
 		return err
 	}
@@ -172,6 +183,11 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		DatabaseBackupRetention: durationOrNever(dbBackupRetention),
 		RebindReplaces:          cfg.RebindReplaces,
 		EnvCapture:              cfg.EnvPatterns(),
+		// Through the accessor, so what is printed is what a remote connection actually uses, including the
+		// default a blank setting means. "off" rather than "0s" for no sharing, because that is the question
+		// being answered.
+		RemoteSSHCommand:        remoteSSHCommandOrDefault(cfg.Remote.SSHCommand),
+		RemoteConnectionPersist: persistOrOff(remotePersist),
 		UnknownSettings:         cfg.UnknownSettings(),
 	}
 	if out.UnknownSettings == nil {
@@ -214,6 +230,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "shim_log_retention        %s\n", out.ShimLogRetention)
 	fmt.Fprintf(os.Stdout, "database_backup_retention %s\n", out.DatabaseBackupRetention)
 	fmt.Fprintf(os.Stdout, "rebind_replaces           %t\n", out.RebindReplaces)
+	fmt.Fprintf(os.Stdout, "remote.ssh_command        %s\n", out.RemoteSSHCommand)
+	fmt.Fprintf(os.Stdout, "remote.connection_persist %s\n", out.RemoteConnectionPersist)
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))
 	if len(out.UnknownSettings) > 0 {
 		// In the report rather than on stderr, next to the values that are in effect, since the whole
@@ -276,4 +294,23 @@ func dirSource(cmd *cobra.Command, flagName, fileVal, fallback string) string {
 	// unconditionally here was wrong for anyone with XDG_STATE_HOME set, which is the same class of mistake as
 	// conflating a flag with an environment variable -- a right value with a wrong explanation.
 	return fallback
+}
+
+// remoteSSHCommandOrDefault names the command a remote connection runs, for a report.
+func remoteSSHCommandOrDefault(configured string) string {
+	if configured == "" {
+		return remote.Scheme
+	}
+	return configured
+}
+
+// persistOrOff renders how long a shared connection is kept, saying "off" rather than "0s".
+//
+// The zero means "do not share", which is a different statement from "share for no time at all", and a
+// report that printed 0s would leave the reader to work that out.
+func persistOrOff(d time.Duration) string {
+	if d <= 0 {
+		return "off"
+	}
+	return d.String()
 }

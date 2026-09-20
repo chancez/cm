@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -42,6 +43,8 @@ type remoteDialer struct {
 	target remote.Target
 	// command is the ssh command line, empty for plain ssh. See remote.Dialing.Command.
 	command []string
+	// persist is how long a shared connection is kept, zero for no sharing. From the config file.
+	persist time.Duration
 	// controlDir is where a shared ssh connection keeps its control socket, empty for a connection of this
 	// command's own. See remote.Target.ControlPath.
 	controlDir string
@@ -57,9 +60,10 @@ func (d *remoteDialer) Dial(ctx context.Context) (transport.Conn, serverv1.Serve
 	d.haveDialed = true
 
 	name, args := d.target.ProxyCommand(remote.Dialing{
-		Command:    d.command,
-		ControlDir: d.controlDir,
-		Start:      start,
+		Command:        d.command,
+		ControlDir:     d.controlDir,
+		ControlPersist: d.persist,
+		Start:          start,
 	})
 	conn, cl, _, err := transport.DialServerVia(ctx, name, args...)
 	return conn, cl, err
@@ -72,9 +76,10 @@ func (d *remoteDialer) Dial(ctx context.Context) (transport.Conn, serverv1.Serve
 // one extra ssh on a path that only runs after an outage has outlasted the quiet period.
 func (d *remoteDialer) StartServer(ctx context.Context) error {
 	name, args := d.target.ProxyCommand(remote.Dialing{
-		Command:    d.command,
-		ControlDir: d.controlDir,
-		Start:      true,
+		Command:        d.command,
+		ControlDir:     d.controlDir,
+		ControlPersist: d.persist,
+		Start:          true,
 	})
 	conn, _, _, err := transport.DialServerVia(ctx, name, args...)
 	if err != nil {
@@ -101,13 +106,40 @@ func (g *globals) remoteDialerFor(noStart bool) (*remoteDialer, error) {
 		return nil, nil
 	}
 
-	d := &remoteDialer{target: *target, command: g.sshCommandLine(), noStart: noStart}
-	if dirs, err := g.dirs(); err == nil {
-		if err := dirs.Ensure(); err == nil {
-			d.controlDir = dirs.Runtime
+	command, persist, err := g.remoteSettings()
+	if err != nil {
+		return nil, err
+	}
+
+	d := &remoteDialer{target: *target, command: command, persist: persist, noStart: noStart}
+	// Only when a connection is to be shared, so a zero persist leaves no socket behind and creates no
+	// directory for one.
+	if persist > 0 {
+		if dirs, err := g.dirs(); err == nil {
+			if err := dirs.Ensure(); err == nil {
+				d.controlDir = dirs.Runtime
+			}
 		}
 	}
 	return d, nil
+}
+
+// remoteSettings resolves how to reach a remote: the ssh command line and how long to share a connection.
+//
+// Flag, then environment, then the config file, which is the precedence every other setting has. bindEnv has
+// already folded the environment into the flag by the time this runs, so the only choice left here is
+// between what was passed and what the file says.
+func (g *globals) remoteSettings() ([]string, time.Duration, error) {
+	cfg, err := g.config()
+	if err != nil {
+		return nil, 0, err
+	}
+	persist, err := cfg.RemoteConnectionPersist()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return g.sshCommandLine(), persist, nil
 }
 
 // serverFor connects to the server an attachment's Options names.
@@ -214,13 +246,23 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	opts.InsideSession = ""
 }
 
-// sshCommandLine returns the configured ssh command line, or nil for plain ssh.
+// sshCommandLine returns the ssh command line to use, or nil for plain ssh.
 //
 // strings.Fields rather than a shell parse, which is a limit worth stating rather than hiding: `kitten ssh`
 // and `ssh -F /etc/other` both work, and a path with a space in it does not. A shell parse would invite
 // quoting bugs into an argv that reaches a process, for a case nobody has.
+//
+// A failure to read the config is ignored here, matching globals.dirs: this is reached from
+// PersistentPreRunE to build a message, and a malformed file should be reported by the command that needs
+// the setting rather than by every command that mentions a remote. remoteSettings is the one that reports it.
 func (g *globals) sshCommandLine() []string {
-	return strings.Fields(g.sshCommand)
+	if g.sshCommand != "" {
+		return strings.Fields(g.sshCommand)
+	}
+	if cfg, err := g.config(); err == nil && cfg != nil {
+		return strings.Fields(cfg.Remote.SSHCommand)
+	}
+	return nil
 }
 
 // machineLocal lists the commands that are about the machine they run on.
