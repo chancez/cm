@@ -450,8 +450,11 @@ The shape, in three stages that are worth deciding separately:
    `cm list --json`. What is left is `cm attach --like <ref>`, which would reproduce the top of the stack and
    leave `cm_launch.py` with no ssh knowledge at all, and persistence: the stack is in memory only, so a
    server restart loses it, and a session whose ssh is still running comes back reporting no location until
-   the next command. Persisting it wants care rather than plumbing, since a stored frame describes a command
-   that may have exited with the previous server.
+   the next command. The symptom is worth stating exactly, since it is the one a reader will meet: after a
+   restart the stack is empty while the remote command carries on, so the *close* for that command arrives for
+   a frame the server never saw opened and is ignored, and the location stays empty rather than going
+   negative. Persisting it wants care rather than plumbing, since a stored frame describes a command that may
+   have exited with the previous server.
 3. *Optional remote participation.* Narrower than this entry first claimed, and the claim is worth
    correcting because it was the reason to think stages 1 and 2 were blocked on it.
 
