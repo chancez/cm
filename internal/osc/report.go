@@ -59,6 +59,35 @@ type Nesting struct {
 	Ended bool
 }
 
+// Frame is a command the session's shell is running, opened at its prompt hook and closed at the next one.
+//
+// The third thing cm's own sequence carries, alongside a Report and a Nesting. What it is for is stated in
+// docs/ideas.md under a session's location: cm has a cwd and a busy flag, both single values derived from
+// bytes, and no notion of "this session is inside something, entered by this command". A frame is that
+// notion, and the reason it is a sequence rather than a derivation is in the same entry: OSC 133 carries a
+// command line that cm has to discard the moment a nested shell prompts, because nothing in it can tell a
+// nested shell from a shell that prompted after an interrupt.
+//
+// It is also what collects a nesting announcement whose client is gone. An announcement binds to the frame
+// open when it arrived, and a frame closing discards it, so a dropped ssh is forgotten when the parent
+// shell reaches its next prompt rather than standing until the server restarts.
+type Frame struct {
+	// ID pairs a close with its open, and is minted by the shell that emitted it: one salt per shell plus a
+	// counter, so frames from two shells in an ssh chain cannot be mistaken for each other.
+	ID string
+	// Argv is the command line as the shell reported it, already unescaped. Empty on a close.
+	Argv string
+	// Ended distinguishes a frame closing from one opening.
+	Ended bool
+}
+
+// maxFrameArgv bounds how much of a command line is kept.
+//
+// Long enough for an ssh invocation with options, which is what this exists to record, and short enough
+// that a session cannot be made to hold a screenful per command. The shells truncate as well; this is the
+// bound that does not depend on them getting it right.
+const maxFrameArgv = 256
+
 // maxPendingNesting bounds how many announcements one drain can carry.
 //
 // Announcements arrive as bytes in a session's output, so anything that prints them is a source: `cat`
@@ -91,6 +120,11 @@ type ReportTracker struct {
 	// last holds the most recent report, and has reports whether there has been one.
 	last Report
 	has  bool
+	// frames holds command frames not yet drained, in the order they arrived.
+	//
+	// A queue for the same reason nests is one: an open and its close are not interchangeable, and a
+	// command fast enough to produce both in one chunk would otherwise leave a frame that never closes.
+	frames []Frame
 	// nests holds announcements not yet drained, in the order they arrived.
 	//
 	// A queue rather than last-one-wins like a report, because these do not describe one changing value:
@@ -124,6 +158,19 @@ func (t *ReportTracker) TakeNesting() []Nesting {
 	}
 	out := t.nests
 	t.nests = nil
+	return out
+}
+
+// TakeFrames returns the command frames since the last call, oldest first, and clears them.
+//
+// Ordered and drained like TakeNesting, and for the same reason: each one moves a stack, so applying them
+// out of order or twice leaves the stack describing something that never happened.
+func (t *ReportTracker) TakeFrames() []Frame {
+	if len(t.frames) == 0 {
+		return nil
+	}
+	out := t.frames
+	t.frames = nil
 	return out
 }
 
@@ -163,13 +210,18 @@ func (t *ReportTracker) Feed(p []byte) bool {
 			break
 		}
 
-		// A nesting announcement first, since it is the one payload that carries no state and would
-		// otherwise be read as a malformed report and discarded.
-		if n, ok := parseNesting(tail[len(reportIntro):end]); ok {
+		// The payloads that carry no state come first, since parseReport rejects anything without one and
+		// would otherwise discard them as malformed.
+		payload := tail[len(reportIntro):end]
+		if n, ok := parseNesting(payload); ok {
 			if len(t.nests) < maxPendingNesting {
 				t.nests = append(t.nests, n)
 			}
-		} else if r, ok := parseReport(tail[len(reportIntro):end]); ok {
+		} else if f, ok := parseFrame(payload); ok {
+			if len(t.frames) < maxPendingNesting {
+				t.frames = append(t.frames, f)
+			}
+		} else if r, ok := parseReport(payload); ok {
 			t.last, t.has = r, true
 			found = true
 		}
@@ -251,6 +303,78 @@ func parseNesting(params []byte) (Nesting, bool) {
 		return Nesting{}, false
 	}
 	return n, true
+}
+
+// FrameSequence returns the bytes a shell writes to open or close a command frame.
+//
+// Here beside the parser for the reason NestingSequence is: the spelling is a contract between cm and a
+// shell integration that a user may have loaded from an older build, and one place to read both halves is
+// what keeps them agreeing. The shells build this with printf rather than calling into Go, so this is also
+// the statement of what they must produce, and internal/shellinit has a test that compares them.
+func FrameSequence(id, argv string, ended bool) []byte {
+	if ended {
+		return []byte(reportIntro + "frame=exit;id=" + id + "\a")
+	}
+	return []byte(reportIntro + "frame=enter;id=" + id + ";argv=" + escapeCmdline(argv) + "\a")
+}
+
+// parseFrame reads a command frame, reporting whether the payload was one.
+//
+// The id is validated exactly as an announcement's is, and for the same reason: it becomes a key, these
+// bytes can come from anything that prints, and a bounded character set is what keeps arbitrary text out.
+func parseFrame(params []byte) (Frame, bool) {
+	var f Frame
+	var sawFrame bool
+	for _, field := range splitUnescaped(string(params), ';') {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "frame":
+			switch unescapeCmdline(value) {
+			case "enter":
+				sawFrame = true
+			case "exit":
+				sawFrame, f.Ended = true, true
+			}
+		case "id":
+			f.ID = unescapeCmdline(value)
+		case "argv":
+			f.Argv = unescapeCmdline(value)
+		}
+	}
+	if !sawFrame || !validNestingID(f.ID) {
+		return Frame{}, false
+	}
+	// Bounded and stripped here rather than trusting the shells, which truncate too. A control byte in a
+	// command line would travel through cm into `cm list --json` and out to whatever reads it, and a
+	// newline would break a line-oriented consumer, so neither is carried.
+	f.Argv = sanitizeArgv(f.Argv)
+	return f, true
+}
+
+// sanitizeArgv makes a reported command line safe to carry and bounded in size.
+func sanitizeArgv(argv string) string {
+	if len(argv) > maxFrameArgv {
+		argv = argv[:maxFrameArgv]
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, argv)
+}
+
+// escapeCmdline is the inverse of unescapeCmdline, for the one caller that writes a value cm will read
+// back: the semicolon separates fields and the backslash escapes, so both have to survive the round trip.
+func escapeCmdline(v string) string {
+	v = strings.ReplaceAll(v, "\\", "\\\\")
+	return strings.ReplaceAll(v, ";", "\\;")
 }
 
 // validNestingID reports whether an announced id is safe to use as a key.
