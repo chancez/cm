@@ -160,13 +160,12 @@ func completeTagKeys(g *globals) func(*cobra.Command, []string, string) ([]strin
 
 // tagKeys lists the distinct tag keys across all sessions.
 func tagKeys(ctx context.Context, g *globals) ([]string, error) {
-	// See globals.completionSource: the remote's keys when its connection is already shared, and none rather
-	// than this machine's when it is not.
-	dial, ok := g.completionSource(ctx)
-	if !ok {
-		return nil, nil
-	}
-	conn, cl, err := g.dialFor(ctx, dial)
+	// The remote's keys when one is named, never this machine's. Bounded, as every completion is: see
+	// globals.completionServer.
+	ctx, cancel := g.completionDeadline(ctx)
+	defer cancel()
+
+	conn, cl, err := g.completionServer(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -191,12 +191,11 @@ func completeBoundNames(g *globals) func(*cobra.Command, []string, string) ([]st
 		if len(args) > 0 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
-		// See globals.completionSource, as sessionNames does.
-		dial, ok := g.completionSource(cmd.Context())
-		if !ok {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		conn, cl, err := g.dialFor(cmd.Context(), dial)
+		// Bounded, and from whichever server was named: see globals.completionServer, as sessionNames does.
+		ctx, cancel := g.completionDeadline(cmd.Context())
+		defer cancel()
+
+		conn, cl, err := g.completionServer(ctx)
 		if err != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}

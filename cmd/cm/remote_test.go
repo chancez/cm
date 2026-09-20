@@ -316,61 +316,91 @@ func TestPointAtServerFollowsTheRemote(t *testing.T) {
 
 // Completion asks this machine when no remote is named, which is the case that must not regress: the flag
 // existing changes nothing about a local shell.
-func TestCompletionSourceIsLocalWithoutARemote(t *testing.T) {
-	g := &globals{}
-	dial, ok := g.completionSource(t.Context())
-	if !ok {
-		t.Fatal("completionSource() refused, so a local completion offers nothing")
-	}
-	if dial != nil {
-		t.Error("completionSource() returned a dialer for a local server, want the socket path")
+func TestCompletionServerIsLocalWithoutARemote(t *testing.T) {
+	g := &globals{configPath: "/nonexistent.toml"}
+
+	ctx, cancel := g.completionDeadline(t.Context())
+	defer cancel()
+	// No server runs under this test's directories, so a failed dial is expected and is not what is asserted:
+	// where it dialed is. An error mentioning ssh would mean a local completion went out over the network.
+	_, _, err := g.completionServer(ctx)
+	if err != nil && strings.Contains(err.Error(), "ssh") {
+		t.Errorf("completionServer() error = %v, which mentions ssh for a local completion", err)
 	}
 }
 
-// And offers nothing rather than this machine's names when a remote is named but its connection is not up.
-// The wrong host's session completed into a `cm kill` is a mistake a user cannot see they are making, and
-// opening a connection on a keystroke is the other thing this refuses to do.
-func TestCompletionSourceRefusesAColdRemote(t *testing.T) {
-	// A host that does not resolve, so the check cannot succeed however long it waits. The control socket
-	// does not exist either, which is the first thing that stops this.
-	g := &globals{remote: "ssh://cm-test-nonexistent.invalid", configPath: "/nonexistent.toml"}
-
-	began := time.Now()
-	dial, ok := g.completionSource(t.Context())
-	if ok {
-		t.Error("completionSource() accepted a remote with no shared connection")
-	}
-	if dial != nil {
-		t.Error("completionSource() returned a dialer for a cold remote")
-	}
-	// Fast, because this runs on a keystroke. The bound is the one the code sets plus room for a process to
-	// start, not a number picked to make the test pass: a check that took longer than this would be the
-	// stall the whole rule exists to avoid.
-	if waited := time.Since(began); waited > completionReadyTimeout+2*time.Second {
-		t.Errorf("completionSource() took %v on a cold remote, which is a stall on a keystroke", waited)
-	}
-}
-
-// A malformed remote completes nothing rather than falling back to this machine, for the same reason: the
-// names would be from somewhere other than where the user pointed.
-func TestCompletionSourceRefusesAMalformedRemote(t *testing.T) {
-	g := &globals{remote: "http://work", configPath: "/nonexistent.toml"}
-	if _, ok := g.completionSource(t.Context()); ok {
-		t.Error("completionSource() accepted a malformed remote, so completion would use the local server")
-	}
-}
-
-// Sharing turned off means no completion from a remote at all, since there is no connection to be already up
-// and opening one is what this refuses to do.
-func TestCompletionSourceRefusesWhenSharingIsOff(t *testing.T) {
+// A remote is asked whether or not a connection is already shared, which is slower than a local completion
+// and is the point: the names offered are read as the things the command will act on, so this machine's names
+// under --remote would be a mistake the user cannot see they are making.
+func TestCompletionServerAsksAColdRemote(t *testing.T) {
+	// Sharing off, so there is certainly no connection to reuse and this is the cold path.
 	path := filepath.Join(t.TempDir(), "cm.toml")
 	body := "[remote]\nconnection_persist = \"0\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v, want nil", err)
 	}
+	g := &globals{remote: "ssh://cm-test-nonexistent.invalid", configPath: path}
 
-	g := &globals{remote: "ssh://work", configPath: path}
-	if _, ok := g.completionSource(t.Context()); ok {
-		t.Error("completionSource() accepted a remote with sharing off")
+	ctx, cancel := g.completionDeadline(t.Context())
+	defer cancel()
+	_, _, err := g.completionServer(ctx)
+	if err == nil {
+		t.Fatal("completionServer() error = nil against a host that does not resolve")
+	}
+	// It reached for the remote rather than falling back to this machine, which the message shows.
+	if !strings.Contains(err.Error(), "ssh") {
+		t.Errorf("completionServer() error = %v, which does not look like it asked the remote", err)
+	}
+}
+
+// And it cannot hang on a keystroke. A host that is unreachable rather than slow gives up inside the bound,
+// which is why there is a deadline rather than a refusal to ask at all.
+func TestCompletionIsBounded(t *testing.T) {
+	g := &globals{remote: "ssh://cm-test-nonexistent.invalid", configPath: "/nonexistent.toml"}
+
+	began := time.Now()
+	ctx, cancel := g.completionDeadline(t.Context())
+	defer cancel()
+	if _, _, err := g.completionServer(ctx); err == nil {
+		t.Fatal("completionServer() error = nil against a host that does not resolve")
+	}
+	// Generous over the bound, since an ssh has to be started and reaped, and still far short of what a
+	// missing deadline would produce: the handshake alone waits 30s.
+	if waited := time.Since(began); waited > completionTimeout+5*time.Second {
+		t.Errorf("completionServer() took %v, past the %v bound", waited, completionTimeout)
+	}
+}
+
+// A malformed remote is an error rather than this machine's names, for the same reason a cold one is asked:
+// the names come from where the user pointed, or from nowhere.
+func TestCompletionServerRefusesAMalformedRemote(t *testing.T) {
+	g := &globals{remote: "http://work", configPath: "/nonexistent.toml"}
+
+	ctx, cancel := g.completionDeadline(t.Context())
+	defer cancel()
+	_, _, err := g.completionServer(ctx)
+	if err == nil {
+		t.Fatal("completionServer() error = nil for a malformed remote")
+	}
+	if !strings.Contains(err.Error(), "ssh://") {
+		t.Errorf("error %q does not say what a remote looks like", err)
+	}
+}
+
+// A completion never starts a server on another machine. Completing a name is a question, and starting a
+// server is not part of asking it.
+func TestCompletionNeverStartsARemoteServer(t *testing.T) {
+	g := &globals{remote: "ssh://work", configPath: "/nonexistent.toml"}
+
+	d, err := g.remoteDialerFor(true)
+	if err != nil {
+		t.Fatalf("remoteDialerFor() error = %v, want nil", err)
+	}
+	if !d.noStart {
+		t.Fatal("the completion dialer would start a server")
+	}
+	_, args := d.target.ProxyCommand(remote.Dialing{Start: !d.noStart && !d.haveDialed})
+	if slices.Contains(args, "--start") {
+		t.Errorf("the completion command %q asks the remote to start a server", args)
 	}
 }

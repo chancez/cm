@@ -252,16 +252,23 @@ Starting a server on the far end is the first dial's job and no later dial's. `r
 stopped on the remote. The client's own recovery path asks explicitly through `StartServer` when its policy
 allows, which is the same division the local client has, and the two commands are distinguishable in `ps`.
 
-**Completion is fast or nothing.** A tab press is the one place where being slow is worse than being
-unhelpful, so a completion against a remote asks it only when the shared connection is *already* up, checked
-with `ssh -O check`, which talks to the control socket and never to the network. Warm that costs about 65ms,
-against 20ms locally, which a keystroke absorbs. Cold it offers nothing rather than opening a connection for
-170ms on loopback and a full handshake on a real link.
+**Completion asks the remote, and is bounded.** A completion under `--remote` offers the remote's session
+names whether or not a connection is already shared, and never this machine's. The names a completion offers
+are read as the things the command will act on, so the wrong host's session landing in a `cm kill` is a
+mistake the user cannot see they are making; being slower is a smaller cost than being wrong.
 
-What it never does is fall back to this machine's names. A completion is read as a list of things the command
-will act on, so the wrong host's session completed into a `cm kill` is a mistake the user cannot see they are
-making; an empty list is merely unhelpful. With `connection_persist = 0` there is never a shared connection,
-so a remote never completes, which follows from the rule rather than being a second one.
+Measured on loopback: 20ms locally, 60ms against a remote whose connection is shared, 170ms when it has to
+open one. Opening one is not wasted, since the master it leaves behind is what the command being typed will
+then use, so a tab press warms the connection for the command after it.
+
+What is bounded is the keystroke, not the step: `completionTimeout` is five seconds and covers the connection
+and the request together. That is long enough for a fresh ssh to a far host and short enough that an
+unreachable one is an empty completion rather than a frozen prompt. Verified against an unroutable address,
+where TCP hangs rather than failing: it gave up after 5.02s. A shorter bound would have to give up on hosts
+that are merely slow, which is the failure being avoided.
+
+A completion never asks the remote to *start* a server. Completing a name is a question, and starting a
+server is not part of asking it.
 
 Four ssh options are passed because each prevents something that would otherwise be rare and
 baffling rather than a clean failure. `-T`, because `RequestTTY` in a user's config overrides ssh's

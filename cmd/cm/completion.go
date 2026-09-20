@@ -83,15 +83,12 @@ func completeSessionNames(g *globals) func(*cobra.Command, []string, string) ([]
 
 // sessionNames lists session names matching a prefix, described so the shell can show state.
 func sessionNames(ctx context.Context, g *globals, prefix string) ([]string, error) {
-	// Where the names come from, and whether asking is quick enough to do on a keystroke. See
-	// globals.completionSource: a remote whose connection is already shared answers in about 65ms, and one
-	// that would have to be opened completes nothing rather than stalling the shell.
-	dial, ok := g.completionSource(ctx)
-	if !ok {
-		return nil, nil
-	}
+	// Whichever server this invocation names, bounded so a tab press cannot hang on a host that is
+	// unreachable rather than slow. See globals.completionServer.
+	ctx, cancel := g.completionDeadline(ctx)
+	defer cancel()
 
-	conn, cl, err := g.dialFor(ctx, dial)
+	conn, cl, err := g.completionServer(ctx)
 	if err != nil {
 		return nil, err
 	}
