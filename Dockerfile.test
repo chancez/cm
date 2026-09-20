@@ -15,8 +15,10 @@ FROM golang:1.26-bookworm AS ghostty
 
 # Zig is fetched rather than installed from apt, which has no 0.16 package.
 ARG ZIG_VERSION=0.16.0
-# The full SHA, not the abbreviation mise.toml uses: `git fetch <abbrev>` fails with
-# "couldn't find remote ref", since a server will only resolve a complete object name.
+# The full SHA, matching GHOSTTY_REF in mise.toml, which now carries the full one too. The reason is on
+# that side: `git fetch --depth 1 origin <abbrev>` answers "couldn't find remote ref", since the protocol
+# matches refs and complete object names and not prefixes. This file used to be the only place with a
+# working ref, and that is how the mise task shipped broken.
 ARG GHOSTTY_REF=4d605bf0d819df901a0332bbb320dc849fdd82e4
 # Matches GLIBC_FLOOR in mise.toml, which explains what it is for: zig picks glibc functions at
 # comptime from the target version, so an unpinned build here would compile calls this image's glibc

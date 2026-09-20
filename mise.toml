@@ -16,7 +16,13 @@ zig = "0.16.0"
 [env]
 # libghostty-vt has no tagged release and its API is explicitly unstable, so pin a
 # commit. Bumping this is a deliberate act: re-run `mise run libghostty` after.
-GHOSTTY_REF = "4d605bf0d"
+#
+# The full SHA, and it has to be: `git fetch --depth 1 origin <abbrev>` answers "couldn't find remote ref",
+# because the fetch protocol matches refs and full object names and not prefixes of either. This was pinned
+# as "4d605bf0d" and the libghostty task therefore could not work on a fresh checkout at all -- it cloned,
+# then died on the next line. Dockerfile.test already carried the full SHA with a comment naming the
+# abbreviation here as the reason, so the workaround outlived the bug by being in the wrong file.
+GHOSTTY_REF = "4d605bf0d819df901a0332bbb320dc849fdd82e4"
 GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
 GHOSTTY_PREFIX = "{{config_root}}/third_party/ghostty/zig-out"
 # The oldest glibc a released Linux binary runs against, and the version the zig build targets there.
