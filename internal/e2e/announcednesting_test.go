@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -236,4 +237,56 @@ func TestDetachKeyLeavesOneAnnouncedLevelPerPress(t *testing.T) {
 		t.Fatal("the outer client never detached once every announced client had gone")
 	}
 	outer.waitExit(10 * time.Second)
+}
+
+// The outer session's location names the session a nested client went to.
+//
+// End to end because the label crosses every hop: the inner client puts its own session in the sequence, the
+// bytes travel up the pty, the outer session's pump parses them, the server places the client at the frame it
+// was announced inside, and the CLI renders it. Each hop has a unit test with a constructed value, which is
+// how a chain broken in the middle passes all of them.
+//
+// `env -u CM_SESSION` is the ssh hop, as in the tests above: it is what makes the client announce rather than
+// name a parent in Open. An `@id` reference deliberately, because that is what `cm tui` attaches with, and the
+// point of this is that the location shows the name anyway.
+func TestLocationNamesTheSessionAnAnnouncedClientAttachedTo(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	outer := attachOnPty(t, e, "outer", "--", "/bin/sh")
+	outer.waitReady()
+
+	// A session to attach to, and its ID, so the inner client asks by ID and the name has to come from the
+	// server's answer rather than from the command line.
+	e.mustRun("attach", "--no-attach", "inner", "--", "/bin/sh")
+	id := strings.TrimSpace(e.mustRun("info", "inner", "--field", "id"))
+	if id == "" {
+		t.Fatal("cm info --field id printed nothing")
+	}
+
+	outer.typeLine("env -u CM_SESSION " + e.bin + " attach " + id)
+	e.waitFor("the nested client to attach", 20*time.Second, func() bool {
+		s, ok := e.session("inner")
+		return ok && s.Clients == 1
+	})
+
+	e.waitFor("the outer location to name the session the client went to", 20*time.Second, func() bool {
+		s, ok := e.session("outer")
+		if !ok {
+			return false
+		}
+		for _, f := range s.Location {
+			if f.Session == "inner" {
+				return true
+			}
+		}
+		return false
+	})
+
+	// And the rendered line a person reads, which is the reason any of this exists. The shell that ran the
+	// attach has no cm integration loaded here, so there is no frame for the client to sit inside and the
+	// location is the client alone.
+	if got, want := e.mustRun("info", "outer", "--field", "location"), "inner\n"; got != want {
+		t.Errorf("cm info --field location = %q, want %q", got, want)
+	}
 }

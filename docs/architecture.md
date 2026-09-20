@@ -499,7 +499,29 @@ session is inside something, entered by this command". The frames are that, in o
 here, then what is running over there, because the far side's shell writes its own frames through the same
 pty.
 
-Five decisions worth keeping.
+Measured over a real ssh, cm on both ends, kitty, no tmux, which is the only way to see the whole chain:
+
+```
+$ cm info @apfp6ppm --field location
+cm attach --remote ssh://white books > sleep 300
+$ cm info @apfp6ppm --field announced_clients
+1
+$ pkill -f "cm attach --remote ssh://white"
+$ cm info @apfp6ppm --field location
+
+$ cm info @apfp6ppm --field announced_clients
+0
+```
+
+Both halves are in that. The stack spans the link: the local shell's frame for the command it ran, with
+white's shell's frame above it. And the emptying is the collector rather than a withdrawal, because the
+client was killed: the `sleep 300` frame belongs to white's shell, whose prompt hook never fired since its
+pty went with the killed client, so nothing but the discard of descendants could have removed it.
+
+Also in that measurement, the thing the location cannot say on its own: `announced_clients 1` and no name
+for what the client attached to. That is what the announced session fixes, below.
+
+Six decisions worth keeping.
 
 - **Announced by the shell rather than derived.** kitty's integration does send the command line, as
   `cmdline=` on OSC 133;C, and `internal/osc/command.go` parses it, then clears it when a prompt marker
@@ -517,6 +539,21 @@ Five decisions worth keeping.
   what a program means that was rejected when a list of session-hosting commands was ruled out. What the
   argv *does* give is the alias as typed, which the OSC 7 host cannot -- that carries the name the remote
   calls itself, so `chance-work-mbp` arrives as `CHANCEZ-M-2YPG.local` and ssh-to-self arrives as local.
+- **A nested client is in the location too, and it is not a frame.** `cm tui` over ssh picks a session after
+  the command line is fixed, so no argv anywhere can name it: the frame says how the host was reached and
+  stops there. The announcement a nested client already sends now carries what it attached to, and the server
+  places it at the frame it was bound to, which the collector was already recording. So the stack a reader
+  sees interleaves the two, while the stack the collector works on stays frames only.
+
+  cm does not emit a frame of its own for this, which was the obvious alternative. A frame means a shell said
+  it ran this, and that is what makes discarding descendants sound: they came from shells further in, whereas
+  a client's entry has no such relation to what is above it. It would also double, since a local `cm attach`
+  is already framed by the shell that ran it: `preexec` does not filter.
+
+  The name is refined rather than taken as given. A client announces before its Open, with the reference it
+  was asked for, and again with the session's own name once the server answers. Without the second, the flow
+  this exists for reports `@a7k2m9x4`, because the picker attaches by ID deliberately. A repeat with the same
+  nonce is one client, so the count does not move and nothing is republished.
 - **Bounded, and in the direction that keeps the outermost.** These are bytes in a session's output like
   everything else here, so a frame past the bound is ignored rather than displacing the oldest: the frames
   that say where the session went are the ones worth keeping.

@@ -447,7 +447,7 @@ The shape, in three stages that are worth deciding separately:
    nothing per command and works with no server running. This fixes both limits above, because the argv is
    what was typed and the announcement does not care whether the host differs.
 2. *Expose and persist it.* **Exposed, not persisted.** `location` is in `cm info`, `--field location`, and
-   `cm list --json`. Not a `cm list` column: the table is already wide and an argv is long, so the stack
+   `cm list --json`, and includes an entry for a nested client with the session it attached to. Not a `cm list` column: the table is already wide and an argv is long, so the stack
    would either dominate it or be truncated to uselessness. What is left is `cm attach --like <ref>`, which would reproduce the top of the stack and
    leave `cm_launch.py` with no ssh knowledge at all, and persistence: the stack is in memory only, so a
    server restart loses it, and a session whose ssh is still running comes back reporting no location until
@@ -491,6 +491,12 @@ The shape, in three stages that are worth deciding separately:
    variable on a host where `CM_SESSION` stays unset. And every frame now means "a shell said it ran this",
    which is what makes the collector's rule sound: closing a frame discards the frames above because they
    came from shells further in. A frame from a client has no such relationship to the ones above it.
+
+   *Done instead, and it covers the case this entry was opened for:* the announcement carries the session the
+   client attached to, and the location places it at the frame it was bound to. The missing middle level is
+   named without a second thing emitting frames, and without the far side cooperating at all, which is what
+   makes this stage a nicety rather than a prerequisite. `cm tui` over ssh is the flow that needs it: the
+   session is chosen after the command line is fixed, so no argv can name it. See docs/architecture.md.
 
 *Why a stack is tractable here, unlike the OSC 133 version.* There is one pty and one pump goroutine feeding
 the trackers chunk by chunk, so announcements from any depth arrive in a total order. Exits carry the id of

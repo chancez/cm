@@ -559,6 +559,8 @@ type sessionJSON struct {
 	Location []struct {
 		ID   string `json:"id"`
 		Argv string `json:"argv"`
+		// Session is set on an entry describing a nested client rather than a command.
+		Session string `json:"session"`
 	} `json:"location"`
 	// AttachedClients is one entry per client, carrying the pid a test needs to kill one without letting
 	// it say goodbye.
