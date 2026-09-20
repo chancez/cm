@@ -10,61 +10,87 @@ import (
 	"github.com/chancez/cm/internal/osc"
 )
 
-// A client that announced itself can only be withdrawn by itself, so a window whose announcement is never
-// withdrawn must keep one way to reach cm. The detach key still goes to the inner client; the overlay's
-// prefix stays here.
+// Both intercepted keys go to the inner client, whichever way the nesting was learned.
 //
-// The failure this prevents: a dropped ssh leaves the parent believing a client is nested, and with both
-// keys handed over that window answers neither ctrl-\ nor ctrl-], so it can only be freed from another
-// window.
-func TestInputGateAnnouncedNestingKeepsThePrefixKey(t *testing.T) {
-	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
-	g.suspended, g.keepPrefix = true, true
-
-	// The detach key is an ordinary keystroke now, and reaches the inner client whole.
-	if dec := g.feed([]byte("\x1c"), t0); string(dec.Forward) != "\x1c" || dec.Action != gateNone {
-		t.Errorf("feed(ctrl-\\) = %+v, want it forwarded with no action: the inner client acts on it", dec)
-	}
-
-	// The prefix key is still this client's.
+// The handover is uniform on purpose. An announced nesting is less trustworthy than one the server was told
+// about, since no withdrawal is guaranteed, and that is answered by the escape below rather than by keeping
+// a key back: a rule per case is one more thing to explain and to get wrong.
+func TestInputGateNestingHandsOverBothKeys(t *testing.T) {
 	prefix, err := ParsePrefixKey(DefaultPrefixKey)
 	if err != nil {
 		t.Fatalf("ParsePrefixKey(%q) error = %v", DefaultPrefixKey, err)
 	}
-	if dec := g.feed([]byte{prefix.Byte}, t0); dec.Action != gatePrefix {
-		t.Errorf("feed(prefix) = %+v, want gatePrefix: an announced nesting leaves the overlay reachable", dec)
-	}
-}
 
-// An attachment the server was told about hands over both keys, which is the behaviour that predates
-// announcements and must not change: the overlay belongs to the session being looked at.
-func TestInputGateKnownNestingHandsOverBothKeys(t *testing.T) {
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
-	g.suspended, g.keepPrefix = true, false
+	g.setSuspended(true)
 
-	prefix, err := ParsePrefixKey(DefaultPrefixKey)
-	if err != nil {
-		t.Fatalf("ParsePrefixKey(%q) error = %v", DefaultPrefixKey, err)
-	}
 	if dec := g.feed([]byte{prefix.Byte}, t0); string(dec.Forward) != string([]byte{prefix.Byte}) ||
 		dec.Action != gateNone {
-		t.Errorf("feed(prefix) = %+v, want it forwarded: the inner client owns the overlay too", dec)
+		t.Errorf("feed(prefix) = %+v, want it forwarded: the overlay belongs to the session on screen", dec)
+	}
+	if dec := g.feed([]byte("\x1c"), t0); string(dec.Forward) != "\x1c" || dec.Action != gateNone {
+		t.Errorf("feed(ctrl-\\) = %+v, want it forwarded: the inner client acts on it", dec)
 	}
 }
 
-// While only the prefix is this client's, a partial that could be either key must not be withheld for the
-// detach key's sake: this client will not act on it, and the inner client's own gate is waiting for it.
-func TestInputGateAnnouncedNestingHoldsOnlyForThePrefix(t *testing.T) {
-	g := newGateWithPrefix(t, "ctrl-\\", "ctrl-]")
-	g.suspended, g.keepPrefix = true, true
+// A handover nobody is acting on is escapable, and the third press is what escapes it.
+//
+// The state this exists for: the inner client is gone and its parent does not know, so every press is
+// forwarded into nothing and the window cannot be left. Two presses are silent and forwarded, because the
+// inner client may be alive and merely slow; the second is reported so the user is told what the next one
+// will do; the third acts here.
+func TestInputGateNestedPressesEscalate(t *testing.T) {
+	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
+	g.setSuspended(true)
 
-	// A lone escape is a prefix of the CSI encodings of both keys. Held, because the prefix key could still
-	// arrive, and released in order afterwards.
-	if dec := g.feed([]byte("\x1b"), t0); len(dec.Forward) != 0 {
-		t.Errorf("feed(escape) = %+v, want it withheld while the prefix key is still live", dec)
+	if dec := g.feed([]byte("\x1c"), t0); string(dec.Forward) != "\x1c" || dec.Action != gateNone {
+		t.Fatalf("first press = %+v, want it forwarded silently", dec)
 	}
-	if _, holding := g.deadline(); !holding {
-		t.Error("deadline() reports nothing held, so a CSI-encoded prefix key would be missed")
+	if dec := g.feed([]byte("\x1c"), t0); string(dec.Forward) != "\x1c" || dec.Action != gateNestedWarn {
+		t.Fatalf("second press = %+v, want it forwarded with gateNestedWarn", dec)
+	}
+	if dec := g.feed([]byte("\x1c"), t0); len(dec.Forward) != 0 || dec.Action != gateDetach {
+		t.Fatalf("third press = %+v, want a detach and the key not forwarded", dec)
+	}
+}
+
+// The count resets whenever the nesting changes, which is what keeps the escape out of reach by accident.
+//
+// The ordinary two-press flow is the case: one press leaves the inner session, the handover ends, and the
+// next press is a plain detach of this client rather than the third of a run. Without the reset, a window
+// that had hosted two nested sessions would be one keystroke from detaching itself.
+func TestInputGateNestedPressCountResetsWithTheHandover(t *testing.T) {
+	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
+
+	g.setSuspended(true)
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
+		t.Fatalf("press while nested = %+v, want it forwarded silently", dec)
+	}
+
+	// The inner client acted on it and left.
+	g.setSuspended(false)
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateDetach {
+		t.Fatalf("press after the handover ended = %+v, want an ordinary detach", dec)
+	}
+
+	// And a second nesting starts from zero rather than from one press in.
+	g.setSuspended(true)
+	if dec := g.feed([]byte("\x1c"), t0); dec.Action != gateNone {
+		t.Errorf("first press of a new handover = %+v, want it forwarded silently", dec)
+	}
+}
+
+// A burst in one read is one press, so a paste of the detach key cannot reach the escape.
+//
+// Auto-repeat is a separate matter and is not what this covers: its events arrive as their own reads. What
+// holds it off is the keyboard's initial delay, a quarter second or more before repeating begins, plus the
+// notice standing between the second press and the third.
+func TestInputGateCountsOnePressPerRead(t *testing.T) {
+	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
+	g.setSuspended(true)
+
+	if dec := g.feed([]byte("\x1c\x1c\x1c\x1c"), t0); dec.Action != gateNone {
+		t.Errorf("four keys in one read = %+v, want them forwarded silently: a burst is one press", dec)
 	}
 }
 

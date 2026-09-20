@@ -61,12 +61,25 @@ func (n *outageNotice) update(waited time.Duration, note string) {
 	if n.painted && text == n.last {
 		return
 	}
-	// DECSC and DECRC around the write, so the cursor the session is using is exactly where it was.
-	// Column 1 of the last row, cleared first, so a shorter notice cannot leave the tail of a longer one
-	// behind.
-	fmt.Fprintf(n.out, "\x1b7\x1b[%d;1H\x1b[2K\x1b[7m%s\x1b[0m\x1b8", rows, text)
+	paintBottomRow(n.out, rows, text)
 	n.painted = true
 	n.last = text
+}
+
+// paintBottomRow writes one line of cm's own text on the terminal's last row.
+//
+// DECSC and DECRC around the write, so the cursor the session is using is exactly where it was. Column 1
+// of the last row, cleared first, so a shorter line cannot leave the tail of a longer one behind.
+//
+// Shared with the nested-detach notice rather than written twice: there is one spelling of "cm says
+// something on the bottom row", and two copies of this sequence would be two things to get wrong.
+func paintBottomRow(out io.Writer, rows uint16, text string) {
+	fmt.Fprintf(out, "\x1b7\x1b[%d;1H\x1b[2K\x1b[7m%s\x1b[0m\x1b8", rows, text)
+}
+
+// eraseBottomRow clears the row paintBottomRow wrote, leaving it blank for a repaint to fill.
+func eraseBottomRow(out io.Writer, rows uint16) {
+	fmt.Fprintf(out, "\x1b7\x1b[%d;1H\x1b[2K\x1b8", rows)
 }
 
 // clear erases the notice, reporting whether there was one to erase.
@@ -79,7 +92,7 @@ func (n *outageNotice) clear() bool {
 	}
 	rows, _ := n.size()
 	if rows > 0 {
-		fmt.Fprintf(n.out, "\x1b7\x1b[%d;1H\x1b[2K\x1b8", rows)
+		eraseBottomRow(n.out, rows)
 	}
 	n.painted = false
 	n.last = ""
@@ -99,8 +112,19 @@ func noticeText(waited time.Duration, note string, cols int) string {
 		// very differently from one that has been waiting five seconds, and the note alone does not say.
 		text = fmt.Sprintf(" cm: %s (%s) ", note, waited.Round(time.Second))
 	}
-	// Collapsed to one line, since a reason read from the server's stderr can carry newlines and a
-	// newline here would scroll the screen.
+	return fitNoticeLine(text, cols)
+}
+
+// fitNoticeLine makes text safe to write on one row of a terminal this wide.
+//
+// Collapsed to a single line, since a reason read from the server's stderr can carry newlines and a newline
+// here would scroll the screen.
+//
+// Truncated to one column short of the width on purpose. Writing the final column leaves the terminal in its
+// pending-wrap state, and a single further byte would scroll the screen: that would move the session's
+// content up by a row and desynchronize it from the model that is about to repaint it. One unused column
+// costs nothing by comparison.
+func fitNoticeLine(text string, cols int) string {
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\r", " ")
 	if limit := cols - 1; limit > 0 && len(text) > limit {

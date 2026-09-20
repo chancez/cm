@@ -899,6 +899,15 @@ func runSession(
 	// escapeGrace so a lone escape is not withheld forever.
 	gate := &inputGate{detach: detachKey, prefix: prefixKey}
 
+	// Says so when the detach key has gone to a nested client twice with nothing happening, which is the
+	// only warning before the next press leaves this session instead. Same row and conditions as the outage
+	// notice: a follower writing to a pipe paints nothing.
+	nested := &nestedNotice{
+		out:     injectWriter{scr},
+		size:    tty.Size,
+		enabled: opts.overlayEnabled(tty),
+	}
+
 	// A command the overlay dispatched, delivered when the child exits.
 	//
 	// Buffered so the goroutine that ran it cannot be left blocked on a send after this connection ended,
@@ -1127,14 +1136,21 @@ func runSession(
 				// stays withheld and is released by the existing grace timer, in order, ahead of whatever
 				// is typed next.
 				//
-				// The prefix key follows only an attachment the server was told about. An announced one
-				// carries no promise of a withdrawal, so handing over both keys could leave this window with
-				// no way to reach cm at all; see inputGate.keepPrefix.
-				keepPrefix := h.Nested && h.AnnouncedOnly
-				if h.Nested != gate.suspended || keepPrefix != gate.keepPrefix {
-					gate.suspended, gate.keepPrefix = h.Nested, keepPrefix
+				// Both intercepted keys go over, whichever way the nesting was learned. An announced one is
+				// less trustworthy, since no withdrawal is guaranteed, and that is answered by the escape on
+				// the detach key rather than by keeping a key back: see inputGate.nestedPresses.
+				if h.Nested != gate.suspended {
+					gate.setSuspended(h.Nested)
 					opts.Log.Info("detach key handed to the innermost session",
 						"session", result.Session, "nested", h.Nested, "announced_only", h.AnnouncedOnly)
+				}
+				if !h.Nested && nested.clear() {
+					// The notice overwrote the session's bottom row and cm's model is the only thing that
+					// knows what was there, so the position is dropped and this attachment repaints. Same
+					// move the outage notice and a detected gap make, for the same reason.
+					opts.Log.Debug("repainting after the nested-detach notice cleared", "session", result.Session)
+					*resumeFrom = nil
+					return outcomeReconnect, nil
 				}
 				continue
 			}
@@ -1320,7 +1336,21 @@ func runSession(
 				}
 				continue
 			}
+			if dec.Action == gateNestedWarn {
+				// The key went to the inner client a second time and nothing came of it. Say so, and send
+				// this press on anyway: an inner client that is merely slow is still entitled to it.
+				nested.show(detachKey)
+				opts.Log.Info("the detach key is being forwarded to a nested client that is not acting on it",
+					"session", result.Session)
+				if sendInput(buf) {
+					return outcomeReconnect, nil
+				}
+				continue
+			}
 			if dec.Action == gateDetach {
+				// A notice on screen is cm's own and goes with it, so the shell does not inherit a row of
+				// inverse video. Nothing repaints it here: this client is leaving.
+				nested.clear()
 				// Forward whatever preceded the detach so a trailing keystroke is not
 				// lost, then leave.
 				if len(buf) > 0 && !opts.ReadOnly {

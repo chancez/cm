@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"syscall"
 	"testing"
 	"time"
 )
@@ -79,6 +80,75 @@ func TestDetachKeyLeavesAnAnnouncedInnerSession(t *testing.T) {
 	if !pressed {
 		t.Fatal("the outer client never detached, so it did not take the detach key back when the " +
 			"announced client withdrew")
+	}
+	outer.waitExit(10 * time.Second)
+}
+
+// A nesting whose client is gone can still be escaped, by pressing the detach key until cm says otherwise.
+//
+// The state: the inner client was killed, so it withdrew nothing and the parent still believes a client is
+// there. Every press is forwarded into nothing, and before this the window could only be freed from another
+// one. Two presses now go through as before, the second is reported, and the third leaves this session.
+//
+// End to end because the escape spans the gate, the notice, and the detach path, and because the stranded
+// state itself only exists once three real processes are involved: a unit test can set the flag, but not
+// arrive at it by the route a dropped link takes.
+func TestDetachKeyEscapesANestingThatIsNotAnswering(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	outer := attachOnPty(t, e, "outer", "--", "/bin/sh")
+	outer.waitReady()
+
+	outer.typeLine("env -u CM_SESSION " + e.bin + " attach inner -- /bin/sh")
+	e.waitFor("the nested client to attach", 20*time.Second, func() bool {
+		s, ok := e.session("inner")
+		return ok && s.Clients == 1
+	})
+	e.waitFor("the outer session to hear the announcement", 10*time.Second, func() bool {
+		s, ok := e.session("outer")
+		return ok && s.AnnouncedClients == 1
+	})
+
+	// Killed rather than detached, which is the whole setup: a client that exits withdraws its
+	// announcement, and a dropped ssh is the case where nothing does.
+	inner, ok := e.session("inner")
+	if !ok || len(inner.AttachedClients) != 1 {
+		t.Fatalf("inner session = %+v, want exactly one attached client to kill", inner)
+	}
+	if err := syscall.Kill(inner.AttachedClients[0].PID, syscall.SIGKILL); err != nil {
+		t.Fatalf("killing the nested client: %v", err)
+	}
+	e.waitFor("the inner session to lose its client", 15*time.Second, func() bool {
+		s, ok := e.session("inner")
+		return ok && s.Clients == 0
+	})
+
+	// The parent still believes it is hosting, which is the state being escaped rather than a bug in this
+	// test: nothing withdrew the announcement and nothing else can.
+	if s, _ := e.session("outer"); s.AnnouncedClients != 1 {
+		t.Fatalf("outer announced clients = %d, want 1: the setup did not strand an announcement",
+			s.AnnouncedClients)
+	}
+
+	// The first two presses are forwarded, so this window stays put.
+	outer.detachKey()
+	time.Sleep(scaleTimeout(300 * time.Millisecond))
+	outer.detachKey()
+	time.Sleep(scaleTimeout(300 * time.Millisecond))
+	if s, ok := e.session("outer"); !ok || s.Clients != 1 {
+		t.Fatalf("outer session = %+v after two presses, want it still attached: the escape must take "+
+			"three, so auto-repeat cannot reach it", s)
+	}
+
+	// The third leaves, whatever the handover says.
+	outer.detachKey()
+	e.waitFor("the outer client to detach on the third press", 15*time.Second, func() bool {
+		s, ok := e.session("outer")
+		return ok && s.Clients == 0
+	})
+	if s, _ := e.session("outer"); s.State != "running" {
+		t.Errorf("outer state = %q, want running: escaping is a detach, not a kill", s.State)
 	}
 	outer.waitExit(10 * time.Second)
 }

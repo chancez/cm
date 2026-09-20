@@ -41,7 +41,20 @@ const (
 	gateDetach
 	// gatePrefix means the prefix key was pressed, so the overlay opens.
 	gatePrefix
+	// gateNestedWarn means the detach key was pressed again while handed to an inner client that has not
+	// acted on it, so the user is told that pressing it once more leaves this session instead.
+	gateNestedWarn
 )
+
+// nestedPressesToWarn is how many forwarded detach keys it takes before cm says something, after which one
+// more detaches this client whatever the handover says.
+//
+// Two, so the ordinary case is silent: one press is what leaves an inner session, and a notice on every
+// nested detach would be noise on the common path. The press after the notice is the escape, which makes
+// three in total -- enough that the keyboard's auto-repeat cannot reach it by accident, since repeat only
+// begins after an initial delay of a quarter second or more and the notice sits between the second press
+// and the third.
+const nestedPressesToWarn = 2
 
 // gateDecision is everything one read of keystrokes produced.
 //
@@ -83,15 +96,20 @@ type inputGate struct {
 	// Separate from KeySpec.Disabled, which is the configured "no key detaches". This one comes
 	// and goes with the nesting and must not overwrite what the user configured.
 	suspended bool
-	// keepPrefix holds the overlay's prefix key back from a handover the detach key still makes.
+	// nestedPresses counts detach keys forwarded since this handover began, which is what makes a handover
+	// nobody is acting on escapable.
 	//
-	// Set while the only thing nested announced itself over the pty rather than telling the server, which
-	// is what a `cm attach` beyond an ssh has to do. That state has no guaranteed withdrawal: a dropped
-	// link sends no farewell, so the parent can be left believing a client is there forever. Handing over
-	// both keys then would leave this window with no way to detach itself at all, since both are what cm
-	// is reachable by. So the detach key goes, because a key that leaves the wrong session is the bug being
-	// fixed, and ctrl-] stays, which costs the inner client its overlay and keeps this window usable.
-	keepPrefix bool
+	// The state it exists for: the inner client is gone but its parent does not know, so every press is
+	// forwarded into nothing and the window cannot be left. That is reachable whichever way the nesting was
+	// learned -- a dropped ssh withdraws no announcement, and an RPC-known client can wedge -- so the way
+	// out is the same for both rather than a rule per case.
+	//
+	// Counted rather than timed, and that is the part worth keeping. A press within a window of the last one
+	// would be the obvious spelling and is unsafe: holding ctrl-\ repeats at about 30/s once the keyboard's
+	// initial delay expires, so a stuck key would detach the inner session and then close the window, which
+	// is the failure this whole mechanism exists to prevent. A count that resets whenever the nesting
+	// changes cannot do that, because a press the inner client acts on ends the handover and clears it.
+	nestedPresses int
 	// held is a partial encoding of the key, kept until the rest arrives or the grace expires.
 	held []byte
 	// heldAt is when the current held bytes were first withheld, so the deadline is measured from the
@@ -117,7 +135,23 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Everything through, including anything withheld before the handover, and in the order it was
 	// typed. Nothing is held back either: a partial sequence has no one here to complete it, and the
 	// inner client needs the whole of it to recognize the key itself.
-	if g.suspended && !g.keepPrefix {
+	if g.suspended {
+		// Scanned even though nothing is intercepted, because a handover that is not being acted on has to
+		// be escapable: see nestedPresses. Counted once per read rather than per occurrence, which is the
+		// conservative direction -- a burst in one read is one press, so a paste cannot reach the escape.
+		if at, _ := g.detach.find(buf); at >= 0 {
+			g.nestedPresses++
+			switch {
+			case g.nestedPresses == nestedPressesToWarn:
+				// Forwarded as well as reported. The inner client may be alive and merely slow, in which case
+				// this press is its own and the notice is the only thing added.
+				return gateDecision{Forward: buf, Action: gateNestedWarn}
+			case g.nestedPresses > nestedPressesToWarn:
+				// Acted on here, so the key is taken out of what goes on rather than sent to a client that
+				// has had two of them and done nothing.
+				return gateDecision{Forward: buf[:at], Action: gateDetach}
+			}
+		}
 		return gateDecision{Forward: buf}
 	}
 
@@ -126,12 +160,6 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// leaving is the one that cannot be undone by pressing something else, so it is the safer reading.
 	detachAt, _ := g.detach.find(buf)
 	prefixAt, prefixLen := g.prefix.find(buf)
-	if g.suspended {
-		// Handed over, so the detach key is an ordinary keystroke here and the inner client's own gate is
-		// what acts on it. Not a returned Forward of the whole read, because the prefix key is still this
-		// client's and may be later in the same read.
-		detachAt = -1
-	}
 	switch {
 	case detachAt >= 0 && (prefixAt < 0 || detachAt <= prefixAt):
 		return gateDecision{Forward: buf[:detachAt], Action: gateDetach}
@@ -146,14 +174,7 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Hold back a possible partial sequence until the rest arrives, or until the grace expires. The
 	// longer of the two, since a partial that could still become either key must wait for whichever needs
 	// more bytes: with the defaults both encode as ESC [ 9 ... and diverge only at the fourth byte.
-	keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf))
-	if g.suspended {
-		// Only the prefix is still this client's, so only its partials are worth waiting for. Withholding
-		// what could become a detach key would delay the inner client's own key by up to escapeGrace for
-		// no gain, since this client is not going to act on it.
-		keep = g.prefix.HoldBack(buf)
-	}
-	if keep > 0 && keep <= len(buf) {
+	if keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf)); keep > 0 && keep <= len(buf) {
 		g.held = append(g.held, buf[len(buf)-keep:]...)
 		if anchor.IsZero() {
 			g.heldAt = now
@@ -163,6 +184,19 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 		buf = buf[:len(buf)-keep]
 	}
 	return gateDecision{Forward: buf}
+}
+
+// setSuspended records whether something is nested inside this session, which is what hands the keys over.
+//
+// A method rather than an assignment so the press count cannot be left behind. Reset on every change,
+// including one handover replacing another: a press the inner client acted on is what ends a handover, so
+// a count that survived into the next one would bring the escape within reach of a single keystroke.
+func (g *inputGate) setSuspended(nested bool) {
+	if g.suspended == nested {
+		return
+	}
+	g.suspended = nested
+	g.nestedPresses = 0
 }
 
 // deadline reports when the held bytes must be released, and whether anything is held at all.

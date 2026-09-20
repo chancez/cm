@@ -2322,9 +2322,12 @@ type Hosting struct {
 	// only way the parent can know, and it comes with a weakness the RPC path does not have: if the link
 	// drops, no withdrawal arrives and the parent goes on believing a client is there.
 	//
-	// So the parent's clients treat the two differently. The detach key is handed over either way, because
-	// a key that leaves the wrong session is the bug being fixed. The overlay's prefix key is kept while
-	// this is set, so a window whose announcement is never withdrawn still has a way to detach itself.
+	// Informational rather than acted on, and deliberately so. Both intercepted keys are handed over for
+	// either kind of nesting, and the weakness is answered by an escape on the detach key itself: three
+	// presses leave this session whatever the handover says. An earlier version kept the overlay's prefix key
+	// for an announced nesting, which worked and was a rule per case in a mechanism whose whole difficulty is
+	// that the cases are hard to tell apart. What this is still worth is a log line that says which route a
+	// handover came from, which is the first question when one of them is wrong.
 	AnnouncedOnly bool `protobuf:"varint,2,opt,name=announced_only,json=announcedOnly,proto3" json:"announced_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

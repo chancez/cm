@@ -552,6 +552,14 @@ type sessionJSON struct {
 	// Hosting names the sessions attached from inside this one by a nested `cm attach`, which is also
 	// what decides who owns the detach key.
 	Hosting []string `json:"hosting"`
+	// AnnouncedClients counts the clients attached inside this session that announced themselves over its
+	// pty rather than telling the server, which is what a `cm attach` beyond an ssh has to do.
+	AnnouncedClients int `json:"announced_clients"`
+	// AttachedClients is one entry per client, carrying the pid a test needs to kill one without letting
+	// it say goodbye.
+	AttachedClients []struct {
+		PID int `json:"pid"`
+	} `json:"attached_clients"`
 	// Cwd and Title are what the shell reported about itself, decoded. Read by the nesting tests: both
 	// are values a nested attach used to overwrite on the session it was launched from.
 	Cwd   string `json:"cwd"`

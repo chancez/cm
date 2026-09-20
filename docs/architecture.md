@@ -407,14 +407,15 @@ already looks for reports. From there it is the existing mechanism: a second sou
 
 Four decisions in it, and the first is the one that shapes the rest.
 
-- **An announced nesting has no guaranteed withdrawal.** An attachment the server was told about ends when
-  its stream does, whatever happens to the client. An announcement is a byte sequence, and a dropped link,
-  a killed client, or a laptop going to sleep sends nothing, leaving the parent believing a client is
-  there. So `Hosting.announced_only` carries which kind it is, and the clients treat them differently: the
-  detach key is handed over either way, because a key that leaves the wrong session is the bug being
-  fixed, while the overlay's prefix key is kept by the outer client. That costs the inner client its
-  overlay and leaves a stranded window able to detach itself, where handing over both keys would leave it
-  answering nothing at all.
+- **An announced nesting has no guaranteed withdrawal, and the handover is uniform anyway.** An attachment
+  the server was told about ends when its stream does, whatever happens to the client. An announcement is a
+  byte sequence, and a dropped link, a killed client, or a laptop going to sleep sends nothing, leaving the
+  parent believing a client is there. Both keys are still handed over for either kind, and the difference is
+  answered by an escape on the detach key rather than by keeping a key back: see "Escaping a handover nobody
+  is acting on" below. An earlier version kept the overlay's prefix key for an announced nesting only, which
+  worked and was dropped for being a rule per case, in a mechanism whose whole problem is that two cases are
+  hard to tell apart. `Hosting.announced_only` survives as a fact for the log, so a line can say which route
+  a handover came from.
 - **The trigger is "I could not tell a server", not "I am on another host".** The client announces when
   `inside_session` is empty, so the local path is untouched and nothing is counted twice. cm learns
   nothing about ssh, which is the same reason the location entry in `docs/ideas.md` rejects a list of
@@ -429,11 +430,39 @@ Four decisions in it, and the first is the one that shapes the rest.
   same nonce, which the parent deduplicates, exactly as the RPC path re-sends `inside_session` when it
   reopens.
 
-What is still missing is a collector: something that discards an announcement whose client is gone. A
-prompt marker cannot do it, because during a nesting the child's OSC 133 travels the same pty and is
-indistinguishable from the parent shell's own. The reliable signal is the parent shell marking its command
-frames, which is the first stage of the location work in `docs/ideas.md`, and when that lands the prefix
-key can be handed over like the detach key.
+#### Escaping a handover nobody is acting on
+
+Three presses of the detach key leave this session whatever the handover says: two go to the inner client as
+before, the second is answered with one line on the bottom row saying what the next press will do, and the
+third detaches here.
+
+It exists because a handover can outlive what it was handed to. An announcement is withdrawn by the client
+that made it, so a killed client or a dropped link leaves the parent believing one is there; a client the
+server knows about can also wedge. Either way every press went into nothing and the window could only be
+freed from another one, which is a poor answer for the failure mode of a key whose job is leaving.
+
+Three decisions in it.
+
+- **Counted, not timed.** A second press within a window would be the obvious spelling and is unsafe:
+  holding the key repeats at about 30/s once the keyboard's initial delay expires, so a stuck key would
+  detach the inner session and then close the window, which is what this whole mechanism exists to prevent.
+  The count resets whenever the nesting changes, and a press the inner client acts on *is* a change, so
+  reaching three requires a handover that is not moving.
+- **The notice is the safety, not decoration.** It is what makes the third press a deliberate answer to
+  something on screen rather than the tail of a burst, and it is why two presses stay silent: one press is
+  the ordinary way to leave a nested session, and a line on every nested detach would be noise on the common
+  path. A burst in one read counts as one press, so a paste cannot reach the escape either.
+- **The second press is still forwarded.** An inner client may be alive and merely slow, over a link with a
+  round trip of its own, and it is entitled to the key. Only the third is taken here.
+
+The notice overwrites the session's bottom row, so clearing it owes a repaint from cm's model, exactly as
+the outage notice does. See `paintBottomRow`, which both share.
+
+What is still missing is a collector: something that discards an announcement whose client is gone, so the
+escape is a fallback rather than the answer. A prompt marker cannot do it, because during a nesting the
+child's OSC 133 travels the same pty and is indistinguishable from the parent shell's own. The reliable
+signal is the parent shell marking its command frames, which is the first stage of the location work in
+`docs/ideas.md`.
 
 Metadata attribution is deliberately *not* frozen for an announced client, unlike a known one. The
 reasoning for freezing applies, but the derived values are the only thing a local consumer has for a
