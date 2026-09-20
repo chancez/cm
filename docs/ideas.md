@@ -452,11 +452,26 @@ The shape, in three stages that are worth deciding separately:
    server restart loses it, and a session whose ssh is still running comes back reporting no location until
    the next command. Persisting it wants care rather than plumbing, since a stored frame describes a command
    that may have exited with the previous server.
-3. *Optional remote participation.* Needed only for ssh chains, where the second hop is made from a shell
-   cm's integration is dormant in: `zsh.sh` gates on `CM_SESSION`, which does not cross ssh. A distinct
-   variable should carry it rather than forwarding `CM_SESSION`, which is a session *reference* a remote
-   shell cannot act on -- the same class of mistake as a `CM_` variable binding itself to a flag. Something
-   like `CM_REPORTS=1`, gating the announcing half only.
+3. *Optional remote participation.* Narrower than this entry first claimed, and the claim is worth
+   correcting because it was the reason to think stages 1 and 2 were blocked on it.
+
+   The original wording said cm's integration is dormant on the far side of an ssh because `zsh.sh` gates on
+   `CM_SESSION`, which does not cross. That is not the case for the hop that matters. A shell in a session
+   *hosted by the remote server* has `CM_SESSION`, exported by the shim on that host for the session it owns
+   (`internal/shim/session.go`), and it is actionable there: cm commands inside it talk to that server. So
+   its frames fire today and arrive through the same pty, stacking above the ssh frame, which is what makes
+   an ssh chain read as a path.
+
+   What genuinely has no integration is a shell reached by a *plain* ssh, which is not a cm session at all.
+   Enabling one there needs a signal that crosses ssh, and it should be a distinct variable rather than a
+   forwarded `CM_SESSION`, which is a session reference a remote shell cannot act on -- the same class of
+   mistake as a `CM_` variable binding itself to a flag. Something like `CM_REPORTS=1`, gating the announcing
+   half only.
+
+   Worth being clear about what that would buy, since it is less than it sounds. Such a shell hosts no cm
+   client, so the collector does not need it: a nesting is announced by a *client*, and the frame that
+   collects one belongs to the shell where the ssh was typed. What it would add is depth in the location for
+   a bare remote shell, which is a reporting nicety rather than a correctness fix.
 
 *Why a stack is tractable here, unlike the OSC 133 version.* There is one pty and one pump goroutine feeding
 the trackers chunk by chunk, so announcements from any depth arrive in a total order. Exits carry the id of
