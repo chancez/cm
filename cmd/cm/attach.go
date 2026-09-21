@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
 	"github.com/chancez/cm/internal/tags"
@@ -142,6 +143,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 				return fmt.Errorf("overlay.selected: %w", err)
 			}
 
+			overlayKeys, _ := cfg.Keymap(keymap.Overlay)
+
 			// Taken before anything reads the environment, because Env below forwards this process's
 			// whole environment to a session this call creates. See takeResumeFrom.
 			resumeFrom := takeResumeFrom(os.Getpid())
@@ -163,6 +166,10 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Command:   argsAfterDash(cmd, args),
 				DetachKey: detachKey,
 				PrefixKey: prefixKey,
+				// What each key means inside the overlay. Problems are not fatal and are not printed here
+				// either: a client is what holds someone's terminal, and `cm keys` is the command that
+				// reports them. See keymap.Problem.
+				Keys: overlayKeys,
 				// How it is drawn, from [overlay] in the config file.
 				BarStyle:      barStyle,
 				BodyStyle:     bodyStyle,

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/capability"
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -133,6 +134,9 @@ type Options struct {
 	// PrefixKey is the key that opens the overlay. The zero value intercepts nothing, so a caller that
 	// does not want an overlay gets none: see KeySpec.live.
 	PrefixKey KeySpec
+	// Keys is what each key means inside the overlay, from the config file. The zero value means the
+	// built-in defaults, which is what every caller that has no config to read wants.
+	Keys keymap.Map
 
 	// BarStyle, BodyStyle and SelectedStyle are how the overlay's three regions are drawn. Empty means the
 	// default. See ParseStyle for why these are configurable at all.
@@ -909,6 +913,13 @@ func runSession(
 		detachKey, _ = ParseDetachKey(DefaultDetachKey)
 	}
 
+	// Defaulted here rather than at each use, so the overlay never has to check: a Map with nothing in it
+	// would silently bind no keys, and the caller that forgot to pass one is a test rather than a user.
+	keys := opts.Keys
+	if !keys.Bound(keymap.OverlayHelp) {
+		keys, _ = keymap.Build(keymap.Overlay, nil)
+	}
+
 	ov := &overlay{
 		// Through the screen, so a row cannot land inside a half-written sequence. It builds each block
 		// with one write, so a paint is one injection.
@@ -919,6 +930,7 @@ func runSession(
 		prefix:   opts.PrefixKey,
 		detach:   detachKey,
 		session:  result.Session,
+		keys:     keys,
 		// Where l goes. Held by the loop, so it survives the reconnect that rebuilds this overlay.
 		lastSession: lastRef,
 		canPick:     opts.OpenPicker != nil,

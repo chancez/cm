@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chancez/cm/internal/ansi"
+	"github.com/chancez/cm/internal/keymap"
 )
 
 // overlay is cm's own UI inside an attached session: a few rows at the bottom of the terminal, opened by
@@ -41,6 +42,10 @@ type overlay struct {
 	// readOnly reports that this client's input is dropped by the server, so nothing here may claim to
 	// have sent anything to the session.
 	readOnly bool
+
+	// keys is what every keypress means in here, from the defaults and the config file. See
+	// internal/keymap.
+	keys keymap.Map
 
 	// prefix and detach are named in the help line and matched while armed, where pressing either a
 	// second time forwards it to the program. That is the only way to reach a key cm intercepts: ctrl-\
@@ -268,12 +273,18 @@ func (o *overlay) feed(data []byte) overlayResponse {
 			// A key release or a repeat of one cm handled, which a terminal reporting event types sends
 			// after every press. Dropping these is what stops the overlay closing the instant the prefix
 			// key is let go.
-		case keyEscape:
-			o.back(&resp)
-		case keyCancel:
-			o.close(&resp)
 		default:
-			o.handleKey(key, &resp)
+			// Escape and ctrl-c first, and not through the keymap: they are the way out, and a config that
+			// moved both elsewhere would leave a program with no documented exit from the overlay. Every
+			// other key is whatever the keymap says.
+			switch {
+			case key.Press.Named == "escape":
+				o.back(&resp)
+			case key.Press.Ctrl == 'c':
+				o.close(&resp)
+			default:
+				o.handleKey(key, &resp)
+			}
 		}
 
 		if o.mode == overlayClosed {
@@ -336,42 +347,44 @@ func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 	}
 }
 
-// armedKey is the action table, and it is deliberately small.
+// armedKey carries out the action a keypress is bound to.
 //
-// Every entry either cannot be done by a command (detaching, forwarding a key) or is a shortcut into the
-// prompt for one that can. Nothing here reimplements a cm command: `cm bind` and `cm switch` already
-// resolve the session from CM_SESSION, and the runner sets it, so the overlay can stay ignorant of what
-// they do.
+// A lookup rather than a switch on runes, because which key means what is now internal/keymap's and the
+// config file's business. What stays here is the doing: every action either cannot be done by a command
+// (detaching, forwarding a key) or is a shortcut into the prompt for one that can. Nothing here
+// reimplements a cm command, since `cm bind` and `cm switch` already resolve the session from CM_SESSION.
 func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
-	if key.Kind != keyRune {
-		// Enter or backspace while armed. Nothing to do with either, and closing is the honest answer:
-		// leaving the overlay armed would put the *next* keystroke into cm long after the user moved on.
-		o.close(resp)
+	action, bound := o.keys.Lookup(key.Press)
+	if !bound {
+		// An unbound key closes rather than waiting for a second guess, which is what a prefix armed
+		// forever would be: the next keystroke would go to cm long after the user forgot they pressed it.
+		o.status = "no action for " + pressName(key.Press)
+		o.mode = overlayResult
 		return
 	}
 
 	// Any action taken from the help screen leaves the help behind, which is what makes reading about a key
 	// and then pressing it work.
-	if key.Rune != '?' {
+	if action != keymap.OverlayHelp {
 		o.helping = false
 		o.body = nil
 	}
 
-	switch key.Rune {
-	case 'd':
+	switch action {
+	case keymap.OverlayDetach:
 		resp.Detach = true
 		o.close(resp)
-	case 's':
+	case keymap.OverlaySwitch:
 		// A chooser rather than a prompt. Typing the name of a session you can see listed is the friction
 		// that made the first version of this unpleasant to use.
 		o.startPick("switch to", pickSwitch, resp)
-	case 'k':
+	case keymap.OverlayKill:
 		o.startPick("kill", pickKill, resp)
-	case 'n':
+	case keymap.OverlayNext:
 		o.startMove(moveNext, resp)
-	case 'p':
+	case keymap.OverlayPrevious:
 		o.startMove(movePrev, resp)
-	case 'l':
+	case keymap.OverlayLast:
 		// Said rather than ignored. A key that does nothing on the first session of a window reads as the
 		// overlay being broken, and this is the one action whose availability depends on what the user has
 		// already done.
@@ -381,13 +394,13 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 			return
 		}
 		o.startMove(moveLast, resp)
-	case 'b':
+	case keymap.OverlayName:
 		// A name is new text, so this one really does need typing. Only the name, though: the verb is the
 		// keypress.
 		o.mode = overlayPrompt
 		o.prompt = promptName
 		o.line = o.line[:0]
-	case 't':
+	case keymap.OverlayPicker:
 		if !o.canPick {
 			o.status = "this client cannot open the picker"
 			o.mode = overlayResult
@@ -397,16 +410,16 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		// Closed rather than left up: the picker takes the whole screen, so the bar has nowhere to be, and
 		// what comes back is either a switch or a repaint.
 		o.close(resp)
-	case ':':
+	case keymap.OverlayCommand:
 		o.mode = overlayPrompt
 		o.prompt = promptCommand
 		o.line = o.line[:0]
-	case 'q':
+	case keymap.OverlaySendDetach:
 		// A mnemonic for the detach key, which on the default is ctrl-\ and so SIGQUIT. Same effect as
 		// pressing the detach key while armed, and worth having twice: this one is discoverable from the
 		// help line, and the other is the tmux habit.
 		o.forwardKey(o.detach, resp)
-	case '?':
+	case keymap.OverlayHelp:
 		if o.helping {
 			// A toggle, as it is in `cm tui`: the key that opened the help closes it. Escape does too, but a
 			// reader who opened the help with ? reaches for ? to put it away.
@@ -415,35 +428,100 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 			o.status = ""
 			return
 		}
-		o.status = fmt.Sprintf("help -- ? or escape goes back, %s twice sends it to the program",
-			o.prefix.Name)
-		o.body = []string{
-			"s  switch session    b  name this session",
-			"n  next session      p  previous session",
-			"l  last visited session",
-			"k  kill a session    d  detach",
-			// The way back is named here because it is the thing a reader cannot guess: the picker takes the
-			// whole screen and this bar is gone by then, so its own notice is the only other place it appears.
-			"t  the full picker; " + o.prefix.Name + " there comes back",
-			"q  send " + o.detach.Name + " to the program",
-			":  any cm command    ctrl-c  leave the overlay",
-			"in a list: type to filter, ctrl-j/ctrl-k to move, enter to choose",
-		}
+		o.status = fmt.Sprintf("help -- %s or escape goes back, %s twice sends it to the program",
+			o.keyFor(keymap.OverlayHelp), o.prefix.Name)
+		o.body = o.helpBody()
 		// Still armed, so every key above works from here. Only escape is special, and it returns to the
 		// hints rather than closing.
 		o.helping = true
 	default:
-		// An unbound key closes rather than waiting for a second guess, which is what a prefix armed
-		// forever would be: the next keystroke would go to cm long after the user forgot they pressed it.
-		o.status = fmt.Sprintf("no action for %q", string(key.Rune))
+		// A key bound to an action the *chooser* owns, pressed while there is no chooser: up, down, choose,
+		// erase, clear-filter. Closing is the same answer an unbound key gets, since neither means anything
+		// here and leaving the overlay armed is what must not happen.
+		o.status = "no action for " + pressName(key.Press) + " here"
 		o.mode = overlayResult
 	}
 }
 
+// pressName describes a keypress for a message, in the spelling a config file would use.
+func pressName(p keymap.Press) string {
+	switch {
+	case p.Named != "":
+		return p.Named
+	case p.Ctrl != 0:
+		return "ctrl-" + string(p.Ctrl)
+	case p.Rune != 0:
+		return string(p.Rune)
+	}
+	return "that key"
+}
+
+// keyFor is the key to show for an action, or empty when it has none.
+func (o *overlay) keyFor(action keymap.Action) string { return o.keys.First(action) }
+
+// helpBody is the help screen, built from the bindings rather than written out.
+//
+// Generated because a rebinding that left the help describing the old keys would be a documentation bug
+// that a reader blames on cm, and this help is the only place most of these keys are discoverable. Two
+// columns where the labels are short, one where they are not, so the block stays inside the width the
+// overlay is capped to.
+func (o *overlay) helpBody() []string {
+	pairs := [][2]keymap.Action{
+		{keymap.OverlaySwitch, keymap.OverlayName},
+		{keymap.OverlayNext, keymap.OverlayPrevious},
+		{keymap.OverlayLast, keymap.OverlayKill},
+		{keymap.OverlayDetach, keymap.OverlayCommand},
+	}
+	var lines []string
+	for _, pair := range pairs {
+		left, right := o.helpEntry(pair[0]), o.helpEntry(pair[1])
+		switch {
+		case left == "" && right == "":
+		case right == "":
+			lines = append(lines, left)
+		case left == "":
+			lines = append(lines, right)
+		default:
+			lines = append(lines, fmt.Sprintf("%-20s %s", left, right))
+		}
+	}
+	// The way back from the picker is named here because it is the thing a reader cannot guess: the picker
+	// takes the whole screen and this bar is gone by then, so its own notice is the only other place it
+	// appears.
+	if entry := o.helpEntry(keymap.OverlayPicker); entry != "" {
+		lines = append(lines, entry+"; "+o.prefix.Name+" there comes back")
+	}
+	if entry := o.helpEntry(keymap.OverlaySendDetach); entry != "" {
+		lines = append(lines, fmt.Sprintf("%s  send %s to the program",
+			o.keyFor(keymap.OverlaySendDetach), o.detach.Name))
+	}
+	lines = append(lines,
+		fmt.Sprintf("%s  help    ctrl-c  leave the overlay", o.keyFor(keymap.OverlayHelp)),
+		fmt.Sprintf("in a list: type to filter, %s/%s to move, %s to choose",
+			o.keyFor(keymap.OverlayDown), o.keyFor(keymap.OverlayUp), o.keyFor(keymap.OverlayChoose)))
+	return lines
+}
+
+// helpEntry is one "key  label" pair, or empty when the action has no key.
+//
+// Empty rather than a blank key, since an action someone unbound with an empty list is one they decided
+// not to have: listing it with nothing in front of it would read as cm having lost the key.
+func (o *overlay) helpEntry(action keymap.Action) string {
+	key := o.keyFor(action)
+	if key == "" {
+		return ""
+	}
+	return key + "  " + o.keys.Label(action)
+}
+
 // promptKey edits the command line.
+//
+// Enter, backspace and the clear-the-line key come from the keymap, since they are the chooser's keys too
+// and a user who moved one moved it everywhere in the overlay. Every other printable key is text.
 func (o *overlay) promptKey(key overlayKey, resp *overlayResponse) {
-	switch key.Kind {
-	case keyEnter:
+	action, _ := o.keys.Lookup(key.Press)
+	switch action {
+	case keymap.OverlayChoose:
 		args, err := o.promptArgs()
 		switch {
 		case err != nil:
@@ -457,14 +535,16 @@ func (o *overlay) promptKey(key overlayKey, resp *overlayResponse) {
 			o.body = nil
 			o.mode = overlayRunning
 		}
-	case keyBackspace:
+	case keymap.OverlayErase:
 		if len(o.line) > 0 {
 			o.line = o.line[:len(o.line)-1]
 		}
-	case keyKillLine:
+	case keymap.OverlayClearFilter:
 		o.line = o.line[:0]
 	default:
-		o.line = append(o.line, key.Rune)
+		if key.Press.Rune != 0 {
+			o.line = append(o.line, key.Press.Rune)
+		}
 	}
 }
 
@@ -636,7 +716,8 @@ func (o *overlay) moveTarget(kind moveKind, items []pickItem) (pickItem, bool) {
 
 // pickKey applies one keypress to the chooser and acts on a choice.
 func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
-	switch o.pick.key(key) {
+	action, _ := o.keys.Lookup(key.Press)
+	switch o.pick.key(action, key.Press) {
 	case pickedItem:
 		it, ok := o.pick.selected()
 		if !ok {
@@ -669,7 +750,7 @@ func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 // Only y approves. Any other key abandons, rather than only escape: the safe answer has to be the easy one,
 // and a user who reaches this screen by accident presses something arbitrary to get out of it.
 func (o *overlay) confirmKey(key overlayKey, resp *overlayResponse) {
-	if key.Kind == keyRune && (key.Rune == 'y' || key.Rune == 'Y') {
+	if key.Press.Rune == 'y' || key.Press.Rune == 'Y' {
 		resp.Run = o.confirm
 		o.status = "running " + strings.Join(o.confirm, " ")
 		o.confirm, o.confirmWhat = nil, ""
@@ -801,9 +882,58 @@ func (o *overlay) bar() string {
 	case o.mode == overlayPrompt:
 		return fmt.Sprintf(" cm %s : %s", label, string(o.line))
 	default:
-		return fmt.Sprintf(" cm %s | s switch  b name  k kill  t picker  d detach  q %s  ? help ",
-			label, o.detach.Name)
+		return fmt.Sprintf(" cm %s | %s ", label, o.hints())
 	}
+}
+
+// hints is the short list of keys on the bar.
+//
+// Built from the bindings rather than written out, so a rebinding cannot leave the bar naming keys nobody
+// has. Six actions rather than all of them, because the bar is one row that also carries the session name
+// and is clipped to the width: the rest are behind the help key, which is on it.
+//
+// An unbound action is left out rather than shown with a blank, which is what makes an empty list in the
+// config read as a decision rather than as a missing key.
+func (o *overlay) hints() string {
+	shown := []keymap.Action{
+		keymap.OverlaySwitch,
+		keymap.OverlayName,
+		keymap.OverlayKill,
+		keymap.OverlayPicker,
+		keymap.OverlayDetach,
+	}
+	var parts []string
+	for _, action := range shown {
+		if key := o.keyFor(action); key != "" {
+			parts = append(parts, key+" "+shortLabel(action))
+		}
+	}
+	// Named with the key it sends rather than with its label, since "q ctrl-\" is what a reader needs: the
+	// action is "send the detach key to the program", and the interesting half is which key that is.
+	if key := o.keyFor(keymap.OverlaySendDetach); key != "" {
+		parts = append(parts, key+" "+o.detach.Name)
+	}
+	if key := o.keyFor(keymap.OverlayHelp); key != "" {
+		parts = append(parts, key+" help")
+	}
+	return strings.Join(parts, "  ")
+}
+
+// shortLabel is a one-word name for the bar, where the help's fuller label would not fit.
+func shortLabel(action keymap.Action) string {
+	switch action {
+	case keymap.OverlaySwitch:
+		return "switch"
+	case keymap.OverlayName:
+		return "name"
+	case keymap.OverlayKill:
+		return "kill"
+	case keymap.OverlayPicker:
+		return "picker"
+	case keymap.OverlayDetach:
+		return "detach"
+	}
+	return string(action)
 }
 
 // paint puts the block on screen.

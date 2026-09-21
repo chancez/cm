@@ -7,11 +7,27 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/chancez/cm/internal/keymap"
 )
 
 // newTestOverlay builds an overlay painting into a buffer, with the default keys.
 func newTestOverlay(t *testing.T, rows, cols uint16) (*overlay, *bytes.Buffer) {
 	t.Helper()
+	return newTestOverlayWithKeys(t, rows, cols, nil)
+}
+
+// newTestOverlayWithKeys is the same with a configured keymap, for the cases about rebinding.
+func newTestOverlayWithKeys(
+	t *testing.T, rows, cols uint16, bindings map[string][]string,
+) (*overlay, *bytes.Buffer) {
+	t.Helper()
+	keys, problems := keymap.Build(keymap.Overlay, bindings)
+	if len(problems) != 0 && bindings == nil {
+		// The defaults must be clean. A problem here would mean every case below is testing something other
+		// than what it says.
+		t.Fatalf("default keymap has problems: %v", problems)
+	}
 	detach, err := ParseDetachKey(DefaultDetachKey)
 	if err != nil {
 		t.Fatalf("ParseDetachKey() error = %v", err)
@@ -28,6 +44,7 @@ func newTestOverlay(t *testing.T, rows, cols uint16) (*overlay, *bytes.Buffer) {
 		prefix:  prefix,
 		detach:  detach,
 		session: "work",
+		keys:    keys,
 		log:     slog.New(discardLogHandler{}),
 
 		// The same defaults runSession resolves, so a test sees what a terminal would.

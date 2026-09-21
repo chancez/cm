@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -126,35 +127,40 @@ const (
 // key applies one keypress.
 // Escape and ctrl-c never reach here: the overlay handles going back and closing above this, so a list does
 // not have to know which of the two it is in the middle of.
-func (p *picker) key(k overlayKey) pickOutcome {
-	switch k.Kind {
-	case keyEnter:
+func (p *picker) key(action keymap.Action, press keymap.Press) pickOutcome {
+	switch action {
+	case keymap.OverlayChoose:
 		if _, ok := p.selected(); !ok {
 			// Nothing to choose, so enter is not a choice. Silently ignored rather than closing: the user
 			// has over-narrowed the filter and wants to correct it, not to start again.
 			return pickedNothing
 		}
 		return pickedItem
-	case keyUp:
+	case keymap.OverlayUp:
 		if p.cursor > 0 {
 			p.cursor--
 		}
-	case keyDown:
+	case keymap.OverlayDown:
 		if n := len(p.matches()); p.cursor < n-1 {
 			p.cursor++
 		}
-	case keyBackspace:
+	case keymap.OverlayErase:
 		if n := len(p.filter); n > 0 {
 			p.filter = p.filter[:n-1]
 			p.cursor = 0
 		}
-	case keyKillLine:
+	case keymap.OverlayClearFilter:
 		p.filter = p.filter[:0]
 		p.cursor = 0
-	case keyRune:
-		p.filter = append(p.filter, k.Rune)
-		// Back to the top, since the old position means nothing in a new list.
-		p.cursor = 0
+	default:
+		// Anything else that is a character filters. After the lookup rather than before it, so a user who
+		// binds a printable key to movement gets movement: their config, their trade, and the default keys
+		// are all control combinations for exactly this reason.
+		if press.Rune != 0 {
+			p.filter = append(p.filter, press.Rune)
+			// Back to the top, since the old position means nothing in a new list.
+			p.cursor = 0
+		}
 	}
 	return pickedNothing
 }

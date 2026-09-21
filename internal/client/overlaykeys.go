@@ -5,42 +5,88 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/chancez/cm/internal/keymap"
 )
 
-// overlayKey is one keypress the overlay understands.
+// overlayKey is one piece of input the overlay has classified.
 type overlayKey struct {
-	// Rune is the character typed, set when Kind is keyRune.
-	Rune rune
-	// Kind names a key that is not a character.
+	// Press names the key for the keymap, which is what decides the action. Zero unless Kind is keyPress.
+	//
+	// Identity rather than meaning, and that inversion is the point of this type. This decoder used to
+	// answer "down" for ctrl-j, so the binding lived in the byte parsing and nothing else could have a
+	// different opinion. It now answers "ctrl-j", and internal/keymap says what ctrl-j does.
+	Press keymap.Press
+	// Kind is what to do with it at all: bind it, drop it, or forward it to the session.
 	Kind overlayKeyKind
 }
 
 // overlayKeyKind classifies what one decoded piece of input is.
+//
+// Three cases, and the split between the last two is the load-bearing one: see decodeKey.
 type overlayKeyKind int
 
 const (
-	// keyRune is a character, which the prompt types and the action table looks up.
-	keyRune overlayKeyKind = iota
-	keyEnter
-	keyBackspace
-	// keyKillLine is ctrl-u, which clears the line, as readline does.
-	keyKillLine
-	// keyUp and keyDown move a selection: the arrows, and ctrl-p and ctrl-n.
-	//
-	// Both spellings because the picker filters on every printable key, so j and k cannot also mean
-	// movement. That is fzf's arrangement and the reason for it is the same.
-	keyUp
-	keyDown
-	// keyEscape goes back one level: out of a list, a prompt or the help, and out of the overlay from the
-	// top. Distinct from keyCancel because they now mean different things.
-	keyEscape
-	// keyCancel leaves the overlay outright, whatever is on screen. ctrl-c.
-	keyCancel
-	// keyIgnore is input the overlay drops. A key release, a repeat, or a keypress it does not bind.
+	// keyPress is a keypress, whose Press the keymap can look up.
+	keyPress overlayKeyKind = iota
+	// keyIgnore is input the overlay drops. A key release, a repeat, or a keypress it cannot name.
 	keyIgnore
 	// keyPassThrough is input the overlay forwards to the session untouched.
 	keyPassThrough
 )
+
+// press builds a keypress of a named key, and ctrlPress one of a control combination.
+//
+// Both are set for the keys that are both: tab is ctrl-i, enter is ctrl-m, escape is ctrl-[ and
+// backspace is ctrl-?. A terminal sends one byte for each pair, so a binding written either way has to
+// match it, and a chord written the other way would otherwise look like a key the terminal never sends.
+func press(name string, ctrl rune) overlayKey {
+	return overlayKey{Kind: keyPress, Press: keymap.Press{Named: name, Ctrl: ctrl}}
+}
+
+func ctrlPress(c rune) overlayKey {
+	return overlayKey{Kind: keyPress, Press: keymap.Press{Ctrl: c}}
+}
+
+func runePress(r rune) overlayKey {
+	return overlayKey{Kind: keyPress, Press: keymap.Press{Rune: r}}
+}
+
+// controlByteKey names the press a bare control byte is.
+//
+// Every one of them is named rather than only the few the overlay used to bind, because which of them
+// mean anything is now the keymap's business: a byte dropped here could not be bound at all, whatever
+// the config file said. Dropping is still the answer for anything that is not a control code of a key
+// somebody can press.
+func controlByteKey(b byte) (overlayKey, bool) {
+	switch {
+	case b == '\r':
+		return press("enter", 'm'), true
+	case b == '\n':
+		// ctrl-j, which is LF. fzf binds it to "down" and so does cm's default keymap, but that is now a
+		// default rather than something decided here.
+		return press("newline", 'j'), true
+	case b == '\t':
+		return press("tab", 'i'), true
+	case b == 0x7f, b == 0x08:
+		// Both spellings of backspace, since terminals disagree about which they send.
+		return press("backspace", '?'), true
+	case b == 0x00:
+		// NUL, which is what a terminal sends for ctrl-space where it sends anything at all.
+		return ctrlPress(' '), true
+	case b >= 0x01 && b <= 0x1a:
+		return ctrlPress(rune('a' + b - 1)), true
+	case b == 0x1c:
+		return ctrlPress('\\'), true
+	case b == 0x1d:
+		return ctrlPress(']'), true
+	case b == 0x1e:
+		return ctrlPress('^'), true
+	case b == 0x1f:
+		return ctrlPress('_'), true
+	}
+	return overlayKey{Kind: keyIgnore}, false
+}
 
 // decodeKey reads one keypress off the front of p and reports how many bytes it took.
 //
@@ -51,6 +97,12 @@ const (
 // expensive shape of it is a program blocked forever on an answer something else consumed. So a cursor
 // position report, an OSC colour reply, a graphics response, a focus event and a mouse report all go to
 // the session, and only what is unmistakably a keypress is dropped.
+//
+// Naming a key and binding it are different things, and only the naming happens here. Every form below
+// is classified exactly as it was before the keymap existed; what changed is that a keypress arrives at
+// the overlay as itself rather than as a meaning. One consequence is worth stating because it looks like
+// an omission: f3 cannot be bound in the overlay. Its CSI form is CSI R, which is also a cursor position
+// report, and the classification wins -- a bound f3 would eat an answer a program is blocked on.
 //
 // Known cost: a sequence split across two reads. The overlay does not hold bytes back the way inputGate
 // does, so an escape arriving alone closes the overlay and the tail of that sequence is forwarded
@@ -64,47 +116,30 @@ func decodeKey(p []byte) (overlayKey, int) {
 	switch b := p[0]; {
 	case b == 0x1b:
 		return decodeEscape(p)
-	case b == '\r':
-		return overlayKey{Kind: keyEnter}, 1
-	case b == '\n':
-		// ctrl-j, which is 0x0a and would otherwise be a second spelling of enter. fzf binds it to "down"
-		// and the muscle memory that comes with it is what this overlay is being measured against, so it
-		// moves rather than submits. Return itself is CR, which is what a terminal sends for it.
-		return overlayKey{Kind: keyDown}, 1
-	case b == 0x0b:
-		// ctrl-k, up, for the same reason.
-		return overlayKey{Kind: keyUp}, 1
-	case b == 0x7f || b == 0x08:
-		return overlayKey{Kind: keyBackspace}, 1
-	case b == 0x15:
-		return overlayKey{Kind: keyKillLine}, 1
-	case b == 0x10:
-		// ctrl-p and ctrl-n, readline's spelling of the same movement.
-		return overlayKey{Kind: keyUp}, 1
-	case b == 0x0e:
-		return overlayKey{Kind: keyDown}, 1
-	case b == 0x03:
-		return overlayKey{Kind: keyCancel}, 1
-	case b < 0x20:
-		// Any other control byte is dropped rather than forwarded. Nothing a terminal sends as an *answer*
-		// is a bare control byte, so the rule above does not apply, and forwarding a stray ctrl-g into a
-		// program while the user is typing at cm would be worse than losing it.
-		return overlayKey{Kind: keyIgnore}, 1
+	case b < 0x20 || b == 0x7f:
+		key, ok := controlByteKey(b)
+		if !ok {
+			// Dropped rather than forwarded. Nothing a terminal sends as an *answer* is a bare control byte,
+			// so the forwarding rule does not apply, and sending a stray control character into a program
+			// while the user is typing at cm would be worse than losing it.
+			return overlayKey{Kind: keyIgnore}, 1
+		}
+		return key, 1
 	default:
 		r, size := utf8.DecodeRune(p)
 		if r == utf8.RuneError && size <= 1 {
 			return overlayKey{Kind: keyIgnore}, 1
 		}
-		return overlayKey{Rune: r}, size
+		return runePress(r), size
 	}
 }
 
 // decodeEscape classifies a sequence starting with ESC.
 func decodeEscape(p []byte) (overlayKey, int) {
 	if len(p) == 1 {
-		// Escape on its own steps back, which is what a prompt is expected to do. See decodeKey on the split
-		// sequence this cannot tell apart from a real escape.
-		return overlayKey{Kind: keyEscape}, 1
+		// Escape on its own, which the overlay treats as a step back whatever the keymap says. See decodeKey
+		// on the split sequence this cannot tell apart from a real escape.
+		return press("escape", '['), 1
 	}
 
 	switch p[1] {
@@ -116,22 +151,43 @@ func decodeEscape(p []byte) (overlayKey, int) {
 		// including the terminator, since the program is blocked waiting for it.
 		return overlayKey{Kind: keyPassThrough}, stringControlLen(p)
 	case 'O':
-		// SS3, which is how an application-mode terminal sends the arrow and F1-F4 keys. Up and down are
-		// bound; the rest are keypresses nothing here wants.
+		// SS3, which is how an application-mode terminal sends the arrow and F1-F4 keys.
 		if len(p) >= 3 {
-			switch p[2] {
-			case 'A':
-				return overlayKey{Kind: keyUp}, 3
-			case 'B':
-				return overlayKey{Kind: keyDown}, 3
+			if name, ok := ss3Keys[p[2]]; ok {
+				return press(name, 0), 3
 			}
 			return overlayKey{Kind: keyIgnore}, 3
 		}
 		return overlayKey{Kind: keyPassThrough}, len(p)
 	default:
-		// ESC followed by a character is alt-<key> in most terminals. Not bound, and not an answer.
+		// ESC followed by a character is alt-<key> in most terminals. Not bound -- see keymap.ParseChord on
+		// why alt cannot be -- and not an answer.
 		return overlayKey{Kind: keyIgnore}, 2
 	}
+}
+
+// ss3Keys names the keys an application-mode terminal sends as SS3.
+var ss3Keys = map[byte]string{
+	'A': "up", 'B': "down", 'C': "right", 'D': "left",
+	'H': "home", 'F': "end",
+	'P': "f1", 'Q': "f2", 'R': "f3", 'S': "f4",
+}
+
+// csiLetterKeys names the keys whose CSI form ends in a letter.
+//
+// R is deliberately absent, and this is the one place where a key cannot be bound because of what else
+// shares its encoding: CSI R is also a cursor position report, which a program may be blocked on. F3
+// therefore reaches the session rather than the overlay. Answering a query beats binding a key.
+var csiLetterKeys = map[byte]string{
+	'A': "up", 'B': "down", 'C': "right", 'D': "left",
+	'H': "home", 'F': "end",
+	'P': "f1", 'Q': "f2", 'S': "f4",
+}
+
+// csiTildeKeys names the keys whose CSI form is a number and a tilde.
+var csiTildeKeys = map[int]string{
+	2: "insert", 3: "delete", 5: "pageup", 6: "pagedown",
+	15: "f5", 17: "f6", 18: "f7", 19: "f8", 20: "f9", 21: "f10", 23: "f11", 24: "f12",
 }
 
 // decodeCSI classifies a CSI sequence, which is where both keypresses and answers live.
@@ -151,29 +207,52 @@ func decodeCSI(p []byte) (overlayKey, int) {
 	params := string(p[2:final])
 	n := final + 1
 
-	switch p[final] {
-	case 'u':
+	switch {
+	case p[final] == 'u':
 		// The kitty keyboard protocol, and the only encoding here that carries a *character*. Which is why
 		// this case exists at all: with report-all-keys on, a program in the session has made the terminal
 		// send even plain letters this way, and an overlay that only read bytes would answer no keys.
 		return decodeKittyKey(params), n
-	case '~':
-		// A function or editing key, and CSI 27;m;cp~ is modifyOtherKeys reporting a modified one. Both are
-		// keypresses. Bracketed paste markers arrive here too, and dropping them is what lets a paste land
-		// in the prompt as text.
-		return overlayKey{Kind: keyIgnore}, n
-	case 'A':
-		return overlayKey{Kind: keyUp}, n
-	case 'B':
-		return overlayKey{Kind: keyDown}, n
-	case 'C', 'D', 'E', 'F', 'H', 'P', 'Q', 'S':
-		// Left, right, home, end and F1-F4 in their CSI forms. Keypresses, none bound.
-		return overlayKey{Kind: keyIgnore}, n
+	case p[final] == '~':
+		return decodeTildeKey(params), n
 	default:
+		if name, ok := csiLetterKeys[p[final]]; ok {
+			return press(name, 0), n
+		}
 		// Everything else is an answer or an event the program asked for: CSI R is a cursor position
 		// report, CSI n and CSI t are replies, CSI I and CSI O are focus, CSI M and CSI m are mouse.
 		return overlayKey{Kind: keyPassThrough}, n
 	}
+}
+
+// decodeTildeKey classifies a CSI <params> ~ sequence.
+//
+// Three shapes arrive here, and all three are keypresses or paste markers rather than answers, which is
+// why this branch never forwards. A bare number is a function or editing key. CSI 27;mods;codepoint~ is
+// xterm's modifyOtherKeys reporting a modified key, and the ctrl forms of it are named for the same reason
+// the kitty ones are: a program that turned the mode on makes the terminal send the overlay's own keys
+// that way, and they stopped working under exactly the programs the overlay exists for. CSI 200~ and
+// CSI 201~ are bracketed paste, dropped so a paste lands in the prompt as text.
+func decodeTildeKey(params string) overlayKey {
+	fields := strings.Split(params, ";")
+	first, err := strconv.Atoi(strings.SplitN(fields[0], ":", 2)[0])
+	if err != nil {
+		return overlayKey{Kind: keyIgnore}
+	}
+
+	if first == 27 && len(fields) == 3 {
+		mods, _ := strconv.Atoi(strings.SplitN(fields[1], ":", 2)[0])
+		code, err := strconv.Atoi(strings.SplitN(fields[2], ":", 2)[0])
+		if err != nil || mods != 5 || code <= 0 || code > 0x10ffff {
+			return overlayKey{Kind: keyIgnore}
+		}
+		return ctrlPress(rune(code))
+	}
+
+	if name, ok := csiTildeKeys[first]; ok {
+		return press(name, 0)
+	}
+	return overlayKey{Kind: keyIgnore}
 }
 
 // decodeKittyKey turns the parameters of a CSI ... u sequence into a keypress.
@@ -210,45 +289,47 @@ func decodeKittyKey(params string) overlayKey {
 		return overlayKey{Kind: keyIgnore}
 	}
 	if mods == 5 {
-		// Ctrl. These have to be listed, because a program that turned on report-all-keys makes the terminal
-		// send even ctrl-c this way: without them the overlay's ctrl-c, ctrl-u and the fzf movement keys stop
-		// working under exactly the full-screen programs this feature exists for. The two keys cm intercepts
-		// are matched before anything is decoded, so they are not here.
-		switch code {
-		case 'j', 'n':
-			return overlayKey{Kind: keyDown}
-		case 'k', 'p':
-			return overlayKey{Kind: keyUp}
-		case 'u':
-			return overlayKey{Kind: keyKillLine}
-		case 'c':
-			return overlayKey{Kind: keyCancel}
+		// Ctrl, named rather than resolved to a meaning. These have to be decoded at all because a program
+		// that turned on report-all-keys makes the terminal send even ctrl-c this way: without them the
+		// overlay's own control keys stop working under exactly the full-screen programs this feature exists
+		// for. The two keys cm intercepts are matched before anything is decoded, so they are not here.
+		if code <= 0x7f {
+			return ctrlPress(rune(code))
 		}
 		return overlayKey{Kind: keyIgnore}
 	}
 	if mods != 1 {
-		// Any other modifier, which nothing here binds.
+		// Any other modifier, which nothing here binds: see keymap.ParseChord.
 		return overlayKey{Kind: keyIgnore}
 	}
 
 	switch code {
 	case 13:
-		return overlayKey{Kind: keyEnter}
-	case 57352:
-		// The kitty protocol's own codepoints for the arrow keys, which a terminal in that mode sends
-		// instead of the CSI A and B forms.
-		return overlayKey{Kind: keyUp}
-	case 57353:
-		return overlayKey{Kind: keyDown}
+		return press("enter", 'm')
+	case 9:
+		return press("tab", 'i')
 	case 27:
-		return overlayKey{Kind: keyEscape}
+		return press("escape", '[')
 	case 127, 8:
-		return overlayKey{Kind: keyBackspace}
+		return press("backspace", '?')
+	}
+	if name, ok := kittyFunctionalKeys[code]; ok {
+		return press(name, 0)
 	}
 	if code < 0x20 {
 		return overlayKey{Kind: keyIgnore}
 	}
-	return overlayKey{Rune: rune(code)}
+	return runePress(rune(code))
+}
+
+// kittyFunctionalKeys are the private-use codepoints the kitty protocol gives keys that have no
+// character, which a terminal in that mode sends instead of the CSI forms.
+var kittyFunctionalKeys = map[int]string{
+	57352: "up", 57353: "down", 57351: "left", 57354: "right",
+	57356: "home", 57357: "end", 57358: "pageup", 57359: "pagedown",
+	57348: "insert", 57349: "delete",
+	57364: "f1", 57365: "f2", 57366: "f3", 57367: "f4", 57368: "f5", 57369: "f6",
+	57370: "f7", 57371: "f8", 57372: "f9", 57373: "f10", 57374: "f11", 57375: "f12",
 }
 
 // stringControlLen returns the length of a string control (OSC, DCS, APC, PM, SOS) at the front of p,
