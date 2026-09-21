@@ -157,6 +157,13 @@ func (p *graphicsProbe) take(data []byte, now time.Time) (rest []byte, answered,
 			// negative answer, which is the reason the query is paired with primary DA at all: a terminal
 			// with no graphics support says nothing to `a=q`, so waiting for its silence to elapse would
 			// otherwise cost a timeout.
+			//
+			// Logged because this is cm taking a reply out of the stream, and a program inside the session
+			// can be waiting for a reply that looks exactly like it. nvim asks DA1 while quitting and logs
+			// "timed out waiting for DA1 response"; if that ever coincides with this window, this is the line
+			// that says so. The window is bounded, so a line here should be rare rather than per keystroke.
+			p.log.Debug("consumed a device attributes reply, ending the graphics probe exchange",
+				"since_ask", now.Sub(p.asked), "settled", p.settled)
 			p.gotDA = true
 			if !p.settled {
 				p.settled, answered, draws = true, true, false

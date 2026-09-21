@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/chancez/cm/internal/input"
@@ -517,8 +519,20 @@ func (s *Session) sweepRequests() {
 }
 
 // writeReplies sends replies to the pty in order.
+//
+// Each write is logged with its bytes, which is not noise: a reply going to the pty is otherwise invisible,
+// and it is bytes *typed* at whatever is reading there. Twice now an investigation has needed to know
+// whether cm answered a program's query and when, and both times the answer had to be inferred from the
+// program's behaviour rather than read. The most recent: nvim asks DA1 while quitting, logs "timed out
+// waiting for DA1 response", and a reply then appears at the shell prompt; nothing here could say whether
+// that reply was cm's, nor when it went out.
+//
+// Truncated, since a reply can be an OSC 52 clipboard payload of arbitrary size and a log line should not
+// carry a screenful of base64.
 func (s *Session) writeReplies(replies [][]byte) {
 	for _, data := range replies {
+		s.log.Debug("writing a terminal reply to the pty",
+			"session", s.label, "bytes", len(data), "reply", truncateForLog(data))
 		if err := s.Write(context.Background(), data); err != nil {
 			// A program that queried the terminal is now waiting for an answer it will never get, so this
 			// explains an otherwise inexplicable hang.
@@ -553,4 +567,24 @@ func (s *Session) now() time.Time {
 		return s.clock()
 	}
 	return time.Now()
+}
+
+// maxLoggedReply bounds how much of a reply a log line carries.
+const maxLoggedReply = 48
+
+// truncateForLog renders a reply for a log line, bounded and printable.
+//
+// Escaped without the surrounding quotes strconv.Quote adds, because the log handler quotes the value
+// itself and two layers of quoting is what the first version produced: reply="\"\\x1b[?62;22c\"".
+func truncateForLog(data []byte) string {
+	shown, extra := data, 0
+	if len(shown) > maxLoggedReply {
+		shown, extra = shown[:maxLoggedReply], len(data)-maxLoggedReply
+	}
+	q := strconv.Quote(string(shown))
+	q = q[1 : len(q)-1]
+	if extra > 0 {
+		return fmt.Sprintf("%s...+%d", q, extra)
+	}
+	return q
 }
