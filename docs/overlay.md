@@ -84,6 +84,12 @@ Four decisions in them:
   reconnect that rebuilds the overlay, and it is recorded on a switch only: a reconnect is the same session,
   and two clients attached to one session arrived from different places. Empty on the first session of a
   window, where `l` says so rather than doing nothing.
+- **A switch is this client moving, which is narrower than "the session changed".** `s`, `n`, `p`, `l`,
+  `cm switch`, and the picker's `s` all record, because each moves this client. The picker's `enter` and
+  `n` do not, and reported as surprising before it was written down: both run `cm attach` as a child, so
+  what changed is that a second client is nested inside this one, and this client is still where it was.
+  `l` has nothing to go back to because nothing left. Detaching the child returns to the same session,
+  which is the other half of the same fact.
 - **An ID, not a name.** `cm bind` can move a name onto another session between the switch and the way back.
 
 Both failure lines are said rather than swallowed: "no other session to switch to" and "the session you came

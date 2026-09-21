@@ -152,3 +152,32 @@ func TestOverlayMoveDiscardsALateAnswer(t *testing.T) {
 		t.Errorf("a list arriving after an escape = %+v, want it dropped", got)
 	}
 }
+
+// What counts as a switch, which is narrower than "the session on screen changed".
+//
+// Reported as surprising by the first person to use l: entering a session from `cm tui`, or making one
+// there, does not become the last visited session. Both run `cm attach` as a child, so what changed is that
+// a second client is nested inside this one and this client never left. The picker's `s` does record,
+// because that moves the caller.
+//
+// Pinned at this level because the distinction lives in one line of the attach loop and reads as an
+// oversight without its reason: the overlay is handed a last session only when the loop switched.
+func TestOnlyThisClientsOwnMoveIsALastSession(t *testing.T) {
+	// A client that has never switched has nothing to go back to, whatever else has happened in the window.
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	if got := o.feed([]byte("l")); !sameResponse(got, overlayResponse{}) {
+		t.Errorf("l = %+v, want nothing to do before this client has switched", got)
+	}
+	if !strings.Contains(o.status, "no session visited before") {
+		t.Errorf("status = %q, want it to say there is no history", o.status)
+	}
+
+	// And one that has switched goes back to where the switch came from, which is what the loop records.
+	o, _ = newTestOverlayWithKeys(t, 24, 80, nil)
+	o.lastSession = "@a7k2m9x4"
+	o.open()
+	if got := o.feed([]byte("l")); !sameResponse(got, overlayResponse{List: true}) {
+		t.Errorf("l = %+v, want the list a move resolves against", got)
+	}
+}

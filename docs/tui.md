@@ -191,6 +191,11 @@ as a child, and takes the terminal back when it exits. What the user chose comes
 on the child's argv (`--chosen-file`, hidden), and the client does the switch itself with the machinery it
 already has for `cm switch`.
 
+One consequence of that split, worth knowing because it surprised its first user: the overlay's `l` (last
+visited session) follows `s` and not `enter`. `s` moves the caller, so the caller records where it came
+from; `enter` and `n` attach a child, so the caller is still on the session it was on and has nothing to
+go back to. The same is true of a new session made from here.
+
 Not the Switch RPC from in here, and the reason is a race rather than taste: the server would push the
 switch to a client that is blocked waiting for this process, and the repaint that follows discards the
 stream, so the window would silently not move.
