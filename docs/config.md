@@ -29,11 +29,22 @@ scrollback_lines = 10000
 # size to whichever window reconnects first.
 resize_policy = "leader"
 
-# The key that detaches a client. "none" disables detaching by key.
-detach_key = "ctrl-\\"
+# The keys that detach a client, and the keys that open cm's overlay inside a
+# session. "none" disables either. detach_key and prefix_key are the older
+# spellings and still work; [keys] wins where a file sets both.
+[keys]
+detach = ["ctrl-\\"]
+prefix = ["ctrl-]"]
 
-# The key that opens cm's overlay inside a session. "none" disables it.
-prefix_key = "ctrl-]"
+# Every action in the overlay and in `cm tui`, by name. A list replaces that
+# action's defaults rather than adding to them, and an empty list unbinds it.
+# `cm keys` prints what is in effect, and reports anything unusable.
+[keys.overlay]
+next = ["n", "ctrl-n"]
+last = ["l"]
+
+[keys.tui]
+kill = ["x", "delete"]
 
 # How the overlay is drawn. See the prefix_key section for the grammar.
 [overlay]
@@ -174,8 +185,9 @@ run without leaving the program in the session. Accepts the same spellings as `d
 `ctrl-space`, and `none` to disable the overlay entirely. `cm attach --prefix-key` overrides it for one
 attachment.
 
-Detaching is unaffected and still takes one press of `detach_key`. Both keys are live at once, so
-`cm attach` refuses a configuration where they are the same key rather than choosing between them.
+Detaching is unaffected and still takes one press of a detach key. Every one of these keys is live at
+once, so `cm attach` refuses a configuration where a key is in both lists rather than choosing between
+them: whichever lost would be silently unreachable.
 
 Inside the overlay: `s` to switch and `k` to kill, both choosing from a filterable list rather than asking
 you to type a name (`ctrl-j`/`ctrl-k` or the arrows move, enter chooses); `b` to name this session; `d` to detach; `t` for the full `cm tui` picker; `:` for any cm command; `?` for the rest.
@@ -188,6 +200,53 @@ and tmux's `ctrl-b`, and the cheapest right-hand control code to take: `ctrl-o` 
 `ctrl-u`, `ctrl-p`, `ctrl-n` and `ctrl-l` are readline's, and `ctrl-]` costs only vim's ctags tag-jump,
 which an LSP's `gd` has largely replaced. `ctrl-space` has better ergonomics still and is spellable, but
 is not the default because not every terminal sends NUL for it. See [overlay.md](overlay.md).
+
+## [keys]
+
+Every action in the overlay and in `cm tui`, bound by name. `cm keys` prints what is in effect, which is
+also the list of action names, and exits non-zero on anything unusable.
+
+```toml
+[keys]
+detach = ["ctrl-\\", "f12"]
+prefix = ["ctrl-]"]
+
+[keys.overlay]
+next = ["n", "ctrl-n"]
+down = ["ctrl-j", "ctrl-n", "down"]
+command = []
+
+[keys.tui]
+kill = ["x", "delete"]
+```
+
+Five rules, each with a reason:
+
+- **A list replaces that action's defaults**, rather than adding to them. Adding is the friendlier default
+  right up to the moment somebody wants a default gone, at which point it is impossible. An empty list
+  unbinds, which is how a key is removed without giving it to something else.
+- **A string is accepted where a list is**, since `detach_key = "ctrl-\"` has always been one and the new
+  spelling of an old setting should not look different for no reason.
+- **Per interface, not shared.** The same verb has different keys in each: the overlay kills with `k`
+  under a program that is still drawing, the picker with `x` in a list where `x` is free. One shared table
+  would have had to pick a winner and silently change one of them.
+- **Keys are spelled as `cm send --key` spells them**: a name from the table (`enter`, `tab`, `up`, `f5`),
+  `ctrl-<key>`, or a single character, with case kept so `g` and `G` differ. `alt-` is rejected, and the
+  reason is the overlay: a terminal sends it as escape then the key, which cannot be told from the escape
+  key at a read boundary.
+- **Nothing here is fatal.** An unknown action name, a key that does not parse, and a key bound to two
+  actions are all reported by `cm keys` and `cm config`, which exit non-zero, while cm itself carries on
+  with the bindings it understood. One config file serves every build on a machine, and a typo that
+  refused to attach would take a terminal away over a key nobody pressed. See "unknown settings" above.
+
+Two keys cannot be moved. `ctrl-c` leaves the overlay and quits the picker, and `escape` steps back a
+level and clears the picker's filter: a config that moved both elsewhere would leave a full-screen program
+with no documented way out. One key cannot be bound in the overlay at all: `f3` arrives as `CSI R`, which
+is also a cursor position report, and answering a program that is blocked on one beats binding a key.
+
+A collision inside one interface is resolved by the order `cm keys` prints, earlier winning, and compared
+by the bytes a terminal sends rather than by name. That matters for the pairs that look distinct and are
+not: `tab` is `ctrl-i`, `enter` is `ctrl-m`, `escape` is `ctrl-[`, `backspace` is `ctrl-?`.
 
 ### overlay
 

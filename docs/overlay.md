@@ -11,7 +11,8 @@ leaving nvim or Claude Code, or opening another window and looking the session u
 people actually want at that moment -- `bind`, `switch`, `tag` -- are the ones whose argument is "the
 session I am looking at".
 
-Keys, all configurable through `prefix_key`:
+Keys. Every one of them is configurable: `[keys.overlay]` in the config file binds them by action name,
+an action can have several keys, and `cm keys` prints what is in effect. The defaults:
 
 ```
 ctrl-]        open
@@ -132,9 +133,29 @@ formatted by hand: the label column is padded to the widest label *in view*, and
 from the *left*, because sessions in one project share every leading segment and a row cut from the right
 shows the same prefix on every line.
 
-`detach_key` is untouched: detaching is still one press of `ctrl-\`. The two keys are live at once, and
+`detach_key` is untouched: detaching is still one press of `ctrl-\`, and both it and the prefix take a
+list now, so either can have an alternate on a keyboard where the default is awkward. The two keys are live at once, and
 `cm attach` refuses a configuration where they are the same key rather than picking a winner, since
 whichever lost would be silently unreachable.
+
+## The keys are a table, not a switch
+
+They were a switch on runes here and a set of meanings decided while decoding bytes: `decodeKey` answered
+"down" for ctrl-j, so the binding lived in the byte parsing and nothing else could have an opinion. The
+decoder now answers "ctrl-j" and internal/keymap says what that means, which is what makes every key
+configurable. Three consequences worth knowing:
+
+- **The bar and the help screen are generated from the bindings.** A rebinding that left them naming the
+  old keys would be a documentation bug a reader blames on cm, and this help is the only place most of
+  these keys are discoverable. An unbound action is left out rather than shown with a blank key.
+- **The set of keys the overlay can name grew**, because naming and binding are now different things:
+  every control byte rather than the seven it bound, the editing and function keys in their CSI forms, and
+  ctrl combinations under xterm's modifyOtherKeys, which were dropped before and so could not have been
+  bound at all.
+- **The classification did not change.** A sequence that could be an answer to a program's query is still
+  forwarded and a sequence that can only be a keypress is still dropped, which is the rule this file's
+  "Reading input while holding the keyboard" section is about. The one place it wins over a binding is
+  `f3`: its CSI form is `CSI R`, which is also a cursor position report.
 
 ## SIGQUIT was unreachable, and this gives it back
 

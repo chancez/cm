@@ -138,6 +138,20 @@ Before believing "it does not reproduce":
 - Beware `script(1)` and `send-text`: neither answers queries, so a mode that needs an answer never
   turns on.
 
+## A comparison helper that skips fields cannot fail on them
+
+`sameResponse` in `internal/client/overlay_test.go` compared four of an overlayResponse's seven fields.
+The three it left out were `SwitchTo`, `List` and `OpenPicker`, so every case asserting one of those
+passed whatever the overlay decided, including the one for the chooser switching to the session under the
+cursor. It was found by writing a new case against it: the response had the wrong session reference in it
+and the test said nothing.
+
+Two things follow. A helper that compares "the interesting fields" decays as fields are added, so compare
+every field and let the compiler's zero values carry the ones a case does not care about. And a helper
+like that hides failures in *existing* tests, not just the one being written, so fixing it is worth doing
+before trusting anything it asserted: correcting this one immediately exposed a real bug where the
+overlay's "previous session" key stepped forwards.
+
 ## A default shell prompt is not a fixed string
 
 Waiting for a shell's prompt means knowing what it prints, and that varies by platform and by user. Measured:

@@ -199,6 +199,22 @@ The key is in the expanded help only. Measured: the short line reaches column 89
 takes it past the width, the help is not truncated, and the overflow silently eats the columns to its
 right. It sits in the existing attach column for the same reason.
 
+## The keys come from the config file
+
+Both the picker's verbs and the list's navigation are bound from `[keys.tui]`, including the keys
+`bubbles/list` would otherwise own: cursor, page, jump, filter and clear-filter. Leaving those alone would
+have made half the keys in this window configurable and the other half not, with nothing saying which was
+which.
+
+Help shows cm's spelling of a key rather than bubbletea's, which is the one visible change with the
+defaults: `ctrl-u`, not `ctrl+u`. That is what somebody writes in the config to move it, and a help line
+naming a spelling the config does not accept sends a reader to the wrong place. The two libraries also
+disagree on three names -- escape, pageup, pagedown -- so a chord carries both spellings and a test in
+internal/tui pairs them against bubbletea itself.
+
+`ctrl-c` still quits and `escape` still clears the filter whatever the config says. A picker that answers
+no key is one people kill from another window.
+
 ## The way back is the key that opened it
 
 `ctrl-] t` goes out to the list and the prefix key alone comes back, so the round trip is one key each
