@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/tui"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -102,8 +103,17 @@ to the selected session instead of nesting an attachment inside it.`,
 				switchTo = func(ref string) error { return writeChosenSession(chosenFile, ref) }
 			}
 
+			// Bindings from the same file the overlay reads. Problems are not fatal and are not printed
+			// here: this process is about to take over the terminal, and `cm keys` is what reports them.
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			pickerKeys, _ := cfg.Keymap(keymap.TUI)
+
 			return tui.Run(cmd.Context(), tui.Options{
 				Sessions: cl,
+				Keys:     pickerKeys,
 				Tags:     tagArgs,
 				Notice:   notice,
 				Preview:  preview,

@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -105,8 +106,29 @@ func newModel(ctx context.Context, opts Options) model {
 	// would refuse anyway, before a request is spent learning it.
 	input.CharLimit = 24
 
+	// The bindings, from the config file by way of the caller. The caller's own key for going back is added
+	// here rather than being a default, since only the client that opened this picker knows it.
+	bound := opts.Keys
+	if !bound.Bound(keymap.TUIAttach) {
+		// A caller with no config to read, which is every test and any future caller that does not want to
+		// think about keys. Left to the defaults rather than to nothing, which would bind no keys at all.
+		bound, _ = keymap.Build(keymap.TUI, nil)
+	}
+	if opts.BackKey != "" {
+		bound.Add(keymap.TUIBack, opts.BackKey)
+	}
+	keys, listKeys := bindingsFrom(bound)
+	// Enabled only when the caller can actually switch. A disabled binding is skipped by key.Matches and
+	// left out of the help, so the key is neither offered nor inert.
+	if opts.Switch == nil {
+		keys.Switch.SetEnabled(false)
+	}
+
 	l := list.New(nil, delegate{home: home, now: time.Now()}, 0, 0)
 	l.Title = "sessions"
+	// The list's navigation, from the same table. Set before anything else touches the list, so nothing
+	// reads bubbles' defaults and then finds them replaced.
+	l.KeyMap = listKeys
 	// The list's own help line is suppressed because the picker renders one that covers both its
 	// bindings and the list's. Two help lines disagreeing about what a key does is worse than either.
 	l.SetShowHelp(false)
@@ -114,16 +136,6 @@ func newModel(ctx context.Context, opts Options) model {
 	interval := refreshInterval
 	if opts.Refresh != nil {
 		interval = *opts.Refresh
-	}
-
-	keys := defaultKeys()
-	// Enabled only when the caller can actually switch. A disabled binding is skipped by key.Matches and
-	// left out of the help, so the key is neither offered nor inert.
-	if opts.Switch != nil {
-		keys.Switch.SetEnabled(true)
-	}
-	if opts.BackKey != "" {
-		keys.Back = backBinding(opts.BackKey)
 	}
 
 	return model{

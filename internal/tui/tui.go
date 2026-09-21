@@ -41,6 +41,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/chancez/cm/internal/keymap"
+
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -120,6 +122,9 @@ type Options struct {
 	Attach AttachFunc
 	// Switch moves the caller to a session, or is nil when there is no caller to move. See SwitchFunc.
 	Switch SwitchFunc
+	// Keys is what each key does, from the config file. The zero value means the built-in defaults, which
+	// is what a caller with no config to read wants: see internal/keymap.
+	Keys keymap.Map
 	// BackKey is the key that leaves the picker for the session that opened it, in cm's spelling
 	// ("ctrl-]"), or empty for no such key.
 	//

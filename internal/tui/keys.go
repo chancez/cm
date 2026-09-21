@@ -1,16 +1,18 @@
 package tui
 
 import (
-	"strings"
-
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
+
+	"github.com/chancez/cm/internal/keymap"
 )
 
-// keyMap is the picker's own bindings, separate from the list's navigation and filter keys.
+// keyMap is the picker's bindings, built from internal/keymap rather than written out here.
 //
-// A bubbles key.Map rather than a switch on strings, because the help line is then generated from the
-// same bindings it describes: a key that moves and a help text that does not is a documentation bug
-// that a reader blames on the tool.
+// A bubbles key.Map still, because the help line is then generated from the same bindings it describes: a
+// key that moves and a help text that does not is a documentation bug that a reader blames on the tool.
+// What changed is where the keys come from. They were literals here, so nothing could be rebound and the
+// overlay's table and this one had no way to agree on a spelling.
 type keyMap struct {
 	Attach       key.Binding
 	Switch       key.Binding
@@ -25,135 +27,89 @@ type keyMap struct {
 	Quit         key.Binding
 }
 
-func defaultKeys() keyMap {
-	return keyMap{
-		Attach: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter", "attach"),
-		),
-		// Switch moves the window that opened the picker rather than nesting an attachment inside it, which
-		// is what enter would do from a session. Disabled unless the caller supplied a way to switch, so it
-		// is absent from the help as well as inert: bubbles skips a disabled binding in both. "s" matches
-		// the overlay's own switch key, which is where most people will arrive here from.
-		Switch: key.NewBinding(
-			key.WithKeys("s"),
-			key.WithHelp("s", "switch here"),
-			key.WithDisabled(),
-		),
-		// Back returns to the session that opened this picker, and carries no key of its own: the caller
-		// names one and backBinding fills it in. Empty and disabled otherwise, which is the case that must
-		// not offer a key -- run from a shell there is no client waiting, and the outer client intercepts
-		// its prefix before this process could see it, so a binding here would describe a key that never
-		// arrives.
-		Back: key.NewBinding(key.WithDisabled()),
-		New: key.NewBinding(
-			key.WithKeys("n"),
-			key.WithHelp("n", "new session"),
-		),
-		Kill: key.NewBinding(
-			key.WithKeys("x"),
-			key.WithHelp("x", "kill"),
-		),
-		Rename: key.NewBinding(
-			key.WithKeys("r"),
-			key.WithHelp("r", "rename"),
-		),
-		Preview: key.NewBinding(
-			key.WithKeys("p"),
-			key.WithHelp("p", "output"),
-		),
-		// Half a page, as in vim and less. The list already turns whole pages on u and d, from its own
-		// KeyMap, so the control pair is what is missing rather than a second spelling of what is there:
-		// ctrl-u and ctrl-d are half pages in every pager, and a session list is long enough to page
-		// through and short enough that a whole page overshoots what was being looked at.
-		HalfPageUp: key.NewBinding(
-			key.WithKeys("ctrl+u"),
-			key.WithHelp("ctrl+u", "half page up"),
-		),
-		HalfPageDown: key.NewBinding(
-			key.WithKeys("ctrl+d"),
-			key.WithHelp("ctrl+d", "half page down"),
-		),
-		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "keys"),
-		),
-		Quit: key.NewBinding(
-			// esc is not bound. The list uses it to clear a filter, and a key that sometimes quits and
-			// sometimes clears a filter quits at the wrong moment. ctrl-c is here because a terminal
-			// program that ignores it is one people kill from another window.
-			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
-		),
+// bindingsFrom turns a resolved keymap into the picker's bindings and the list's own.
+//
+// Both, because the list's navigation is as much a binding as the picker's verbs: bubbles/list holds its
+// keys in a struct cm can overwrite, so leaving them alone would have made half the keys in this window
+// configurable and the other half not, with nothing saying which was which.
+func bindingsFrom(keys keymap.Map) (keyMap, list.KeyMap) {
+	km := keyMap{
+		Attach:       binding(keys, keymap.TUIAttach),
+		Switch:       binding(keys, keymap.TUISwitch),
+		Back:         binding(keys, keymap.TUIBack),
+		New:          binding(keys, keymap.TUINew),
+		Kill:         binding(keys, keymap.TUIKill),
+		Rename:       binding(keys, keymap.TUIRename),
+		Preview:      binding(keys, keymap.TUIOutput),
+		HalfPageUp:   binding(keys, keymap.TUIHalfPageUp),
+		HalfPageDown: binding(keys, keymap.TUIHalfPageDown),
+		Help:         binding(keys, keymap.TUIHelp),
+		Quit:         binding(keys, keymap.TUIQuit),
 	}
+
+	// The list's defaults are replaced rather than edited, so what is here is the whole of what its
+	// navigation does. The filtering keys it owns are left as bubbles set them: accepting or cancelling a
+	// filter is part of its text field rather than a cm action, and esc already reaches it as clear-filter.
+	lk := list.DefaultKeyMap()
+	lk.CursorUp = binding(keys, keymap.TUIUp)
+	lk.CursorDown = binding(keys, keymap.TUIDown)
+	lk.PrevPage = binding(keys, keymap.TUIPageUp)
+	lk.NextPage = binding(keys, keymap.TUIPageDown)
+	lk.GoToStart = binding(keys, keymap.TUIStart)
+	lk.GoToEnd = binding(keys, keymap.TUIEnd)
+	lk.Filter = binding(keys, keymap.TUIFilter)
+	lk.ClearFilter = binding(keys, keymap.TUIClearFilter)
+	// The list's own quit keys are cleared rather than bound, because the model handles quitting before it
+	// delegates anything to the list. Left in place they were inert and still rendered: bubbles' default
+	// binds Quit to "v" with the help text "select", so every picker help line carried a "v select" entry
+	// for a key that did nothing, and a user who bound v to one of their own actions would see both.
+	lk.Quit = key.NewBinding(key.WithDisabled())
+	lk.ForceQuit = key.NewBinding(key.WithDisabled())
+	return km, lk
+}
+
+// binding is one action as bubbles sees it.
+//
+// An action with no keys is disabled rather than bound to nothing, which is what bubbles wants: key.Matches
+// skips a disabled binding and the help leaves it out, so an action someone unbound with an empty list is
+// absent from both rather than listed with a blank key.
+//
+// The help shows the first key and the full label. Every key would widen the one line the picker has room
+// for: the measured limit is column 89 of 100 with the defaults, and `cm keys` is where the whole set is.
+func binding(keys keymap.Map, action keymap.Action) key.Binding {
+	teaKeys := keys.TeaKeys(action)
+	if len(teaKeys) == 0 {
+		return key.NewBinding(key.WithDisabled())
+	}
+	return key.NewBinding(
+		key.WithKeys(teaKeys...),
+		key.WithHelp(keys.First(action), keys.Label(action)),
+	)
 }
 
 // ShortHelp is the one line under the list.
 //
-// Switch is not on it either, for the same measured reason: the line reached column 89 of 100 with the
-// entries below, and "s switch here" takes it past the width. It is in the expanded help, in the column it
-// belongs to rather than one of its own.
+// Switch and Back are not on it, for a measured reason: the line reached column 89 of 100 with the entries
+// below, and either of them takes it past the width. Neither help line is truncated and the layout measures
+// the footer by counting newlines, so anything that overflows either costs the list a row or is cut off the
+// right edge. They are in the expanded help, in the column they belong to.
 //
-// The half page keys are not on it, and that is a space decision rather than an oversight: the line
-// already carries the picker's actions plus the list's navigation and filter keys, it is not truncated
-// to the window, and the layout measures the footer by counting newlines, so a line that wraps costs a
-// row the list was given. Navigation belongs in the expanded help beside the page and jump keys anyway,
-// which is where somebody looking for it looks.
+// The half page keys are not on it either, and that is the same space decision: navigation belongs in the
+// expanded help beside the page and jump keys, which is where somebody looking for it looks.
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Attach, k.New, k.Kill, k.Rename, k.Preview, k.Help, k.Quit}
 }
 
-// FullHelp is what "?" expands to.
+// FullHelp is what the help key expands to.
 //
-// The list's own navigation and filter keys are added by the model, which owns the list and so is the
-// only thing that can ask it what its bindings are, and the half page keys go into the list's own
-// navigation column rather than into one of these. See model.fullHelp.
+// The list's own navigation and filter keys are added by the model, which owns the list and so is the only
+// thing that can ask it what its bindings are, and the half page keys go into the list's own navigation
+// column rather than into one of these. See model.fullHelp.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Attach, k.Switch, k.New},
 		{k.Kill, k.Rename},
-		// Back sits with quit because that is what it is a spelling of, and in the expanded help rather
-		// than on the short line for the width reason above: the line already reaches column 89 of 100.
-		// The startup notice says it instead, which is where somebody who has just pressed ctrl-] t is
-		// looking anyway.
+		// Back sits with quit because that is what it is a spelling of.
 		{k.Preview, k.Help, k.Quit, k.Back},
 	}
-}
-
-// backBinding is the caller's key for returning to the session it opened this picker from.
-//
-// spec is cm's spelling, "ctrl-<key>", which is what KeySpec.Name holds. Translated here rather than
-// passed in bubbletea's form because the caller is a cm client talking about its own prefix key, and a
-// command layer that had to know charm's key names to configure a picker would be knowing the wrong
-// thing.
-//
-// A spec that is not a ctrl- combination leaves the binding disabled. The only caller passes a parsed
-// KeySpec, so this covers "none", which is a prefix key the user turned off: with no way to open the
-// overlay there is no way to arrive here, and offering the key anyway would be describing one that
-// cannot be pressed.
-func backBinding(spec string) key.Binding {
-	k := teaKey(spec)
-	if k == "" {
-		return key.NewBinding(key.WithDisabled())
-	}
-	return key.NewBinding(
-		key.WithKeys(k),
-		key.WithHelp(spec, "back to the session"),
-	)
-}
-
-// teaKey translates cm's spelling of an intercepted key into bubbletea's, or returns empty when the
-// spec is not one.
-//
-// The two differ only in the separator, ctrl-] against ctrl+], and in nothing else that a cm spec can
-// express: ParseKeySpec accepts a single character or a name that resolves to one byte, and bubbletea
-// names ctrl plus NUL "ctrl+space", which is the same name cm took the byte from.
-// TestTeaKeyMatchesBubbletea pairs the two so a rename upstream fails here rather than silently
-// unbinding the key.
-func teaKey(spec string) string {
-	rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(spec)), "ctrl-")
-	if !ok || rest == "" {
-		return ""
-	}
-	return "ctrl+" + rest
 }

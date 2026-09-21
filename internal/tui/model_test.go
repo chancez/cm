@@ -528,7 +528,10 @@ func TestTheExpandedHelpNamesTheHalfPageKeysAndStillFits(t *testing.T) {
 	h.press("?")
 
 	view := h.model.help.View(h.model.fullHelp())
-	for _, want := range []string{"ctrl+u", "half page up", "ctrl+d", "half page down"} {
+	// cm's spelling of the key rather than bubbletea's, which is what the help showed while the bindings
+	// were literals here: "ctrl-u" is what somebody would write in the config file to move it, and a help
+	// line naming a spelling the config does not accept sends a reader to the wrong place.
+	for _, want := range []string{"ctrl-u", "half page up", "ctrl-d", "half page down"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the expanded help does not mention %q:\n%s", want, view)
 		}
