@@ -24,7 +24,7 @@ func TestThePickerArgvCarriesTheKeyThatComesBack(t *testing.T) {
 		"tui", "--chosen-file", "/tmp/r/picked-1",
 		"--back-key", "ctrl-o",
 	}
-	got := pickerArgv(&globals{runtimeDir: "/tmp/r"}, "/tmp/r/picked-1", pickerBackKey(prefix))
+	got := pickerArgv(&globals{runtimeDir: "/tmp/r"}, "/tmp/r/picked-1", pickerBackKey([]client.KeySpec{prefix}))
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("argv %q, want %q", got, want)
 	}
@@ -38,12 +38,12 @@ func TestADisabledPrefixKeyOffersNoWayBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := pickerBackKey(prefix); got != "" {
+	if got := pickerBackKey([]client.KeySpec{prefix}); got != "" {
 		t.Errorf("back key %q, want none", got)
 	}
 
 	want := []string{"tui", "--chosen-file", "/tmp/picked-1"}
-	if got := pickerArgv(&globals{}, "/tmp/picked-1", pickerBackKey(prefix)); !reflect.DeepEqual(got, want) {
+	if got := pickerArgv(&globals{}, "/tmp/picked-1", pickerBackKey([]client.KeySpec{prefix})); !reflect.DeepEqual(got, want) {
 		t.Errorf("argv %q, want %q", got, want)
 	}
 }

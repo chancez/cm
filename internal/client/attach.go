@@ -129,11 +129,16 @@ type Options struct {
 	// Tags label a session being created, for grouping and filtering. Ignored when attaching to a
 	// session that already exists, since an attach is not how tags are changed.
 	Tags map[string]string
-	// DetachKey is the key that detaches. Zero value means the default.
-	DetachKey KeySpec
-	// PrefixKey is the key that opens the overlay. The zero value intercepts nothing, so a caller that
-	// does not want an overlay gets none: see KeySpec.live.
-	PrefixKey KeySpec
+	// DetachKeys are the keys that detach, the first of which is the one named in help. An empty list
+	// means the default key rather than none, since an unset setting must not remove the only way to
+	// leave a session.
+	DetachKeys []KeySpec
+	// PrefixKeys are the keys that open the overlay, the first of which is named in help. An empty list
+	// intercepts nothing, so a caller that does not want an overlay gets none: see KeySpec.live.
+	//
+	// A list rather than one key for the reason keySet gives: two ways to reach the same thing is an
+	// ordinary want, and the alternative is a second setting for a second key.
+	PrefixKeys []KeySpec
 	// Keys is what each key means inside the overlay, from the config file. The zero value means the
 	// built-in defaults, which is what every caller that has no config to read wants.
 	Keys keymap.Map
@@ -366,12 +371,12 @@ func (o Options) readsTerminal(tty *TTY) bool {
 		// Keystrokes reach the session.
 		return true
 	}
-	if !o.DetachKey.Disabled {
-		// A zero DetachKey means the default key rather than none, so this holds for any caller that did
+	if !keySet(o.DetachKeys).allDisabled() {
+		// An empty DetachKeys means the default key rather than none, so this holds for any caller that did
 		// not deliberately turn it off. See where Attach defaults it.
 		return true
 	}
-	return o.PrefixKey.live() && o.overlayEnabled(tty)
+	return keySet(o.PrefixKeys).live() && o.overlayEnabled(tty)
 }
 
 // overlayEnabled reports whether the overlay has a terminal of its own to paint on.
@@ -907,10 +912,12 @@ func runSession(
 		}
 	}()
 
-	detachKey := opts.DetachKey
-	if detachKey.Name == "" {
-		// Zero value means the caller did not configure one.
-		detachKey, _ = ParseDetachKey(DefaultDetachKey)
+	detachKeys := keySet(opts.DetachKeys)
+	if len(detachKeys) == 0 {
+		// An empty list means the caller configured none, which is the default key rather than no key: an
+		// unset setting must not silently remove the only way to leave a session.
+		key, _ := ParseDetachKey(DefaultDetachKey)
+		detachKeys = keySet{key}
 	}
 
 	// Defaulted here rather than at each use, so the overlay never has to check: a Map with nothing in it
@@ -927,10 +934,12 @@ func runSession(
 		size:     tty.Size,
 		enabled:  opts.overlayEnabled(tty),
 		readOnly: opts.ReadOnly,
-		prefix:   opts.PrefixKey,
-		detach:   detachKey,
-		session:  result.Session,
-		keys:     keys,
+		// The primary of each, since these are what the bar names and what `ctrl-] q` forwards. The whole
+		// set is matched by the gate below.
+		prefix:  keySet(opts.PrefixKeys).primary(),
+		detach:  detachKeys.primary(),
+		session: result.Session,
+		keys:    keys,
 		// Where l goes. Held by the loop, so it survives the reconnect that rebuilds this overlay.
 		lastSession: lastRef,
 		canPick:     opts.OpenPicker != nil,
@@ -940,15 +949,17 @@ func runSession(
 		bodyStyle:     styleOr(opts.BodyStyle, DefaultBodyStyle),
 		selectedStyle: styleOr(opts.SelectedStyle, DefaultSelectedStyle),
 	}
-	prefixKey := opts.PrefixKey
+	prefixKeys := keySet(opts.PrefixKeys)
 	if !ov.enabled {
-		prefixKey = KeySpec{}
+		// Nothing to open, so the prefix is not intercepted either: a client painting to a pipe has no
+		// overlay, and swallowing the key there would take it from the program for nothing.
+		prefixKeys = nil
 	}
 
 	// The gate buffers a partial detach sequence across reads, so a CSI-encoded detach split between
 	// two reads is still recognized rather than forwarded to the shell, and releases it after
 	// escapeGrace so a lone escape is not withheld forever.
-	gate := &inputGate{detach: detachKey, prefix: prefixKey}
+	gate := &inputGate{detach: detachKeys, prefix: prefixKeys}
 
 	// Says so when the detach key has gone to a nested client twice with nothing happening, which is the
 	// only warning before the next press leaves this session instead. Same row and conditions as the outage
@@ -1397,7 +1408,8 @@ func runSession(
 			if dec.Action == gateNestedWarn {
 				// The key went to the inner client a second time and nothing came of it. Say so, and send
 				// this press on anyway: an inner client that is merely slow is still entitled to it.
-				nested.show(detachKey)
+				// The spelling that was actually pressed, since the notice asks for one more press of it.
+				nested.show(dec.Key)
 				opts.Log.Info("the detach key is being forwarded to a nested client that is not acting on it",
 					"session", result.Session)
 				if sendInput(buf) {

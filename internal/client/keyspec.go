@@ -224,3 +224,87 @@ func (k KeySpec) HoldBack(p []byte) int {
 	}
 	return keep
 }
+
+// keySet is an intercepted key and its alternates, matched as one.
+//
+// A list because a person can want two ways to reach the same thing: a home keyboard where ctrl-\ is
+// comfortable and a laptop layout where it is not, or a spare f-key beside the habit. The alternative was
+// one key and a second setting for a second key, which is how a list grows one element at a time.
+//
+// The first is the primary, and that distinction is not cosmetic: it is the key named in the overlay's bar
+// and help, and the one `ctrl-] q` forwards to the program. A help line listing three spellings of detach
+// would spend the width it has on a fact nobody needs twice.
+type keySet []KeySpec
+
+// primary is the key to name and to forward, or a disabled spec when the set is empty.
+func (s keySet) primary() KeySpec {
+	for _, k := range s {
+		if k.live() {
+			return k
+		}
+	}
+	if len(s) > 0 {
+		return s[0]
+	}
+	return KeySpec{Name: "none", Disabled: true}
+}
+
+// live reports whether any key in the set is intercepted.
+func (s keySet) live() bool {
+	for _, k := range s {
+		if k.live() {
+			return true
+		}
+	}
+	return false
+}
+
+// allDisabled reports that this set was configured and every key in it is off.
+//
+// Empty is not the same thing and answers false, which is the distinction that matters for the detach key:
+// an unset setting means the default key rather than no key, so an empty list must not read as "detaching
+// is turned off". Getting this wrong made a read-only client stop reading the terminal, since
+// Options.readsTerminal asks exactly this question.
+func (s keySet) allDisabled() bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, k := range s {
+		if k.live() {
+			return false
+		}
+	}
+	return true
+}
+
+// find reports where the earliest press of any key in the set starts, how many bytes it took, and which
+// key it was.
+//
+// Earliest rather than first-in-the-list, because what matters is the order the *user* typed: a read can
+// hold two of these keys and acting on the later one would reorder what they did.
+//
+// The key is returned because a message about a press has to name the key that arrived rather than the
+// primary. The nested-handover notice is the case: it tells the user to press the key once more, and with
+// several bound, naming a spelling they did not press is worse than naming none.
+func (s keySet) find(p []byte) (offset, length int, matched KeySpec) {
+	best, n := -1, 0
+	var key KeySpec
+	for _, k := range s {
+		if i, l := k.find(p); i >= 0 && (best < 0 || i < best) {
+			best, n, key = i, l, k
+		}
+	}
+	return best, n, key
+}
+
+// holdBack is how many trailing bytes to retain for a partial encoding of any key in the set.
+//
+// The maximum, since a tail that could still become either key has to wait for whichever needs more bytes.
+// Taking the minimum would forward the start of a longer encoding and miss that press.
+func (s keySet) holdBack(p []byte) int {
+	keep := 0
+	for _, k := range s {
+		keep = max(keep, k.HoldBack(p))
+	}
+	return keep
+}

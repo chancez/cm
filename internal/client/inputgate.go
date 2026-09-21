@@ -65,6 +65,10 @@ type gateDecision struct {
 	Forward []byte
 	// Action is what cm must do itself.
 	Action gateAction
+	// Key is the intercepted key that was pressed, for a message that has to name it. Zero unless Action
+	// names one, and the primary is not a substitute: with several detach keys bound, a notice naming a
+	// spelling the user did not press is worse than naming none.
+	Key KeySpec
 	// Rest is what followed the prefix key in the same read.
 	//
 	// Non-empty when the prefix and the key after it land in one read, which happens when someone types
@@ -80,10 +84,10 @@ type gateDecision struct {
 // to test either apart from a live attachment, and the missing bound above went unnoticed for that
 // reason.
 type inputGate struct {
-	// detach ends the attachment, prefix opens the overlay. Both are matched the same way, and whichever
-	// was pressed first in a read wins.
-	detach KeySpec
-	prefix KeySpec
+	// detach ends the attachment, prefix opens the overlay. Each is a set, since either can be configured
+	// with alternates, and both are matched the same way: whichever was pressed first in a read wins.
+	detach keySet
+	prefix keySet
 	// suspended stops both keys being intercepted, so they reach the session like any other keystroke.
 	//
 	// Set while a nested client is attached inside this session, which the server reports. That client
@@ -147,17 +151,17 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 		// Scanned even though nothing is intercepted, because a handover that is not being acted on has to
 		// be escapable: see nestedPresses. Counted once per read rather than per occurrence, which is the
 		// conservative direction -- a burst in one read is one press, so a paste cannot reach the escape.
-		if at, _ := g.detach.find(buf); at >= 0 {
+		if at, _, key := g.detach.find(buf); at >= 0 {
 			g.nestedPresses++
 			switch {
 			case g.nestedPresses == nestedPressesToWarn:
 				// Forwarded as well as reported. The inner client may be alive and merely slow, in which case
 				// this press is its own and the notice is the only thing added.
-				return gateDecision{Forward: buf, Action: gateNestedWarn}
+				return gateDecision{Forward: buf, Action: gateNestedWarn, Key: key}
 			case g.nestedPresses > nestedPressesToWarn:
 				// Acted on here, so the key is taken out of what goes on rather than sent to a client that
 				// has had two of them and done nothing.
-				return gateDecision{Forward: buf[:at], Action: gateDetach}
+				return gateDecision{Forward: buf[:at], Action: gateDetach, Key: key}
 			}
 		}
 		return gateDecision{Forward: buf}
@@ -166,11 +170,11 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Whichever key was pressed first in this read wins, which is the only ordering that matches what the
 	// user did. Detaching wins a tie, which is reachable only by configuring both keys to the same key:
 	// leaving is the one that cannot be undone by pressing something else, so it is the safer reading.
-	detachAt, _ := g.detach.find(buf)
-	prefixAt, prefixLen := g.prefix.find(buf)
+	detachAt, _, detachKey := g.detach.find(buf)
+	prefixAt, prefixLen, _ := g.prefix.find(buf)
 	switch {
 	case detachAt >= 0 && (prefixAt < 0 || detachAt <= prefixAt):
-		return gateDecision{Forward: buf[:detachAt], Action: gateDetach}
+		return gateDecision{Forward: buf[:detachAt], Action: gateDetach, Key: detachKey}
 	case prefixAt >= 0:
 		return gateDecision{
 			Forward: buf[:prefixAt],
@@ -182,7 +186,7 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 	// Hold back a possible partial sequence until the rest arrives, or until the grace expires. The
 	// longer of the two, since a partial that could still become either key must wait for whichever needs
 	// more bytes: with the defaults both encode as ESC [ 9 ... and diverge only at the fourth byte.
-	if keep := max(g.detach.HoldBack(buf), g.prefix.HoldBack(buf)); keep > 0 && keep <= len(buf) {
+	if keep := max(g.detach.holdBack(buf), g.prefix.holdBack(buf)); keep > 0 && keep <= len(buf) {
 		g.held = append(g.held, buf[len(buf)-keep:]...)
 		if anchor.IsZero() {
 			g.heldAt = now

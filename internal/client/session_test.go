@@ -717,7 +717,7 @@ func TestRunSessionDetachesOnTheDetachKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDetachKey() error = %v", err)
 	}
-	h.opts.DetachKey = key
+	h.opts.DetachKeys = []KeySpec{key}
 	h.stream.opened("test", 0, nil)
 
 	done := h.runAsync(context.Background())
@@ -777,7 +777,7 @@ func TestRunSessionDetachesOnASplitSequence(t *testing.T) {
 	}
 
 	h := newHarness(t)
-	h.opts.DetachKey = key
+	h.opts.DetachKeys = []KeySpec{key}
 	h.stream.opened("test", 0, nil)
 
 	done := h.runAsync(context.Background())
@@ -1116,7 +1116,7 @@ func TestRunSessionForwardsATerminalReplyWhole(t *testing.T) {
 	}
 
 	h := newHarness(t)
-	h.opts.DetachKey = key
+	h.opts.DetachKeys = []KeySpec{key}
 	h.stream.opened("test", 0, nil)
 
 	done := h.runAsync(context.Background())

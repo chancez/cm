@@ -91,13 +91,16 @@ func pickerArgv(g *globals, chosenPath, backKey string) []string {
 
 // pickerBackKey reports the key to offer the picker as its way back, or empty when there is none.
 //
-// A disabled prefix key has no name worth passing on: with nothing to open the overlay there is no route
-// to the picker from here at all, and the picker would be advertising a key nobody can press.
-func pickerBackKey(prefix client.KeySpec) string {
-	if prefix.Disabled {
-		return ""
+// The first live prefix key, since that is the one the overlay names and the one somebody just pressed to
+// get here. A disabled prefix has no name worth passing on: with nothing to open the overlay there is no
+// route to the picker at all, and the picker would be advertising a key nobody can press.
+func pickerBackKey(prefix []client.KeySpec) string {
+	for _, key := range prefix {
+		if !key.Disabled {
+			return key.Name
+		}
 	}
-	return prefix.Name
+	return ""
 }
 
 // forwardedDirFlags repeats the directory and config flags this process was given.

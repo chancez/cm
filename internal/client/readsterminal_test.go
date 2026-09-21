@@ -39,19 +39,19 @@ func TestReadsTerminal(t *testing.T) {
 		{
 			// followSession's options: cm read --follow, cm send --follow, cm run's streaming.
 			name: "a follower streaming to a pipe",
-			opts: Options{ReadOnly: true, DetachKey: detachOff, NoRestore: true, Output: io.Discard},
+			opts: Options{ReadOnly: true, DetachKeys: []KeySpec{detachOff}, NoRestore: true, Output: io.Discard},
 			want: false,
 		},
 		{
 			// The case that rules out keying off ReadOnly alone: interactive, so it still needs the key
 			// that ends it.
 			name: "cm attach --read-only",
-			opts: Options{ReadOnly: true, PrefixKey: prefix},
+			opts: Options{ReadOnly: true, PrefixKeys: []KeySpec{prefix}},
 			want: true,
 		},
 		{
 			name: "an ordinary attach",
-			opts: Options{PrefixKey: prefix},
+			opts: Options{PrefixKeys: []KeySpec{prefix}},
 			want: true,
 		},
 		{
@@ -65,8 +65,8 @@ func TestReadsTerminal(t *testing.T) {
 			// A prefix key with nowhere to paint buys nothing, so it does not earn a reader either.
 			name: "a follower that was handed a prefix key anyway",
 			opts: Options{
-				ReadOnly: true, DetachKey: detachOff, NoRestore: true,
-				Output: io.Discard, PrefixKey: prefix,
+				ReadOnly: true, DetachKeys: []KeySpec{detachOff}, NoRestore: true,
+				Output: io.Discard, PrefixKeys: []KeySpec{prefix},
 			},
 			want: false,
 		},

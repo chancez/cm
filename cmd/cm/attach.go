@@ -99,33 +99,23 @@ matters for another multiplexer, which sees the key first and never passes it on
 				return err
 			}
 
-			// The flag wins over the config file, as flags do. Worth having as a flag and not only a
-			// setting: the case for changing it is usually one attachment rather than every one, such as
-			// attaching from inside another multiplexer that claims ctrl-\ for itself.
-			keySpec := cfg.DetachKey
-			if detachKeyArg != "" {
-				keySpec = detachKeyArg
-			}
-			detachKey, err := client.ParseDetachKey(keySpec)
+			// The flag wins over the config file, as flags do, and is a single key: the case for changing
+			// these on the command line is one attachment rather than every one, such as attaching from
+			// inside another multiplexer that claims ctrl-\ for itself.
+			detachKeys, err := interceptedKeys(cfg.DetachKeys(), detachKeyArg, client.ParseDetachKey)
 			if err != nil {
-				return err
+				return fmt.Errorf("detach key: %w", err)
 			}
-
-			prefixSpec := cfg.PrefixKey
-			if prefixKeyArg != "" {
-				prefixSpec = prefixKeyArg
-			}
-			prefixKey, err := client.ParsePrefixKey(prefixSpec)
+			prefixKeys, err := interceptedKeys(cfg.PrefixKeys(), prefixKeyArg, client.ParsePrefixKey)
 			if err != nil {
-				return err
+				return fmt.Errorf("prefix key: %w", err)
 			}
-			// Refused rather than resolved by precedence. Both keys are live at once, so one key configured
-			// as both means whichever loses is unreachable, and a user who did that by accident would see a
-			// working detach and an overlay that never opens.
-			if !detachKey.Disabled && !prefixKey.Disabled && detachKey.Byte == prefixKey.Byte {
-				return fmt.Errorf(
-					"the detach key and the prefix key are both %s, so one of them would never fire",
-					detachKey.Name)
+			// Refused rather than resolved by precedence. Every one of these keys is live at once, so a key
+			// in both lists means whichever loses is unreachable, and a user who did that by accident would
+			// see a working detach and an overlay that never opens. Checked across the lists rather than
+			// between two keys, which is the same rule with more than one key to apply it to.
+			if err := noSharedKeys(detachKeys, prefixKeys); err != nil {
+				return err
 			}
 
 			// Parsed here rather than in internal/client so a mistake in the config file is reported by the
@@ -160,12 +150,12 @@ matters for another multiplexer, which sees the key first and never passes it on
 					_, err := os.Stat(dirs.ServerStopped())
 					return err == nil
 				},
-				Session:   session,
-				ReadOnly:  readOnly,
-				Dir:       dir,
-				Command:   argsAfterDash(cmd, args),
-				DetachKey: detachKey,
-				PrefixKey: prefixKey,
+				Session:    session,
+				ReadOnly:   readOnly,
+				Dir:        dir,
+				Command:    argsAfterDash(cmd, args),
+				DetachKeys: detachKeys,
+				PrefixKeys: prefixKeys,
 				// What each key means inside the overlay. Problems are not fatal and are not printed here
 				// either: a client is what holds someone's terminal, and `cm keys` is the command that
 				// reports them. See keymap.Problem.
@@ -180,7 +170,7 @@ matters for another multiplexer, which sees the key first and never passes it on
 				RunCommand: overlayRunner(dirs),
 				// And how it hands the terminal to the full picker. Both are supplied here rather than built
 				// in internal/client, which would have to guess which binary to run and how to hear back.
-				OpenPicker: overlayPicker(g, dirs, pickerBackKey(prefixKey)),
+				OpenPicker: overlayPicker(g, dirs, pickerBackKey(prefixKeys)),
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),
@@ -328,4 +318,54 @@ func runAttach(
 		fmt.Fprintf(os.Stderr, "detached from %s\n", res.Session)
 	}
 	return closeErr
+}
+
+// interceptedKeys resolves the keys a client intercepts, from the config file or from a flag.
+//
+// One parser for both settings, passed in, because the two differ only in what an empty value means and
+// each says so in its own error. A flag replaces the list rather than adding to it: it is for one
+// attachment, and a flag that left a configured alternate in place would be a key the user did not ask
+// for in a command line they typed to be specific.
+func interceptedKeys(
+	configured []string, flag string, parse func(string) (client.KeySpec, error),
+) ([]client.KeySpec, error) {
+	specs := configured
+	if flag != "" {
+		specs = []string{flag}
+	}
+	if len(specs) == 0 {
+		// Nothing configured, so the parser's own default applies: the detach key falls back to ctrl-\ and
+		// the prefix to ctrl-].
+		key, err := parse("")
+		if err != nil {
+			return nil, err
+		}
+		return []client.KeySpec{key}, nil
+	}
+
+	keys := make([]client.KeySpec, 0, len(specs))
+	for _, spec := range specs {
+		key, err := parse(spec)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, nil
+}
+
+// noSharedKeys refuses a key that would be both intercepted keys at once.
+func noSharedKeys(detach, prefix []client.KeySpec) error {
+	for _, d := range detach {
+		if d.Disabled {
+			continue
+		}
+		for _, p := range prefix {
+			if !p.Disabled && d.Byte == p.Byte {
+				return fmt.Errorf(
+					"%s is both a detach key and the prefix key, so one of them would never fire", d.Name)
+			}
+		}
+	}
+	return nil
 }

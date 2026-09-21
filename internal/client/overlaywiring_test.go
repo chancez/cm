@@ -43,8 +43,8 @@ func overlayHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("ParsePrefixKey() error = %v", err)
 	}
-	h.opts.DetachKey = detach
-	h.opts.PrefixKey = prefix
+	h.opts.DetachKeys = []KeySpec{detach}
+	h.opts.PrefixKeys = []KeySpec{prefix}
 	return h
 }
 
@@ -252,7 +252,7 @@ func TestRunSessionNoOverlayWithoutATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePrefixKey() error = %v", err)
 	}
-	h.opts.PrefixKey = prefix
+	h.opts.PrefixKeys = []KeySpec{prefix}
 	h.stream.opened("test", 0, nil)
 
 	done := h.runAsync(context.Background())

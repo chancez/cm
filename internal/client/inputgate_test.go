@@ -16,7 +16,7 @@ func newGate(t *testing.T, spec string) *inputGate {
 	if err != nil {
 		t.Fatalf("ParseDetachKey(%q) error = %v", spec, err)
 	}
-	return &inputGate{detach: key}
+	return &inputGate{detach: keySet{key}}
 }
 
 // newGateWithPrefix builds a gate with both keys live, which is what an ordinary attachment has.
@@ -27,7 +27,7 @@ func newGateWithPrefix(t *testing.T, detachSpec, prefixSpec string) *inputGate {
 	if err != nil {
 		t.Fatalf("ParsePrefixKey(%q) error = %v", prefixSpec, err)
 	}
-	g.prefix = prefix
+	g.prefix = keySet{prefix}
 	return g
 }
 

@@ -189,7 +189,7 @@ func TestNewNestingAnnouncer(t *testing.T) {
 		{
 			name: "a read-only client with no keys does not",
 			// Nothing to be handed: it holds no detach key, so there is no handover for a parent to make.
-			opts: Options{ReadOnly: true, DetachKey: KeySpec{Disabled: true}},
+			opts: Options{ReadOnly: true, DetachKeys: []KeySpec{{Disabled: true}}},
 			want: false,
 		},
 	}

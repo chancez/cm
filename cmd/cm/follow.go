@@ -56,7 +56,7 @@ func followSession(ctx context.Context, g *globals, session string, raw bool, lo
 		ReadOnly: true,
 		// No detach key: this is not an interactive attachment, and reserving a keystroke from a stream being
 		// piped would swallow a byte of output.
-		DetachKey: client.KeySpec{Name: "none", Disabled: true},
+		DetachKeys: []client.KeySpec{{Name: "none", Disabled: true}},
 		// No repaint. A follower streams what happens next; the screen as it stands now is either already
 		// printed by the caller or deliberately not wanted.
 		NoRestore: true,
@@ -333,12 +333,12 @@ func followSessionSignalling(
 ) error {
 	var once sync.Once
 	opts := client.Options{
-		Log:       log,
-		Session:   session,
-		ReadOnly:  true,
-		DetachKey: client.KeySpec{Name: "none", Disabled: true},
-		NoRestore: true,
-		Output:    followWriter(raw),
+		Log:        log,
+		Session:    session,
+		ReadOnly:   true,
+		DetachKeys: []client.KeySpec{{Name: "none", Disabled: true}},
+		NoRestore:  true,
+		Output:     followWriter(raw),
 		OnAttached: func() {
 			once.Do(func() { close(ready) })
 		},

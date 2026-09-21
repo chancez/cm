@@ -23,7 +23,7 @@ func TestRunSessionForwardsTheDetachKeyWhileHostingANestedClient(t *testing.T) {
 	}
 
 	h := newHarness(t)
-	h.opts.DetachKey = key
+	h.opts.DetachKeys = []KeySpec{key}
 	h.stream.opened("test", 0, nil)
 	h.stream.hosting(true)
 	h.stream.output(0, "nested")
@@ -62,7 +62,7 @@ func TestRunSessionTakesTheDetachKeyBackWhenNestingEnds(t *testing.T) {
 	}
 
 	h := newHarness(t)
-	h.opts.DetachKey = key
+	h.opts.DetachKeys = []KeySpec{key}
 	h.stream.opened("test", 0, nil)
 	h.stream.hosting(true)
 	h.stream.hosting(false)
