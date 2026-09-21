@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/chancez/cm/internal/input"
+	"github.com/chancez/cm/internal/keymap"
 )
 
 // KeySpec describes a key a client intercepts instead of forwarding to the session.
@@ -25,19 +26,13 @@ type KeySpec struct {
 	Disabled bool
 }
 
-// DefaultDetachKey is ctrl-\, matching zmx.
-const DefaultDetachKey = `ctrl-\`
-
-// DefaultPrefixKey is ctrl-], which opens the overlay.
-//
-// Chosen against the alternatives on two counts. Ergonomics: left ctrl and a right-hand key, which
-// ctrl-a and ctrl-b (screen and tmux) are not. And cost, which is what ruled the rest out: ctrl-o is
-// vim's jumplist-back, ctrl-u ctrl-p ctrl-n ctrl-l are readline's, and every remaining right-hand
-// control code is a key a program wants. ctrl-] costs vim's ctags tag-jump, which an LSP's gd has
-// largely replaced. ctrl-space has the best ergonomics of all and was rejected for delivery: not every
-// terminal sends NUL for it, and a key that silently does nothing on one machine is worse than a key
-// that costs something everywhere.
-const DefaultPrefixKey = "ctrl-]"
+// DefaultDetachKey and DefaultPrefixKey live in internal/keymap with every other key cm binds, and are
+// named here too because this is the package that parses them. See keymap.DefaultPrefixKey for why
+// ctrl-] and not something easier to reach.
+const (
+	DefaultDetachKey = keymap.DefaultDetachKey
+	DefaultPrefixKey = keymap.DefaultPrefixKey
+)
 
 // ParseKeySpec resolves a configured key.
 //

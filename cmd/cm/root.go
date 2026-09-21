@@ -144,6 +144,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newShimCommand(g),
 		newVersionCommand(g),
 		newConfigCommand(g),
+		newKeysCommand(g),
 		newStatusCommand(g),
 		newCompletionsCommand(),
 		newShellInitCommand(),

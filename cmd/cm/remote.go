@@ -386,6 +386,10 @@ var machineLocal = map[string]bool{
 	"doctor": true,
 	// Reports the configuration *this process* resolved, from this machine's files and environment.
 	"config": true,
+	// The same, for bindings. The keys that matter are the ones the client in front of you reads, and a
+	// client is always local even when the session it shows is not: `cm --remote ssh://host keys` would
+	// answer about a file on the host and describe keys nothing on this machine presses.
+	"keys": true,
 	// Reads log files out of the local state directory.
 	"logs":        true,
 	"logs client": true,

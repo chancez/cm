@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/seqlog"
@@ -68,6 +70,9 @@ type Config struct {
 	// different things: detaching stays one press, and the prefix is what makes cm reachable from under a
 	// full-screen program.
 	PrefixKey string `toml:"prefix_key"`
+
+	// Keys binds the actions in cm's own interfaces. See KeysConfig.
+	Keys KeysConfig `toml:"keys"`
 
 	// LogLevel is the minimum severity recorded: debug, info, warn, error, or off.
 	//
@@ -135,6 +140,60 @@ type RemoteConfig struct {
 // Configurable because no default is legible in every theme, and that was learned the hard way: the first
 // two-shade default came out grey on grey in a terminal other than the one it was written in. Each value is
 // a style in the small grammar internal/client.ParseStyle describes, such as "white on bright-black".
+// KeysConfig binds the actions in cm's own interfaces.
+//
+// Per interface rather than one shared table, because the same verb has different keys in each: the
+// overlay kills with k under a program that is still drawing, the picker with x in a list where x is
+// free. A shared table would have had to pick a winner and silently change one of them.
+//
+// A list replaces that action's defaults rather than adding to them, which is the only rule that can
+// take a default away, and an empty list unbinds. `cm keys` prints what is in effect.
+type KeysConfig struct {
+	// Detach and Prefix are the keys a client intercepts before the session sees them. Empty means the
+	// default, and DetachKey and PrefixKey are the older spellings of the same thing.
+	Detach KeyList `toml:"detach"`
+	Prefix KeyList `toml:"prefix"`
+	// Overlay and TUI are keyed by action name: "next", "kill", "attach". An unknown name is reported by
+	// `cm keys` and `cm config` and otherwise ignored, for the reason UnknownSettings gives.
+	//
+	// A map rather than a struct per interface, so a name this build does not know reaches the code that
+	// can say so by name instead of toml recording it as an undecoded key.
+	Overlay map[string]KeyList `toml:"overlay"`
+	TUI     map[string]KeyList `toml:"tui"`
+}
+
+// KeyList is one key or several, written either way.
+//
+// `detach_key = "ctrl-\\"` has always been a bare string, so a list-only setting would make the new
+// spelling of an old setting look different for no reason. Both forms decode, and a wrong *type* here
+// would otherwise be a toml parse error, which fails Load and takes the whole file with it -- every
+// other mistake in a binding is survivable, and this one has no reason not to be.
+type KeyList []string
+
+// UnmarshalTOML accepts a string, a list of strings, or an empty list.
+func (k *KeyList) UnmarshalTOML(v any) error {
+	switch val := v.(type) {
+	case string:
+		*k = KeyList{val}
+		return nil
+	case []any:
+		out := make(KeyList, 0, len(val))
+		for _, item := range val {
+			s, ok := item.(string)
+			if !ok {
+				return fmt.Errorf("a key must be a string, got %T", item)
+			}
+			out = append(out, s)
+		}
+		// Kept non-nil when the list was written and empty, since that is what unbinds an action: a nil
+		// list would be indistinguishable from the setting being absent, which means "use the default".
+		*k = out
+		return nil
+	default:
+		return fmt.Errorf("a key setting must be a string or a list of strings, got %T", v)
+	}
+}
+
 type OverlayConfig struct {
 	// Bar is the top row, which names the session and the keys.
 	Bar string `toml:"bar"`
@@ -306,6 +365,50 @@ func (c *Config) Path() string { return c.path }
 // The split is therefore by who is reading. Anything holding a shell up warns and carries on;
 // `cm config` fails, because a person is reading that and a typo is the question it answers.
 func (c *Config) UnknownSettings() []string { return c.unknown }
+
+// Keymap resolves one interface's bindings: the defaults with this file's changes applied.
+//
+// Problems are returned beside the map rather than as an error, and everything understandable is still
+// bound, for the reason UnknownSettings gives at length: a client reads this file too, and a typo that
+// refused to attach would take a terminal away over a key nobody pressed.
+func (c *Config) Keymap(ctx keymap.Context) (keymap.Map, []keymap.Problem) {
+	var table map[string]KeyList
+	switch ctx {
+	case keymap.Overlay:
+		table = c.Keys.Overlay
+	case keymap.TUI:
+		table = c.Keys.TUI
+	}
+
+	overrides := make(map[string][]string, len(table))
+	for action, keys := range table {
+		overrides[action] = keys
+	}
+	return keymap.Build(ctx, overrides)
+}
+
+// DetachKeys and PrefixKeys are the keys a client intercepts, in the order they are matched.
+//
+// Nil means the caller's default. Both spellings are honored, and the list wins where a file sets both:
+// `detach_key` predates `[keys]`, every existing config uses it, and an upgrade that ignored it would
+// take away the only key some people have for leaving a session.
+func (c *Config) DetachKeys() []string {
+	return keyListOr(c.Keys.Detach, c.DetachKey)
+}
+
+func (c *Config) PrefixKeys() []string {
+	return keyListOr(c.Keys.Prefix, c.PrefixKey)
+}
+
+func keyListOr(list KeyList, single string) []string {
+	if list != nil {
+		return list
+	}
+	if strings.TrimSpace(single) != "" {
+		return []string{single}
+	}
+	return nil
+}
 
 // DefaultPath returns where cm looks for its configuration.
 //

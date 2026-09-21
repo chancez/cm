@@ -1,5 +1,22 @@
 package keymap
 
+// DefaultDetachKey is ctrl-\, matching zmx.
+//
+// Here rather than in internal/client because it is a key like any other and this package is where keys
+// are spelled; the client parses it into the form it matches bytes with.
+const DefaultDetachKey = `ctrl-\`
+
+// DefaultPrefixKey is ctrl-], which opens the overlay.
+//
+// Chosen against the alternatives on two counts. Ergonomics: left ctrl and a right-hand key, which ctrl-a
+// and ctrl-b (screen and tmux) are not. And cost, which is what ruled the rest out: ctrl-o is vim's
+// jumplist-back, ctrl-u ctrl-p ctrl-n ctrl-l are readline's, and every remaining right-hand control code
+// is a key a program wants. ctrl-] costs vim's ctags tag-jump, which an LSP's gd has largely replaced.
+// ctrl-space has the best ergonomics of all and was rejected for delivery: not every terminal sends NUL
+// for it, and a key that silently does nothing on one machine is worse than a key that costs something
+// everywhere.
+const DefaultPrefixKey = "ctrl-]"
+
 // Context is which of cm's interfaces a binding belongs to.
 //
 // Two, and they are kept apart rather than sharing action names, because the same verb has different

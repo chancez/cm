@@ -10,6 +10,7 @@ import (
 
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/config"
+	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/remote"
 )
@@ -83,6 +84,8 @@ type configJSON struct {
 	// UnknownSettings are settings in the file this build does not know, which everything else ignores
 	// with a warning. Empty on a healthy install.
 	UnknownSettings []string `json:"unknown_settings"`
+	// KeyProblems are bindings in [keys] that were not usable, which `cm keys` prints in full.
+	KeyProblems []string `json:"key_problems"`
 }
 
 func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -145,13 +148,20 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		return err
 	}
 
-	detach := cfg.DetachKey
-	if detach == "" {
-		detach = client.DefaultDetachKey
-	}
-	prefix := cfg.PrefixKey
-	if prefix == "" {
-		prefix = client.DefaultPrefixKey
+	// Whichever spelling the file used, since [keys] and detach_key both set the same thing. Joined
+	// rather than printed as a list, because this report is one value per line and a key list is the one
+	// setting that can hold several.
+	detach := join(orDefault(cfg.DetachKeys(), client.DefaultDetachKey))
+	prefix := join(orDefault(cfg.PrefixKeys(), client.DefaultPrefixKey))
+
+	// Only the count and the problems here. Forty bindings would bury the rest of this report, and the
+	// question they answer is "what does this key do", which is `cm keys`.
+	var keyProblems []string
+	for _, ctx := range []keymap.Context{keymap.Overlay, keymap.TUI} {
+		_, problems := cfg.Keymap(ctx)
+		for _, p := range problems {
+			keyProblems = append(keyProblems, p.String())
+		}
 	}
 
 	_, fileErr := os.Stat(path)
@@ -189,17 +199,21 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		RemoteSSHCommand:        remoteSSHCommandOrDefault(cfg.Remote.SSHCommand),
 		RemoteConnectionPersist: persistOrOff(remotePersist),
 		UnknownSettings:         cfg.UnknownSettings(),
+		KeyProblems:             keyProblems,
 	}
 	if out.UnknownSettings == nil {
 		// An empty array rather than null, so a script can iterate unconditionally.
 		out.UnknownSettings = []string{}
+	}
+	if out.KeyProblems == nil {
+		out.KeyProblems = []string{}
 	}
 
 	if asJSON {
 		if err := writeJSON(os.Stdout, out); err != nil {
 			return err
 		}
-		return unknownSettingsError(out.UnknownSettings)
+		return configProblemsError(out)
 	}
 
 	fmt.Fprintf(os.Stdout, "file                      %s", out.File)
@@ -239,7 +253,27 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		fmt.Fprintf(os.Stdout, "unknown settings          %s (ignored by this build: a typo, or a setting from another build)\n",
 			strings.Join(out.UnknownSettings, " "))
 	}
-	return unknownSettingsError(out.UnknownSettings)
+	for _, p := range out.KeyProblems {
+		// One line each rather than a joined list, since each names a setting and says what to write
+		// instead, and `cm keys` is where the bindings that did work are.
+		fmt.Fprintf(os.Stdout, "key problem               %s\n", p)
+	}
+	return configProblemsError(out)
+}
+
+// configProblemsError fails on anything this report found that a person has to fix.
+//
+// Both kinds land here for the same reason: a setting that does nothing is indistinguishable from one
+// that is absent, and this is the command someone runs to tell them apart. Everything that holds a shell
+// up carries on regardless. See config.UnknownSettings.
+func configProblemsError(out configJSON) error {
+	if err := unknownSettingsError(out.UnknownSettings); err != nil {
+		return err
+	}
+	if len(out.KeyProblems) > 0 {
+		return &exitCodeError{code: 1, reported: true}
+	}
+	return nil
 }
 
 // unknownSettingsError fails when the file names settings this build does not know.
