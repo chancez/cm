@@ -17,6 +17,10 @@ a person runs to ask why a setting does nothing is the one that fails.
 
 ## Example
 
+Every setting without a table of its own comes first. In TOML a bare key belongs to whatever table
+header precedes it, so a top-level setting written below `[overlay]` is read as `overlay.log_level`:
+an unknown key, warned about and otherwise ignored, leaving the real setting at its default.
+
 ```toml
 # Scrollback retained per session, in lines. 0 means unlimited.
 scrollback_lines = 10000
@@ -28,30 +32,6 @@ scrollback_lines = 10000
 # stream dropped, which includes a repaint and a server restart, keeps its place rather than handing the
 # size to whichever window reconnects first.
 resize_policy = "leader"
-
-# Keys, by where they are live. A session key is intercepted before the program
-# sees it, so each one is taken from every program in the session; an overlay or
-# picker key costs nothing, because cm is on screen when it is matched.
-#
-# A list replaces that action's defaults rather than adding to them, and an
-# empty list unbinds it. `cm keys` prints what is in effect.
-[keys.session]
-detach = ["ctrl-\\"]        # detach_key is the older spelling and still works
-prefix = ["ctrl-]"]         # prefix_key likewise
-kill = ["f5"]               # any overlay verb, reached without the prefix
-
-[keys.overlay]
-next = ["n", "ctrl-n"]
-last = ["l"]
-
-[keys.tui]
-kill = ["x", "delete"]
-
-# How the overlay is drawn. See the prefix_key section for the grammar.
-[overlay]
-bar = "reverse"
-body = "bright-white on color236"
-selected = "bright-white on color241"
 
 # Diagnostic log level: debug, info, warn, error, or off.
 log_level = "info"
@@ -68,6 +48,30 @@ rebind_replaces = false
 # Where sockets and state live. Absolute paths: "~" is not expanded.
 runtime_dir = "/tmp/cm"
 state_dir = "/home/user/.local/state/cm"
+
+# Keys, by where they are live. A session key is intercepted before the program
+# sees it, so each one is taken from every program in the session; an overlay or
+# picker key costs nothing, because cm is on screen when it is matched.
+#
+# A list replaces that action's defaults rather than adding to them, and an
+# empty list unbinds it. `cm keys` prints what is in effect.
+[keys.session]
+detach = ["ctrl-\\"]        # detach_key is the older spelling and still works
+prefix = ["ctrl-]"]         # prefix_key likewise
+kill = ["f5"]               # any overlay verb, reached without the prefix
+
+[keys.overlay]
+next = ["n", "ctrl-f"]      # ctrl-n is the chooser's "down": `cm keys` reports a collision
+last = ["l"]
+
+[keys.tui]
+kill = ["x", "delete"]
+
+# How the overlay is drawn. See the prefix_key section for the grammar.
+[overlay]
+bar = "reverse"
+body = "bright-white on color236"
+selected = "bright-white on color241"
 
 [env]
 # Added to the built-in capture list. A trailing "*" matches by prefix.
