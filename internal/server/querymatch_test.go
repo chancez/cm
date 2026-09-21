@@ -253,3 +253,64 @@ func TestGraphicsResponseReachesThePty(t *testing.T) {
 			"must keep APC out of answerFromClient rather than relying on it.", got)
 	}
 }
+
+// A reply cm never asked for, split at a read boundary, must not reach the pty either.
+//
+// The sibling of the OSC 52 case above, and the one that reached a user: cm answers DA1 from its own model
+// and never proxies it, so nothing is outstanding while the *terminal* answers the same query anyway. With
+// the hold conditional on an outstanding question, "\x1b[?62;22c" arriving as two reads went to the pty as
+// an Escape keypress plus the text "[?62" and ";22c", which zsh showed as "/62;22c" beside the prompt after
+// neovim exited.
+//
+// Asserted at this level rather than only in internal/input because the seam test cannot show the
+// consequence: what makes this a bug is the bytes arriving at the pty, where a shell types them.
+func TestFragmentedUnsolicitedReplyDoesNotBecomeInput(t *testing.T) {
+	rec := startShimFor(t, shim.Config{
+		Session: "unsolicitedreply",
+		Command: []string{"/bin/sh", "-c", "sleep 10"},
+		Rows:    24,
+		Cols:    80,
+	})
+
+	sess, err := newSession(rec, &fakeTerminal{restore: []byte("R")}, 0, 0)
+	if err != nil {
+		t.Fatalf("newSession() error = %v", err)
+	}
+	defer sess.Close()
+
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	// The state that defines this case: cm asked this client nothing, which is what it looks like for every
+	// query the emulator answers itself.
+	if sess.awaitingReply(att.token) {
+		t.Fatal("awaitingReply() = true with nothing proxied, so this is not the case under test")
+	}
+
+	const reply = "\x1b[?62;22c"
+	var framer input.ReplyFramer
+	now := time.Now()
+	expect := sess.awaitingReply(att.token)
+	if err := routeInput(context.Background(), sess,
+		att.token, framer.Split([]byte(reply[:5]), now, expect)); err != nil {
+		t.Fatalf("routeInput(first fragment) error = %v", err)
+	}
+	if err := routeInput(context.Background(), sess,
+		att.token, framer.Split([]byte(reply[5:]), now.Add(time.Millisecond), expect)); err != nil {
+		t.Fatalf("routeInput(second fragment) error = %v", err)
+	}
+
+	// The pty echoes what is written to it, which is how the fragments were visible in the first place.
+	if got := awaitStream(t, sess, "62;22c", 700*time.Millisecond); strings.Contains(got, "62;22c") {
+		t.Errorf("the reply reached the pty as input; stream was %q", got)
+	}
+	sess.mu.Lock()
+	requests := len(sess.requests)
+	sess.mu.Unlock()
+	if requests != 0 {
+		t.Errorf("requests = %d, want 0: an unsolicited reply must be discarded rather than queued", requests)
+	}
+}

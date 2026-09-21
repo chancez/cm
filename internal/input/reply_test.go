@@ -317,3 +317,59 @@ func TestTerminalProbeBatchIsNotTyping(t *testing.T) {
 		t.Errorf("SplitReplies(%q) = %q, want %q", batch, got, want)
 	}
 }
+
+// An unsolicited reply split across two reads must survive, which is the case cm has no outstanding
+// question for.
+//
+// Reported as "/62;22c" left at a zsh prompt after quitting neovim. cm answers DA1 from its own model and
+// never proxies it, so expectReply is false while the *terminal* answers the same query anyway. Split at a
+// read boundary the sequence was dismantled: the ESC went out as a keypress and "[?62" and ";22c" followed
+// as text, which the line editor showed beside the prompt.
+//
+// Every unsolicited reply is in this position, not only DA1: whatever cm answers itself is never proxied,
+// so nothing is outstanding when the terminal's own answer arrives.
+func TestReplyFramerKeepsASplitReplyNobodyAskedFor(t *testing.T) {
+	const reply = "\x1b[?62;22c"
+
+	var framer ReplyFramer
+	now := time.Now()
+	if got, want := framer.Split([]byte(reply[:5]), now, false), []Part(nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(first fragment) = %#v, want %#v: a partial sequence must be held", got, want)
+	}
+	want := []Part{{Data: []byte(reply), Reply: true}}
+	if got := framer.Split([]byte(reply[5:]), now.Add(time.Millisecond), false); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(second fragment) = %#v, want %#v", got, want)
+	}
+}
+
+// A keypress split at a read boundary is held for the same reason, and dismantling one is worse than
+// dismantling a reply: an arrow key arriving as "\x1b[" then "A" reaches the program as an Escape followed
+// by the literal text "[A".
+func TestReplyFramerKeepsASplitKeypressWhole(t *testing.T) {
+	var framer ReplyFramer
+	now := time.Now()
+	if got, want := framer.Split([]byte("\x1b["), now, false), []Part(nil); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(first fragment) = %#v, want %#v", got, want)
+	}
+	want := []Part{{Data: []byte("\x1b[A")}}
+	if got := framer.Split([]byte("A"), now.Add(time.Millisecond), false); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(second fragment) = %#v, want %#v", got, want)
+	}
+}
+
+// A lone Escape is released at once, which is the reason the holding rule is written in terms of length
+// rather than simply holding every partial tail.
+//
+// Escape is a key people press constantly, in vim above all, and a keystroke that waits for a grace period
+// is felt as the session being slow. It is also the one partial tail that cannot be the start of a reply
+// worth waiting for: there is no reply shorter than an introducer plus a final byte.
+func TestReplyFramerReleasesALoneEscapeAtOnce(t *testing.T) {
+	var framer ReplyFramer
+	want := []Part{{Data: []byte("\x1b")}}
+	if got := framer.Split([]byte("\x1b"), time.Now(), false); !reflect.DeepEqual(got, want) {
+		t.Errorf("Split(lone escape) = %#v, want %#v", got, want)
+	}
+	if _, ok := framer.Deadline(); ok {
+		t.Error("Deadline() reports something held, want nothing: a lone escape must not be held")
+	}
+}

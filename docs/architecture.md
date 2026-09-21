@@ -1681,6 +1681,32 @@ Being the terminal for graphics has since been built, and the section below is w
 prediction above held: intercepting the protocol is what fixed the file-medium failure and the reply echo,
 and it is also what restore-on-reattach needed.
 
+### Framing a reply nobody asked for
+
+One rule sits below the routing and is worth stating separately, because it was wrong for a reason the
+section above does not cover.
+
+A reply can straddle a read: the pty caps reads at 1022 bytes and nothing aligns them to sequences. The
+framer holds an incomplete tail so the next read completes it. It used to hold one only while cm had a
+question outstanding with that client, on the argument that holding always would delay every Escape
+keypress.
+
+That condition is false exactly where it matters most. cm answers DA1 from its own model and never proxies
+it, while the query still reaches the terminal, which answers as well, so nothing is outstanding when that
+answer arrives. Split at a boundary it was taken apart: the ESC went out as a keypress and the rest as
+text. Reported as `/62;22c` beside a zsh prompt after quitting neovim, and reproduced in a test as
+`^[[?62;22c` echoed by the pty.
+
+So the hold is now keyed on length rather than on expectation: anything longer than a lone ESC is held, and
+a lone ESC still goes straight through. That keeps the latency argument intact, since Escape is the key
+people press constantly and the only partial tail that cannot be the start of a reply. It also fixes a
+keypress with the same shape: an arrow key split as `\x1b[` and `A` used to reach the program as an Escape
+followed by the literal text `[A`.
+
+This is not the local reply-path fix the section above warns against. It changes no routing branch and
+decides nothing about what a sequence *means*; it only stops a sequence being cut in half before anything
+classifies it. A reply that arrives whole and matches no outstanding question is still discarded, unchanged.
+
 ## Restoring an image
 
 An image on a session's screen is two facts, and cm keeps them in two places. *What* the image is lives in

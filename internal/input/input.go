@@ -202,9 +202,8 @@ func (f *ReplyFramer) Split(p []byte, now time.Time, expectReply bool) []Part {
 			break
 		}
 
-		// An incomplete sequence at the end of the read, while cm is waiting for an answer from this
-		// client. Held whole rather than dismantled, because the rest is already in the pty and arrives on
-		// the next read within microseconds.
+		// An incomplete sequence at the end of the read. Held whole rather than dismantled, because the rest
+		// is already in the pty and arrives on the next read within microseconds.
 		//
 		// beginsStringControl above catches an OSC, DCS or APC once its introducer has arrived. This
 		// catches what it cannot: a lone ESC, whose introducer is in the next read, and an incomplete CSI,
@@ -214,7 +213,21 @@ func (f *ReplyFramer) Split(p []byte, now time.Time, expectReply bool) []Part {
 		// ansi.PartialTailLen rather than a check of its own, so there is still one escape-sequence state
 		// machine in cm. It also keeps this narrow: ESC O A, an arrow key, is a complete two-byte sequence
 		// followed by text, so it reports nothing pending and the key is released at once even mid-query.
-		if expectReply && ansi.PartialTailLen(p) == len(p) {
+		//
+		// The length test is what replaced "hold only while a reply is expected", and the reason is that the
+		// replies most likely to be dismantled are the ones cm has no question outstanding for. cm answers
+		// DA1 from its own model and never proxies it, while the query still reaches the terminal, which
+		// answers as well; expectReply is false for every such answer. Reported as "/62;22c" beside a zsh
+		// prompt after quitting neovim, where "\x1b[?62;22c" split at a read boundary went out as an Escape
+		// keypress followed by the text "[?62" and ";22c".
+		//
+		// A lone ESC still goes straight through, which is the whole reason this is a length rather than an
+		// unconditional hold: Escape is pressed constantly, above all in vim, and a keystroke that waits out
+		// a grace period is felt as the session being slow. Everything longer has an introducer already, so
+		// it is either a reply or a keypress whose own sequence would be corrupted by being taken apart.
+		// Dismantling an arrow key split as "\x1b[" and "A" delivers an Escape and the literal text "[A",
+		// which is worse than the ReplyGrace wait this costs.
+		if ansi.PartialTailLen(p) == len(p) && (expectReply || len(p) > 1) {
 			f.partial = append(f.partial, p...)
 			f.heldAt = now
 			break
