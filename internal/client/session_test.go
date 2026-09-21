@@ -722,7 +722,7 @@ func TestRunSessionDetachesOnTheDetachKey(t *testing.T) {
 
 	done := h.runAsync(context.Background())
 	// A keystroke, then the detach byte: the preceding byte must still be forwarded rather than dropped.
-	h.input <- []byte{'x', key.Byte}
+	h.input <- append([]byte("x"), key.Primary()...)
 	// Waited for rather than assumed, and waited for the Detach itself because that is what the
 	// acknowledgement answers.
 	//
@@ -766,12 +766,12 @@ func TestRunSessionDetachesOnASplitSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseDetachKey() error = %v", err)
 	}
-	// The multi-byte encodings are the CSI forms a terminal sends when a keyboard protocol is active. Those
-	// are the ones that can arrive split, since the single control byte cannot be.
-	if len(key.Sequences) == 0 {
+	// The forms after the first are the CSI encodings a terminal sends when a keyboard protocol is active.
+	// Those are the ones that can arrive split, since the single control byte cannot be.
+	if len(key.forms) < 2 {
 		t.Fatal("the default detach key has no multi-byte encodings, so nothing here can be split")
 	}
-	seq := key.Sequences[0]
+	seq := key.forms[1]
 	if len(seq) < 2 {
 		t.Fatalf("encoding is %d bytes, need at least 2 to split", len(seq))
 	}

@@ -24,7 +24,7 @@ func TestInputGateNestingHandsOverBothKeys(t *testing.T) {
 	g := newGateWithPrefix(t, DefaultDetachKey, DefaultPrefixKey)
 	g.setNesting(true, 1)
 
-	if dec := g.feed([]byte{prefix.Byte}, t0); string(dec.Forward) != string([]byte{prefix.Byte}) ||
+	if dec := g.feed(prefix.Primary(), t0); string(dec.Forward) != string(prefix.Primary()) ||
 		dec.Action != gateNone {
 		t.Errorf("feed(prefix) = %+v, want it forwarded: the overlay belongs to the session on screen", dec)
 	}

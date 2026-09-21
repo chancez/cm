@@ -148,11 +148,11 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		return err
 	}
 
-	// Whichever spelling the file used, since [keys] and detach_key both set the same thing. Joined
+	// Whichever spelling the file used, since [keys.session] and detach_key set the same thing. Joined
 	// rather than printed as a list, because this report is one value per line and a key list is the one
-	// setting that can hold several.
-	detach := join(orDefault(cfg.DetachKeys(), client.DefaultDetachKey))
-	prefix := join(orDefault(cfg.PrefixKeys(), client.DefaultPrefixKey))
+	// setting that can hold several. `cm keys` is where the whole table is.
+	detach := join(orElse(cfg.DetachKeys(), client.DefaultDetachKey))
+	prefix := join(orElse(cfg.PrefixKeys(), client.DefaultPrefixKey))
 
 	// Only the count and the problems here. Forty bindings would bury the rest of this report, and the
 	// question they answer is "what does this key do", which is `cm keys`.
@@ -259,6 +259,16 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		fmt.Fprintf(os.Stdout, "key problem               %s\n", p)
 	}
 	return configProblemsError(out)
+}
+
+// orElse names the built-in key when the config sets none, so the report never has a blank where a live key
+// is: an unset setting and a key that does nothing look identical in a file, which is what this command
+// exists to tell apart.
+func orElse(keys []string, fallback string) []string {
+	if len(keys) > 0 {
+		return keys
+	}
+	return []string{fallback}
 }
 
 // configProblemsError fails on anything this report found that a person has to fix.

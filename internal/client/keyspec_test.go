@@ -59,8 +59,8 @@ func TestParseDetachKey(t *testing.T) {
 			if got.Name != tt.wantName {
 				t.Errorf("Name = %q, want %q", got.Name, tt.wantName)
 			}
-			if !tt.disabled && got.Byte != tt.wantByte {
-				t.Errorf("Byte = %#x, want %#x", got.Byte, tt.wantByte)
+			if !tt.disabled && string(got.Primary()) != string([]byte{tt.wantByte}) {
+				t.Errorf("Primary() = %q, want %#x", got.Primary(), tt.wantByte)
 			}
 		})
 	}
@@ -74,22 +74,20 @@ func TestParsePrefixKeyDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePrefixKey(\"\") error = %v", err)
 	}
-	want := KeySpec{
-		Byte:      0x1D,
-		Sequences: encodingsFor(']'),
-		Name:      "ctrl-]",
+	if got, want := string(prefix.Primary()), "\x1d"; got != want {
+		t.Errorf("ParsePrefixKey(\"\") sends %q, want %q", got, want)
 	}
-	if prefix.Byte != want.Byte || prefix.Name != want.Name || prefix.Disabled {
-		t.Errorf("ParsePrefixKey(\"\") = %+v, want %+v", prefix, want)
+	if prefix.Name != "ctrl-]" || prefix.Disabled {
+		t.Errorf("ParsePrefixKey(\"\") = %+v, want ctrl-] and live", prefix)
 	}
 
 	detach, err := ParseDetachKey("")
 	if err != nil {
 		t.Fatalf("ParseDetachKey(\"\") error = %v", err)
 	}
-	if detach.Byte == prefix.Byte {
-		t.Errorf("the default prefix and detach keys are both %#x, so one of them is unreachable",
-			detach.Byte)
+	if detach.SameKey(prefix) {
+		t.Errorf("the default prefix and detach keys are both %q, so one of them is unreachable",
+			detach.Primary())
 	}
 }
 

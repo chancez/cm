@@ -362,7 +362,17 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		o.mode = overlayResult
 		return
 	}
+	o.perform(action, pressName(key.Press), resp)
+}
 
+// perform carries out an action, whether a key in the overlay asked for it or a session key did.
+//
+// One path for both, which is what makes `[keys.session] kill` mean exactly what `ctrl-] k` means. A
+// session key opens the overlay first and then arrives here, so an interactive verb lands on its chooser or
+// its prompt rather than skipping it: one press instead of two, not a kill without a question.
+//
+// pressed is what to call the key in a message about it, since the two callers know it differently.
+func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayResponse) {
 	// Any action taken from the help screen leaves the help behind, which is what makes reading about a key
 	// and then pressing it work.
 	if action != keymap.OverlayHelp {
@@ -438,7 +448,7 @@ func (o *overlay) armedKey(key overlayKey, resp *overlayResponse) {
 		// A key bound to an action the *chooser* owns, pressed while there is no chooser: up, down, choose,
 		// erase, clear-filter. Closing is the same answer an unbound key gets, since neither means anything
 		// here and leaving the overlay armed is what must not happen.
-		o.status = "no action for " + pressName(key.Press) + " here"
+		o.status = "no action for " + pressed + " here"
 		o.mode = overlayResult
 	}
 }
@@ -1070,7 +1080,7 @@ func (o *overlay) forwardKey(key KeySpec, resp *overlayResponse) {
 		// The control byte rather than whatever encoding the terminal used. A program inside the session
 		// did not negotiate the kitty protocol with cm's client, and the pty's line discipline acts on the
 		// byte: forwarding CSI 92;5u would put "[92;5u" on the command line instead of raising SIGQUIT.
-		resp.Send = append(resp.Send, key.Byte)
+		resp.Send = append(resp.Send, key.Primary()...)
 		o.close(resp)
 	}
 }

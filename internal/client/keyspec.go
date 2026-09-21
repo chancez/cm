@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/keymap"
 )
 
@@ -15,15 +14,28 @@ import (
 // matching is the hard part and it is identical for both -- a terminal has three ways to spell the same
 // keystroke, and any of them can be split across two reads. Getting that right once is the point.
 type KeySpec struct {
-	// Byte is the control character the terminal sends in raw mode.
-	Byte byte
-	// Sequences are the ways a terminal may encode the same key when a keyboard protocol is
-	// active, checked in addition to Byte.
-	Sequences [][]byte
-	// Name is the spelling the user configured, for error messages.
+	// Name is the spelling the user configured, for error messages and for help text.
 	Name string
 	// Disabled reports that the key is not intercepted, so it reaches the session instead.
 	Disabled bool
+
+	// forms is every byte sequence that means this key, the one a terminal sends in its default modes
+	// first.
+	//
+	// A list rather than a byte plus alternates, which is what this was: a control character, plus the CSI
+	// forms a keyboard protocol sends for it. That shape could only describe a key whose default form is one
+	// byte, so anything else -- f5, delete, an arrow -- could not be an intercepted key at all. The zero
+	// value has no forms and matches nothing, which is what live() is for: a zero Byte used to mean NUL, so
+	// an unparsed spec silently swallowed ctrl-space.
+	forms [][]byte
+}
+
+// Primary is what a terminal sends for this key in its default modes, for forwarding it to the program.
+func (k KeySpec) Primary() []byte {
+	if len(k.forms) == 0 {
+		return nil
+	}
+	return k.forms[0]
 }
 
 // DefaultDetachKey and DefaultPrefixKey live in internal/keymap with every other key cm binds, and are
@@ -36,57 +48,47 @@ const (
 
 // ParseKeySpec resolves a configured key.
 //
-// Accepts "ctrl-X" for a letter, one of the punctuation characters that have control codes, or a named
-// key that is itself a single character; and "none" to disable interception. Configurable because ctrl-\
-// is awkward or unreachable on some keyboard layouts, and disableable because a program inside the
-// session may want the key itself.
+// Through internal/keymap, which is the one place keys are spelled, so an intercepted key accepts exactly
+// what a binding does: a name from the table, ctrl-<key>, or a single character. It used to accept ctrl-
+// combinations alone, which quietly limited what could be a session key -- `detach = ["f12"]` parsed as a
+// binding and then failed here, which is a config that takes a terminal away over a key nobody pressed.
+//
+// "none" is this layer's own, since it is about interception rather than about a key: it means the program
+// gets the key instead.
 func ParseKeySpec(spec string) (KeySpec, error) {
-	s := strings.ToLower(strings.TrimSpace(spec))
-	switch s {
+	switch strings.ToLower(strings.TrimSpace(spec)) {
 	case "":
 		return KeySpec{}, fmt.Errorf("no key given")
 	case "none", "off", "disabled":
 		return KeySpec{Name: "none", Disabled: true}, nil
 	}
 
-	rest, ok := strings.CutPrefix(s, "ctrl-")
-	if !ok {
-		rest, ok = strings.CutPrefix(s, "c-")
+	chord, err := keymap.ParseChord(spec)
+	if err != nil {
+		return KeySpec{}, err
 	}
-	if !ok {
+	if chord.Typing() {
+		// A bare character is refused however clearly the file asks for it. An intercepted key is taken from
+		// every program in every session, so a detach key of "a" would make the letter unreachable in vim, in
+		// a shell, everywhere, and a typo in a config file is a likelier explanation than the request. The
+		// same character inside the overlay is fine, since nothing there competes for it.
 		return KeySpec{}, fmt.Errorf(
-			"key %q must be \"ctrl-<key>\" or \"none\"", spec)
+			"%q is a character a program needs; a key cm takes from the session has to be a control "+
+				"combination like ctrl-o or a named key like f5", spec)
 	}
+	return KeySpecFromChord(chord), nil
+}
 
-	// A named key resolves first, so "ctrl-space" is NUL rather than rejected for not being one
-	// character. Same table `cm send --key` uses, deliberately: a user who configures a key and then
-	// sends it by name is describing one keystroke, and two spellings that disagree would be a bug
-	// nobody could see. Only single-byte names qualify, since ctrl plus an arrow key is not a control
-	// code at all.
-	name := "ctrl-" + rest
-	if named, err := input.ParseKey(rest); err == nil && len(named) == 1 &&
-		named[0] >= 0x20 && named[0] < 0x7f {
-		// Printable only. "ctrl-esc" would otherwise resolve to 0x1b and then be reported as having no
-		// control code, with the raw byte in the message: ctrl-[ is the spelling for that key, and a name
-		// whose own byte is already a control code is not a ctrl- combination at all.
-		rest = string(named)
-	}
-	if len(rest) != 1 {
-		return KeySpec{}, fmt.Errorf(
-			"key %q must be \"ctrl-<key>\" or \"none\"", spec)
-	}
-
-	c := rest[0]
-	code, ok := input.ControlCode(c)
-	if !ok {
-		return KeySpec{}, fmt.Errorf("no control code exists for ctrl-%c", c)
-	}
-
-	return KeySpec{
-		Byte:      code,
-		Sequences: encodingsFor(c),
-		Name:      name,
-	}, nil
+// KeySpecFromChord builds an intercepted-key matcher from a parsed chord.
+//
+// The chord already knows every byte form of the key, including the CSI encodings a keyboard protocol sends
+// for a ctrl combination, so nothing here re-derives them: two tables of encodings would eventually
+// disagree, and the disagreement would look like a key that works on one machine.
+func KeySpecFromChord(c keymap.Chord) KeySpec {
+	forms := make([][]byte, 0, 1+len(c.Sequences))
+	forms = append(forms, c.Bytes)
+	forms = append(forms, c.Sequences...)
+	return KeySpec{Name: c.Name, forms: forms}
 }
 
 // ParseDetachKey resolves the detach key, defaulting when nothing is configured.
@@ -118,23 +120,6 @@ func ParsePrefixKey(spec string) (KeySpec, error) {
 	return key, nil
 }
 
-// encodingsFor returns the CSI forms a terminal may send instead of the control byte.
-//
-// A terminal with the kitty keyboard protocol or xterm's modifyOtherKeys reports a modified key as a
-// sequence rather than a control character, so checking only the byte silently stops detecting the key
-// for exactly the users most likely to have those modes on. zmx hit this with Claude Code, which
-// enables modifyOtherKeys on startup, making ctrl-\ unable to detach at all.
-func encodingsFor(c byte) [][]byte {
-	// Both protocols identify the key by its unmodified codepoint, with 5 meaning ctrl.
-	cp := int(c)
-	return [][]byte{
-		// kitty keyboard protocol: CSI <codepoint> ; 5 u
-		[]byte(fmt.Sprintf("\x1b[%d;5u", cp)),
-		// xterm modifyOtherKeys: CSI 27 ; 5 ; <codepoint> ~
-		[]byte(fmt.Sprintf("\x1b[27;5;%d~", cp)),
-	}
-}
-
 // live reports whether this spec describes a key that is intercepted at all.
 //
 // The zero value is not, and saying so here rather than at each call site is the point: a KeySpec that
@@ -142,7 +127,16 @@ func encodingsFor(c byte) [][]byte {
 // prefix key would otherwise swallow that keystroke while looking disabled. Every parsed spec carries
 // its CSI encodings, so their absence is what distinguishes unset from configured.
 func (k KeySpec) live() bool {
-	return !k.Disabled && len(k.Sequences) > 0
+	return !k.Disabled && len(k.forms) > 0
+}
+
+// SameKey reports whether two specs describe the same keystroke.
+//
+// Compared on the primary form, which is the byte a terminal sends by default, so the pairs that are one
+// keystroke under two names come out equal: tab and ctrl-i, enter and ctrl-m, escape and ctrl-[. A
+// comparison on names would call those distinct and let a user bind both, leaving one silently unreachable.
+func (k KeySpec) SameKey(other KeySpec) bool {
+	return k.live() && other.live() && bytes.Equal(k.Primary(), other.Primary())
 }
 
 // Find reports the offset of a press of this key in p, or -1 if there is none.
@@ -163,12 +157,9 @@ func (k KeySpec) find(p []byte) (offset, length int) {
 	}
 
 	best, n := -1, 0
-	if i := bytes.IndexByte(p, k.Byte); i >= 0 {
-		best, n = i, 1
-	}
-	for _, seq := range k.Sequences {
-		if i := bytes.Index(p, seq); i >= 0 && (best < 0 || i < best) {
-			best, n = i, len(seq)
+	for _, form := range k.forms {
+		if i := bytes.Index(p, form); i >= 0 && (best < 0 || i < best) {
+			best, n = i, len(form)
 		}
 	}
 	return best, n
@@ -212,7 +203,7 @@ func (k KeySpec) HoldBack(p []byte) int {
 		return 0
 	}
 	keep := 0
-	for _, seq := range k.Sequences {
+	for _, seq := range k.forms {
 		// A complete sequence is not a partial one: Find handles that case, and holding the whole
 		// thing here would mean a press never fires.
 		for n := min(len(p), len(seq)-1); n > keep; n-- {

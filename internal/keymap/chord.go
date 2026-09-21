@@ -245,6 +245,14 @@ func (c Chord) Matches(p Press) bool {
 	}
 }
 
+// Typing reports whether this chord is a character somebody would type.
+//
+// The distinction a key cm *intercepts* turns on: a bare letter taken from the session is taken from every
+// program in it, so "a" is never a detach key however clearly a config file asks. A control combination or
+// a named key is not ordinary typing and is fair game. Inside the overlay the same chord is fine, because
+// nothing there is competing for it.
+func (c Chord) Typing() bool { return c.kind == chordRune }
+
 // Same reports whether two chords are the same keystroke.
 //
 // Compared by bytes rather than by name, which matters for exactly the pairs that look distinct and are

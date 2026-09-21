@@ -149,15 +149,16 @@ type RemoteConfig struct {
 // A list replaces that action's defaults rather than adding to them, which is the only rule that can
 // take a default away, and an empty list unbinds. `cm keys` prints what is in effect.
 type KeysConfig struct {
-	// Detach and Prefix are the keys a client intercepts before the session sees them. Empty means the
-	// default, and DetachKey and PrefixKey are the older spellings of the same thing.
-	Detach KeyList `toml:"detach"`
-	Prefix KeyList `toml:"prefix"`
-	// Overlay and TUI are keyed by action name: "next", "kill", "attach". An unknown name is reported by
-	// `cm keys` and `cm config` and otherwise ignored, for the reason UnknownSettings gives.
+	// Session, Overlay and TUI are each keyed by action name: "next", "kill", "attach".
 	//
-	// A map rather than a struct per interface, so a name this build does not know reaches the code that
+	// One table per place a key is live, which is the only thing that differs between them. Session keys
+	// are intercepted before the program sees them, so each one is taken from every program in every
+	// session; the other two cost nothing, because they are matched while cm is on screen. detach and
+	// prefix are session actions like any other and are the two with defaults.
+	//
+	// Maps rather than a struct per table, so an action name this build does not know reaches the code that
 	// can say so by name instead of toml recording it as an undecoded key.
+	Session map[string]KeyList `toml:"session"`
 	Overlay map[string]KeyList `toml:"overlay"`
 	TUI     map[string]KeyList `toml:"tui"`
 }
@@ -374,6 +375,8 @@ func (c *Config) UnknownSettings() []string { return c.unknown }
 func (c *Config) Keymap(ctx keymap.Context) (keymap.Map, []keymap.Problem) {
 	var table map[string]KeyList
 	switch ctx {
+	case keymap.Session:
+		table = c.Keys.Session
 	case keymap.Overlay:
 		table = c.Keys.Overlay
 	case keymap.TUI:
@@ -384,20 +387,40 @@ func (c *Config) Keymap(ctx keymap.Context) (keymap.Map, []keymap.Problem) {
 	for action, keys := range table {
 		overrides[action] = keys
 	}
+	// The older spellings, folded in here so everything downstream sees one table. They predate [keys] and
+	// every existing config uses them, so an upgrade that ignored one would take away the only way some
+	// people have of leaving a session. The table wins where a file sets both.
+	if ctx == keymap.Session {
+		if _, ok := overrides[string(keymap.OverlayDetach)]; !ok && strings.TrimSpace(c.DetachKey) != "" {
+			overrides[string(keymap.OverlayDetach)] = []string{c.DetachKey}
+		}
+		if _, ok := overrides[string(keymap.SessionPrefix)]; !ok && strings.TrimSpace(c.PrefixKey) != "" {
+			overrides[string(keymap.SessionPrefix)] = []string{c.PrefixKey}
+		}
+	}
 	return keymap.Build(ctx, overrides)
 }
 
-// DetachKeys and PrefixKeys are the keys a client intercepts, in the order they are matched.
+// DetachKeys and PrefixKeys are the two session keys a client needs before it has a keymap: they decide
+// whether it reads the terminal at all, and one of them is refused against the other.
 //
-// Nil means the caller's default. Both spellings are honored, and the list wins where a file sets both:
-// `detach_key` predates `[keys]`, every existing config uses it, and an upgrade that ignored it would
-// take away the only key some people have for leaving a session.
-func (c *Config) DetachKeys() []string {
-	return keyListOr(c.Keys.Detach, c.DetachKey)
-}
+// Read from the session table rather than from settings of their own, since that is where they live now.
+// Nil means nothing was configured and the caller's default applies.
+func (c *Config) DetachKeys() []string { return c.sessionKeys(keymap.OverlayDetach) }
 
-func (c *Config) PrefixKeys() []string {
-	return keyListOr(c.Keys.Prefix, c.PrefixKey)
+func (c *Config) PrefixKeys() []string { return c.sessionKeys(keymap.SessionPrefix) }
+
+func (c *Config) sessionKeys(action keymap.Action) []string {
+	if list, ok := c.Keys.Session[string(action)]; ok {
+		return list
+	}
+	switch action {
+	case keymap.OverlayDetach:
+		return keyListOr(nil, c.DetachKey)
+	case keymap.SessionPrefix:
+		return keyListOr(nil, c.PrefixKey)
+	}
+	return nil
 }
 
 func keyListOr(list KeyList, single string) []string {

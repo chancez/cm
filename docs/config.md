@@ -29,16 +29,17 @@ scrollback_lines = 10000
 # size to whichever window reconnects first.
 resize_policy = "leader"
 
-# The keys that detach a client, and the keys that open cm's overlay inside a
-# session. "none" disables either. detach_key and prefix_key are the older
-# spellings and still work; [keys] wins where a file sets both.
-[keys]
-detach = ["ctrl-\\"]
-prefix = ["ctrl-]"]
+# Keys, by where they are live. A session key is intercepted before the program
+# sees it, so each one is taken from every program in the session; an overlay or
+# picker key costs nothing, because cm is on screen when it is matched.
+#
+# A list replaces that action's defaults rather than adding to them, and an
+# empty list unbinds it. `cm keys` prints what is in effect.
+[keys.session]
+detach = ["ctrl-\\"]        # detach_key is the older spelling and still works
+prefix = ["ctrl-]"]         # prefix_key likewise
+kill = ["f5"]               # any overlay verb, reached without the prefix
 
-# Every action in the overlay and in `cm tui`, by name. A list replaces that
-# action's defaults rather than adding to them, and an empty list unbinds it.
-# `cm keys` prints what is in effect, and reports anything unusable.
 [keys.overlay]
 next = ["n", "ctrl-n"]
 last = ["l"]
@@ -203,13 +204,36 @@ is not the default because not every terminal sends NUL for it. See [overlay.md]
 
 ## [keys]
 
-Every action in the overlay and in `cm tui`, bound by name. `cm keys` prints what is in effect, which is
-also the list of action names, and exits non-zero on anything unusable.
+Every action bound by name, in one table per **place the key is live**. That is the only thing that
+separates them, and it decides what a key costs:
+
+- `[keys.session]` is matched in the byte stream before the program sees it, so each key here is taken from
+  every program in every session, permanently. Two are bound by default, `detach` and `prefix`, and that
+  number is small on purpose.
+- `[keys.overlay]` is matched while the bar is up, so a key costs nothing and is free to be a bare letter.
+- `[keys.tui]` is the same, in a program of cm's own.
+
+`detach` and `prefix` are session actions like any other rather than settings of their own kind:
+`detach_key`, `prefix_key`, `--detach-key` and `--prefix-key` all still work and mean the single-key case.
+
+Any overlay verb can also be a session key, which is how `kill` or `name` is reached without the prefix
+first. An interactive one lands you inside the overlay at that step -- a session key for `kill` opens the
+chooser, one for `name` opens the prompt -- so it is one press instead of two, not a kill without a
+question. The chooser's own keys (`up`, `down`, `choose`, `erase`, `clear-filter`) are not session actions,
+since they act on a list nothing has opened; binding one there is reported.
+
+A session key has to be a control combination or a named key. A bare character is refused, in the file and
+on the command line: `detach_key = "a"` would make the letter unreachable in every program in the session,
+and a typo is a likelier explanation than the request.
+
+`cm keys` prints all three tables, which is also the list of action names, and exits non-zero on anything
+unusable.
 
 ```toml
-[keys]
+[keys.session]
 detach = ["ctrl-\\", "f12"]
 prefix = ["ctrl-]"]
+kill = ["f5"]
 
 [keys.overlay]
 next = ["n", "ctrl-n"]

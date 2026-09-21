@@ -33,11 +33,11 @@ func TestRunSessionForwardsTheDetachKeyWhileHostingANestedClient(t *testing.T) {
 		t.Fatalf("terminal output = %q, want the marker that proves the hosting event was processed", got)
 	}
 
-	h.input <- []byte{key.Byte}
+	h.input <- key.Primary()
 	// The Open, then the forwarded key.
 	h.stream.waitForRequests(t, 2)
 
-	if got := string(h.stream.inputs()); got != string([]byte{key.Byte}) {
+	if got := string(h.stream.inputs()); got != string(key.Primary()) {
 		t.Errorf("input forwarded = %q, want the detach key passed through to the inner client", got)
 	}
 	if n := h.stream.detaches(); n != 0 {
@@ -73,7 +73,7 @@ func TestRunSessionTakesTheDetachKeyBackWhenNestingEnds(t *testing.T) {
 		t.Fatalf("terminal output = %q, want the marker that proves both hosting events were processed", got)
 	}
 
-	h.input <- []byte{key.Byte}
+	h.input <- key.Primary()
 	h.stream.detached()
 
 	if oc := <-done; oc != outcomeDone {

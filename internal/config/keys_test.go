@@ -29,10 +29,10 @@ func TestNoKeysSectionLeavesTheDefaults(t *testing.T) {
 }
 
 // Both spellings of a key setting decode, because detach_key has always been a bare string and a
-// list-only [keys] would make the same setting look different for no reason.
+// list-only [keys.session] would make the same setting look different for no reason.
 func TestAKeySettingTakesAStringOrAList(t *testing.T) {
 	cfg, err := Load(writeConfig(t, `
-[keys]
+[keys.session]
 detach = "ctrl-q"
 
 [keys.overlay]
@@ -61,7 +61,7 @@ previous = ["P", "ctrl-y"]
 // A wrong type is a problem rather than a parse failure that takes the whole file with it. Every other
 // mistake in a binding is survivable and this one has no reason not to be.
 func TestAKeySettingOfTheWrongTypeIsReportedNotFatal(t *testing.T) {
-	_, err := Load(writeConfig(t, "[keys]\ndetach = 42\n"))
+	_, err := Load(writeConfig(t, "[keys.session]\ndetach = 42\n"))
 	if err == nil {
 		t.Fatal("Load() error = nil, want a message naming the setting")
 	}
@@ -70,11 +70,11 @@ func TestAKeySettingOfTheWrongTypeIsReportedNotFatal(t *testing.T) {
 	}
 }
 
-// [keys] wins where a file sets both spellings, and the old one still works on its own: every existing
-// config uses detach_key, and an upgrade that ignored it would take away the only way some people have of
-// leaving a session.
+// The session table wins where a file sets both spellings, and the old one still works on its own: every
+// existing config uses detach_key, and an upgrade that ignored it would take away the only way some people
+// have of leaving a session.
 func TestTheOlderKeySettingsStillWork(t *testing.T) {
-	both, err := Load(writeConfig(t, "detach_key = \"ctrl-q\"\n[keys]\ndetach = [\"ctrl-g\"]\n"))
+	both, err := Load(writeConfig(t, "detach_key = \"ctrl-q\"\n[keys.session]\ndetach = [\"ctrl-g\"]\n"))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}

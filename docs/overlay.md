@@ -138,6 +138,28 @@ list now, so either can have an alternate on a keyboard where the default is awk
 `cm attach` refuses a configuration where they are the same key rather than picking a winner, since
 whichever lost would be silently unreachable.
 
+## Any verb can be reached without the prefix
+
+`[keys.session]` binds an overlay verb to a key in the session itself: `kill = ["f5"]` opens the kill
+chooser on one press rather than two. detach and prefix are entries in that same table, which is the point
+of it -- they are not a different kind of setting, they are the two session actions with defaults.
+
+Nothing else is bound there, and the reason is the price. A session key is matched in the byte stream before
+the program sees it, so it is taken from every program in every session, permanently, and the holdback
+widens with each one: a tail that could begin any intercepted key waits up to escapeGrace for the rest.
+
+Three things fall out of routing these through the same gate rather than a path of their own, and all three
+are why it is done that way:
+
+- A nested client gets them, like the other intercepted keys. Otherwise an outer window would take a key
+  from the session the user is actually looking at.
+- A key in two places resolves by the keymap's order, detach first, then prefix, then the verbs.
+- An interactive verb works unchanged, because the overlay opens first and then performs the action: the
+  chooser and the prompt draw as they always did. One press instead of two, not a kill without a question.
+
+A session key has to be a control combination or a named key. A bare character is refused rather than bound,
+since `kill = ["j"]` would make j unreachable in vim.
+
 ## The keys are a table, not a switch
 
 They were a switch on runes here and a set of meanings decided while decoding bytes: `decodeKey` answered

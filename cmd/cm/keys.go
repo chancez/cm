@@ -13,11 +13,12 @@ import (
 
 // keysJSON is what `cm keys --json` prints.
 type keysJSON struct {
-	// Detach and Prefix are the keys a client intercepts, which belong to no interface: they are matched
-	// in the byte stream before the overlay or anything else sees them.
-	Detach []string `json:"detach"`
-	Prefix []string `json:"prefix"`
-	// Overlay and TUI are the bindings in effect, in the order a keypress is matched against them.
+	// Session, Overlay and TUI are the bindings in effect, in the order a keypress is matched against them.
+	//
+	// Three because there are three places a key can be live, which is the only thing that separates them:
+	// a session key is intercepted before the program sees it, and the other two are matched while cm is on
+	// screen. detach and prefix are session actions like any other.
+	Session []bindingJSON `json:"session"`
 	Overlay []bindingJSON `json:"overlay"`
 	TUI     []bindingJSON `json:"tui"`
 	// Problems are the settings that were not usable, which is also what makes this command exit
@@ -58,12 +59,8 @@ byte stream before either interface sees a keypress.`,
 				return err
 			}
 
-			out := keysJSON{
-				Detach:   orDefault(cfg.DetachKeys(), keymap.DefaultDetachKey),
-				Prefix:   orDefault(cfg.PrefixKeys(), keymap.DefaultPrefixKey),
-				Problems: []string{},
-			}
-			for _, ctx := range []keymap.Context{keymap.Overlay, keymap.TUI} {
+			out := keysJSON{Problems: []string{}}
+			for _, ctx := range []keymap.Context{keymap.Session, keymap.Overlay, keymap.TUI} {
 				m, problems := cfg.Keymap(ctx)
 				bindings := make([]bindingJSON, 0, len(m.Actions()))
 				for _, def := range m.Actions() {
@@ -77,9 +74,12 @@ byte stream before either interface sees a keypress.`,
 						Does:   def.Label,
 					})
 				}
-				if ctx == keymap.Overlay {
+				switch ctx {
+				case keymap.Session:
+					out.Session = bindings
+				case keymap.Overlay:
 					out.Overlay = bindings
-				} else {
+				case keymap.TUI:
 					out.TUI = bindings
 				}
 				for _, p := range problems {
@@ -94,15 +94,22 @@ byte stream before either interface sees a keypress.`,
 				return keyProblemsError(out.Problems)
 			}
 
-			fmt.Fprintf(os.Stdout, "detach  %s\n", join(out.Detach))
-			fmt.Fprintf(os.Stdout, "prefix  %s\n", join(out.Prefix))
 			// Through a tabwriter because the key column's width depends on what is bound: "ctrl-k, ctrl-p,
 			// up" against "s". Aligning to a guess leaves the labels ragged the moment anything is rebound.
+			prefix := "the prefix key"
+			for _, b := range out.Session {
+				if b.Action == string(keymap.SessionPrefix) && len(b.Keys) > 0 {
+					prefix = b.Keys[0]
+				}
+			}
 			for _, section := range []struct {
 				title    string
 				bindings []bindingJSON
 			}{
-				{title: "overlay, after " + join(out.Prefix), bindings: out.Overlay},
+				// Said on the session section because it is the one with a price: every key here is one the
+				// program in the session no longer receives, which is why almost all of them are unbound.
+				{title: "in the session, taken from the program", bindings: out.Session},
+				{title: "in the overlay, after " + prefix, bindings: out.Overlay},
 				{title: paths.Name + " tui", bindings: out.TUI},
 			} {
 				fmt.Fprintf(os.Stdout, "\n%s\n", section.title)
@@ -141,15 +148,6 @@ func keyProblemsError(problems []string) error {
 		return nil
 	}
 	return &exitCodeError{code: 1, reported: true}
-}
-
-// orDefault names the built-in key when the config sets none, so the output never has a blank where a
-// live key is.
-func orDefault(keys []string, fallback string) []string {
-	if len(keys) > 0 {
-		return keys
-	}
-	return []string{fallback}
 }
 
 func join(keys []string) string {

@@ -59,6 +59,17 @@ func Build(ctx Context, overrides map[string][]string) (Map, []Problem) {
 			case err != nil:
 				problems = append(problems, Problem{Setting: setting, Message: err.Error()})
 				continue
+			case ctx == Session && c.Typing():
+				// A character a program needs, refused here so it is reported rather than fatal: a session key
+				// is taken from every program in the session, and "j" bound there would be unreachable in vim.
+				// The same chord in the overlay is fine, since nothing competes for it while the bar is up.
+				problems = append(problems, Problem{
+					Setting: setting,
+					Message: fmt.Sprintf(
+						"%s is a character a program needs; a key taken from the session has to be a control "+
+							"combination like ctrl-o or a named key like f5", c.Name),
+				})
+				continue
 			case ctx == TUI && c.Tea == "":
 				// A key bubbletea does not report is one this action could never fire on. Said here rather
 				// than left to look like a key that does nothing.

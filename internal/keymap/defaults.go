@@ -17,14 +17,26 @@ const DefaultDetachKey = `ctrl-\`
 // everywhere.
 const DefaultPrefixKey = "ctrl-]"
 
-// Context is which of cm's interfaces a binding belongs to.
+// Context is where a key is live, which is the only thing that actually differs between cm's bindings.
 //
-// Two, and they are kept apart rather than sharing action names, because the same verb has different
-// keys in each today: the overlay kills with k under a program that is still drawing, the picker with x
-// in a list where x is free. Merging them would have had to pick a winner and silently change one.
+// Not "which feature owns the key", which was the first cut and was an artifact: detach and prefix looked
+// like a different *kind* of setting from the overlay's keys, and they are not. They are the two actions
+// that happen to be bound in the session by default. What separates a context from another is what a key
+// costs and when it is matched, and those two go together:
+//
+//   - Session: matched in the byte stream before the program sees it, so every key here is taken from
+//     every program in every session, permanently. That is why only two are bound by default.
+//   - Overlay: matched while the bar is up, so a key costs nothing and is free to be a bare letter.
+//   - TUI: the same, in a program of cm's own.
+//
+// Contexts also keep their own action names rather than sharing, because the same verb wants different
+// keys in each: the overlay kills with k under a program that is still drawing, the picker with x in a
+// list where x is free. One shared table would have had to pick a winner and silently change one.
 type Context string
 
 const (
+	// Session is a key cm intercepts inside an attached session, before the program sees it.
+	Session Context = "session"
 	// Overlay is the bar inside an attached session, including its session chooser.
 	Overlay Context = "overlay"
 	// TUI is `cm tui`, the full session picker.
@@ -60,6 +72,10 @@ const (
 	OverlayErase       Action = "erase"
 	OverlayClearFilter Action = "clear-filter"
 )
+
+// SessionPrefix opens the overlay, and is the one action that exists only in the session: everything else
+// there is an overlay verb reached without the prefix first.
+const SessionPrefix Action = "prefix"
 
 // Picker actions, including the list's own navigation.
 const (
@@ -156,5 +172,51 @@ var definitions = map[Context][]Definition{
 	},
 }
 
+// sessionVerbs are the overlay actions that can also be reached without the prefix.
+//
+// The verbs only. The chooser's keys are deliberately absent: up, down, choose, erase and clear-filter act
+// on a list that is not on screen until something opens one, so a key bound to one of them in the session
+// could never do anything, and Build reports that rather than leaving it to look like a key that failed.
+//
+// An interactive verb is eligible and lands you inside the overlay at that step: a session key for kill
+// opens the chooser, one for name opens the prompt. One press instead of two, not a kill without a
+// question -- which is the point, since a single keystroke that ends a shell is not something to add by
+// accident.
+var sessionVerbs = []Action{
+	OverlaySwitch, OverlayNext, OverlayPrevious, OverlayLast,
+	OverlayName, OverlayKill, OverlayPicker, OverlaySendDetach,
+	OverlayCommand, OverlayHelp,
+}
+
 // Definitions returns a context's actions in the order they are matched and rendered.
-func Definitions(ctx Context) []Definition { return definitions[ctx] }
+func Definitions(ctx Context) []Definition {
+	if ctx != Session {
+		return definitions[ctx]
+	}
+
+	// Built from the overlay's table rather than written out again, so a label or a new verb cannot say one
+	// thing after the prefix and another without it. Only the defaults differ, and they differ in the way
+	// that matters: nothing here is bound unless somebody asks for it, because each one is a key taken from
+	// every program in every session.
+	defs := []Definition{
+		{
+			Action:   SessionPrefix,
+			Label:    "open the overlay",
+			Defaults: []string{DefaultPrefixKey},
+		},
+		{
+			Action:   OverlayDetach,
+			Label:    "detach",
+			Defaults: []string{DefaultDetachKey},
+		},
+	}
+	for _, verb := range sessionVerbs {
+		for _, def := range definitions[Overlay] {
+			if def.Action == verb {
+				defs = append(defs, Definition{Action: def.Action, Label: def.Label})
+				break
+			}
+		}
+	}
+	return defs
+}

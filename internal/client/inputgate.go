@@ -1,6 +1,10 @@
 package client
 
-import "time"
+import (
+	"time"
+
+	"github.com/chancez/cm/internal/keymap"
+)
 
 // escapeGrace bounds how long a partial detach-key sequence is withheld while the rest of it is
 // awaited.
@@ -44,6 +48,9 @@ const (
 	// gateNestedWarn means the detach key was pressed again while handed to an inner client that has not
 	// acted on it, so the user is told that pressing it once more leaves this session instead.
 	gateNestedWarn
+	// gateOverlayAction means a session key asked for an overlay action without the prefix: the overlay
+	// opens and performs Do rather than waiting for a second keypress.
+	gateOverlayAction
 )
 
 // nestedPressesToWarn is how many forwarded detach keys it takes before cm says something, after which one
@@ -56,6 +63,12 @@ const (
 // and the third.
 const nestedPressesToWarn = 2
 
+// gateActionKeys is one session action and the keys that perform it.
+type gateActionKeys struct {
+	Action keymap.Action
+	Keys   keySet
+}
+
 // gateDecision is everything one read of keystrokes produced.
 //
 // A struct rather than several return values because the parts have to be read together: what the
@@ -65,6 +78,8 @@ type gateDecision struct {
 	Forward []byte
 	// Action is what cm must do itself.
 	Action gateAction
+	// Do is the overlay action a session key asked for, when Action is gateOverlayAction.
+	Do keymap.Action
 	// Key is the intercepted key that was pressed, for a message that has to name it. Zero unless Action
 	// names one, and the primary is not a substitute: with several detach keys bound, a notice naming a
 	// spelling the user did not press is worse than naming none.
@@ -86,8 +101,17 @@ type gateDecision struct {
 type inputGate struct {
 	// detach ends the attachment, prefix opens the overlay. Each is a set, since either can be configured
 	// with alternates, and both are matched the same way: whichever was pressed first in a read wins.
+	//
+	// These two keep fields of their own rather than living in actions below, because each has behavior
+	// nothing else has: detach is what the handover escape counts, and prefix hands the rest of the read to
+	// the overlay. Both are session actions in the config, and the config is where that uniformity belongs.
 	detach keySet
 	prefix keySet
+	// actions are the other session keys: an overlay verb reached without the prefix first.
+	//
+	// In the order the keymap lists them, so a key bound to two actions resolves the same way here as it
+	// does everywhere else. Empty unless somebody bound one, since each is a key taken from every program.
+	actions []gateActionKeys
 	// suspended stops both keys being intercepted, so they reach the session like any other keystroke.
 	//
 	// Set while a nested client is attached inside this session, which the server reports. That client
@@ -183,10 +207,30 @@ func (g *inputGate) feed(data []byte, now time.Time) gateDecision {
 		}
 	}
 
+	// A session key bound to an overlay verb, checked after the two above so a key in both lists resolves
+	// the way the keymap's order says. Each of these was opted into one at a time, so there is no default
+	// case where this loop has anything to do.
+	for _, bound := range g.actions {
+		if at, _, key := bound.Keys.find(buf); at >= 0 {
+			return gateDecision{
+				Forward: buf[:at],
+				Action:  gateOverlayAction,
+				Do:      bound.Action,
+				Key:     key,
+			}
+		}
+	}
+
 	// Hold back a possible partial sequence until the rest arrives, or until the grace expires. The
 	// longer of the two, since a partial that could still become either key must wait for whichever needs
 	// more bytes: with the defaults both encode as ESC [ 9 ... and diverge only at the fourth byte.
-	if keep := max(g.detach.holdBack(buf), g.prefix.holdBack(buf)); keep > 0 && keep <= len(buf) {
+	keep := max(g.detach.holdBack(buf), g.prefix.holdBack(buf))
+	for _, bound := range g.actions {
+		// Every intercepted key widens the holdback, which is the quiet cost of binding one: a tail that
+		// could begin any of them waits up to escapeGrace for the rest.
+		keep = max(keep, bound.Keys.holdBack(buf))
+	}
+	if keep > 0 && keep <= len(buf) {
 		g.held = append(g.held, buf[len(buf)-keep:]...)
 		if anchor.IsZero() {
 			g.heldAt = now

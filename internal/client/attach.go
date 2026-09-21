@@ -48,6 +48,16 @@ const (
 	inputReadSize = 4096
 )
 
+// SessionKey is one overlay action reachable from the session without the prefix.
+//
+// Parsed by the command layer, which is where a configuration mistake is reported by the command that read
+// the file, and handed over already resolved: internal/client matches bytes and does not decide what a key
+// is called.
+type SessionKey struct {
+	Action keymap.Action
+	Keys   []KeySpec
+}
+
 // Open builds the Open message these options describe.
 //
 // Exists because there is more than one way to create a session -- an interactive attach, and
@@ -142,6 +152,14 @@ type Options struct {
 	// Keys is what each key means inside the overlay, from the config file. The zero value means the
 	// built-in defaults, which is what every caller that has no config to read wants.
 	Keys keymap.Map
+	// SessionKeys are the overlay verbs bound to a key in the session itself, so they are reached without
+	// the prefix. Empty for every caller that did not ask for one, which is the default: each is a key
+	// taken from every program in the session.
+	//
+	// detach and prefix are session actions too and stay in their own fields, because the gate treats them
+	// differently: one is what the handover escape counts and the other hands the rest of a read to the
+	// overlay.
+	SessionKeys []SessionKey
 
 	// BarStyle, BodyStyle and SelectedStyle are how the overlay's three regions are drawn. Empty means the
 	// default. See ParseStyle for why these are configurable at all.
@@ -959,7 +977,11 @@ func runSession(
 	// The gate buffers a partial detach sequence across reads, so a CSI-encoded detach split between
 	// two reads is still recognized rather than forwarded to the shell, and releases it after
 	// escapeGrace so a lone escape is not withheld forever.
-	gate := &inputGate{detach: detachKeys, prefix: prefixKeys}
+	sessionActions := make([]gateActionKeys, 0, len(opts.SessionKeys))
+	for _, bound := range opts.SessionKeys {
+		sessionActions = append(sessionActions, gateActionKeys{Action: bound.Action, Keys: bound.Keys})
+	}
+	gate := &inputGate{detach: detachKeys, prefix: prefixKeys, actions: sessionActions}
 
 	// Says so when the detach key has gone to a nested client twice with nothing happening, which is the
 	// only warning before the next press leaves this session instead. Same row and conditions as the outage
@@ -1401,6 +1423,26 @@ func runSession(
 				ov.open()
 				// The same read can hold the action key, which is what a fast typist or a paste produces.
 				if outcome, done := applyOverlay(ov.feed(dec.Rest)); done {
+					return outcome, nil
+				}
+				continue
+			}
+			if dec.Action == gateOverlayAction {
+				// A session key: the same action the prefix and then a key would have performed, one press
+				// sooner. Whatever preceded it was typed at the program and goes there first, in order.
+				if sendInput(buf) {
+					return outcomeReconnect, nil
+				}
+				stopHold()
+				ov.session = result.Session
+				// Opened first, because an interactive verb has to draw: kill needs its chooser and name
+				// needs its prompt. A verb that finishes on its own closes again in the same breath, so
+				// nothing is left on screen that the user did not ask for.
+				ov.open()
+				var resp overlayResponse
+				ov.perform(dec.Do, dec.Key.Name, &resp)
+				ov.paint()
+				if outcome, done := applyOverlay(resp); done {
 					return outcome, nil
 				}
 				continue

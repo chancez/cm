@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
@@ -134,6 +135,13 @@ matters for another multiplexer, which sees the key first and never passes it on
 			}
 
 			overlayKeys, _ := cfg.Keymap(keymap.Overlay)
+			// The verbs somebody chose to reach without the prefix. Empty for anybody who bound none, and
+			// parsed here so a bad key is reported by the command that read the file. Problems are not fatal
+			// for the reason keymap.Problem gives; `cm keys` is what reports them.
+			sessionKeys, err := sessionActionKeys(cfg)
+			if err != nil {
+				return err
+			}
 
 			// Taken before anything reads the environment, because Env below forwards this process's
 			// whole environment to a session this call creates. See takeResumeFrom.
@@ -159,7 +167,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 				// What each key means inside the overlay. Problems are not fatal and are not printed here
 				// either: a client is what holds someone's terminal, and `cm keys` is the command that
 				// reports them. See keymap.Problem.
-				Keys: overlayKeys,
+				Keys:        overlayKeys,
+				SessionKeys: sessionKeys,
 				// How it is drawn, from [overlay] in the config file.
 				BarStyle:      barStyle,
 				BodyStyle:     bodyStyle,
@@ -354,6 +363,42 @@ func interceptedKeys(
 	return keys, nil
 }
 
+// sessionActionKeys resolves the overlay verbs bound to a key in the session.
+//
+// Refuses a key that is also the detach or prefix key, for the reason noSharedKeys does: every one of these
+// is live at once, so a key in two places means whichever loses is silently unreachable.
+func sessionActionKeys(cfg *config.Config) ([]client.SessionKey, error) {
+	m, _ := cfg.Keymap(keymap.Session)
+	var out []client.SessionKey
+	for _, def := range m.Actions() {
+		switch def.Action {
+		case keymap.SessionPrefix, keymap.OverlayDetach:
+			// Held in their own fields by the client, since the gate treats each differently.
+			continue
+		}
+		chords := m.Chords(def.Action)
+		if len(chords) == 0 {
+			continue
+		}
+		keys := make([]client.KeySpec, 0, len(chords))
+		for _, c := range chords {
+			key, err := client.ParseKeySpec(c.Name)
+			if err != nil {
+				// Skipped rather than fatal, and unreachable in practice because Build rejects the same chords
+				// with a message naming the setting. Belt and braces in the direction that keeps a terminal:
+				// a client is what someone is sitting in front of, and `cm keys` is what reports a bad key.
+				continue
+			}
+			keys = append(keys, key)
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		out = append(out, client.SessionKey{Action: def.Action, Keys: keys})
+	}
+	return out, nil
+}
+
 // noSharedKeys refuses a key that would be both intercepted keys at once.
 func noSharedKeys(detach, prefix []client.KeySpec) error {
 	for _, d := range detach {
@@ -361,7 +406,7 @@ func noSharedKeys(detach, prefix []client.KeySpec) error {
 			continue
 		}
 		for _, p := range prefix {
-			if !p.Disabled && d.Byte == p.Byte {
+			if !p.Disabled && d.SameKey(p) {
 				return fmt.Errorf(
 					"%s is both a detach key and the prefix key, so one of them would never fire", d.Name)
 			}
