@@ -118,7 +118,17 @@ func (s *Service) Subscribe(ctx context.Context, req *shimv1.SubscribeRequest, s
 }
 
 func (s *Service) Write(_ context.Context, req *shimv1.WriteRequest) (*shimv1.WriteResponse, error) {
-	n, err := s.session.Write(req.Data)
+	// A reply takes the guarded path, which drops it when the program that asked has gone. Typing takes
+	// the plain one and is never dropped: it belongs to whoever is reading now. See Session.WriteReply.
+	var (
+		n   int
+		err error
+	)
+	if req.Reply {
+		n, err = s.session.WriteReply(req.Data, seq.Shim(req.QuerySeq))
+	} else {
+		n, err = s.session.Write(req.Data)
+	}
 	if err != nil {
 		return nil, err
 	}

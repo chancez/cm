@@ -341,8 +341,28 @@ func (x *Output) GetGap() bool {
 }
 
 type WriteRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Data  []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// reply marks these bytes as an answer to a query the program in the session asked, rather than
+	// input on that program's behalf.
+	//
+	// The shim does not treat the two differently in effect. It reports them differently: a reply is
+	// logged with how long it took to come back, which is a span only the process that owns the pty can
+	// see, and which is how the reported `62;22c` at a prompt after quitting neovim was traced to an
+	// answer released half a second late rather than to cm answering slowly.
+	//
+	// A version of the shim dropped a reply whose asker had gone, decided here from the pty's foreground
+	// process group. That is reverted; see docs/architecture.md on delivering an answer to a program that
+	// has gone for the measurements and for why the decision does not belong in a shim.
+	Reply bool `protobuf:"varint,2,opt,name=reply,proto3" json:"reply,omitempty"`
+	// query_seq is the sequence number of the output chunk whose query this answers, and 0 when the
+	// caller does not know.
+	//
+	// The shim keeps the read time of recent chunks by sequence, so this is what pairs an answer with the
+	// read its question arrived in. Timing against the newest read instead is wrong and was tried: a reply
+	// is written after later output has already been read, so every span reported as instant and an answer
+	// the server had held for 525ms looked like 0.34ms.
+	QuerySeq      uint64 `protobuf:"varint,3,opt,name=query_seq,json=querySeq,proto3" json:"query_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -382,6 +402,20 @@ func (x *WriteRequest) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *WriteRequest) GetReply() bool {
+	if x != nil {
+		return x.Reply
+	}
+	return false
+}
+
+func (x *WriteRequest) GetQuerySeq() uint64 {
+	if x != nil {
+		return x.QuerySeq
+	}
+	return 0
 }
 
 type WriteResponse struct {
@@ -797,9 +831,11 @@ const file_cm_shim_v1_shim_proto_rawDesc = "" +
 	"\x06Output\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
-	"\x03gap\x18\x03 \x01(\bR\x03gap\"\"\n" +
+	"\x03gap\x18\x03 \x01(\bR\x03gap\"U\n" +
 	"\fWriteRequest\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\")\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x14\n" +
+	"\x05reply\x18\x02 \x01(\bR\x05reply\x12\x1b\n" +
+	"\tquery_seq\x18\x03 \x01(\x04R\bquerySeq\")\n" +
 	"\rWriteResponse\x12\x18\n" +
 	"\awritten\x18\x01 \x01(\x04R\awritten\"\x8c\x01\n" +
 	"\rResizeRequest\x12\x12\n" +

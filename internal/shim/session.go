@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
@@ -98,6 +99,13 @@ type Session struct {
 	// escape sequences. See ptyWriter: the tty layer does not order them on Linux.
 	writer *ptyWriter
 	cmd    *exec.Cmd
+
+	// readAt holds when recent chunks were read, oldest first, guarded by mu.
+	//
+	// Instrumentation rather than state anything depends on: it is the only place in cm that knows when a
+	// chunk left the pty, so it is the only place that can report how long an answer took to come back. The
+	// server can time its own share and cannot see either boundary. See WriteReply.
+	readAt []readAt
 
 	// log records what the shim does. Never nil.
 	log *slog.Logger
@@ -262,6 +270,12 @@ func (s *Session) pump() {
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
+			// When this chunk left the pty, for WriteReply to report against later. A timestamp rather
+			// than anything about who produced it: a reading of the pty's foreground process group was
+			// tried here and removed, because it cost 2771ns per read on darwin against 3556ns for a
+			// whole pty round trip, and because the question it answers is who may read next rather than
+			// who asked. See docs/architecture.md on delivering an answer to a program that has gone.
+			s.noteRead(s.outputLog.Next())
 			s.outputLog.Append(buf[:n])
 			if s.persist != nil {
 				// A failed write stops persisting rather than ending the session. The shell and
@@ -390,6 +404,75 @@ func (s *Session) Log() *seqlog.Log[seq.Shim] { return s.outputLog }
 // The exited check stays outside the write lock. It reads a different mutex, so nesting is avoided
 // entirely, and a write that beats an exit by a hair is not the failure worth ordering against: the pty
 // is closed under it either way and the write reports that.
+// WriteReply writes an answer to a query the program in the session asked.
+//
+// Identical to Write in effect. It exists so the shim can report the one span nothing else can see: a
+// query leaves the pty here and its answer comes back here, and since_read is the round trip. The server
+// can time its own share, a client can time its own, and neither can see either boundary.
+//
+// Deliberately not a decision. A version of this dropped a reply when the pty's foreground process group
+// had changed since the query was read, and it was removed rather than kept: the cost was 2771ns of ioctl
+// per pty read against 3556ns for a whole pty round trip, and the signal answers which group may read next
+// rather than which asked, so it needed a sample history, a fail-open rule and a throttle to say anything.
+// A shim is also effectively firmware, since it cannot be replaced without ending the shell, so a rule
+// still being iterated is in the worst possible place. See docs/architecture.md on delivering an answer to
+// a program that has gone.
+func (s *Session) WriteReply(p []byte, querySeq seq.Shim) (int, error) {
+	// Ahead of the write, so a delay here puts the asking program's exit before delivery. That is the
+	// window the reported artifact lives in, and it cannot be raced reliably. See fault.BeforeReplyWrite.
+	fault.At(fault.BeforeReplyWrite)
+
+	s.log.Debug("writing a terminal reply to the pty",
+		"session", s.cfg.Session, "bytes", len(p), "since_read", s.sinceRead(querySeq))
+	return s.Write(p)
+}
+
+// readAt is when one chunk of output was read from the pty.
+type readAt struct {
+	// seq is the first sequence number of the chunk.
+	seq seq.Shim
+	// at is when it was read.
+	at time.Time
+}
+
+// maxReadSamples bounds the history of read times.
+//
+// A reply follows its query within milliseconds, so only the newest handful can ever be asked for. Kept
+// small deliberately: this is a diagnostic, not a record of the session.
+const maxReadSamples = 64
+
+// noteRead records when the chunk starting at seq was read.
+func (s *Session) noteRead(seq seq.Shim) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readAt = append(s.readAt, readAt{seq: seq, at: time.Now()})
+	if len(s.readAt) > maxReadSamples {
+		s.readAt = s.readAt[len(s.readAt)-maxReadSamples:]
+	}
+}
+
+// sinceRead reports how long ago the chunk containing seq was read, or zero when it is not remembered.
+//
+// The latest sample at or before seq, since a chunk covers a range and only its first number is recorded.
+// Zero rather than an error because this only ever feeds a log line: a reply whose chunk has aged out of
+// the history is one this was never going to say anything useful about.
+func (s *Session) sinceRead(seq seq.Shim) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var at time.Time
+	for _, sample := range s.readAt {
+		if sample.seq <= seq {
+			at = sample.at
+			continue
+		}
+		break
+	}
+	if at.IsZero() {
+		return 0
+	}
+	return time.Since(at)
+}
+
 func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	exited := s.exited

@@ -65,6 +65,18 @@ const (
 	// exited before binding, and a session named `work` worked throughout, which is what hid it. A delay
 	// here makes the slow path reachable without breaking the shim.
 	BeforeShimReady Point = "before-shim-ready"
+
+	// BeforeReplyWrite is in the shim's WriteReply, before a terminal reply reaches the pty.
+	//
+	// The window is the reported `62;22c` at a shell prompt: nvim asks primary DA as its last act, exits,
+	// and cm's answer arrives at a pty the shell is now reading, so the shell takes it as typing. Racing it
+	// needs a real nvim and does not reproduce on demand, which is how three rounds of A/B testing produced
+	// four different wrong theories.
+	//
+	// A delay here holds the answer back for as long as a test needs, so the asking program is provably gone
+	// before the reply is delivered. Placed ahead of the guard rather than behind it, so the guard decides
+	// with the state it would really see.
+	BeforeReplyWrite Point = "before-reply-write"
 )
 
 // points is every point, for validating a spec against something rather than accepting any string.
@@ -79,4 +91,5 @@ var points = map[Point]bool{
 	AfterAttachOpened:     true,
 	BeforeShimReady:       true,
 	BeforeClientCanAnswer: true,
+	BeforeReplyWrite:      true,
 }

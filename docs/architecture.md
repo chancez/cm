@@ -1707,6 +1707,80 @@ This is not the local reply-path fix the section above warns against. It changes
 decides nothing about what a sequence *means*; it only stops a sequence being cut in half before anything
 classifies it. A reply that arrives whole and matches no outstanding question is still discarded, unchanged.
 
+### Delivering an answer to a program that has gone
+
+Open. The cause is measured, the reproduction is deterministic, and no candidate fix has been accepted.
+
+`62;22c` appears at a zsh prompt after quitting neovim. The chain:
+
+- nvim asks primary DA as its last act and exits.
+- cm answers it from its own model. By itself that is fast: 160us and 211us with nothing queued ahead.
+- The answer is held. An earlier terminal-only query in the same burst is still waiting for a client, and
+  every reply behind it queues to keep the program's answers in order. Release comes when the sweeper
+  expires that question at `requestTimeout`: measured at 507ms, 510ms and 525ms.
+- Half a second outlasts nvim's teardown, so the answer reaches a pty the shell is reading. zsh in vi mode
+  takes the ESC as a mode switch and inserts `62;22c` into a search one character at a time, which is why a
+  grep of the reported capture for the sequence found nothing while the garbage was on screen.
+
+nvim logging `tui_stop: timed out waiting for DA1 response` is the same fact from the other side.
+
+Reproducing needs no nvim and no real terminal: a program that asks a terminal-only query, then one cm
+answers itself, then exits, with no client to answer the first. `TestAnAnswerReachesTheShellAfterItsAskerExits`
+pins it, and `fault.BeforeReplyWrite` makes the exit unconditionally first instead of racing the 500ms.
+
+**The hold is not the thing to fix.** Queuing a local reply behind an outstanding question is the ordering
+guarantee, and the `wallfacer -h` corruption above is what happens without it.
+`TestAQueryAskedBeforeAClientCanAnswerIsStillAnswered` covers a client attaching inside that window.
+
+**Why there is no clean fix.** A pty input queue has no addressee. cm writes bytes into it and cannot ask
+who will read next, and nothing synchronizes that write with the kernel handing the terminal over. Knowing
+would mean asking whether the asking program still has a read pending on that descriptor, which POSIX does
+not expose. So every candidate is evidence about the asker, and they differ in what they get wrong:
+
+| candidate | evidence | loses an answer when | fails toward |
+| --- | --- | --- | --- |
+| foreground process group changed | out-of-band sample | never, but misses a program that asks in its first instant | deliver |
+| shell reported the command ended, OSC 133 | ordered in the stream | ctrl-z; never fires without shell integration | drop |
+| model left the alternate screen | ordered in the stream | ctrl-z; nothing for a non-TUI | drop |
+| the reply is older than `requestTimeout` | time only | any program still waiting | drop |
+
+Each was built or specified and none was kept:
+
+- **Foreground process group**, `TIOCGPGRP` sampled per read and compared at write time, was implemented and
+  reverted. It needed a 64-entry sample history, a fail-open rule, and a throttle to stay off the hot path:
+  2771ns per ioctl against 3556ns for a whole pty round trip on an M3 Max. It also answers who may read next
+  rather than who asked, and that mismatch is where its failure mode comes from. A test written against it
+  passed on darwin and failed in the Linux image, because a shell hands the terminal to a job around the
+  time it starts rather than before it, so a program's first output samples as the shell's.
+- **OSC 133 command end** reads a marker cm already parses and costs no syscall, but it depends on shell
+  integration being loaded. A rule that silently never fires is not a rule.
+- **Leaving the alternate screen** covers only the case OSC 133 misses and shares its ctrl-z loss, so it adds
+  a second mechanism for no extra coverage.
+- **Dropping on expiry** needs no signal at all and reaches every live session, and it discards the answer of
+  any program that is still waiting, which is the failure the ordering queue exists to prevent.
+- **Answering immediately and suppressing a late proxied reply** attacks the latency rather than the
+  delivery. It is the `wallfacer -h` corruption: wallfacer asked OSC 11 then `CSI 6n`, and receiving the
+  `6n` answer first made it consume that as its OSC 11 reply.
+
+**Where a fix may not go, and why that is not layering taste.** A shim cannot be replaced without ending its
+shell, so `cm upgrade` reports kept shims rather than replacing them. Shim code is therefore shipped once per
+session lifetime and unfixable in place: the process-group guard, once installed, did nothing for the session
+that reported the bug and could not until that shell ended. Server code reaches every live session. So a rule
+that is still being iterated belongs in the server, and the shim should carry sensors rather than decisions.
+`WriteReply` is exactly that now: it reports `since_read`, the pty-read-to-pty-write span that neither the
+server nor a client can see, and decides nothing.
+
+Two open questions, recorded so they are not re-derived:
+
+- The report was that older sessions showed it and fresh ones did not, and nothing measured accounts for
+  that. Session volume is a 2.5x effect on emulator work, nowhere near 500ms, and the reported session's
+  server log contained no expiry lines at all. A second route to the same endpoint is open: an answer
+  delivered promptly to a program that has already stopped reading. `since_read` separates them.
+- Making a shim upgradeable would remove the constraint above entirely. `syscall.Exec` on itself keeps the
+  pid, so the shell's parent and `wait()` still work, and the pty master survives an exec; the handover is a
+  log position and a persist path, which is what cm already does for a client via `CM_RESUME_FROM_SEQ`. See
+  `docs/ideas.md`.
+
 ## Restoring an image
 
 An image on a session's screen is two facts, and cm keeps them in two places. *What* the image is lives in

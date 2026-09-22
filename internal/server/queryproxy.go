@@ -8,6 +8,7 @@ import (
 
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/query"
+	"github.com/chancez/cm/internal/seq"
 )
 
 // requestTimeout bounds how long a proxied query waits for a client's answer.
@@ -57,6 +58,28 @@ type pendingRequest struct {
 	data []byte
 	// asked is when this entry was created, for expiry.
 	asked time.Time
+	// querySeq is the output chunk the query came from, carried so the shim can tell whether the program
+	// that asked is still the one reading. Zero when unknown, which the shim treats as "deliver".
+	querySeq seq.Shim
+	// queuedAt is when a queued local reply was produced. Zero for a proxied question, which has asked.
+	queuedAt time.Time
+}
+
+// readyReply is a reply that may go to the pty now, with the chunk its query came from.
+type readyReply struct {
+	data     []byte
+	querySeq seq.Shim
+	// queuedAt is when the emulator produced this reply, so the write can report how long it was held.
+	//
+	// The whole point of recording it: the reported `62;22c` was not cm answering slowly, it was cm answering
+	// at once and then holding the answer behind a question no client answered, released by the sweeper at
+	// requestTimeout. Measured at 507ms, 510ms and 525ms. Nothing in any log said so, and the shim's own
+	// since_read cannot be read on a session whose shim predates it, which is every session that existed
+	// before this shipped: `cm upgrade` replaces the server and reports shims rather than replacing them.
+	// This side is therefore the only part of the measurement an existing session can be asked for.
+	queuedAt time.Time
+	// byExpiry records that the release came from a question timing out rather than being answered.
+	byExpiry bool
 }
 
 // noteQueries inspects a chunk of session output and sends any terminal-only query to a client.
@@ -451,19 +474,31 @@ func (s *Session) queueOrWriteReply(replies [][]byte) {
 		return
 	}
 
+	// The chunk being processed when the emulator produced these, in the *shim's* numbering, which is the
+	// space the shim's own record of foreground groups uses. Read under mu with the rest of the state
+	// rather than passed down through feedTerminal, which carries the server's numbering and would make
+	// this the third place the two spaces meet.
+	var ready []readyReply
 	s.mu.Lock()
+	querySeq := s.chunkSeq
+	produced := s.now()
 	if len(s.requests) == 0 {
 		s.mu.Unlock()
-		s.writeReplies(replies)
+		for _, data := range replies {
+			ready = append(ready, readyReply{data: data, querySeq: querySeq, queuedAt: produced})
+		}
+		s.writeReplies(ready)
 		return
 	}
 	for _, data := range replies {
 		s.requests = append(s.requests, &pendingRequest{
-			data:  append([]byte(nil), data...),
-			asked: s.now(),
+			data:     append([]byte(nil), data...),
+			asked:    produced,
+			querySeq: querySeq,
+			queuedAt: produced,
 		})
 	}
-	ready := s.takeReadyLocked()
+	ready = s.takeReadyLocked()
 	s.mu.Unlock()
 
 	s.writeReplies(ready)
@@ -473,8 +508,8 @@ func (s *Session) queueOrWriteReply(replies [][]byte) {
 //
 // Stops at the first entry still waiting for a client, which is the ordering guarantee: everything behind
 // an unanswered question stays queued. Callers must hold mu.
-func (s *Session) takeReadyLocked() [][]byte {
-	var out [][]byte
+func (s *Session) takeReadyLocked() []readyReply {
+	var out []readyReply
 	i := 0
 	for ; i < len(s.requests); i++ {
 		r := s.requests[i]
@@ -483,7 +518,7 @@ func (s *Session) takeReadyLocked() [][]byte {
 			break
 		}
 		if len(r.data) > 0 {
-			out = append(out, r.data)
+			out = append(out, readyReply{data: r.data, querySeq: r.querySeq, queuedAt: r.queuedAt})
 		}
 	}
 	s.requests = s.requests[i:]
@@ -512,6 +547,11 @@ func (s *Session) sweepRequests() {
 	s.mu.Unlock()
 
 	if expired > 0 {
+		// Anything released here was waiting on the question that just expired, by definition, so the write
+		// can say that rather than leaving a long wait to be correlated against a separate line by timestamp.
+		for i := range ready {
+			ready[i].byExpiry = true
+		}
 		s.log.Debug("expired proxied terminal queries with no reply",
 			"session", s.label, "count", expired)
 	}
@@ -529,11 +569,21 @@ func (s *Session) sweepRequests() {
 //
 // Truncated, since a reply can be an OSC 52 clipboard payload of arbitrary size and a log line should not
 // carry a screenful of base64.
-func (s *Session) writeReplies(replies [][]byte) {
-	for _, data := range replies {
+func (s *Session) writeReplies(replies []readyReply) {
+	for _, r := range replies {
+		data := r.data
+		var waited time.Duration
+		if !r.queuedAt.IsZero() {
+			waited = s.now().Sub(r.queuedAt)
+		}
+		released := "direct"
+		if r.byExpiry {
+			released = "expiry"
+		}
 		s.log.Debug("writing a terminal reply to the pty",
-			"session", s.label, "bytes", len(data), "reply", truncateForLog(data))
-		if err := s.Write(context.Background(), data); err != nil {
+			"session", s.label, "bytes", len(data), "reply", truncateForLog(data),
+			"query_seq", uint64(r.querySeq), "waited", waited, "released", released)
+		if err := s.WriteReply(context.Background(), data, r.querySeq); err != nil {
 			// A program that queried the terminal is now waiting for an answer it will never get, so this
 			// explains an otherwise inexplicable hang.
 			s.log.Warn("delivering terminal response to the pty failed",

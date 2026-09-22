@@ -397,6 +397,12 @@ type Session struct {
 	// it away would trade a fixed detach key for a broken split. See docs/ideas.md on a session's location.
 	announced map[string]announcedClient
 
+	// chunkSeq is the shim sequence number of the output chunk being processed, guarded by mu.
+	//
+	// Carried so a reply can be attributed to the chunk whose query produced it. In the shim's numbering,
+	// because the shim is what consumes it.
+	chunkSeq seq.Shim
+
 	// frames is the stack of command frames the shells writing to this pty have opened, outermost first.
 	//
 	// One entry per command in flight, which for one shell is at most one; the depth comes from an ssh, where
@@ -822,6 +828,12 @@ func (s *Session) resubscribe() (shimv1.Shim_SubscribeClient, error) {
 // Called only from pump, on pump's goroutine, which is what lets promptPartial and the trackers go without
 // locks.
 func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
+	// Recorded before anything reads the chunk, so a reply the emulator produces from it can name the
+	// chunk its query came from. The shim keeps the pty's foreground process group per chunk and uses that
+	// to drop a reply whose asker has gone; see Session.WriteReply in internal/shim.
+	s.mu.Lock()
+	s.chunkSeq = rawSeq
+	s.mu.Unlock()
 
 	// A chunk ending inside an escape sequence is trimmed, and the tail waits for the rest.
 	//
@@ -3313,12 +3325,24 @@ func (s *Session) ReportFocus(ctx context.Context, focused bool) {
 
 // Write sends input to the session's shell.
 func (s *Session) Write(ctx context.Context, data []byte) error {
+	return s.write(ctx, data, false, 0)
+}
+
+// WriteReply writes an answer to a query the program asked, rather than typing.
+//
+// Separate from Write so the shim can tell them apart, which is what lets it drop an answer whose asker
+// has exited: see Session.WriteReply in internal/shim. Nothing else about the write differs.
+func (s *Session) WriteReply(ctx context.Context, data []byte, querySeq seq.Shim) error {
+	return s.write(ctx, data, true, querySeq)
+}
+
+func (s *Session) write(ctx context.Context, data []byte, reply bool, querySeq seq.Shim) error {
 	// The write that cannot otherwise be made to fail: os.File.Write loops until the pty accepts
 	// everything, so a short or failed write has no natural cause to provoke.
 	if err := fault.Err(fault.BeforeShimWrite); err != nil {
 		return err
 	}
-	resp, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data})
+	resp, err := s.shim.Write(ctx, &shimv1.WriteRequest{Data: data, Reply: reply, QuerySeq: uint64(querySeq)})
 	if err != nil {
 		return err
 	}

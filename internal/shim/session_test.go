@@ -386,3 +386,56 @@ func TestStartRejectsInvalidSessionName(t *testing.T) {
 		t.Error("Start() with traversal name = nil error, want rejection")
 	}
 }
+
+// The read-time history answers for the chunk a query arrived in, not for the newest read.
+//
+// The distinction is the whole point of keying it on sequence. A reply is written after later output has
+// already been read, so reporting the newest sample would time the wrong chunk and make every span look
+// instant. That is how the first version of this reported 0.34ms for an answer the server had held for half
+// a second.
+func TestSinceReadAnswersForTheChunkTheQueryArrivedIn(t *testing.T) {
+	s := &Session{}
+	// Three reads, oldest first, spaced so a wrong pick is obvious in the result rather than marginal.
+	now := time.Now()
+	s.readAt = []readAt{
+		{seq: 10, at: now.Add(-3 * time.Second)},
+		{seq: 20, at: now.Add(-2 * time.Second)},
+		{seq: 30, at: now.Add(-1 * time.Second)},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		query seq.Shim
+		want  time.Duration
+	}{
+		{name: "inside the oldest chunk", query: 15, want: 3 * time.Second},
+		{name: "exactly at a sample", query: 20, want: 2 * time.Second},
+		{name: "inside the newest chunk", query: 45, want: 1 * time.Second},
+		{name: "before anything was read", query: 5, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := s.sinceRead(tc.query)
+			// Rounded, since the span is measured against time.Now inside the call.
+			if got.Round(100*time.Millisecond) != tc.want {
+				t.Errorf("sinceRead(%d) = %v, want about %v", tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
+// The history is bounded, and it drops the oldest rather than the newest.
+//
+// Keeping the wrong end would be silent: every span would report zero for a busy session, which reads as
+// "instant" rather than as "not recorded".
+func TestNoteReadKeepsTheNewestSamples(t *testing.T) {
+	s := &Session{}
+	for i := range maxReadSamples + 10 {
+		s.noteRead(seq.Shim(i))
+	}
+	if len(s.readAt) != maxReadSamples {
+		t.Errorf("history holds %d samples, want %d", len(s.readAt), maxReadSamples)
+	}
+	if first := s.readAt[0].seq; first != 10 {
+		t.Errorf("oldest retained sample is seq %d, want 10: the wrong end was dropped", first)
+	}
+}

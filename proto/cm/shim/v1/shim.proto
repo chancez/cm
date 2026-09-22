@@ -113,6 +113,26 @@ message Output {
 
 message WriteRequest {
   bytes data = 1;
+  // reply marks these bytes as an answer to a query the program in the session asked, rather than
+  // input on that program's behalf.
+  //
+  // The shim does not treat the two differently in effect. It reports them differently: a reply is
+  // logged with how long it took to come back, which is a span only the process that owns the pty can
+  // see, and which is how the reported `62;22c` at a prompt after quitting neovim was traced to an
+  // answer released half a second late rather than to cm answering slowly.
+  //
+  // A version of the shim dropped a reply whose asker had gone, decided here from the pty's foreground
+  // process group. That is reverted; see docs/architecture.md on delivering an answer to a program that
+  // has gone for the measurements and for why the decision does not belong in a shim.
+  bool reply = 2;
+  // query_seq is the sequence number of the output chunk whose query this answers, and 0 when the
+  // caller does not know.
+  //
+  // The shim keeps the read time of recent chunks by sequence, so this is what pairs an answer with the
+  // read its question arrived in. Timing against the newest read instead is wrong and was tried: a reply
+  // is written after later output has already been read, so every span reported as instant and an answer
+  // the server had held for 525ms looked like 0.34ms.
+  uint64 query_seq = 3;
 }
 
 message WriteResponse {
