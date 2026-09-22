@@ -1067,3 +1067,24 @@ is where the interception belongs.
 Ordering made this visible rather than causing it. Transmissions used to precede the screen, whose leading
 `ESC [ 2J` erased whatever a confused terminal had printed; they follow it now, because that same erase
 discards the stored image, so the garbage stays on screen.
+
+## Keep the last terminal facts a client reported
+
+cm asks an attached client for anything whose answer lives in the window: the foreground and background
+colours, the palette, terminfo capabilities, and the pixel dimensions. With no client attached there is
+nobody to ask, so the question parks, expires at `requestTimeout`, and the program gets nothing while every
+reply queued behind it waits out the full 500ms. Measured at 507ms, 510ms and 525ms.
+
+Most of those facts change rarely. A session that has ever had a client knows what its terminal said, and
+serving that while detached would be right almost always, would empty the parking queue, and would remove the
+stall for headless sessions entirely.
+
+Two things make it a real decision rather than an obvious win. A session detached from one terminal and
+reattached to another serves the first one's answers until the next query, so a theme change or a different
+font shows up as a wrong colour or a wrong cell size for that window. And the pixel dimensions are not
+retained anywhere today: the session record holds `Rows` and `Cols` only, and the per-client sizes go with the
+client, so this needs new state rather than a new read of existing state.
+
+Where it would land: `CSI 14t` and `16t` would gain the fallback they cannot have now, and OSC 10/11 would
+stop parking on a detached session, which is the common case since every TUI asks for the background colour at
+startup. See `docs/architecture.md` on answering what cm already knows.

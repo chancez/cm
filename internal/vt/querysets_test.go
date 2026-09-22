@@ -103,6 +103,13 @@ func TestQuerySetsAgreeWithEmulator(t *testing.T) {
 		if emulatorAnswers && terminalOnly {
 			wrongProxy = append(wrongProxy, fmt.Sprintf("%q", seq))
 		}
+		// And so must one cm answers from its own session state, for the same reason: two answerers on
+		// one pty is the duplicate this whole design removes. Without this arm a sequence moved into the
+		// local-report set is swept without being checked against the emulator at all, which is exactly
+		// what happened when 18t was moved there.
+		if emulatorAnswers && query.IsLocalReport([]byte(seq)) {
+			wrongProxy = append(wrongProxy, fmt.Sprintf("%q (local report)", seq))
+		}
 	}
 
 	t.Logf("swept %d sequences: %d answerable, %d terminal-only", len(seqs), answeredCount, proxyCount)
@@ -141,6 +148,28 @@ func TestQuerySetsAgreeWithEmulator(t *testing.T) {
 	}
 }
 
+// The text area report is cm's own, named here so its absence from the proxied list above is a decision
+// rather than something that fell out.
+//
+// cm writes the pty's winsize and every resize passes through it, so no terminal's answer is better. It was
+// proxied, and with nothing attached that parked, expired at requestTimeout, held every reply behind it for
+// 507-525ms and returned nothing. See docs/architecture.md on answering what cm already knows.
+func TestTheTextAreaReportIsAnsweredByCM(t *testing.T) {
+	const seq = "\x1b[18t"
+	if query.IsTerminalOnlyRequest([]byte(seq)) {
+		t.Errorf("IsTerminalOnlyRequest(%q) = true, want false: asking a client for the size cm set stalls "+
+			"every reply behind it for the full timeout and answers nothing", seq)
+	}
+	if !query.IsLocalReport([]byte(seq)) {
+		t.Errorf("IsLocalReport(%q) = false, want true", seq)
+	}
+	// The emulator must stay silent about it, or cm would answer twice. Asked rather than assumed, which is
+	// what the sweep does for every other query.
+	if replies := emulatorReplies(t, seq); len(replies) > 0 {
+		t.Errorf("the emulator answered %q with %q, so cm answering it too would be a duplicate", seq, replies)
+	}
+}
+
 // The specific queries the proxy exists for, named rather than left to the sweep.
 //
 // The sweep proves the sets are consistent with the emulator; it does not prove the *right* sequences are
@@ -161,7 +190,6 @@ func TestProxiedQueriesAreTheOnesThatMatter(t *testing.T) {
 		{"XTGETTCAP", "\x1bP+q544e\x1b\\"},
 		{"XTWINOPS pixel size", "\x1b[14t"},
 		{"XTWINOPS cell size", "\x1b[16t"},
-		{"XTWINOPS text area", "\x1b[18t"},
 	}
 	for _, tc := range proxied {
 		t.Run(tc.name, func(t *testing.T) {

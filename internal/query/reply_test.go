@@ -83,7 +83,8 @@ func TestEveryProxiedQueryHasARecognizedReply(t *testing.T) {
 		{"\x1b]52;c;?\x07", "\x1b]52;c;aGk=\x07"},
 		{"\x1b[14t", "\x1b[4;600;800t"},
 		{"\x1b[16t", "\x1b[6;20;10t"},
-		{"\x1b[18t", "\x1b[8;24;80t"},
+		// 18t is absent because cm no longer proxies it: it is a LocalReport, answered from the winsize cm
+		// wrote. See TestTheTextAreaReportIsNotProxied.
 		{"\x1bP+q544e\x1b\\", "\x1bP1+r544e=787465726d\x1b\\"},
 	}
 

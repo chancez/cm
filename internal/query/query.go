@@ -9,6 +9,9 @@
 //   - **Terminal-only** queries are ones no model can answer, because the value lives in the window:
 //     the background and foreground colours, the palette, the clipboard, pixel dimensions, terminfo
 //     capabilities. cm has to ask an attached client and relay what comes back.
+//   - **Local reports** are ones neither the model nor the terminal should answer, because cm itself is
+//     authoritative: the text area in cells is the winsize cm wrote on the pty. Proxying these was
+//     measured to cost a 500ms stall on a session with no client, and to return no answer at all.
 //
 // The important consequence is that a client is a *source cm consults*, never an answerer in its own
 // right. Every reply reaching the pty is written by cm. That is what makes the duplicate-reply bug
@@ -38,6 +41,14 @@ const (
 	Answerable
 	// TerminalOnly is a query only the real terminal can answer, so cm must ask a client.
 	TerminalOnly
+	// LocalReport is a query cm answers from its own session state rather than from the emulator or from
+	// a client.
+	//
+	// A third answerer rather than a variant of Answerable, because the two are pinned differently and
+	// the distinction is checked: Answerable means the *emulator* replies, and TestQuerySets asks the
+	// live emulator whether it does. The emulator is silent about these, so calling them answerable
+	// would fail that sweep, and calling them terminal-only is what cost the measured 500ms stall.
+	LocalReport
 )
 
 // Classify reports what the sequence at the start of p is, and how long it is.
@@ -48,6 +59,9 @@ const (
 func Classify(p []byte) (n int, kind Kind) {
 	if n, answered := classify(p); answered {
 		return n, Answerable
+	}
+	if n, local := classifyLocalReport(p); local {
+		return n, LocalReport
 	}
 	if n, terminal := classifyTerminalOnly(p); terminal {
 		return n, TerminalOnly
@@ -76,6 +90,31 @@ func IsAnsweredRequest(p []byte) bool {
 func IsTerminalOnlyRequest(p []byte) bool {
 	n, terminal := classifyTerminalOnly(p)
 	return terminal && n == len(p)
+}
+
+// IsLocalReport reports whether p is exactly one query cm answers from its own session state.
+//
+// The third counterpart of IsAnsweredRequest, pinned by the same sweep: a query in this set must be one
+// the emulator stays silent about, or cm would answer it twice.
+func IsLocalReport(p []byte) bool {
+	n, local := classifyLocalReport(p)
+	return local && n == len(p)
+}
+
+// classifyLocalReport recognizes the queries cm answers from session state.
+//
+// Only the text area in cells today. The pixel reports are deliberately not here: a real terminal's answer
+// is better when one is attached, because a font change moves the cell size and cm would not know, so those
+// stay proxied and fall back to query.Report only when no client can answer. See Report.
+func classifyLocalReport(p []byte) (n int, local bool) {
+	_, _, _, length, ok := parseCSI(p)
+	if !ok {
+		return 0, false
+	}
+	if op, isReport := winopsReport(p); isReport && op == 18 {
+		return length, true
+	}
+	return length, false
 }
 
 // classifyTerminalOnly recognizes the queries whose answer lives in the window rather than in a
@@ -295,7 +334,9 @@ func classifyCSITerminalOnly(p []byte) (n int, terminal bool) {
 		i++
 	}
 	switch string(params[:i]) {
-	case "14", "16", "18":
+	case "14", "16":
+		// 18 is absent on purpose: it is the text area in cells, which cm set on the pty itself, so no
+		// terminal's answer is better and asking one only risks the stall. It is a LocalReport.
 		return length, true
 	}
 	// 21 (the title report) is absent on purpose: the emulator answers it, so it is in the answerable

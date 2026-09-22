@@ -97,8 +97,11 @@ func (s *Session) noteQueries(data []byte) {
 	// is on the path every byte of session output takes.
 	for i := 0; i < len(data); {
 		n, kind := query.Classify(data[i:])
-		if kind == query.TerminalOnly {
+		switch kind {
+		case query.TerminalOnly:
 			s.proxyQuery(data[i : i+n])
+		case query.LocalReport:
+			s.answerLocally(data[i : i+n])
 		}
 		if n <= 0 {
 			// Not a sequence, or an incomplete one at the end of the chunk. Advance a byte: classifying a
@@ -108,6 +111,50 @@ func (s *Session) noteQueries(data []byte) {
 		}
 		i += n
 	}
+}
+
+// answerLocally answers a query from the session's own state, in the program's asking order.
+//
+// The text area in cells is the only one of these today, and it is cm's outright: cm writes the pty's
+// winsize and every resize passes through it, so no terminal's answer is better. It used to be proxied,
+// which cost the stall this whole section of docs/architecture.md is about. On a session with no client the
+// question parked, expired at requestTimeout, and every reply queued behind it waited that out: 507ms,
+// 510ms and 525ms measured. The program got nothing.
+//
+// Queued rather than written, and that is the part worth not simplifying. A reply is only allowed to pass an
+// outstanding question if the program asked it later, so this goes through the same queue as everything
+// else. Writing it straight to the pty would overtake a proxied question asked before it, which is the
+// `wallfacer -h` corruption.
+//
+// Nothing is queued when cm cannot answer after all. That keeps the queue honest: an entry with no data and
+// no client to fill it would stall every reply behind it until the sweeper expired it, which is the failure
+// this function exists to remove.
+func (s *Session) answerLocally(seq []byte) {
+	rows, cols := s.Size()
+
+	// Zero pixels, deliberately. cm does not retain a pixel size once its client detaches, so there is
+	// nothing to answer the pixel reports from and they stay proxied; query.Report declines them here rather
+	// than inventing a number, and a zero answer would be worse than none, since that is what `kitten icat`
+	// reads as "this terminal cannot report pixel sizes".
+	data, ok := query.Report(seq, rows, cols, 0, 0)
+	if !ok {
+		return
+	}
+
+	s.log.Debug("answering a size report from the session rather than asking a client",
+		"session", s.label, "bytes", len(data), "rows", rows, "cols", cols)
+
+	s.mu.Lock()
+	querySeq := s.chunkSeq
+	s.requests = append(s.requests, &pendingRequest{
+		data:     data,
+		asked:    s.now(),
+		querySeq: querySeq,
+	})
+	ready := s.takeReadyLocked()
+	s.mu.Unlock()
+
+	s.writeReplies(ready)
 }
 
 // proxyQuery asks one attached client a question cm cannot answer, recording it as outstanding.

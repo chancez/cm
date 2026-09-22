@@ -1781,6 +1781,38 @@ Two open questions, recorded so they are not re-derived:
   log position and a persist path, which is what cm already does for a client via `CM_RESUME_FROM_SEQ`. See
   `docs/ideas.md`.
 
+### Answering what cm already knows
+
+A consequence of the section above, and the one part of it that is settled.
+
+Proxying is only worth its cost when the answer genuinely lives in the window. `CSI 18t`, the text area in
+characters, does not: cm writes the pty's winsize itself and every resize passes through it, so no terminal's
+answer is better than cm's. Asking anyway bought nothing and cost the stall above, which with no client
+attached is not a risk but a certainty: the question parks, expires at `requestTimeout`, every reply behind it
+waits that out, and the asking program gets no answer at all.
+
+So there are three answerers rather than two, and `query.Kind` says which: the emulator, cm's own session
+state, and the real terminal. `query.LocalReport` is the middle one, `query.Report` formats it, and
+`Session.answerLocally` queues it. Queued rather than written directly, since a reply may only pass a question
+the program asked earlier, which is the `wallfacer -h` ordering again.
+
+It is a third kind rather than part of `Answerable` because those two are pinned differently, and the pin is
+what keeps this honest: `Answerable` means the *emulator* replies, and `TestQuerySetsAgreeWithEmulator` asks
+the live emulator across 24294 sequences whether it does. libghostty is silent about `18t`, so calling it
+answerable would fail that sweep. The sweep now checks local reports for the same silence, because a sequence
+moved into that set was otherwise swept without being checked against the emulator at all.
+
+**`CSI 14t` and `16t` stay proxied**, and the reason is a limit rather than a preference. A real terminal's
+answer is better while one is attached, since a font change moves the cell size and cm never learns of it. And
+the fallback that would matter is not available: cm does not retain a pixel size once its client detaches. The
+session record holds `Rows` and `Cols` and nothing about pixels, and the per-client sizes go with the client.
+So a detached session has nothing to answer these from, which is exactly the case a fallback would be for.
+Answering zero is not an option: zero is what `kitten icat` reads as "this terminal cannot report pixel sizes",
+and it then refuses to transmit an image at all.
+
+Closing that needs cm to keep the last pixel size a client reported, which is the same mechanism as caching any
+other terminal fact to serve while detached, and it is open: see `docs/ideas.md`.
+
 ## Restoring an image
 
 An image on a session's screen is two facts, and cm keeps them in two places. *What* the image is lives in
