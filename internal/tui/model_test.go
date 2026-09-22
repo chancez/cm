@@ -658,6 +658,53 @@ func TestRenameRefusesANameThatCouldBeAReference(t *testing.T) {
 	}
 }
 
+// TestAddNameKeepsTheNameTheSessionAlreadyHas is the regression test for the bug this key exists for.
+//
+// The report: a session kitty had named kitty.325 was renamed in the picker, and restarting kitty brought
+// the window back as a new session under the old name. A window's launch command is fixed when the window
+// is created, so kitty.325 is what it asks for forever, and a rename had taken that name off the session.
+func TestAddNameKeepsTheNameTheSessionAlreadyHas(t *testing.T) {
+	h := newHarness(t, session("kitty.325", "a7k2m9x4", 100))
+	h.list()
+
+	h.press("b")
+	if h.model.mode != modeAddName {
+		t.Fatalf("b left the picker in mode %d, want the add-name prompt", h.model.mode)
+	}
+	for _, k := range []string{"w", "o", "r", "k"} {
+		h.press(k)
+	}
+	h.run(h.pressCode(tea.KeyEnter))
+
+	wantBind := []*serverv1.BindRequest{{Name: "work", Session: "@a7k2m9x4"}}
+	if got := h.sessions.bound; !reflect.DeepEqual(got, wantBind) {
+		t.Errorf("bound %v, want %v", got, wantBind)
+	}
+	if got := h.sessions.unbound; len(got) != 0 {
+		t.Errorf("unbound %v, want nothing: adding a name takes none away", got)
+	}
+}
+
+// TestTheTwoNamingPromptsSayWhichIsOpen covers the footer telling them apart.
+//
+// They look alike, they are one key apart, and only one of them takes a name away, so a prompt that said
+// "rename" while adding would be an invitation to the bug above.
+func TestTheTwoNamingPromptsSayWhichIsOpen(t *testing.T) {
+	h := newHarness(t, session("kitty.325", "a7k2m9x4", 100))
+	h.list()
+
+	h.press("b")
+	if got, want := h.model.footer(), "add a name to kitty.325"; !strings.Contains(got, want) {
+		t.Errorf("the add-name prompt does not say %q:\n%s", want, got)
+	}
+
+	h.pressCode(tea.KeyEsc)
+	h.press("r")
+	if got, want := h.model.footer(), "rename kitty.325 to"; !strings.Contains(got, want) {
+		t.Errorf("the rename prompt does not say %q:\n%s", want, got)
+	}
+}
+
 // TestAFailedListKeepsTheRowsAndSaysSo checks that one bad poll does not blank the list.
 //
 // A server that has gone away is usually coming back, and the rows are what the user is reading. The

@@ -85,6 +85,7 @@ const (
 	TUINew          Action = "new"
 	TUIKill         Action = "kill"
 	TUIRename       Action = "rename"
+	TUIAddName      Action = "add-name"
 	TUIOutput       Action = "output"
 	TUIHelp         Action = "help"
 	TUIQuit         Action = "quit"
@@ -155,12 +156,21 @@ var definitions = map[Context][]Definition{
 		{Action: TUINew, Label: "new session", Defaults: []string{"n"}},
 		{Action: TUIKill, Label: "kill", Defaults: []string{"x"}},
 		{Action: TUIRename, Label: "rename", Defaults: []string{"r"}},
+		// b, the same key the overlay names a session with, because it is the same request: one more name
+		// pointing at the session, nothing taken away. The two differ only in which session they act on.
+		//
+		// It costs b as a page-up alias below, which is the trade rather than an oversight: two defaults on
+		// one key in one context is a collision the keymap test fails on, and the picker still turns pages on
+		// left, h, pageup and u.
+		{Action: TUIAddName, Label: "add a name", Defaults: []string{"b"}},
 		{Action: TUIOutput, Label: "output", Defaults: []string{"p"}},
 		{Action: TUIHelp, Label: "keys", Defaults: []string{"?"}},
 		{Action: TUIQuit, Label: "quit", Defaults: []string{"q"}, Always: []string{"ctrl-c"}},
 		{Action: TUIUp, Label: "up", Defaults: []string{"up", "k"}},
 		{Action: TUIDown, Label: "down", Defaults: []string{"down", "j"}},
-		{Action: TUIPageUp, Label: "prev page", Defaults: []string{"left", "h", "pageup", "b", "u"}},
+		// b is not here: it names a session, above. bubbles' list binds it as a page-up alias, so somebody
+		// who wants it back puts it in [keys.tui] page-up and takes add-name off b.
+		{Action: TUIPageUp, Label: "prev page", Defaults: []string{"left", "h", "pageup", "u"}},
 		{Action: TUIPageDown, Label: "next page", Defaults: []string{"right", "l", "pagedown", "f", "d"}},
 		// Half a page, as in vim and less, which is what the whole-page keys above leave missing.
 		{Action: TUIHalfPageUp, Label: "half page up", Defaults: []string{"ctrl-u"}},

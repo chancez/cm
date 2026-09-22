@@ -20,8 +20,8 @@ import (
 
 // mode is what the picker is currently asking for.
 //
-// A mode rather than a stack of sub-models, because there are two questions and both are one
-// keystroke deep. What matters is that a mode captures what it acts on when it is entered: see target.
+// A mode rather than a stack of sub-models, because the questions are all one keystroke deep. What matters
+// is that a mode captures what it acts on when it is entered: see target.
 type mode int
 
 const (
@@ -31,6 +31,12 @@ const (
 	modeConfirmKill
 	// modeRename is reading a new name.
 	modeRename
+	// modeAddName is reading another name, which the session keeps alongside the ones it has.
+	//
+	// Its own mode rather than a flag on modeRename, because the two ask different questions and answer to
+	// different keys, and the footer has to say which one is open: renaming a session a terminal emulator
+	// named takes away the name that emulator will ask for again.
+	modeAddName
 )
 
 type model struct {
@@ -51,7 +57,7 @@ type model struct {
 	input textinput.Model
 
 	mode mode
-	// target is the session a confirmation or a rename acts on, captured when the mode was entered
+	// target is the session a confirmation or a naming prompt acts on, captured when the mode was entered
 	// rather than read back from the list when the answer arrives.
 	//
 	// This is the bug that would otherwise be waiting here. The list refreshes on a timer, and a
@@ -183,6 +189,17 @@ type renamedMsg struct {
 	err     error
 }
 
+// namedMsg is a completed add-name.
+//
+// Separate from renamedMsg rather than the same type with dropped left empty, because the two report
+// different things and the difference is the point of the action: one says what the session is called now,
+// the other that it answers to one more name than it did.
+type namedMsg struct {
+	label string
+	name  string
+	err   error
+}
+
 func (m model) Init() tea.Cmd {
 	// The first list is fetched rather than waited for, so the picker is useful in one round trip
 	// instead of one refresh interval.
@@ -283,6 +300,13 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, m.fetch()
 
+	case namedMsg:
+		m.err = msg.err
+		if msg.err == nil {
+			m.status = fmt.Sprintf("%s is also %s", msg.label, msg.name)
+		}
+		return m, m.fetch()
+
 	case tea.KeyPressMsg:
 		return m.key(msg)
 	}
@@ -342,8 +366,8 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	switch m.mode {
 	case modeConfirmKill:
 		return m.confirmKey(msg)
-	case modeRename:
-		return m.renameKey(msg)
+	case modeRename, modeAddName:
+		return m.nameKey(msg)
 	}
 
 	// The way back is the exception to the filter rule below, because it is the caller's prefix key: a
@@ -439,6 +463,17 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.target = it.session
 		m.input.SetValue("")
 		return m, m.input.Focus()
+
+	case key.Matches(msg, m.keys.AddName):
+		it, ok := m.selected()
+		if !ok {
+			return m, nil
+		}
+		m.err = nil
+		m.mode = modeAddName
+		m.target = it.session
+		m.input.SetValue("")
+		return m, m.input.Focus()
 	}
 
 	var cmd tea.Cmd
@@ -461,8 +496,11 @@ func (m model) confirmKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	return m, m.kill(target)
 }
 
-// renameKey reads a new name.
-func (m model) renameKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
+// nameKey reads a name, for whichever of the two naming prompts is open.
+//
+// One function for both because everything up to the request is the same, including the two ways out: what
+// differs is only whether the session keeps the name it has.
+func (m model) nameKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeList
@@ -471,6 +509,7 @@ func (m model) renameKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	case "enter":
 		name := strings.TrimSpace(m.input.Value())
 		target := m.target
+		adding := m.mode == modeAddName
 		m.mode = modeList
 		m.target = nil
 		if name == "" {
@@ -485,6 +524,9 @@ func (m model) renameKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		if err := paths.ValidateSessionName(name); err != nil {
 			m.err = err
 			return m, nil
+		}
+		if adding {
+			return m, m.addName(target, name)
 		}
 		return m, m.rename(target, name)
 	}
@@ -572,6 +614,31 @@ func (m model) rename(target *serverv1.Session, name string) tea.Cmd {
 			}
 		}
 		return renamedMsg{label: label, name: name, dropped: dropped}
+	}
+}
+
+// addName gives a session another name and takes nothing away.
+//
+// The bind half of rename, on its own, which is the whole action: a session can have several names and is
+// reachable by every one of them. What it exists for is the name a terminal emulator gave a per-window
+// session. That name is in the window's saved launch command, so a rename takes it off the session the
+// window will ask for again, and restarting the emulator makes a new session under the old name while the
+// renamed one sits beside it. `cm bind` has always done this from a shell; this is the same request from the
+// list, where the session is in front of you.
+func (m model) addName(target *serverv1.Session, name string) tea.Cmd {
+	if target == nil {
+		return nil
+	}
+	label := target.Name
+	ref := paths.FormatSessionID(target.Id)
+	return func() tea.Msg {
+		// Move is left off, so a name that already points at another session is refused by the server rather
+		// than taken from it: adding a name must not be a way to silently move one. The error says to use
+		// --move, which is `cm bind`'s wording and the only place that can be done.
+		if _, err := m.sessions.Bind(m.ctx, &serverv1.BindRequest{Name: name, Session: ref}); err != nil {
+			return namedMsg{label: label, name: name, err: err}
+		}
+		return namedMsg{label: label, name: name}
 	}
 }
 
@@ -738,6 +805,10 @@ func (m model) footer() string {
 		line = fmt.Sprintf("kill %s? [y/N]", m.target.Name)
 	case m.mode == modeRename && m.target != nil:
 		line = fmt.Sprintf("rename %s to %s", m.target.Name, m.input.View())
+	case m.mode == modeAddName && m.target != nil:
+		// Worded so the two prompts cannot be mistaken for each other at a glance, since they look alike and
+		// only one of them takes a name away.
+		line = fmt.Sprintf("add a name to %s: %s", m.target.Name, m.input.View())
 	case m.err != nil:
 		line = "error: " + m.err.Error()
 	case m.listErr != nil:

@@ -45,7 +45,10 @@ terminal returns to the session it always named. `cm rebind` moves the window's 
 makes it stick. `cm rebind --replace` also ends the session the name came off, and `rebind_replaces` makes that the
 default. `cm bind` and `cm unbind` manage names: between them they cover renaming a session, giving it a second
 name, and moving a name to another session. `cm bind <name>` with no session names the session it is run
-in, from `CM_SESSION`, the same way `cm tag` and `cm report` default. `cm bind --borrow` marks a name whose kill releases the name
+in, from `CM_SESSION`, the same way `cm tag` and `cm report` default. The same two are a key each where a
+session is in front of you: `ctrl-] b` in an attached session, `b` in `cm tui`, both adding a name rather
+than moving one. Renaming a session a terminal emulator named is the case to be careful with, and
+[tui.md](tui.md) says why. `cm bind --borrow` marks a name whose kill releases the name
 instead of killing the session, which is what a per-window name wants once its window is borrowing a
 session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
 teardown script should treat them apart: the session named there is still running.

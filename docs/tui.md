@@ -114,6 +114,21 @@ a name that holds nothing, so a name unbound since the refresh would silently ma
 `Manager.Open` refuses a stale ID rather than creating for it, so an ID either finds the session that
 was on screen or fails.
 
+**Two naming keys, because a name is a binding rather than a field.** `r` renames: it binds the new name
+and drops the old one, but only when the session had exactly one, since choosing among several would be a
+guess. `b` adds a name and takes none away, which is `cm bind` from the list and the same key the overlay
+names a session with.
+
+Both exist because renaming an implicit session is a trap. A terminal emulator names a per-window session
+in the window's launch command, `kitty.325`, and that command is fixed when the window is created. A
+rename takes that name off the session the window will ask for again, so restarting the emulator makes a
+new session under the old name while the renamed one sits beside it. That is the bug `b` was added for. The
+footers are worded apart (`rename work to` against `add a name to work:`) because the prompts otherwise
+look identical and only one of them removes anything.
+
+`b` costs the list's `b` as a page-up alias: two defaults on one key in one context is a collision
+`internal/keymap` fails a test on, and `left`, `h`, `pageup` and `u` still turn the page.
+
 **A confirmation captures its target.** The list refreshes while the question is on screen. When the
 selected session ends on its own there is nothing to put the cursor back on, so it stays where it is
 and a different session is under it: a kill that re-read the selection at `y` would end that one.
@@ -129,7 +144,7 @@ kill one. This one bit in the sandbox before the test existed. `ctrl-u` is the s
 side: it is delete-to-start in a text field, so a filter being typed keeps it.
 
 **`ctrl-u` and `ctrl-d` move half a page**, as in vim and less. The list already turns whole pages on
-`u`, `d`, `f` and `b` from its own KeyMap, so the control pair is what was missing. Half of the list's
+`u`, `d` and `f` from its own KeyMap, so the control pair is what was missing. Half of the list's
 `PerPage` rather than half the window, since the pane and the expanded help both take rows off the list.
 The cursor is stepped a row at a time rather than dropped on an index, because the list is paginated
 rather than scrolled: `CursorDown` turns the page when it runs off the end of one, and setting an index

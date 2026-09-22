@@ -20,6 +20,7 @@ type keyMap struct {
 	New          key.Binding
 	Kill         key.Binding
 	Rename       key.Binding
+	AddName      key.Binding
 	Preview      key.Binding
 	HalfPageUp   key.Binding
 	HalfPageDown key.Binding
@@ -40,6 +41,7 @@ func bindingsFrom(keys keymap.Map) (keyMap, list.KeyMap) {
 		New:          binding(keys, keymap.TUINew),
 		Kill:         binding(keys, keymap.TUIKill),
 		Rename:       binding(keys, keymap.TUIRename),
+		AddName:      binding(keys, keymap.TUIAddName),
 		Preview:      binding(keys, keymap.TUIOutput),
 		HalfPageUp:   binding(keys, keymap.TUIHalfPageUp),
 		HalfPageDown: binding(keys, keymap.TUIHalfPageDown),
@@ -89,10 +91,10 @@ func binding(keys keymap.Map, action keymap.Action) key.Binding {
 
 // ShortHelp is the one line under the list.
 //
-// Switch and Back are not on it, for a measured reason: the line reached column 89 of 100 with the entries
-// below, and either of them takes it past the width. Neither help line is truncated and the layout measures
-// the footer by counting newlines, so anything that overflows either costs the list a row or is cut off the
-// right edge. They are in the expanded help, in the column they belong to.
+// Switch, Back and AddName are not on it, for a measured reason: the line reached column 89 of 100 with the
+// entries below, and any of them takes it past the width. Neither help line is truncated and the layout
+// measures the footer by counting newlines, so anything that overflows either costs the list a row or is cut
+// off the right edge. They are in the expanded help, in the column they belong to.
 //
 // The half page keys are not on it either, and that is the same space decision: navigation belongs in the
 // expanded help beside the page and jump keys, which is where somebody looking for it looks.
@@ -108,7 +110,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Attach, k.Switch, k.New},
-		{k.Kill, k.Rename},
+		{k.Kill, k.Rename, k.AddName},
 		// Back sits with quit because that is what it is a spelling of.
 		{k.Preview, k.Help, k.Quit, k.Back},
 	}
