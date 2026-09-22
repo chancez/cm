@@ -133,6 +133,15 @@ type sessionJSON struct {
 	// shim outlives servers by design, a healthy install spans several builds at once: one incident
 	// had twelve across twenty-six sessions. Empty rather than null, like Tags and Hosting.
 	AttachedClients []attachedClientJSON `json:"attached_clients"`
+	// ShimBuild is the build this session's shim is running, empty when the server has not asked yet or the
+	// shim is too old to report one.
+	//
+	// The same need AttachedClients above answers, for the other half of the session. A shim outlives the
+	// build that started it, so a long-lived session can be running code many releases behind the server,
+	// and `cm doctor` would say six builds were in play without saying which session ran which. Chasing a
+	// reply artifact through that gap meant identifying builds from process inspection, which is what this
+	// removes.
+	ShimBuild string `json:"shim_build"`
 }
 
 // locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
@@ -244,6 +253,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		Tags:                sessionTags,
 		Hosting:             hosting,
 		AnnouncedClients:    s.AnnouncedClients,
+		ShimBuild:           s.ShimBuild,
 		Location:            location,
 		AttachedClients:     clients,
 	}
@@ -794,6 +804,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		// the JSON output carries the frames as a list for anything that wants the structure. Same trade as
 		// tags above, which renders a map as "k=v,k" here.
 		{"location", formatLocation(j.Location)},
+		// Shown as unknown rather than blank: empty here means the server has not asked or the shim cannot
+		// say, and a blank column reads as "same as the server", which is the mistake this exists to stop.
+		{"shim_build", orUnknown(j.ShimBuild)},
 	}
 }
 
@@ -876,6 +889,14 @@ type killJSON struct {
 	// running, and a teardown script that counted this as a kill would report work destroyed that is
 	// still there, while one that treated it as a failure would retry something that already succeeded.
 	Unbound map[string]string `json:"unbound"`
+}
+
+// orUnknown renders an empty string as "unknown", for a value whose absence is itself information.
+func orUnknown(v string) string {
+	if v == "" {
+		return "unknown"
+	}
+	return v
 }
 
 // plural renders a count with its unit, choosing the form rather than hedging with "(s)".

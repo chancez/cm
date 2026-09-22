@@ -85,6 +85,13 @@ type Session struct {
 	capsMu    sync.Mutex
 	shimCaps  capability.Set
 	capsAsked bool
+	// shimBuild is the version string this session's shim reports, cached beside the capabilities above
+	// because it arrives in the same reply and cannot change for the life of the shim.
+	//
+	// Worth surfacing because a shim outlives the build that started it, so a session can be running code
+	// several releases old while the server is current. `cm doctor` could say how many builds were in play
+	// and not which session ran which, and that gap sent a real investigation looking at the wrong things.
+	shimBuild string
 
 	// term accumulates terminal state so a reattaching client can be restored. Nil until
 	// the VT layer lands; the fanout below does not depend on it.
@@ -3669,6 +3676,7 @@ func (s *Session) State(ctx context.Context) (*shimv1.StateResponse, error) {
 	// of its own. Every reply carries them and they cannot change.
 	s.capsMu.Lock()
 	s.shimCaps, s.capsAsked = capability.Parse(st.GetCapabilities()), true
+	s.shimBuild = st.GetVersion()
 	s.capsMu.Unlock()
 	return st, nil
 }
@@ -3690,6 +3698,36 @@ func (s *Session) ShimCapabilities(ctx context.Context) capability.Set {
 		return capability.Set{}
 	}
 	return capability.Parse(st.GetCapabilities())
+}
+
+// shimBuildCached reports the shim's build if it is already known, without a round trip.
+//
+// What List uses. Asking here instead would cost one round trip per session on a command the TUI runs
+// interactively, which is the cost `cm doctor` accepts and `cm list` must not: 40 sessions is 40 dials.
+// Empty is normal early in a session's life and shows as unknown.
+func (s *Session) shimBuildCached() string {
+	s.capsMu.Lock()
+	defer s.capsMu.Unlock()
+	return s.shimBuild
+}
+
+// ShimBuild reports the build this session's shim is running, asking it once if nothing has.
+//
+// Empty when the shim cannot be reached or is too old to report one, and the caller shows that as unknown
+// rather than guessing: a shim predating version reporting is itself a build difference, and naming it as
+// the server's build would be a lie in exactly the case this exists to expose.
+func (s *Session) ShimBuild(ctx context.Context) string {
+	s.capsMu.Lock()
+	asked, build := s.capsAsked, s.shimBuild
+	s.capsMu.Unlock()
+	if asked {
+		return build
+	}
+	st, err := s.State(ctx)
+	if err != nil {
+		return ""
+	}
+	return st.GetVersion()
 }
 
 // setLabel records a name to call this session by in messages and logs.

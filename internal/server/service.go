@@ -993,6 +993,9 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.ID); live {
+			// From the cache rather than asked, so this stays free: see shimBuildCached. Empty for a
+			// session the server has not yet had reason to query, which shows as unknown.
+			item.ShimBuild = sess.shimBuildCached()
 			// Including its outcome. A session records that it ended before the manager writes it
 			// back, so a caller polling for a short-lived command would otherwise see it as running
 			// and then briefly as dead, since an unwritten record still says running while the shim

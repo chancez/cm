@@ -3586,6 +3586,16 @@ type Session struct {
 	// Not persisted. These describe commands running right now, and a stored frame would come back after a
 	// restart claiming a session is inside something that exited with the previous server.
 	Location []*LocationFrame `protobuf:"bytes,26,rep,name=location,proto3" json:"location,omitempty"`
+	// shim_build is the build this session's shim is running, empty when it has not been asked yet or the
+	// shim is too old to report one.
+	//
+	// Present because a shim outlives the build that started it: only ending a session replaces its shim, so
+	// a long-lived session can be running code many releases behind the server. `cm doctor` reported how many
+	// builds were in play without saying which session ran which, and that gap cost a real investigation.
+	//
+	// Read from the server's cache rather than asked per session, since List is interactive and one dial per
+	// session would make it slow in exactly the installations where this matters most.
+	ShimBuild string `protobuf:"bytes,27,opt,name=shim_build,json=shimBuild,proto3" json:"shim_build,omitempty"`
 	// The clients attached right now, one entry each.
 	//
 	// Alongside the count above rather than replacing it: clients is what a status line wants and is
@@ -3800,6 +3810,13 @@ func (x *Session) GetLocation() []*LocationFrame {
 		return x.Location
 	}
 	return nil
+}
+
+func (x *Session) GetShimBuild() string {
+	if x != nil {
+		return x.ShimBuild
+	}
+	return ""
 }
 
 func (x *Session) GetAttachedClients() []*AttachedClient {
@@ -5137,7 +5154,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xd4\a\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xf3\a\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5165,7 +5182,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04tags\x18\x13 \x03(\v2\x1f.cm.server.v1.Session.TagsEntryR\x04tags\x12\x18\n" +
 	"\ahosting\x18\x14 \x03(\tR\ahosting\x12+\n" +
 	"\x11announced_clients\x18\x19 \x01(\rR\x10announcedClients\x127\n" +
-	"\blocation\x18\x1a \x03(\v2\x1b.cm.server.v1.LocationFrameR\blocation\x12G\n" +
+	"\blocation\x18\x1a \x03(\v2\x1b.cm.server.v1.LocationFrameR\blocation\x12\x1d\n" +
+	"\n" +
+	"shim_build\x18\x1b \x01(\tR\tshimBuild\x12G\n" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

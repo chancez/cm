@@ -1096,6 +1096,16 @@ message Session {
   // Not persisted. These describe commands running right now, and a stored frame would come back after a
   // restart claiming a session is inside something that exited with the previous server.
   repeated LocationFrame location = 26;
+  // shim_build is the build this session's shim is running, empty when it has not been asked yet or the
+  // shim is too old to report one.
+  //
+  // Present because a shim outlives the build that started it: only ending a session replaces its shim, so
+  // a long-lived session can be running code many releases behind the server. `cm doctor` reported how many
+  // builds were in play without saying which session ran which, and that gap cost a real investigation.
+  //
+  // Read from the server's cache rather than asked per session, since List is interactive and one dial per
+  // session would make it slow in exactly the installations where this matters most.
+  string shim_build = 27;
 
   // The clients attached right now, one entry each.
   //

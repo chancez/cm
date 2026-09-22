@@ -102,6 +102,9 @@ func TestSessionJSONKeys(t *testing.T) {
 		"location",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
+		// Which build the session's own shim runs, the other half of what attached_clients answers for
+		// clients. A shim outlives the build that started it, so this can be many releases behind.
+		"shim_build",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
