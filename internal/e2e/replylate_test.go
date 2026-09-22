@@ -6,27 +6,28 @@ import (
 	"time"
 )
 
-// TestAnAnswerReachesTheShellAfterItsAskerExits pins the reported `62;22c` at a prompt.
+// TestAnAnswerReachesTheShellAfterItsAskerExits pins a reply delivered after its asker has gone.
 //
-// This asserts the bug rather than a fix, deliberately, and it is the only test here that does. Nothing
-// else reproduces the artifact: three rounds of manual A/B testing produced four wrong theories, and the
-// chain only became clear once the shim logged how long each answer took. Pinning it means the next attempt
-// at a fix has something that fails today and a recorded shape to compare against. Whoever fixes it should
-// invert the assertion below rather than delete the test.
+// This asserts the bug rather than a fix, deliberately, and it is the only test here that does. Whoever
+// fixes it should invert the assertion rather than delete the test.
 //
-// The chain, measured in a sandbox: a program asks a terminal-only query and then one cm answers itself.
-// The first goes to a client and nothing answers it. The second is queued behind it to keep the program's
-// answers in order, and released only when the sweeper expires the first at requestTimeout, measured at
-// 507ms, 510ms and 525ms. The asking program is gone by then, so the answer lands on a pty the shell is
-// reading, and zsh in vi mode inserts it into a search one character at a time.
+// It is *not* the reported `62;22c` case, and conflating the two cost real time. What it reproduces is the
+// ordering hold: a terminal-only query nobody answers holds every reply behind it until the sweeper expires
+// it at requestTimeout, measured at 507ms, 510ms and 525ms, by which point the asking program is gone. The
+// reported session showed no expiry lines at all and had its replies written in under two microseconds, so
+// that one arrives by some other route. See docs/architecture.md on delivering an answer to a program that
+// has gone.
+//
+// What makes this worth keeping anyway is the threshold it shares with the reported case: a program consumes
+// cm's answer whenever it arrives inside its own read window, and the artifact appears only once that window
+// has closed. nvim's is 1000ms and the artifact appears at 1100ms, not at 900ms.
 //
 // The fault makes the exit unconditionally first. Without it the test rests on the program exiting inside
-// the 500ms hold, which it does easily, but an inequality is not an ordering: on a slow machine the answer
-// arrives while the program is still there, which is the correct case and proves nothing.
+// the hold, which it does easily, but an inequality is not an ordering: on a slow machine the answer arrives
+// while the program is still there, which is the correct case and proves nothing.
 //
 // `sh -i` for job control, so the program gets its own process group and the shell takes the terminal back
-// when it exits. That is what makes the shell the reader, and it is the state any candidate fix has to
-// distinguish.
+// when it exits. That is the state any candidate fix has to distinguish.
 func TestAnAnswerReachesTheShellAfterItsAskerExits(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a server, a shell and a pty")
