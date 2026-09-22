@@ -402,6 +402,20 @@ type Session struct {
 	// Carried so a reply can be attributed to the chunk whose query produced it. In the shim's numbering,
 	// because the shim is what consumes it.
 	chunkSeq seq.Shim
+	// chunkAt is when that chunk arrived from the shim, so a reply can report how long cm held it.
+	//
+	// The span this gives is the server's own share, shim-receipt to reply-handover, and it exists because
+	// it is the only span that can be measured on a session whose shim predates the build. since_read in the
+	// shim covers the whole round trip and is better, and it reaches nothing that is already running. The
+	// reported `62;22c` was on such a session, which is why this is here.
+	chunkAt time.Time
+	// chunkOnAlt is whether the model was on the alternate screen when that chunk began.
+	//
+	// Recorded here rather than queried at reply time, and that is a constraint rather than a preference: the
+	// model produces a reply synchronously inside term.Write, so writeReplies runs with termMu already held
+	// and asking the model anything there deadlocks. It answers whether the asker was a full-screen program,
+	// which for the reported case is the difference between nvim and a shell prompt hook.
+	chunkOnAlt bool
 
 	// frames is the stack of command frames the shells writing to this pty have opened, outermost first.
 	//
@@ -833,6 +847,7 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	// to drop a reply whose asker has gone; see Session.WriteReply in internal/shim.
 	s.mu.Lock()
 	s.chunkSeq = rawSeq
+	s.chunkAt = time.Now()
 	s.mu.Unlock()
 
 	// A chunk ending inside an escape sequence is trimmed, and the tail waits for the rest.
@@ -1256,6 +1271,10 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 	// Read before the write so the transition out of the alternate screen can be seen. Cheap: a mode
 	// query rather than a serialization.
 	wasOnAlt, altErr := term.OnAltScreen()
+	// Published for the reply log. Free: this reading was already taken.
+	s.mu.Lock()
+	s.chunkOnAlt = wasOnAlt && altErr == nil
+	s.mu.Unlock()
 
 	s.termMu.Lock()
 	err := term.Write(data)

@@ -63,12 +63,24 @@ type pendingRequest struct {
 	querySeq seq.Shim
 	// queuedAt is when a queued local reply was produced. Zero for a proxied question, which has asked.
 	queuedAt time.Time
+	// chunkAt and onAlt are the query's chunk context, carried for the log. See readyReply.
+	chunkAt time.Time
+	onAlt   bool
 }
 
 // readyReply is a reply that may go to the pty now, with the chunk its query came from.
 type readyReply struct {
 	data     []byte
 	querySeq seq.Shim
+	// chunkAt is when the chunk carrying the query arrived from the shim, and onAlt whether the model was
+	// on the alternate screen then.
+	//
+	// Both are for the log rather than for any decision. chunkAt gives the server's whole share of the
+	// delay, shim-receipt to reply-handover, which is wider than waited below and is the only span
+	// measurable on a session whose shim predates since_read. onAlt says whether the asker was a
+	// full-screen program.
+	chunkAt time.Time
+	onAlt   bool
 	// queuedAt is when the emulator produced this reply, so the write can report how long it was held.
 	//
 	// The whole point of recording it: the reported `62;22c` was not cm answering slowly, it was cm answering
@@ -528,11 +540,15 @@ func (s *Session) queueOrWriteReply(replies [][]byte) {
 	var ready []readyReply
 	s.mu.Lock()
 	querySeq := s.chunkSeq
+	chunkAt := s.chunkAt
+	onAlt := s.chunkOnAlt
 	produced := s.now()
 	if len(s.requests) == 0 {
 		s.mu.Unlock()
 		for _, data := range replies {
-			ready = append(ready, readyReply{data: data, querySeq: querySeq, queuedAt: produced})
+			ready = append(ready, readyReply{
+				data: data, querySeq: querySeq, queuedAt: produced, chunkAt: chunkAt, onAlt: onAlt,
+			})
 		}
 		s.writeReplies(ready)
 		return
@@ -543,6 +559,8 @@ func (s *Session) queueOrWriteReply(replies [][]byte) {
 			asked:    produced,
 			querySeq: querySeq,
 			queuedAt: produced,
+			chunkAt:  chunkAt,
+			onAlt:    onAlt,
 		})
 	}
 	ready = s.takeReadyLocked()
@@ -565,7 +583,9 @@ func (s *Session) takeReadyLocked() []readyReply {
 			break
 		}
 		if len(r.data) > 0 {
-			out = append(out, readyReply{data: r.data, querySeq: r.querySeq, queuedAt: r.queuedAt})
+			out = append(out, readyReply{
+				data: r.data, querySeq: r.querySeq, queuedAt: r.queuedAt, chunkAt: r.chunkAt, onAlt: r.onAlt,
+			})
 		}
 	}
 	s.requests = s.requests[i:]
@@ -627,9 +647,14 @@ func (s *Session) writeReplies(replies []readyReply) {
 		if r.byExpiry {
 			released = "expiry"
 		}
+		var sinceChunk time.Duration
+		if !r.chunkAt.IsZero() {
+			sinceChunk = s.now().Sub(r.chunkAt)
+		}
 		s.log.Debug("writing a terminal reply to the pty",
 			"session", s.label, "bytes", len(data), "reply", truncateForLog(data),
-			"query_seq", uint64(r.querySeq), "waited", waited, "released", released)
+			"query_seq", uint64(r.querySeq), "waited", waited, "released", released,
+			"since_chunk", sinceChunk, "asker_on_alt", r.onAlt)
 		if err := s.WriteReply(context.Background(), data, r.querySeq); err != nil {
 			// A program that queried the terminal is now waiting for an answer it will never get, so this
 			// explains an otherwise inexplicable hang.

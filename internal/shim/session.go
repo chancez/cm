@@ -438,7 +438,8 @@ func (s *Session) WriteReply(p []byte, querySeq seq.Shim) (int, error) {
 		go func() {
 			fault.At(fault.BeforeReplyWrite)
 			s.log.Debug("writing a delayed terminal reply to the pty",
-				"session", s.cfg.Session, "bytes", len(delayed), "since_read", s.sinceRead(querySeq))
+				"session", s.cfg.Session, "bytes", len(delayed), "since_read", s.sinceRead(querySeq),
+				"reading_now", s.readerNow())
 			if _, err := s.Write(delayed); err != nil {
 				s.log.Debug("a delayed terminal reply could not be written",
 					"session", s.cfg.Session, "error", err)
@@ -448,7 +449,8 @@ func (s *Session) WriteReply(p []byte, querySeq seq.Shim) (int, error) {
 	}
 
 	s.log.Debug("writing a terminal reply to the pty",
-		"session", s.cfg.Session, "bytes", len(p), "since_read", s.sinceRead(querySeq))
+		"session", s.cfg.Session, "bytes", len(p), "since_read", s.sinceRead(querySeq),
+		"reading_now", s.readerNow())
 	return s.Write(p)
 }
 
@@ -481,6 +483,20 @@ func (s *Session) noteRead(seq seq.Shim) {
 // The latest sample at or before seq, since a chunk covers a range and only its first number is recorded.
 // Zero rather than an error because this only ever feeds a log line: a reply whose chunk has aged out of
 // the history is one this was never going to say anything useful about.
+// readerNow reports the process group that owns the terminal, or 0 when the pty cannot say.
+//
+// One ioctl, and only on a reply. An earlier version sampled this on every pty *read* to decide whether to
+// drop a reply, and that was reverted: 2771ns per ioctl against 3556ns for a whole pty round trip made it a
+// real cost on the hot path, and the reading answers which group may read next rather than which asked. As a
+// log field on a path taken a handful of times per session it costs nothing and decides nothing, and it is
+// the one thing that says whether the asking program was still at the terminal when its answer went out.
+func (s *Session) readerNow() int {
+	if pgrp, err := s.foregroundGroup(); err == nil {
+		return pgrp
+	}
+	return 0
+}
+
 func (s *Session) sinceRead(seq seq.Shim) time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
