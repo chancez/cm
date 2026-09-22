@@ -418,9 +418,34 @@ func (s *Session) Log() *seqlog.Log[seq.Shim] { return s.outputLog }
 // still being iterated is in the worst possible place. See docs/architecture.md on delivering an answer to
 // a program that has gone.
 func (s *Session) WriteReply(p []byte, querySeq seq.Shim) (int, error) {
-	// Ahead of the write, so a delay here puts the asking program's exit before delivery. That is the
-	// window the reported artifact lives in, and it cannot be raced reliably. See fault.BeforeReplyWrite.
-	fault.At(fault.BeforeReplyWrite)
+	// Delivered from a goroutine when faults are configured, which is the only way a delay here means
+	// what it looks like it means.
+	//
+	// WriteReply is called from the server's pump path, so blocking in it stalls the session's output
+	// processing as well as the reply. A blocking delay therefore slides both sides equally and the
+	// relative timing never changes: measured as an entire reply burst cascading to since_read values of
+	// 1.5s, 5.1s, 6.6s, 8.1s and 9.6s, with nvim's teardown sliding along with it and consuming its answer
+	// as normal. The window being simulated is a *late* reply into a session that kept running, so the
+	// pump has to keep running too.
+	//
+	// fault.Enabled is false in a released build, so this branch is a constant false and the goroutine does
+	// not exist there. See fault.BeforeReplyWrite.
+	if fault.Enabled() {
+		// Copied, because p belongs to the caller and is reused once this returns. Handing the original to
+		// a goroutine wrote nothing observable, and the artifact stopped reproducing: a test-only path that
+		// silently drops the bytes it is supposed to deliver late is worse than no fault at all.
+		delayed := append([]byte(nil), p...)
+		go func() {
+			fault.At(fault.BeforeReplyWrite)
+			s.log.Debug("writing a delayed terminal reply to the pty",
+				"session", s.cfg.Session, "bytes", len(delayed), "since_read", s.sinceRead(querySeq))
+			if _, err := s.Write(delayed); err != nil {
+				s.log.Debug("a delayed terminal reply could not be written",
+					"session", s.cfg.Session, "error", err)
+			}
+		}()
+		return len(p), nil
+	}
 
 	s.log.Debug("writing a terminal reply to the pty",
 		"session", s.cfg.Session, "bytes", len(p), "since_read", s.sinceRead(querySeq))

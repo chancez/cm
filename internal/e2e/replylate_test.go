@@ -3,6 +3,7 @@ package e2e
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAnAnswerReachesTheShellAfterItsAskerExits pins the reported `62;22c` at a prompt.
@@ -55,8 +56,11 @@ func TestAnAnswerReachesTheShellAfterItsAskerExits(t *testing.T) {
 	// a program that held the terminal for a while before it asked, which is nvim and every long-running TUI.
 	c.typeLine(`sh -c 'sleep 0.3; printf "\033[c"'`)
 
-	// The second marker is the wait rather than a sleep: the answer is either in the output before DONE or it
-	// is not coming, since the shell cannot echo DONE until the pump gets past the delayed reply write.
+	// The second marker proves the shell is reading again, and then the artifact is waited for rather than
+	// snapshotted. Asserting at DONE-time is what an earlier version did, and it only worked because the
+	// fault used to block the pump: the shell could not echo DONE until the reply write had completed, so
+	// the reply was always already in the stream. Delivering late without stalling the pump breaks that
+	// coupling, and the assertion started failing on a reply that did arrive a moment later.
 	c.typeLine(`printf 'DON%s\n' E`)
 	waitForOnPty(t, c, "DONE")
 
@@ -64,9 +68,14 @@ func TestAnAnswerReachesTheShellAfterItsAskerExits(t *testing.T) {
 	// key binding consumes it and echoes the rest, so `\x1b[?62;22c` never appears as a unit: the reported
 	// capture showed the characters interleaved with cursor moves, and a grep for the sequence found nothing
 	// while the garbage was on screen.
-	if got := c.output(); !strings.Contains(got, "62;22c") {
-		t.Errorf("the answer did not reach the shell, so this bug no longer reproduces the way it was "+
-			"measured. If that is a fix, invert this assertion; if not, the reproduction has drifted and the "+
-			"recorded chain in docs/architecture.md no longer matches.\npty:\n%s", got)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(c.output(), "62;22c") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the answer did not reach the shell within 5s of its asker exiting, so this bug no "+
+				"longer reproduces the way it was measured. If that is a fix, invert this assertion; if not, "+
+				"the reproduction has drifted and the chain recorded in docs/architecture.md no longer "+
+				"matches.\npty:\n%s", c.output())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
