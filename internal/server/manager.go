@@ -1565,6 +1565,29 @@ func (m *Manager) Clients(id string) int64 {
 	return sess.Clients()
 }
 
+// forget drops everything cm holds about a session: its persisted output, its names, and its record.
+//
+// One function because the three have to go together, and they did not. Kill deleted the row and left
+// the log file, and `ExpireDeadSessions` is the only other thing that removes a log: it walks records,
+// so once the row was gone nothing could ever collect the file. Measured on a real install before this
+// existed, 149 logs in the state dir with 118 of them belonging to no session, 85 MB that nothing would
+// ever free. The symptom is a state directory that only grows, which points nowhere near `cm kill`.
+//
+// logPath is passed rather than read from the store, because the caller that matters holds a live
+// session and its record rather than a row.
+func (m *Manager) forget(ctx context.Context, id, logPath string) error {
+	if logPath != "" {
+		// A log that cannot be removed is not a reason to keep the record, matching ExpireDeadSessions:
+		// the row is what makes a session visible, and a stranded file is the smaller problem.
+		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+			m.log.Warn("removing the log of a forgotten session failed",
+				"session", id, "path", logPath, "error", err)
+		}
+	}
+	m.releaseNames(ctx, id)
+	return m.store.Delete(ctx, id)
+}
+
 // Kill terminates a session and forgets it.
 //
 // Without force, an unreachable shim is left recorded rather than forgotten: it may be
@@ -1619,8 +1642,7 @@ func (m *Manager) Kill(
 		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
 		}
-		m.releaseNames(ctx, id)
-		return surviving, m.store.Delete(ctx, id)
+		return surviving, m.forget(ctx, id, sess.record.LogPath)
 	}
 
 	rec, err := m.store.Get(ctx, id)
@@ -1652,8 +1674,7 @@ func (m *Manager) Kill(
 			if resp != nil {
 				surviving = resp.SurvivingPids
 			}
-			m.releaseNames(ctx, id)
-			return surviving, m.store.Delete(ctx, id)
+			return surviving, m.forget(ctx, id, rec.LogPath)
 		}
 		if !force {
 			return nil, fmt.Errorf("cannot reach shim for %s: %w", id, dialErr)
@@ -1663,8 +1684,7 @@ func (m *Manager) Kill(
 	if rec.State == store.StateRunning && !force {
 		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", id)
 	}
-	m.releaseNames(ctx, id)
-	return nil, m.store.Delete(ctx, id)
+	return nil, m.forget(ctx, id, rec.LogPath)
 }
 
 // ExpireDeadSessions removes dead sessions older than the configured age, along with their logs.
@@ -1716,17 +1736,7 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 			continue
 		}
 
-		if rec.LogPath != "" {
-			// A log that cannot be removed is not a reason to keep the record. The row is what makes
-			// the session visible, and an orphaned file is a smaller problem than a session that
-			// can never be cleaned up.
-			if err := os.Remove(rec.LogPath); err != nil && !os.IsNotExist(err) {
-				m.log.Warn("removing expired session log failed",
-					"session", rec.ID, "path", rec.LogPath, "error", err)
-			}
-		}
-		m.releaseNames(ctx, rec.ID)
-		if err := m.store.Delete(ctx, rec.ID); err != nil {
+		if err := m.forget(ctx, rec.ID, rec.LogPath); err != nil {
 			return removed, fmt.Errorf("expiring session %s: %w", rec.ID, err)
 		}
 		removed++
