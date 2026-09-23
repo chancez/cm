@@ -1131,7 +1131,11 @@ func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
 	for _, ref := range req.Sessions {
 		name := ref
-		outcome, err := s.killRef(ctx, ref, req.Force, req.Signal)
+		outcome, err := s.killRef(ctx, ref, KillOptions{
+			Force:  req.Force,
+			Signal: req.Signal,
+			Keep:   req.Keep,
+		})
 		if err == nil && outcome.unboundFrom != "" {
 			// The name was a borrower, so it let go and the session runs on. Reported apart from
 			// killed, since a caller has to be able to tell that from its session being gone.

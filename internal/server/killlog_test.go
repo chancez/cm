@@ -37,7 +37,7 @@ func TestKillRemovesThePersistedLogOfALiveSession(t *testing.T) {
 		t.Fatal("session was not adopted, so the live path is not under test")
 	}
 
-	if _, err := mgr.Kill(ctx, "logged", false, 0); err != nil {
+	if _, err := mgr.Kill(ctx, "logged", KillOptions{}); err != nil {
 		t.Fatalf("Kill() error = %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestForcedKillOfAnUnreachableShimRemovesItsLog(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if _, err := mgr.Kill(ctx, "stranded", true, 0); err != nil {
+	if _, err := mgr.Kill(ctx, "stranded", KillOptions{Force: true}); err != nil {
 		t.Fatalf("Kill() with force error = %v", err)
 	}
 

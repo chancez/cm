@@ -15,6 +15,7 @@ import (
 func newKillCommand(g *globals) *cobra.Command {
 	var (
 		force   bool
+		keep    bool
 		asJSON  bool
 		all     bool
 		tagArgs []string
@@ -43,6 +44,19 @@ not the default -- an unreachable shim may be busy rather than dead, and discard
 the record would orphan it and its pty permanently. Reach for --signal when the
 goal is only a stronger signal.
 
+Killing forgets the session as well: its record, its names and any output it had
+saved all go. That is what a window-close watcher wants, since one session per
+window would otherwise leave a row behind for every window ever closed.
+
+--keep is for the other reason to end a session, which is to look at what it did:
+
+  cm kill build --keep
+  cm history build
+
+The session's shell stops, and the session is then listed as exited and expires
+on the usual schedule, exactly like a shell that exited on its own. It cannot be
+combined with --force, whose second half is the opposite.
+
 --all kills every session the server knows, which is what a test harness or a
 teardown script wants: killing by name means enumerating them first, and a
 missed one leaves a shell and its pty behind.
@@ -66,6 +80,11 @@ selector matching nothing is an error rather than a silent success.`,
 		},
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if force && keep {
+				// Refused rather than ranked. force's second half is "forget it even if its shim cannot be
+				// reached" and keep says not to forget it, so one of the two was a mistake.
+				return errors.New("--force and --keep cannot be combined; --force forgets the session")
+			}
 			if all && len(tagArgs) > 0 {
 				// Refused rather than resolved. --all means every session and --tag means a subset, so
 				// one of the two was a mistake and guessing which would kill either too much or too
@@ -122,6 +141,7 @@ selector matching nothing is an error rather than a silent success.`,
 					Sessions: names,
 					Force:    force,
 					Signal:   sig,
+					Keep:     keep,
 				})
 				if err != nil {
 					return err
@@ -133,6 +153,8 @@ selector matching nothing is an error rather than a silent success.`,
 	f := cmd.Flags()
 	f.BoolVar(&force, "force", false,
 		"end the session with SIGKILL, and forget it even if its shim cannot be reached")
+	f.BoolVar(&keep, "keep", false,
+		"stop the shell but keep the session's record, names and saved output")
 	f.StringVar(&sigSpec, "signal", "",
 		"signal to end the session with, by name or number (default hup, or kill with --force)")
 	f.BoolVar(&all, "all", false, "kill every session")

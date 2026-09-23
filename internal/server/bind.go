@@ -89,7 +89,7 @@ type killOutcome struct {
 // same session killed by one of its names and by its ID can mean two different things, and Kill takes an
 // identity by design.
 func (s *Service) killRef(
-	ctx context.Context, ref string, force bool, sig int32,
+	ctx context.Context, ref string, opts KillOptions,
 ) (killOutcome, error) {
 	id, err := s.mgr.Resolve(ctx, ref)
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *Service) killRef(
 		}
 	}
 
-	surviving, err := s.mgr.Kill(ctx, id, force, sig)
+	surviving, err := s.mgr.Kill(ctx, id, opts)
 	if err != nil {
 		return killOutcome{}, err
 	}
@@ -277,7 +277,7 @@ func (s *Service) replacePrevious(sess *Session, asked int) (killed, keptReason 
 
 	ctx, cancel := context.WithTimeout(context.Background(), replaceKillTimeout)
 	defer cancel()
-	if _, err := s.mgr.Kill(ctx, sess.id, false, 0); err != nil {
+	if _, err := s.mgr.Kill(ctx, sess.id, KillOptions{}); err != nil {
 		return "", fmt.Sprintf("ending %s failed: %v", paths.FormatSessionID(sess.id), err)
 	}
 	return sess.id, ""

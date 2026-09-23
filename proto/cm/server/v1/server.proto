@@ -1156,6 +1156,16 @@ message KillRequest {
   // A number rather than an enum, for the same reason SignalRequest uses one: the set is
   // platform-defined.
   int32 signal = 3;
+  // Stop the session's shell but keep its record, its names and its saved output.
+  //
+  // Killing otherwise forgets the session outright, which is what a window-close watcher wants and why
+  // it is the default. This is for the other caller: someone ending a session in order to look at what
+  // it did, for whom deleting the scrollback along with the shell is the opposite of the point.
+  //
+  // The record then follows the same path as a shell that exited on its own, so it is listed as exited
+  // and expires on the usual schedule. Cannot be combined with force, whose second half is "forget it
+  // even if the shim cannot be reached".
+  bool keep = 4;
 }
 
 message KillResponse {

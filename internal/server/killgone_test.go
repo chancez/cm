@@ -48,7 +48,7 @@ func TestKillTreatsAGoneShellAsDone(t *testing.T) {
 	mgr.sessions[rec.ID] = sess
 	mgr.mu.Unlock()
 
-	if _, err := mgr.Kill(ctx, "aaaa2222", false, 0); err != nil {
+	if _, err := mgr.Kill(ctx, "aaaa2222", KillOptions{}); err != nil {
 		t.Errorf("Kill() error = %v, want nil: the shell being gone is the requested outcome", err)
 	}
 	// And the record goes, which is what made the old error a lie: it reported a failure for something

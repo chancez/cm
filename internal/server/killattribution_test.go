@@ -41,7 +41,7 @@ func TestKillIsAttributableInTheLog(t *testing.T) {
 	var logged lockedBuffer
 	mgr.SetLogger(slog.New(slog.NewTextHandler(&logged, nil)))
 
-	if _, err := mgr.Kill(ctx, "attributable", false, 9); err != nil {
+	if _, err := mgr.Kill(ctx, "attributable", KillOptions{Signal: 9}); err != nil {
 		t.Fatalf("Kill() error = %v", err)
 	}
 

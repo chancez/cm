@@ -3920,7 +3920,17 @@ type KillRequest struct {
 	//
 	// A number rather than an enum, for the same reason SignalRequest uses one: the set is
 	// platform-defined.
-	Signal        int32 `protobuf:"varint,3,opt,name=signal,proto3" json:"signal,omitempty"`
+	Signal int32 `protobuf:"varint,3,opt,name=signal,proto3" json:"signal,omitempty"`
+	// Stop the session's shell but keep its record, its names and its saved output.
+	//
+	// Killing otherwise forgets the session outright, which is what a window-close watcher wants and why
+	// it is the default. This is for the other caller: someone ending a session in order to look at what
+	// it did, for whom deleting the scrollback along with the shell is the opposite of the point.
+	//
+	// The record then follows the same path as a shell that exited on its own, so it is listed as exited
+	// and expires on the usual schedule. Cannot be combined with force, whose second half is "forget it
+	// even if the shim cannot be reached".
+	Keep          bool `protobuf:"varint,4,opt,name=keep,proto3" json:"keep,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3974,6 +3984,13 @@ func (x *KillRequest) GetSignal() int32 {
 		return x.Signal
 	}
 	return 0
+}
+
+func (x *KillRequest) GetKeep() bool {
+	if x != nil {
+		return x.Keep
+	}
+	return false
 }
 
 type KillResponse struct {
@@ -5192,11 +5209,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rLocationFrame\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04argv\x18\x02 \x01(\tR\x04argv\x12\x18\n" +
-	"\asession\x18\x03 \x01(\tR\asession\"W\n" +
+	"\asession\x18\x03 \x01(\tR\asession\"k\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12\x16\n" +
-	"\x06signal\x18\x03 \x01(\x05R\x06signal\"\xc9\x03\n" +
+	"\x06signal\x18\x03 \x01(\x05R\x06signal\x12\x12\n" +
+	"\x04keep\x18\x04 \x01(\bR\x04keep\"\xc9\x03\n" +
 	"\fKillResponse\x12\x16\n" +
 	"\x06killed\x18\x01 \x03(\tR\x06killed\x12>\n" +
 	"\x06errors\x18\x02 \x03(\v2&.cm.server.v1.KillResponse.ErrorsEntryR\x06errors\x12G\n" +

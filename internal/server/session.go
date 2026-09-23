@@ -446,6 +446,11 @@ type Session struct {
 	// releasing records that this server is letting go of a still-live session, so the
 	// pump ending is not mistaken for the session ending.
 	releasing atomic.Bool
+	// keepRecord records that a kill asked for the session's record to survive it, so watch() reports
+	// the outcome instead of forgetting an interactive session that ended.
+	//
+	// Set by Kill before the shell is stopped, since watch() runs the moment it dies.
+	keepRecord atomic.Bool
 
 	// clients counts attached clients for reporting.
 	clients atomic.Int64

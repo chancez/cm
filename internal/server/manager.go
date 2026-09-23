@@ -763,7 +763,9 @@ func (m *Manager) watch(sess *Session) {
 	// EverWatched rather than the current client count, and rather than any attachment: a client detaching
 	// as its shell exits is exactly the shape of typing `exit`, so the count is already zero by the time
 	// this runs, and `cm run` and `--no-attach` both attach briefly just to create the session.
-	if state == store.StateExited && sess.EverWatched() &&
+	// keepRecord is checked first: `cm kill --keep` exists to leave something to look at afterwards, and
+	// this rule would delete it a moment later.
+	if state == store.StateExited && !sess.keepRecord.Load() && sess.EverWatched() &&
 		!sess.record.PersistRequested && sess.record.LogPath == "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1588,14 +1590,31 @@ func (m *Manager) forget(ctx context.Context, id, logPath string) error {
 	return m.store.Delete(ctx, id)
 }
 
-// Kill terminates a session and forgets it.
+// KillOptions says how a session should be stopped and what to do with what it leaves behind.
+//
+// A struct rather than three parameters, because two of them are booleans: `Kill(ctx, id, false, 9)`
+// does not say which of force and keep the false belongs to, and a reader has to count.
+type KillOptions struct {
+	// Force is maximally forceful: SIGKILL, and forget the session even if its shim cannot be reached.
+	Force bool
+	// Signal ends the session with something other than the default. Zero means SIGHUP, or SIGKILL
+	// with Force.
+	Signal int32
+	// Keep retains the record, the names and the saved output after the shell is stopped, leaving the
+	// session listed as ended rather than gone. See KillRequest.keep for why the default is the
+	// opposite.
+	Keep bool
+}
+
+// Kill terminates a session, and forgets it unless asked to keep it.
 //
 // Without force, an unreachable shim is left recorded rather than forgotten: it may be
 // busy rather than dead, and forgetting it would orphan a live shell. force exists for the
 // case where the user knows better.
 func (m *Manager) Kill(
-	ctx context.Context, id string, force bool, sig int32,
+	ctx context.Context, id string, opts KillOptions,
 ) (surviving []int32, err error) {
+	force, sig := opts.Force, opts.Signal
 	m.mu.Lock()
 	sess, live := m.sessions[id]
 	m.mu.Unlock()
@@ -1606,9 +1625,16 @@ func (m *Manager) Kill(
 	// was left afterwards was the shim's "shim exiting" with exit_code=-1, which names neither the signal
 	// nor who sent it, so after losing real work there was nothing to read. The shim logs its side too;
 	// this is the side that knows a *request* arrived and what asked for it.
-	m.log.Info("killing session", "session", id, "force", force, "signal", sig, "live", live)
+	m.log.Info("killing session",
+		"session", id, "force", force, "signal", sig, "keep", opts.Keep, "live", live)
 
 	if live {
+		// Set before the shell is stopped, because watch() runs as soon as it dies and would otherwise
+		// forget the record for being an interactive session that ended -- the rule that keeps a closed
+		// window from leaving a row behind, and exactly the wrong one here.
+		if opts.Keep {
+			sess.keepRecord.Store(true)
+		}
 		// A session whose shell has already exited is not a failure to stop, whatever the RPC says.
 		//
 		// This window is narrow and real: the shell exits, the shim starts shutting down and closes its
@@ -1642,6 +1668,11 @@ func (m *Manager) Kill(
 		case <-time.After(2 * time.Second):
 		case <-ctx.Done():
 		}
+		if opts.Keep {
+			// watch() records the state and the exit code, the same as for a shell that exited on its own,
+			// so there is nothing to write here.
+			return surviving, nil
+		}
 		return surviving, m.forget(ctx, id, sess.record.LogPath)
 	}
 
@@ -1674,6 +1705,16 @@ func (m *Manager) Kill(
 			if resp != nil {
 				surviving = resp.SurvivingPids
 			}
+			if opts.Keep {
+				// No watch() on this path, since the session belongs to no registry here, so the state is
+				// recorded from what is known: the shim answered and was asked to stop, and nothing will
+				// ever learn its exit status. That is what dead means, as opposed to exited.
+				state := store.StateDead
+				if err := m.store.Apply(ctx, id, store.Update{State: &state}); err != nil {
+					return surviving, fmt.Errorf("recording %s as stopped: %w", id, err)
+				}
+				return surviving, nil
+			}
 			return surviving, m.forget(ctx, id, rec.LogPath)
 		}
 		if !force {
@@ -1683,6 +1724,12 @@ func (m *Manager) Kill(
 
 	if rec.State == store.StateRunning && !force {
 		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", id)
+	}
+	if opts.Keep {
+		// Nothing was stopped and nothing is being dropped, so the request is satisfied by doing nothing.
+		// Reachable only for a session already recorded as ended, since force and keep cannot be combined
+		// and the branch above refuses a running one.
+		return nil, nil
 	}
 	return nil, m.forget(ctx, id, rec.LogPath)
 }
