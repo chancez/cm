@@ -53,9 +53,34 @@ instead of killing the session, which is what a per-window name wants once its w
 session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
 teardown script should treat them apart: the session named there is still running.
 
+## Ending a session, and forgetting one
+
+Two operations, deliberately two commands, because they act on different things. `cm kill` stops a
+shell. `cm forget` removes a record.
+
+Killing also forgets: the record, the names and any saved output go with the shell. That is the default
+because almost every kill comes from a terminal emulator's window-close watcher, and with one session
+per window, a row left behind for every window ever closed is what the list fills up with. `cm kill
+--keep` is the other case, ending a session in order to look at what it did: the shell stops, the
+session is listed as exited, and `cm history` still works. `--keep` and `--force` are refused together,
+since force also means "forget it even if the shim cannot be reached".
+
+`cm forget` is for a session that has already ended, and refuses one that is still running. There is no
+override, which is what the separation buys: kill cannot refuse on those grounds, because ending a
+running shell is its whole job. `cm forget --ended` clears every ended record at once, spelled unlike
+`kill --all` because it means something narrower and touches nothing that is running.
+
+For a session whose shim cannot be reached at all, `cm kill --force` remains the escape hatch. Forget
+declines that case on purpose: `ECONNREFUSED` from a shim means busy at least as often as it means gone,
+so treating unreachable as dead would forget a live shell that was merely slow. A row recorded as
+running is marked dead by the next server start, and can be forgotten after that.
+
+Records also go on their own, on the schedule `expire_after` and `forget_unpersisted_after` set. See
+[persistence.md](persistence.md).
+
 ## JSON output
 
-`list`, `info`, `kill`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
+`list`, `info`, `kill`, `forget`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`, and
 `clients current` accept
 `--json`.

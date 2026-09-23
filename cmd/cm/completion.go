@@ -60,21 +60,45 @@ func writeCompletions(root *cobra.Command, w io.Writer, shell string) error {
 // Deliberately does not start a server. Completion runs on every tab press, and a stray keystroke
 // should not launch a daemon; if none is running there is nothing to complete anyway.
 func completeSessionNames(g *globals) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return completeSessionsMatching(g, nil)
+}
+
+// completeEndedSessionNames offers only the sessions that have ended, for `cm forget`.
+//
+// Filtered because forget refuses a running session, so offering one completes to a guaranteed refusal.
+// A completion that suggests what the command will reject is worse than none: it reads as the command
+// being broken rather than the choice being wrong.
+func completeEndedSessionNames(
+	g *globals,
+) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return completeSessionsMatching(g, func(s *serverv1.Session) bool {
+		return s.State != serverv1.SessionState_SESSION_STATE_RUNNING
+	})
+}
+
+// completeSessionsMatching offers the session names a predicate accepts, or all of them when it is nil.
+func completeSessionsMatching(
+	g *globals, want func(*serverv1.Session) bool,
+) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		// Only the first positional argument is a session name for these commands.
-		if len(args) > 0 && cmd.Name() != "kill" {
+		// Whether more than one session can be named is read off the usage line rather than kept as a list
+		// of command names here. `<session>...` is what says a command takes several, so the two can never
+		// disagree, and a new command gets the right behavior without this file being edited. It was a name
+		// check on "kill", and `cm forget a b<TAB>` offered nothing because forget was not that name.
+		several := strings.HasSuffix(cmd.Use, "...")
+		if len(args) > 0 && !several {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 
-		names, err := sessionNames(cmd.Context(), g, toComplete)
+		names, err := sessionNames(cmd.Context(), g, toComplete, want)
 		if err != nil {
 			// Silence rather than an error: a completion that prints a diagnostic corrupts the
 			// command line the user is typing.
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 
-		// kill takes several, so names already given are dropped from the offers.
-		if cmd.Name() == "kill" && len(args) > 0 {
+		// Names already on the command line are dropped from the offers.
+		if several && len(args) > 0 {
 			names = without(names, args)
 		}
 		return names, cobra.ShellCompDirectiveNoFileComp
@@ -82,7 +106,11 @@ func completeSessionNames(g *globals) func(*cobra.Command, []string, string) ([]
 }
 
 // sessionNames lists session names matching a prefix, described so the shell can show state.
-func sessionNames(ctx context.Context, g *globals, prefix string) ([]string, error) {
+//
+// want filters which sessions are offered, and nil offers every one.
+func sessionNames(
+	ctx context.Context, g *globals, prefix string, want func(*serverv1.Session) bool,
+) ([]string, error) {
 	// Whichever server this invocation names, bounded so a tab press cannot hang on a host that is
 	// unreachable rather than slow. See globals.completionServer.
 	ctx, cancel := g.completionDeadline(ctx)
@@ -102,6 +130,9 @@ func sessionNames(ctx context.Context, g *globals, prefix string) ([]string, err
 	sortSessions(resp.Sessions)
 	out := make([]string, 0, len(resp.Sessions))
 	for _, s := range resp.Sessions {
+		if want != nil && !want(s) {
+			continue
+		}
 		// The description after a tab is what zsh shows beside each candidate, which is where the
 		// state is worth knowing: attaching to a dead session restores it, which is different from
 		// attaching to a running one.

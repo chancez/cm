@@ -1734,6 +1734,44 @@ func (m *Manager) Kill(
 	return nil, m.forget(ctx, id, rec.LogPath)
 }
 
+// Forget drops the record, the names and the saved output of a session that has already ended.
+//
+// It refuses a session that is still alive, with no override, and that is the whole reason it is a
+// separate call from Kill: the two answer different questions, and only one of them can refuse. Kill is
+// asked to end a shell, so "it is still running" is not a reason to decline. Forget is asked to drop a
+// record, and a live shell is exactly the reason to decline, since dropping it would leave a shim holding
+// a pty that nothing can reach or name again.
+//
+// So there is no force here. `cm kill --force` is the escape hatch for a shim that cannot be reached: it
+// says what it does, which is to stop trying and accept the orphan.
+//
+// Liveness is the registry plus the recorded state, and deliberately not a probe of the shim. A shim
+// outlives its shell, so an exited session's socket answers for a while yet, and probing reported a `cm
+// run` that had already finished with its status recorded as still running. The record is what says whether
+// a session is over, which is the same reason ExpireDeadSessions does not re-probe. The registry covers the
+// other half, a session this server is proxying whose record has not caught up.
+//
+// A row that says running with no shim behind it is therefore refused as well, and stays refused until a
+// server start marks it dead. That is the conservative half of the same invariant: `ECONNREFUSED` from a
+// shim means busy at least as often as it means gone, so treating unreachable as dead here would forget a
+// live shell that was merely slow.
+func (m *Manager) Forget(ctx context.Context, id string) error {
+	m.mu.Lock()
+	_, live := m.sessions[id]
+	m.mu.Unlock()
+
+	rec, err := m.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if live || rec.State == store.StateRunning {
+		return fmt.Errorf("%s is still running; use `%s kill` to stop it first", id, paths.Name)
+	}
+
+	m.log.Info("forgetting session", "session", id, "state", rec.State)
+	return m.forget(ctx, id, rec.LogPath)
+}
+
 // ExpireDeadSessions removes dead sessions older than the configured age, along with their logs.
 //
 // Necessary rather than tidy: without it both the session list and the disk grow forever across

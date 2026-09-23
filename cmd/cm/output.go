@@ -867,6 +867,56 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 	return tw.Flush()
 }
 
+// forgetJSON is the JSON shape of a forget result.
+//
+// Both halves together for the same reason killJSON carries both: forgetting several sessions can partly
+// succeed, and the expected failure is one that is still running, which a caller has to be able to see.
+type forgetJSON struct {
+	Forgotten []string `json:"forgotten"`
+	// Errors maps a session reference to why it could not be forgotten.
+	Errors map[string]string `json:"errors"`
+}
+
+func reportForget(w io.Writer, resp *serverv1.ForgetResponse, asJSON bool) error {
+	out := forgetJSON{Forgotten: resp.Forgotten, Errors: resp.Errors}
+	if out.Forgotten == nil {
+		// An empty array rather than null, so a script can iterate unconditionally.
+		out.Forgotten = []string{}
+	}
+	if out.Errors == nil {
+		out.Errors = map[string]string{}
+	}
+
+	if asJSON {
+		if err := writeJSON(w, out); err != nil {
+			return err
+		}
+	} else {
+		for _, name := range out.Forgotten {
+			fmt.Fprintf(w, "forgot %s\n", name)
+		}
+	}
+	return reportedErrors(out.Errors, asJSON)
+}
+
+// reportedErrors turns a per-session error map into one error, so a partial failure still sets a
+// non-zero exit status.
+func reportedErrors(errs map[string]string, asJSON bool) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(errs))
+	for _, name := range sortedKeys(errs) {
+		msgs = append(msgs, fmt.Sprintf("%s: %s", name, errs[name]))
+	}
+	if asJSON {
+		// The detail is already in the payload, so the error only has to set the exit status without
+		// duplicating it onto stderr.
+		return errAlreadyReported
+	}
+	return fmt.Errorf("%s", strings.Join(msgs, "; "))
+}
+
 // killJSON is the JSON shape of a kill result.
 //
 // Both outcomes are reported together rather than as a single success or failure, because killing

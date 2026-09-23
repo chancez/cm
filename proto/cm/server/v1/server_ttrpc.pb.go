@@ -11,6 +11,7 @@ type ServerService interface {
 	Attach(context.Context, Server_AttachServer) error
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
+	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -67,6 +68,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 					return nil, err
 				}
 				return svc.Kill(ctx, &req)
+			},
+			"Forget": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ForgetRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Forget(ctx, &req)
 			},
 			"Send": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req SendRequest
@@ -197,6 +205,7 @@ type ServerClient interface {
 	Attach(context.Context) (Server_AttachClient, error)
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
+	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -270,6 +279,14 @@ func (c *serverClient) List(ctx context.Context, req *ListRequest) (*ListRespons
 func (c *serverClient) Kill(ctx context.Context, req *KillRequest) (*KillResponse, error) {
 	var resp KillResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Kill", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Forget(ctx context.Context, req *ForgetRequest) (*ForgetResponse, error) {
+	var resp ForgetResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Forget", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

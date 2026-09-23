@@ -22,6 +22,15 @@ service Server {
   // Kill terminates sessions and their shells.
   rpc Kill(KillRequest) returns (KillResponse);
 
+  // Forget drops what cm holds about sessions that have already ended.
+  //
+  // Separate from Kill rather than a flag on it, because the two act on different things: Kill stops a
+  // shell, and this removes a record. Kill removes the record as well, which is why one call served both
+  // for a while, but asking to clear an exited row meant sending a request to kill something that was
+  // already dead. A refusal to forget a running session is then also expressible, which it is not when
+  // the verb's job is to end one.
+  rpc Forget(ForgetRequest) returns (ForgetResponse);
+
   // Send writes bytes to a session's shell without attaching to it.
   rpc Send(SendRequest) returns (SendResponse);
 
@@ -1198,6 +1207,25 @@ message KillResponse {
 // SurvivingProcesses lists pids that outlived a signal.
 message SurvivingProcesses {
   repeated int32 pids = 1;
+}
+
+message ForgetRequest {
+  // Sessions to forget, as names or "@id" references.
+  repeated string sessions = 1;
+  // Forget every session that has ended, instead of the ones named.
+  //
+  // Spelled differently from Kill's all on purpose, because it means something narrower: every *ended*
+  // session rather than every session. Sharing the name would make `cm forget --all` read as the
+  // destructive thing it refuses to do.
+  bool ended = 2;
+}
+
+message ForgetResponse {
+  // Sessions that were forgotten, by the reference the caller gave.
+  repeated string forgotten = 1;
+  // Sessions that could not be forgotten, keyed by name. Shaped like KillResponse.errors, and the
+  // expected entry is a session that is still running.
+  map<string, string> errors = 2;
 }
 
 message SwitchRequest {

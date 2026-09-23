@@ -1168,6 +1168,49 @@ func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv
 	return resp, nil
 }
 
+// Forget drops what cm holds about sessions that have ended.
+//
+// Resolution is by reference like everything else, but a name is not treated specially the way killRef
+// treats it: a borrowed name resolves to its session and that session's record is what gets forgotten or
+// refused. Releasing a name is `cm unbind`, which already exists and says so.
+func (s *Service) Forget(
+	ctx context.Context, req *serverv1.ForgetRequest,
+) (*serverv1.ForgetResponse, error) {
+	refs := req.Sessions
+	if req.Ended {
+		listed, err := s.mgr.store.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing sessions to forget: %w", err)
+		}
+		refs = nil
+		for _, rec := range listed {
+			if rec.State == store.StateRunning {
+				continue
+			}
+			// By ID, so the request cannot be diverted by a name that moves between the list and the call.
+			refs = append(refs, paths.FormatSessionID(rec.ID))
+		}
+	}
+
+	resp := &serverv1.ForgetResponse{Errors: make(map[string]string)}
+	for _, ref := range refs {
+		id, err := s.mgr.Resolve(ctx, ref)
+		if err != nil {
+			resp.Errors[ref] = trimNamePrefix(err.Error(), ref)
+			continue
+		}
+		if err := s.mgr.Forget(ctx, id); err != nil {
+			resp.Errors[ref] = trimNamePrefix(err.Error(), ref)
+			continue
+		}
+		resp.Forgotten = append(resp.Forgotten, ref)
+	}
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
+	return resp, nil
+}
+
 // Detach disconnects a session's clients, leaving the session running.
 //
 // Resolved against live sessions only, and a name the store knows but the registry does not is not an

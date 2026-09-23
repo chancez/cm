@@ -256,6 +256,11 @@ func (c *fakeClient) List(context.Context, *serverv1.ListRequest) (*serverv1.Lis
 func (c *fakeClient) Kill(context.Context, *serverv1.KillRequest) (*serverv1.KillResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Forget(
+	context.Context, *serverv1.ForgetRequest,
+) (*serverv1.ForgetResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Detach(
 	context.Context, *serverv1.DetachRequest,
 ) (*serverv1.DetachResponse, error) {
