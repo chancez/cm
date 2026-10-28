@@ -9,9 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func serveTest(t *testing.T) string {
+	t.Helper()
+	return serveWith(t, Options{Profiles: true})
+}
+
+func serveWith(t *testing.T, opts Options) string {
 	t.Helper()
 	// os.MkdirTemp rather than t.TempDir, which embeds the test name and passes darwin's 104-byte socket
 	// path limit.
@@ -23,7 +29,7 @@ func serveTest(t *testing.T) string {
 	socket := filepath.Join(dir, "p.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	stop, err := Serve(ctx, socket, slog.New(slog.DiscardHandler))
+	stop, err := Serve(ctx, socket, opts, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
@@ -57,7 +63,7 @@ func TestFetchReturnsATrace(t *testing.T) {
 	if err := Fetch(context.Background(), socket, "trace", 0, &buf); err != nil {
 		t.Fatalf("Fetch(trace) error = %v", err)
 	}
-	if !bytes.HasPrefix(buf.Bytes(), []byte("go 1.")) {
+	if !isTrace(buf.Bytes()) {
 		t.Errorf("trace starts %q, want the runtime/trace header", buf.Bytes()[:min(16, buf.Len())])
 	}
 }
@@ -113,12 +119,69 @@ func TestStopRemovesTheSocket(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	socket := filepath.Join(dir, "p.sock")
-	stop, err := Serve(context.Background(), socket, slog.New(slog.DiscardHandler))
+	stop, err := Serve(context.Background(), socket, Options{Profiles: true, FlightWindow: time.Second},
+		slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
 	stop()
 	if _, err := os.Stat(socket); !os.IsNotExist(err) {
 		t.Errorf("Stat(socket) error = %v after stop, want it gone", err)
+	}
+}
+
+// isTrace reports whether b is what runtime/trace writes, which `go tool trace` reads.
+func isTrace(b []byte) bool { return bytes.HasPrefix(b, []byte("go 1.")) }
+
+// The recorder's window comes back as a trace, and it does so without profiles being on.
+func TestFetchFlightWithoutProfiles(t *testing.T) {
+	socket := serveWith(t, Options{FlightWindow: time.Second})
+	var buf bytes.Buffer
+	if err := Fetch(context.Background(), socket, Flight, 0, &buf); err != nil {
+		t.Fatalf("Fetch(flight) error = %v", err)
+	}
+	if !isTrace(buf.Bytes()) {
+		t.Errorf("flight starts %q, want the runtime/trace header", buf.Bytes()[:min(16, buf.Len())])
+	}
+}
+
+// Each feature refuses when it is off, naming the setting, whatever the other is set to.
+func TestEachFeatureRefusesWhenOff(t *testing.T) {
+	for _, tc := range []struct {
+		opts Options
+		name string
+		want error
+	}{
+		{Options{FlightWindow: time.Second}, "goroutine", errProfilesOff},
+		{Options{FlightWindow: time.Second}, "cpu", errProfilesOff},
+		{Options{Profiles: true}, Flight, errFlightOff},
+	} {
+		// A subtest each, so one's recorder is stopped before the next starts: the runtime allows one.
+		t.Run(tc.name, func(t *testing.T) {
+			socket := serveWith(t, tc.opts)
+			var buf bytes.Buffer
+			err := Fetch(context.Background(), socket, tc.name, 0, &buf)
+			if err == nil || err.Error() != tc.want.Error() || buf.Len() != 0 {
+				t.Errorf("%+v: Fetch(%s) = %v with %d bytes, want %q and nothing written",
+					tc.opts, tc.name, err, buf.Len(), tc.want)
+			}
+		})
+	}
+}
+
+// A live trace and the flight recorder run at once: `cm debug pprof --profile trace --flight` asks for
+// both, and the runtime would refuse the second if they could not share.
+func TestLiveTraceAlongsideTheRecorder(t *testing.T) {
+	socket := serveWith(t, Options{Profiles: true, FlightWindow: time.Second})
+	var live, flight bytes.Buffer
+	if err := Fetch(context.Background(), socket, "trace", 1, &live); err != nil {
+		t.Fatalf("Fetch(trace) error = %v", err)
+	}
+	if err := Fetch(context.Background(), socket, Flight, 0, &flight); err != nil {
+		t.Fatalf("Fetch(flight) error = %v", err)
+	}
+	if !isTrace(live.Bytes()) || !isTrace(flight.Bytes()) {
+		t.Errorf("live %q, flight %q, want both to be traces",
+			live.Bytes()[:min(16, live.Len())], flight.Bytes()[:min(16, flight.Len())])
 	}
 }

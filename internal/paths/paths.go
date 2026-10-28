@@ -133,10 +133,11 @@ func (d Dirs) ServerSocket() string {
 	return filepath.Join(d.Runtime, "server.sock")
 }
 
-// ProfileSocket is where one cm process serves its runtime profiles when `[debug] pprof` is on. role is
-// "server", a session ID for its shim, or "client-<pid>". See internal/profiling.
-func (d Dirs) ProfileSocket(role string) string {
-	return filepath.Join(d.Runtime, "pprof-"+role+".sock")
+// DiagnosticsSocket is where one cm process serves its profiles and flight recorder, when `[debug] pprof`
+// or `[debug] flight_recorder` is on. role is "server", a session ID for its shim, or "client-<pid>". See
+// internal/profiling.
+func (d Dirs) DiagnosticsSocket(role string) string {
+	return filepath.Join(d.Runtime, "debug-"+role+".sock")
 }
 
 // ShimSocket is the path the server uses to reach one session's shim.

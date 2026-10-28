@@ -225,7 +225,7 @@ matters for another multiplexer, which sees the key first and never passes it on
 			// every byte that reaches a terminal. See internal/client.screen.
 			opts.SetTitle = setTitle
 			// Keyed by pid, which an upgrade's exec keeps, so the replacement takes over the same socket.
-			defer serveProfiles(cmd.Context(), dirs, cfg, "client-"+strconv.Itoa(os.Getpid()), logger)()
+			defer serveDiagnostics(cmd.Context(), dirs, cfg, "client-"+strconv.Itoa(os.Getpid()), logger)()
 			return runAttach(cmd.Context(), dirs, opts, func(res client.Result) []string {
 				return upgradeArgv(cmd, args, res)
 			})

@@ -390,8 +390,9 @@ var machineLocal = map[string]bool{
 	// client is always local even when the session it shows is not: `cm --remote ssh://host keys` would
 	// answer about a file on the host and describe keys nothing on this machine presses.
 	"keys": true,
-	// Profiles a process through a socket in the local runtime directory.
-	"debug pprof": true,
+	// Profile or trace a process through a socket in the local runtime directory.
+	"debug pprof":  true,
+	"debug flight": true,
 	// Reads log files out of the local state directory.
 	"logs":        true,
 	"logs client": true,

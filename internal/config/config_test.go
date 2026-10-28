@@ -551,3 +551,28 @@ func TestRemoteSettings(t *testing.T) {
 		})
 	}
 }
+
+// The window only means something with the recorder on, so it is zero otherwise, whatever it says. That is
+// what keeps a window left in the file after turning the recorder off from starting one.
+func TestFlightWindow(t *testing.T) {
+	for _, tc := range []struct {
+		debug DebugConfig
+		want  time.Duration
+	}{
+		{DebugConfig{}, 0},
+		{DebugConfig{FlightRecorderWindow: "30s"}, 0},
+		{DebugConfig{FlightRecorder: true}, DefaultFlightRecorderWindow},
+		{DebugConfig{FlightRecorder: true, FlightRecorderWindow: "30s"}, 30 * time.Second},
+	} {
+		cfg := &Config{Debug: tc.debug}
+		if got, err := cfg.FlightWindow(); err != nil || got != tc.want {
+			t.Errorf("FlightWindow(%+v) = (%v, %v), want (%v, nil)", tc.debug, got, err, tc.want)
+		}
+	}
+	for _, spec := range []string{"0", "-1s", "nonsense"} {
+		cfg := &Config{Debug: DebugConfig{FlightRecorder: true, FlightRecorderWindow: spec}}
+		if _, err := cfg.FlightWindow(); err == nil {
+			t.Errorf("FlightWindow(%q) = nil error, want a rejection", spec)
+		}
+	}
+}

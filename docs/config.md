@@ -109,6 +109,9 @@ forget_unpersisted_after = "5m"
 [debug]
 # Serve runtime profiles for `cm debug pprof`.
 pprof = false
+# Keep the last few seconds of execution trace for `cm debug flight`.
+flight_recorder = false
+flight_recorder_window = "10s"
 ```
 
 ## Top-level options
@@ -553,7 +556,7 @@ points one shell or one window at a host, which is the scope that fits.
 ### pprof
 
 Makes the server, every shim, and every attached client serve Go runtime profiles on a socket in the
-runtime directory, `pprof-<process>.sock`. `cm debug pprof` fetches one into a file for `go tool pprof`, or
+runtime directory, `debug-<process>.sock`. `cm debug pprof` fetches one into a file for `go tool pprof`, or
 `go tool trace` for `--profile trace`:
 
 ```sh
@@ -571,3 +574,32 @@ was in the shim, which is why every process serves its own.
 
 A line-based request over the socket rather than `net/http/pprof`, which would have added 3.5 MB to the
 binary (28.2 to 31.7 MB) and about 1ms to every cm invocation for a setting that is off by default.
+
+### flight_recorder
+
+Makes the same processes keep the last `flight_recorder_window` (default `10s`) of their execution trace in
+memory. `cm debug flight` writes it to a file for `go tool trace`, so a stall can be looked at after it has
+happened rather than reproduced under a profiler:
+
+```sh
+cm debug flight work                        # what the shim behind "work" just did
+cm debug pprof --server --flight            # a CPU profile, then the trace of the same 10s
+```
+
+Independent of `pprof`: each serves the socket on its own, and each refuses requests for the other when it is
+off. Read when each process starts, as `pprof` is.
+
+What it costs, measured on an M3 Max with the recorder in the server and a shim:
+
+| | off | on |
+|---|---|---|
+| 3 runs of 50 MB of output, wall time per run | 4.30-4.71s | 4.50-4.51s |
+| server CPU over those runs | 11.91-12.02s | 11.95-11.99s |
+| idle server CPU per 60s | 80ms | 170ms |
+| idle shim CPU per 60s | 0ms | 100ms |
+| idle shim resident memory | 20.4 MB | 22.1 MB |
+
+Nothing measurable under load, and about 1.5ms of CPU per second per idle process for the recorder's own
+wakeups, so the cost grows with the number of sessions rather than with what they do. A 10s window measured
+96 KB for an idle shim and 5.2 MB for a server under 11 MB/s of output; the buffer is capped at 1 MiB per
+second of window, at least 4 MiB, and a heavier burst shortens the window rather than growing the buffer.

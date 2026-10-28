@@ -680,4 +680,36 @@ type DebugConfig struct {
 	// the runtime directory, read with `cm debug pprof`. Off by default. Read when each process starts, so
 	// turning it on reaches a running server after a restart and a running session not at all.
 	Pprof bool `toml:"pprof"`
+
+	// FlightRecorder makes the same processes keep the last FlightRecorderWindow of their execution trace
+	// in memory, read with `cm debug flight`. Independent of Pprof: either serves the socket, and each
+	// refuses requests for the other when it is off. Read when each process starts, as Pprof is.
+	FlightRecorder bool `toml:"flight_recorder"`
+
+	// FlightRecorderWindow is how much trace the recorder keeps, as a Go duration. Empty means
+	// DefaultFlightRecorderWindow.
+	FlightRecorderWindow string `toml:"flight_recorder_window"`
+}
+
+// DefaultFlightRecorderWindow is long enough to cover noticing a stall and running a command, and short
+// enough to stay small: 10s of trace measured 96 KB for an idle shim and 5.2 MB for a server under 11 MB/s
+// of output.
+const DefaultFlightRecorderWindow = 10 * time.Second
+
+// FlightWindow returns how much trace each process keeps, or zero when the recorder is off.
+func (c *Config) FlightWindow() (time.Duration, error) {
+	if !c.Debug.FlightRecorder {
+		return 0, nil
+	}
+	if c.Debug.FlightRecorderWindow == "" {
+		return DefaultFlightRecorderWindow, nil
+	}
+	d, err := time.ParseDuration(c.Debug.FlightRecorderWindow)
+	if err != nil {
+		return 0, fmt.Errorf("debug.flight_recorder_window: %w", err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("debug.flight_recorder_window must be positive, got %q", c.Debug.FlightRecorderWindow)
+	}
+	return d, nil
 }
