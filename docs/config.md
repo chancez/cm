@@ -105,6 +105,10 @@ expire_after = "168h"
 
 # Remove an ended session that saved no output after this long.
 forget_unpersisted_after = "5m"
+
+[debug]
+# Serve runtime profiles for `cm debug pprof`.
+pprof = false
 ```
 
 ## Top-level options
@@ -543,3 +547,27 @@ There is deliberately **no default remote**. A setting naming one would point ev
 in every shell at another host, including the ones that answer about sessions, and the local
 behavior of a command is not something a config file should change invisibly. `$CM_REMOTE`
 points one shell or one window at a host, which is the scope that fits.
+
+## [debug]
+
+### pprof
+
+Makes the server, every shim, and every attached client serve Go runtime profiles on a socket in the
+runtime directory, `pprof-<process>.sock`. `cm debug pprof` fetches one into a file for `go tool pprof`, or
+`go tool trace` for `--profile trace`:
+
+```sh
+cm debug pprof work                         # the shim behind session "work", 10s of CPU
+cm debug pprof --server --profile trace --seconds 5
+cm debug pprof --client 4242 --profile goroutine
+```
+
+Read when each process starts, so it reaches a running server after `cm server restart` and a session
+only once it is started again. Off by default; a process that is not asked to profile pays nothing.
+
+Which process to profile depends on where the time goes: the shim owns the pty and the persisted log, the
+server the terminal model, the client the writes to your terminal. Slow nvim scrolling with persistence on
+was in the shim, which is why every process serves its own.
+
+A line-based request over the socket rather than `net/http/pprof`, which would have added 3.5 MB to the
+binary (28.2 to 31.7 MB) and about 1ms to every cm invocation for a setting that is off by default.

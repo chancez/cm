@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -223,6 +224,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 			// remainder printed as text on screen. The command layer states the policy; the client owns
 			// every byte that reaches a terminal. See internal/client.screen.
 			opts.SetTitle = setTitle
+			// Keyed by pid, which an upgrade's exec keeps, so the replacement takes over the same socket.
+			defer serveProfiles(cmd.Context(), dirs, cfg, "client-"+strconv.Itoa(os.Getpid()), logger)()
 			return runAttach(cmd.Context(), dirs, opts, func(res client.Result) []string {
 				return upgradeArgv(cmd, args, res)
 			})

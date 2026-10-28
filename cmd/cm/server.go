@@ -357,6 +357,7 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	// Reproduced by stopping and starting a server repeatedly: it failed within a few iterations.
 
 	logger.Info("server starting", "pid", os.Getpid(), "socket", dirs.ServerSocket())
+	defer serveProfiles(ctx, dirs, cfg, "server", logger)()
 
 	// A server that is up means no stop is in effect, whoever asked for the last one. Removed here rather
 	// than by whatever started this process, so a server run by hand clears it too, and so the marker can

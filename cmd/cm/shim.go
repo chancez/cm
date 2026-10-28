@@ -168,6 +168,7 @@ func runShim(ctx context.Context, dirs paths.Dirs, appCfg *config.Config, cfg sh
 		return fmt.Errorf("starting session %s: %w", cfg.Session, err)
 	}
 	session.SetLogger(logger)
+	defer serveProfiles(ctx, dirs, appCfg, cfg.Session, logger)()
 
 	logger.Info("shim started",
 		"session", cfg.Session, "pid", os.Getpid(), "shell_pid", session.ShellPID(),

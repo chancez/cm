@@ -75,6 +75,7 @@ type configJSON struct {
 	// RebindReplaces, because "my setting does nothing" is the question this command answers, and a
 	// default that ends a session is one worth being able to read back.
 	RebindReplaces bool     `json:"rebind_replaces"`
+	DebugPprof     bool     `json:"debug_pprof"`
 	EnvCapture     []string `json:"env_capture"`
 	// The remote settings, reported for the same reason the retentions are: "my setting does nothing" is what
 	// this command answers, and a connection shared for a minute by default is a process the user did not
@@ -192,6 +193,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Also "never" rather than "0s" when disabled, where zero means "keep every snapshot".
 		DatabaseBackupRetention: durationOrNever(dbBackupRetention),
 		RebindReplaces:          cfg.RebindReplaces,
+		DebugPprof:              cfg.Debug.Pprof,
 		EnvCapture:              cfg.EnvPatterns(),
 		// Through the accessor, so what is printed is what a remote connection actually uses, including the
 		// default a blank setting means. "off" rather than "0s" for no sharing, because that is the question
@@ -244,6 +246,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "shim_log_retention        %s\n", out.ShimLogRetention)
 	fmt.Fprintf(os.Stdout, "database_backup_retention %s\n", out.DatabaseBackupRetention)
 	fmt.Fprintf(os.Stdout, "rebind_replaces           %t\n", out.RebindReplaces)
+	fmt.Fprintf(os.Stdout, "debug.pprof               %t\n", out.DebugPprof)
 	fmt.Fprintf(os.Stdout, "remote.ssh_command        %s\n", out.RemoteSSHCommand)
 	fmt.Fprintf(os.Stdout, "remote.connection_persist %s\n", out.RemoteConnectionPersist)
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))

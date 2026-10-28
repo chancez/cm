@@ -100,6 +100,9 @@ type Config struct {
 	// vacated one is the shell the emulator made and nothing else.
 	RebindReplaces bool `toml:"rebind_replaces"`
 
+	// Debug holds settings for diagnosing cm itself. See DebugConfig.
+	Debug DebugConfig `toml:"debug"`
+
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 	Remote  RemoteConfig  `toml:"remote"`
@@ -669,4 +672,12 @@ func (c *Config) CommandIsSafeToRerun(argv []string) bool {
 		}
 	}
 	return false
+}
+
+// DebugConfig holds settings for diagnosing cm itself rather than for using it.
+type DebugConfig struct {
+	// Pprof makes the server, each shim, and each attached client serve runtime profiles on a socket in
+	// the runtime directory, read with `cm debug pprof`. Off by default. Read when each process starts, so
+	// turning it on reaches a running server after a restart and a running session not at all.
+	Pprof bool `toml:"pprof"`
 }
