@@ -778,41 +778,9 @@ a session from its output log. Today a dead shim means a dead session, and the p
 readable but not revivable. This is a real capability rather than a nicety, and it is bounded work: the
 restore path already replays a log into a screen.
 
-**Rotate the persisted log instead of trimming it.** `seqlog.File` stays inside its bound by dropping bytes
-from the front, and `trimLocked` does that by reading the remainder into a buffer, truncating, and writing
-it back. Once a log has reached its cap that runs on *every* append, so appending a chunk costs the size of
-everything retained. Measured on an M3 Max, appending 1 KiB chunks of 80-column output:
-
-```
-unbounded, no trim                     11.9 us/op    80.6 MB/s
-at cap,   1k lines retained (80 KB)    62.1 us/op    15.5 MB/s
-at cap,  10k lines retained (800 KB)    176 us/op     5.5 MB/s   <- shipped default
-at cap, 100k lines retained (8 MB)     1587 us/op     0.61 MB/s
-```
-
-Linear in retained size, which is the rewrite rather than the write. The append is on the shim's pty read
-loop (`internal/shim/session.go:266`), so a saturated log throttles the session it is recording. It is not
-confined to opted-in sessions either: `persisting := requested || opts.CaptureOutput`
-(`internal/server/manager.go:1185`) means every `cm run` writes output to disk whatever `persist.enabled`
-says, so this is a live cost rather than a hypothetical one.
-
-Segments instead of one file. Name each after the sequence number of its first byte, zero-padded so a
-directory listing is the index and `cat *` in name order is still the log; rotate at the first newline past
-a size threshold; drop whole segments for retention. Appends become the unbounded case permanently and stop
-depending on retained size, `countLines` and `offsetAfterLines` leave the hot path, and rotating on a
-newline keeps the property the current trim was written for, that retained content starts at a line rather
-than mid-escape. A sealed segment is immutable, so a reader no longer shares a mutex with the writer.
-
-No manifest file: it would be a second source of truth that can disagree with the files. Retention gets
-coarse in exchange, overshooting by up to one segment, since only whole segments can be dropped.
-
-The work is mostly outside `seqlog`, because `LogPath` stops being a file and becomes a directory: the
-`log_path` column, `--persist-path` in the shim argv, `restoreFrom`, `replayFromDisk`, expiry's
-`os.Remove`, and the `cm doctor` check that stats it. Two hazards there. Expiry must unlink only files
-matching the segment pattern and then `rmdir`, never `RemoveAll` on a path read out of the database: the
-same bug that leaks a file today deletes a tree tomorrow. And `--persist-path` must keep meaning a single
-file, because a still-running old server passes one to a new shim; a new `--persist-dir` beside it leaves
-old servers and old rows working, since a plain file is a one-segment log.
+**Rotate the persisted log instead of trimming it.** Done: the log is a directory of segments retained by
+deleting whole ones. See "Retention" in [persistence.md](persistence.md) for the layout and the measurement
+that decided it.
 
 **Persist every session, and make the configuration about restoring rather than saving.** Persistence is
 fixed when the shim spawns: `persistsSession` decides at create time, the path goes into the shim argv, and
@@ -829,9 +797,8 @@ the config becomes: `sessions` patterns select a *lifetime* rather than whether 
 `forget_unpersisted_after` loses its subject and the honest distinction is one-shot run against named
 session, `on_restore` is unchanged, and `enabled` either goes away or becomes the escape hatch.
 
-Two costs. The first is the one `persistence.md` asserts without a number, and the measurement above says
-most of it is the trim rather than the write, so segments are a prerequisite rather than a companion. The
-second is disclosure: every session's raw output on disk with no user action, including whatever scrolled
+Two costs. The first is the write on every session's pty read loop, which with segments is 2.9us per
+1022-byte read whatever is retained (see "Retention" in `persistence.md`). The second is disclosure: every session's raw output on disk with no user action, including whatever scrolled
 past. Mode is 0600 under a 0700 directory and `loose-dir-perms` guards that, but a global off switch and a
 per-session `--no-persist` should survive even if neither is the default.
 

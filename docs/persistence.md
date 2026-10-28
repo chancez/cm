@@ -90,14 +90,35 @@ the server never consumed.
 
 ## Retention
 
-Bounded by lines, matching how `scrollback_lines` is expressed, with the oldest output dropped as
-the file grows.
+Bounded by lines, matching how `scrollback_lines` is expressed, with a byte ceiling as a backstop. The
+shim deliberately knows nothing about terminals, so a line is a newline in the byte stream, and a session
+emitting very long lines would otherwise produce a far larger log than its line count suggests. Defaults
+are 10000 lines and 16 MiB. A full-screen program positions the cursor rather than writing newlines, so
+for nvim the byte ceiling is the limit that applies.
 
-One wrinkle to implement carefully: the shim deliberately knows nothing about terminals, so it has
-no concept of a line beyond counting newlines in the byte stream. It counts them on append and trims
-whole lines from the front. That means a session emitting very long lines produces a larger file
-than the line count suggests, so a byte ceiling also applies as a backstop; a single pathological
-line must not be able to fill the disk.
+The log is a directory, `logs/<id>.log.d/`, of segment files named by the sequence number of their first
+byte, zero-padded so `cat *` in name order is the log. The shim seals a segment at the first newline past
+1 MiB, or at 2 MiB if none comes, and retention deletes the oldest sealed segments while what remains still
+covers both limits. So the log keeps up to one segment more than the limits ask for, and an append is a
+write to the end of one file however much is retained. There is no manifest: it would be a second record
+that can disagree with the files.
+
+The alternative, one file trimmed from the front, has to rewrite everything retained to drop a prefix, and
+once the log is full it does that on every append, on the shim's pty read loop. Measured on an M3 Max, one
+1022-byte pty read at the default limits:
+
+```
+single file, full   5085374 ns/op   0.20 MB/s
+segments, full         2895 ns/op    353 MB/s
+```
+
+That was 50 to 150ms of stalled output per half-page scroll in an nvim vertical split, which is how it was
+found. `BenchmarkAppendAtCap` in `internal/seqlog` measures both.
+
+Older shims write the single file, `logs/<id>.log`, and are given `--persist-path` for it. A current server
+passes `--persist-dir` instead, reads either layout, and moves a single file into segments when it revives
+the session that wrote it, keeping the numbering. A session started before an upgrade keeps its old shim and
+its single file until it ends.
 
 Older scrollback is lost across a reboot. A restored session has the most recent output, not all of
 it.
