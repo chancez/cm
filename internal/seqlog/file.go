@@ -23,6 +23,9 @@ type FileLimits struct {
 	// otherwise produce a file far larger than its line count suggests. One pathological line must
 	// not be able to fill the disk.
 	MaxBytes int64
+	// SegmentBytes is the size at which Dir seals a segment. Zero means DefaultSegmentBytes. File
+	// ignores it.
+	SegmentBytes int64
 }
 
 // DefaultFileLimits retains enough to rebuild a screen and a useful amount of scrollback.
