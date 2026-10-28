@@ -57,7 +57,7 @@ func seedFromPersistedLog(
 		return ErrNothingToRestore
 	}
 
-	f, err := seqlog.OpenFile[seq.Shim](logPath, limits)
+	f, err := seqlog.OpenPersisted[seq.Shim](logPath, limits)
 	if err != nil {
 		return fmt.Errorf("opening persisted log: %w", err)
 	}

@@ -236,3 +236,9 @@ func (d Dirs) ShimLog(session string) string {
 func (d Dirs) SessionLog(session string) string {
 	return filepath.Join(d.logDir(), session+".log")
 }
+
+// SessionLogDir is the segmented output log for one session, which current shims write. SessionLog
+// is the single file an older shim writes, and a session it persisted keeps that path in its record.
+func (d Dirs) SessionLogDir(session string) string {
+	return filepath.Join(d.logDir(), session+".log.d")
+}

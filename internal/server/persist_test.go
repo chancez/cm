@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -408,6 +410,81 @@ func TestOpenRevivesDeadPersistedSession(t *testing.T) {
 	// The replay is attempted only after a shim exists, so the emulator should not have been fed.
 	if got := term.Written(); got != "" {
 		t.Errorf("emulator was fed %q before a shim existed", got)
+	}
+}
+
+// Reviving a session an older shim persisted moves its single-file log into segments before the new shim
+// starts, so the shim continues the same numbering and the next reboot still restores the old content.
+// Without the move, the record would point at segments holding only what followed the revival.
+func TestOpenMovesALegacyLogIntoSegments(t *testing.T) {
+	newTerm, _ := replayTerminal(t)
+	mgr, st, dirs := newTestManager(t, newTerm)
+	mgr.SetPersistPolicy(testPolicy())
+	ctx := context.Background()
+
+	legacy := dirs.SessionLog("aaaa3333")
+	writeSavedLog(t, legacy, "OUTPUT_FROM_AN_OLDER_SHIM\r\n")
+	if err := st.Create(ctx, store.Session{
+		ID:         "aaaa3333",
+		ShimSocket: dirs.ShimSocket("aaaa3333"),
+		LogPath:    legacy,
+		State:      store.StateDead,
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// The move happens before the spawn, so a shim that cannot start still shows it.
+	mgr.selfExe = "/nonexistent/cm"
+	if _, _, err := mgr.Open(ctx, OpenOptions{Ref: paths.FormatSessionID("aaaa3333"), Rows: 24, Cols: 80}); err == nil {
+		t.Fatal("Open() succeeded with a bogus shim binary, want failure")
+	}
+
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) error = %v, want the single file gone", legacy, err)
+	}
+	d, err := seqlog.OpenDir[seq.Shim](dirs.SessionLogDir("aaaa3333"), seqlog.FileLimits{})
+	if err != nil {
+		t.Fatalf("OpenDir() error = %v", err)
+	}
+	defer d.Close()
+	data, gap, err := d.ReadFrom(0)
+	if err != nil {
+		t.Fatalf("ReadFrom() error = %v", err)
+	}
+	if got, want := fmt.Sprintf("%q gap=%v", data, gap), fmt.Sprintf("%q gap=false", "OUTPUT_FROM_AN_OLDER_SHIM\r\n"); got != want {
+		t.Errorf("segments hold %s, want %s", got, want)
+	}
+}
+
+// Expiry removes a segmented log as well as a single file, and only cm's own files in it.
+func TestExpireRemovesASegmentedLog(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.ExpireAfter = time.Hour
+	mgr.SetPersistPolicy(policy)
+	ctx := context.Background()
+	now := time.Now()
+
+	logDir := dirs.SessionLogDir("old")
+	d, err := seqlog.OpenDir[seq.Shim](logDir, seqlog.FileLimits{SegmentBytes: 4})
+	if err != nil {
+		t.Fatalf("OpenDir() error = %v", err)
+	}
+	if err := d.Append([]byte("aaaa\nbbbb\ncc")); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	d.Close()
+
+	if err := st.Create(ctx, store.Session{ID: "old", LogPath: logDir, State: store.StateDead}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	ageRecord(t, st, "old", now.Add(-2*time.Hour))
+
+	if removed, err := mgr.ExpireDeadSessions(ctx, now); err != nil || removed != 1 {
+		t.Fatalf("ExpireDeadSessions() = %d, %v, want 1, nil", removed, err)
+	}
+	if _, err := os.Stat(logDir); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) error = %v, want the segmented log gone", logDir, err)
 	}
 }
 

@@ -183,3 +183,52 @@ func TestSessionFlushesPersistedLogOnExit(t *testing.T) {
 		t.Errorf("persisted log = %q, want the shell's final output", got)
 	}
 }
+
+// A current server passes --persist-dir, and the output must land in segments there. PersistPath is set
+// too, to pin that the directory wins: an older server passes only the path, a newer one only the
+// directory, and a shim writing both would leave a file nothing reads or removes.
+func TestSessionPersistsOutputAsSegments(t *testing.T) {
+	dir := shortTempDir(t)
+	segments := filepath.Join(dir, "persist.log.d")
+	file := filepath.Join(dir, "persist.log")
+
+	sess, err := Start(Config{
+		Session:     "segmented",
+		Command:     []string{"/bin/sh", "-c", "echo SEGMENTED_LINE; sleep 5"},
+		Rows:        24,
+		Cols:        80,
+		PersistPath: file,
+		PersistDir:  segments,
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { sess.Signal(9, true) })
+
+	r := sess.Log().Subscribe(0)
+	defer r.Close()
+	readUntil(t, r, "SEGMENTED_LINE")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d, err := seqlog.OpenDir[seq.Shim](segments, seqlog.FileLimits{})
+		if err != nil {
+			t.Fatalf("OpenDir() error = %v", err)
+		}
+		got, _, err := d.ReadFrom(0)
+		d.Close()
+		if err != nil {
+			t.Fatalf("ReadFrom() error = %v", err)
+		}
+		if strings.Contains(string(got), "SEGMENTED_LINE") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("persisted segments = %q, want the session's output", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s) error = %v, want no single-file log beside the segments", file, err)
+	}
+}

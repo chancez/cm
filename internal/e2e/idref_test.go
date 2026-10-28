@@ -104,7 +104,7 @@ func TestAttachByIDRevivesAndKeepsTheID(t *testing.T) {
 	// One log, not two. A revive under a new ID would name a new log file and orphan the old one, which
 	// nothing would ever remove: expiry deletes a log through the record that names it, and that record
 	// is the one the revive replaced.
-	logs, err := filepath.Glob(filepath.Join(e.state, "logs", "*.log"))
+	logs, err := filepath.Glob(filepath.Join(e.state, "logs", "*.log.d"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}

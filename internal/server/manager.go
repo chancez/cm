@@ -1203,7 +1203,8 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 
 	logPath := ""
 	if persisting {
-		logPath = m.dirs.SessionLog(opts.id)
+		logPath = m.dirs.SessionLogDir(opts.id)
+		opts.restoreFrom = m.migrateLegacyLog(opts.id, opts.restoreFrom, logPath)
 	}
 
 	rec := store.Session{
@@ -1351,7 +1352,7 @@ func (m *Manager) shimArgs(opts OpenOptions, logPath string) []string {
 		)
 	}
 	if logPath != "" {
-		args = append(args, "--persist-path", logPath)
+		args = append(args, "--persist-dir", logPath)
 		if m.persist != nil {
 			if m.persist.Limits.MaxLines > 0 {
 				args = append(args, "--persist-max-lines", strconv.Itoa(m.persist.Limits.MaxLines))
@@ -1581,13 +1582,43 @@ func (m *Manager) forget(ctx context.Context, id, logPath string) error {
 	if logPath != "" {
 		// A log that cannot be removed is not a reason to keep the record, matching ExpireDeadSessions:
 		// the row is what makes a session visible, and a stranded file is the smaller problem.
-		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		if err := removeSessionLog(logPath); err != nil && !os.IsNotExist(err) {
 			m.log.Warn("removing the log of a forgotten session failed",
 				"session", id, "path", logPath, "error", err)
 		}
 	}
 	m.releaseNames(ctx, id)
 	return m.store.Delete(ctx, id)
+}
+
+// removeSessionLog deletes a persisted log in whichever layout it has.
+func removeSessionLog(path string) error {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return seqlog.RemoveDir(path)
+	}
+	return os.Remove(path)
+}
+
+// migrateLegacyLog moves a single-file log an older shim wrote into the segmented layout the new shim
+// will continue, and returns what to restore from.
+//
+// Without it a session revived after upgrading restores once from the old file and then persists only
+// what follows, so the next reboot loses everything from before the upgrade. A failure keeps the old
+// file to restore from, which costs that history later rather than the screen now.
+func (m *Manager) migrateLegacyLog(id, restoreFrom, dir string) string {
+	if restoreFrom == "" || restoreFrom == dir {
+		return restoreFrom
+	}
+	info, err := os.Stat(restoreFrom)
+	if err != nil || info.IsDir() {
+		return restoreFrom
+	}
+	if err := seqlog.MigrateFile(restoreFrom, dir); err != nil {
+		m.log.Warn("moving a persisted log to segments failed, restoring from the old file",
+			"session", id, "path", restoreFrom, "error", err)
+		return restoreFrom
+	}
+	return dir
 }
 
 // KillOptions says how a session should be stopped and what to do with what it leaves behind.
@@ -1935,7 +1966,7 @@ func (m *Manager) replayFromDisk(
 		limits = m.persist.Limits
 	}
 
-	f, err := seqlog.OpenFile[seq.Shim](rec.LogPath, limits)
+	f, err := seqlog.OpenPersisted[seq.Shim](rec.LogPath, limits)
 	if err != nil {
 		return nil, fmt.Errorf("opening persisted log for %s: %w", name, err)
 	}

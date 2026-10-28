@@ -79,7 +79,11 @@ type Config struct {
 	// PersistPath, when set, is a file the output log is also written to, so a session's content
 	// survives this process and a reboot.
 	PersistPath string
-	// PersistLimits bounds the persisted file. Ignored when PersistPath is empty.
+	// PersistDir, when set, is a directory the output log is written to as segments, and wins over
+	// PersistPath. A separate flag rather than a new meaning for PersistPath, because an older server
+	// still running after an upgrade passes PersistPath and reads back a single file.
+	PersistDir string
+	// PersistLimits bounds the persisted log. Ignored when neither path is set.
 	PersistLimits seqlog.FileLimits
 }
 
@@ -91,7 +95,7 @@ type Session struct {
 	outputLog *seqlog.Log[seq.Shim]
 	// persist mirrors output to disk when the session is configured to survive this process. Nil
 	// otherwise, which is the common case.
-	persist *seqlog.File[seq.Shim]
+	persist seqlog.Persisted[seq.Shim]
 
 	// ptmx is the pty master. Reads drain shell output; writes deliver input.
 	ptmx *os.File
@@ -151,7 +155,7 @@ func Start(cfg Config) (*Session, error) {
 
 	s := &Session{cfg: cfg, log: cmlog.Discard(), outputLog: seqlog.New[seq.Shim](logBytes)}
 
-	if cfg.PersistPath != "" {
+	if cfg.PersistDir != "" || cfg.PersistPath != "" {
 		limits := cfg.PersistLimits
 		if limits.MaxLines == 0 && limits.MaxBytes == 0 {
 			limits = seqlog.DefaultFileLimits
@@ -159,7 +163,12 @@ func Start(cfg Config) (*Session, error) {
 		// A log that cannot be opened is reported rather than ignored: the caller asked for a
 		// session whose content survives, and silently not doing that would be discovered only
 		// after a reboot, when it is too late to matter.
-		pf, err := seqlog.OpenFile[seq.Shim](cfg.PersistPath, limits)
+		var pf seqlog.Persisted[seq.Shim]
+		if cfg.PersistDir != "" {
+			pf, err = seqlog.OpenDir[seq.Shim](cfg.PersistDir, limits)
+		} else {
+			pf, err = seqlog.OpenFile[seq.Shim](cfg.PersistPath, limits)
+		}
 		if err != nil {
 			return nil, err
 		}

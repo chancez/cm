@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -106,9 +107,18 @@ func TestLogLayout(t *testing.T) {
 		}
 	}
 
-	// Session output, directly in logs/ and not in a diagnostic directory.
-	if e.readFileOrEmpty(filepath.Join(e.state, "logs", id+".log")) == "" {
-		t.Error("the session's output log is missing from logs/")
+	// Session output, directly in logs/ and not in a diagnostic directory, as segments. A single file
+	// there means the server passed --persist-path, which still works and rewrites the whole file on every
+	// append once it is full.
+	segments, err := filepath.Glob(filepath.Join(e.state, "logs", id+".log.d", "*.seg"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(segments) == 0 || e.readFileOrEmpty(segments[0]) == "" {
+		t.Errorf("the session's output segments are missing from logs/: %v", segments)
+	}
+	if _, err := os.Stat(filepath.Join(e.state, "logs", id+".log")); !os.IsNotExist(err) {
+		t.Errorf("Stat(%s.log) error = %v, want no single-file output log", id, err)
 	}
 	if e.readFileOrEmpty(filepath.Join(e.state, "logs", "shim", "shim-"+id+".log")) != "" {
 		t.Error("a shim log kept its old prefixed name, so the layout is inconsistent")

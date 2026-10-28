@@ -30,6 +30,7 @@ func newShimCommand(g *globals) *cobra.Command {
 		xpixel, ypixel  uint16
 		logBytes        int
 		persistPath     string
+		persistDir      string
 		persistMaxLines int
 		persistMaxBytes int64
 	)
@@ -65,6 +66,7 @@ func newShimCommand(g *globals) *cobra.Command {
 				YPixel:      ypixel,
 				LogBytes:    logBytes,
 				PersistPath: persistPath,
+				PersistDir:  persistDir,
 				PersistLimits: seqlog.FileLimits{
 					MaxLines: persistMaxLines,
 					MaxBytes: persistMaxBytes,
@@ -89,6 +91,8 @@ func newShimCommand(g *globals) *cobra.Command {
 	f.IntVar(&logBytes, "log-bytes", 0, "bytes of output to retain (0 for the default)")
 	f.StringVar(&persistPath, "persist-path", "",
 		"file to mirror output to, so the session survives this process")
+	f.StringVar(&persistDir, "persist-dir", "",
+		"directory to mirror output to as segments; wins over --persist-path")
 	f.IntVar(&persistMaxLines, "persist-max-lines", 0,
 		"lines to retain in the persisted log (0 for the default)")
 	f.Int64Var(&persistMaxBytes, "persist-max-bytes", 0,
