@@ -108,16 +108,19 @@ jobs:
           floor="$(sed -n 's/^GLIBC_FLOOR = "\(.*\)"$/\1/p' mise.toml)"
           [ -n "$floor" ] || { echo "could not read GLIBC_FLOOR from mise.toml" >&2; exit 1; }
           echo "glibc=$floor" >> "$GITHUB_OUTPUT"
+          zig="$(sed -n 's/^zig = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$zig" ] || { echo "could not read the zig version from mise.toml" >&2; exit 1; }
+          echo "zig=$zig" >> "$GITHUB_OUTPUT"
           echo "using libghostty $ref, glibc floor $floor"
 
-      # Keyed on the pinned ref, the optimize mode, and the runner, so a bump or a flag change misses
-      # and everything else hits. The zig build is the dominant cost of this workflow, minutes against
-      # seconds for the Go build.
+      # Keyed on the pinned ref, the runner, and the build script, so a bump or a flag change misses and
+      # everything else hits. The zig build is the dominant cost of this workflow, minutes against seconds
+      # for the Go build.
       #
-      # The optimize mode is in the key because ReleaseSafe is load-bearing rather than a tuning choice:
-      # a Debug artifact makes a reverse index at the top row cost 14ms instead of 10us, and
-      # internal/vt/scroll_test.go asserts on that ratio. A cache hit serving a Debug build would fail
-      # that test with nothing in the diff to explain it.
+      # The script is in the key because its flags are load-bearing rather than tuning: a Debug artifact
+      # makes a reverse index at the top row cost 14ms instead of 10us, and internal/vt/scroll_test.go
+      # asserts on that ratio. A cache hit serving a stale build would fail that test with nothing in the
+      # diff to explain it.
       #
       # The glibc floor is in the key for the same reason, since it changes which functions zig compiles
       # calls to. It is in the darwin key too, where it means nothing, because one wasted rebuild on a
@@ -126,68 +129,41 @@ jobs:
         id: ghostty-cache
         uses: actions/cache@v4
         with:
-          path: third_party/ghostty/zig-out
-          key: ghostty-${{ matrix.name }}-${{ steps.ghostty.outputs.ref }}-releasesafe-glibc${{ steps.ghostty.outputs.glibc }}
+          path: third_party/libghostty-vt
+          key: ghostty-${{ matrix.name }}-${{ steps.ghostty.outputs.ref }}-glibc${{ steps.ghostty.outputs.glibc }}-${{ hashFiles('scripts/libghostty.sh') }}
 
       - name: Install zig
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: mlugg/setup-zig@v2
         with:
-          # Matches mise.toml. Only needed on a cache miss, since the cached artifact is what the Go
-          # build links against.
-          version: 0.16.0
+          version: ${{ steps.ghostty.outputs.zig }}
 
-      # Mirrors mise.toml's libghostty task, including the three flags that are not optional there.
-      # -Demit-xcframework=false because the default is "xcodebuild is on PATH", true even with only the
-      # Command Line Tools, and configuring the iOS target then fails. -Doptimize=ReleaseSafe for the
-      # reason in the cache key above.
-      #
-      # One flag is not in that task: on Linux the target names the glibc floor, matching release.yml, so
-      # the tests run against the emulator a release actually ships rather than one built for the runner's
-      # newer glibc. See GLIBC_FLOOR in mise.toml.
+      # The same script mise's libghostty task runs, so CI builds exactly what a developer does. On Linux the
+      # target names the glibc floor, so the binary needs no newer glibc than GLIBC_FLOOR in mise.toml says.
       - name: Build libghostty
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          ref="${{ steps.ghostty.outputs.ref }}"
-          git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git third_party/ghostty
-          cd third_party/ghostty
-          # `git fetch <abbreviated-sha>` fails with "couldn't find remote ref": a server will only
-          # resolve a complete object name, and mise.toml pins an abbreviation because that is what a
-          # person reads. Dockerfile.test works around this by repeating the full SHA, which is a second
-          # copy that can drift.
-          #
-          # Fetching the default branch and resolving the abbreviation locally keeps mise.toml as the only
-          # place the ref is written. --filter=blob:none makes this cheap: commits and trees only, with
-          # blobs fetched on checkout.
-          if ! git fetch --depth 1 origin "$ref" 2>/dev/null; then
-            echo "abbreviated ref, resolving it locally"
-            git fetch --filter=blob:none origin
-            full="$(git rev-parse "$ref")"
-            echo "$ref resolves to $full"
-            git checkout --detach "$full"
-          else
-            git checkout --detach FETCH_HEAD
-          fi
           target=""
           if [ -n "${{ matrix.zigarch }}" ]; then
-            target="-Dtarget=${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
+            target="${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
           fi
-          zig build \
-            -Demit-lib-vt=true \
-            -Demit-xcframework=false \
-            -Demit-macos-app=false \
-            -Doptimize=ReleaseSafe \
-            $target
+          GHOSTTY_REF="${{ steps.ghostty.outputs.ref }}" \
+          GHOSTTY_DIR="$RUNNER_TEMP/ghostty" \
+          GHOSTTY_PREFIX="$GITHUB_WORKSPACE/third_party/libghostty-vt" \
+          GHOSTTY_TARGET="$target" \
+            sh scripts/libghostty.sh
 
-      # Proves the artifact the Go build will link against actually exists, whether it came from the
-      # cache or the build above. A cache that restored an empty directory otherwise surfaces as a
-      # confusing cgo link error several steps later.
-      - name: Verify libghostty artifact
+      # go.mitchellh.com/libghostty links through pkg-config, so pointing it at the build is all the Go steps
+      # need. Checked here, whether the build came from the cache or the step above, because a cache that
+      # restored an empty directory otherwise surfaces as a confusing cgo error several steps later.
+      - name: Point pkg-config at libghostty
         run: |
           set -euo pipefail
-          ls -l third_party/ghostty/zig-out/lib/libghostty-vt.a
-          ls third_party/ghostty/zig-out/include/ghostty/vt.h
+          pc="$GITHUB_WORKSPACE/third_party/libghostty-vt/share/pkgconfig"
+          echo "PKG_CONFIG_PATH=$pc" >> "$GITHUB_ENV"
+          command -v pkg-config >/dev/null || brew install pkgconf
+          PKG_CONFIG_PATH="$pc" pkg-config --static --libs libghostty-vt-static
 
       - name: gofmt
         run: |

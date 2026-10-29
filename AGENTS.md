@@ -27,8 +27,7 @@ Out of scope, permanently: windows, tabs, splits. The terminal emulator does tho
 
 ```
 mise install          # pinned Go, Zig, protoc, buf, fish
-mise run libghostty   # builds libghostty-vt once, into third_party/ (slow, cached)
-mise run build        # -> bin/cm
+mise run build        # -> bin/cm, building libghostty-vt for the pinned ref first if needed
 mise run check        # fmt, vet, test, validate the plugin manifests
 ```
 

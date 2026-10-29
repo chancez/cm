@@ -32,17 +32,17 @@ mean abandoned, since a detached session can hold a live shell with someone's wo
 ## Setup
 
 Toolchains are pinned in `mise.toml`. [mise](https://mise.jdx.dev) is the fast path, but nothing
-requires it: Go and, for the emulator, Zig 0.16.0 are the only hard requirements.
+requires it: Go, pkg-config and, for the emulator, Zig 0.17.0 are the only hard requirements.
 
 ```sh
 mise install          # pinned Go, Zig, protoc, buf, fish
-mise run libghostty   # build libghostty-vt into third_party/ (slow, cached)
-mise run build        # -> bin/cm
+mise run build        # -> bin/cm, building libghostty-vt first if needed
 ```
 
-`mise run libghostty` is needed once, and again whenever `GHOSTTY_REF` in `mise.toml` moves.
-libghostty-vt has no tagged release and its API is explicitly unstable, so the ref is a pinned
-commit and bumping it is a deliberate act.
+The first build compiles libghostty-vt into `third_party/libghostty-vt/<ref>/`, which takes about a
+minute; later builds reuse it, and a branch on another pin builds its own once. libghostty-vt has no
+tagged release, so the ref is a pinned commit, and it must match the Go binding's: see
+`docs/libghostty.md`.
 
 Pass `-Doptimize=ReleaseSafe` if you build it by hand. Zig defaults to Debug, which turns on
 per-page integrity verification in ghostty, and that is not a tuning knob: a reverse index with the

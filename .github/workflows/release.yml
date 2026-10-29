@@ -65,6 +65,9 @@ jobs:
           floor="$(sed -n 's/^GLIBC_FLOOR = "\(.*\)"$/\1/p' mise.toml)"
           [ -n "$floor" ] || { echo "could not read GLIBC_FLOOR from mise.toml" >&2; exit 1; }
           echo "glibc=$floor" >> "$GITHUB_OUTPUT"
+          zig="$(sed -n 's/^zig = "\(.*\)"$/\1/p' mise.toml)"
+          [ -n "$zig" ] || { echo "could not read the zig version from mise.toml" >&2; exit 1; }
+          echo "zig=$zig" >> "$GITHUB_OUTPUT"
           echo "libghostty $ref, glibc floor $floor"
 
       # The glibc floor is in the key because it changes what zig compiles, not just how: an archive
@@ -75,52 +78,41 @@ jobs:
         id: ghostty-cache
         uses: actions/cache@v4
         with:
-          path: third_party/ghostty/zig-out
-          key: ghostty-${{ matrix.goos }}-${{ matrix.goarch }}-${{ steps.ghostty.outputs.ref }}-releasesafe-glibc${{ steps.ghostty.outputs.glibc }}
+          path: third_party/libghostty-vt
+          key: ghostty-${{ matrix.goos }}-${{ matrix.goarch }}-${{ steps.ghostty.outputs.ref }}-glibc${{ steps.ghostty.outputs.glibc }}-${{ hashFiles('scripts/libghostty.sh') }}
 
       - name: Install zig
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: ${{ steps.ghostty.outputs.zig }}
 
+      # The same script mise's libghostty task runs, so CI builds exactly what a developer does. On Linux the
+      # target names the glibc floor, so the binary needs no newer glibc than GLIBC_FLOOR in mise.toml says.
       - name: Build libghostty
         if: steps.ghostty-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          ref="${{ steps.ghostty.outputs.ref }}"
-          git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git third_party/ghostty
-          cd third_party/ghostty
-          # `git fetch <abbreviated-sha>` fails with "couldn't find remote ref": a server will only
-          # resolve a complete object name, and mise.toml pins an abbreviation because that is what a
-          # person reads. Dockerfile.test works around this by repeating the full SHA, which is a second
-          # copy that can drift.
-          #
-          # Fetching the default branch and resolving the abbreviation locally keeps mise.toml as the only
-          # place the ref is written. --filter=blob:none makes this cheap: commits and trees only, with
-          # blobs fetched on checkout.
-          if ! git fetch --depth 1 origin "$ref" 2>/dev/null; then
-            echo "abbreviated ref, resolving it locally"
-            git fetch --filter=blob:none origin
-            full="$(git rev-parse "$ref")"
-            echo "$ref resolves to $full"
-            git checkout --detach "$full"
-          else
-            git checkout --detach FETCH_HEAD
-          fi
-          # On Linux, name the target glibc version rather than letting zig use the native one. Zig's
-          # std selects glibc functions at comptime from the target version, so the runner's 2.39
-          # decides what the *released* binary requires. See GLIBC_FLOOR in mise.toml.
           target=""
           if [ -n "${{ matrix.zigarch }}" ]; then
-            target="-Dtarget=${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
+            target="${{ matrix.zigarch }}-linux-gnu.${{ steps.ghostty.outputs.glibc }}"
           fi
-          zig build \
-            -Demit-lib-vt=true \
-            -Demit-xcframework=false \
-            -Demit-macos-app=false \
-            -Doptimize=ReleaseSafe \
-            $target
+          GHOSTTY_REF="${{ steps.ghostty.outputs.ref }}" \
+          GHOSTTY_DIR="$RUNNER_TEMP/ghostty" \
+          GHOSTTY_PREFIX="$GITHUB_WORKSPACE/third_party/libghostty-vt" \
+          GHOSTTY_TARGET="$target" \
+            sh scripts/libghostty.sh
+
+      # go.mitchellh.com/libghostty links through pkg-config, so pointing it at the build is all the Go steps
+      # need. Checked here, whether the build came from the cache or the step above, because a cache that
+      # restored an empty directory otherwise surfaces as a confusing cgo error several steps later.
+      - name: Point pkg-config at libghostty
+        run: |
+          set -euo pipefail
+          pc="$GITHUB_WORKSPACE/third_party/libghostty-vt/share/pkgconfig"
+          echo "PKG_CONFIG_PATH=$pc" >> "$GITHUB_ENV"
+          command -v pkg-config >/dev/null || brew install pkgconf
+          PKG_CONFIG_PATH="$pc" pkg-config --static --libs libghostty-vt-static
 
       # No ldflags stamping the version. paths.Version reads it from the Go build info, so a build from
       # a tagged commit reports the tag on its own; adding -X here would create a second source of truth

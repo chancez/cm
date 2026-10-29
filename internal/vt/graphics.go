@@ -1,18 +1,12 @@
-package vt
+//go:build cgo
 
-/*
-// The #cgo CFLAGS and LDFLAGS for libghostty live in vt.go and apply to the whole package, so
-// they are deliberately absent here. Repeating them named the same static archive twice on the
-// link line, which ld reports as "ignoring duplicate libraries" on every build.
-#include <ghostty/vt.h>
-#include <stdlib.h>
-*/
-import "C"
+package vt
 
 import (
 	"errors"
 	"fmt"
-	"unsafe"
+
+	"go.mitchellh.com/libghostty"
 )
 
 // ImageFormat is the pixel layout of a stored image.
@@ -137,15 +131,8 @@ func (t *Terminal) GraphicsEnabled() (bool, error) {
 
 // graphicsStorageLimit reads back the configured storage limit in bytes.
 func (t *Terminal) graphicsStorageLimit() (uint64, error) {
-	var n C.size_t
-	if err := check(
-		C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_KITTY_IMAGE_STORAGE_LIMIT,
-			unsafe.Pointer(&n)),
-		"reading kitty image storage limit",
-	); err != nil {
-		return 0, err
-	}
-	return uint64(n), nil
+	n, err := t.term.KittyImageStorageLimit()
+	return n, check(err, "reading kitty image storage limit")
 }
 
 // SetGraphicsStorageLimit bounds the bytes of decoded image data this terminal retains.
@@ -159,19 +146,9 @@ func (t *Terminal) graphicsStorageLimit() (uint64, error) {
 // process-wide for those, and rejects them otherwise. RGB and RGBA payloads need no decoder.
 func (t *Terminal) SetGraphicsStorageLimit(bytes int) error {
 	if bytes <= 0 {
-		return check(
-			C.ghostty_terminal_set(t.ptr, C.GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, nil),
-			"clearing kitty image storage limit",
-		)
+		return check(t.term.SetKittyImageStorageLimit(nil), "clearing kitty image storage limit")
 	}
-	n := C.size_t(bytes)
-	// The address of a local is safe here for the same reason as SetScrollbackLimit: libghostty reads
-	// the value during the call rather than retaining the pointer, unlike a callback option.
-	return check(
-		C.ghostty_terminal_set(t.ptr, C.GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
-			unsafe.Pointer(&n)),
-		"setting kitty image storage limit",
-	)
+	return check(t.term.SetKittyImageStorageLimit(new(uint64(bytes))), "setting kitty image storage limit")
 }
 
 // graphics borrows the terminal's image storage handle.
@@ -179,16 +156,10 @@ func (t *Terminal) SetGraphicsStorageLimit(bytes int) error {
 // The handle is invalidated by the next mutating terminal call, so it is fetched per operation rather
 // than cached on the Terminal. That is not a performance concern here: everything using it runs on
 // attach or when dumping state, never per byte of output.
-func (t *Terminal) graphics() (C.GhosttyKittyGraphics, error) {
-	var g C.GhosttyKittyGraphics
-	if err := check(
-		C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS, unsafe.Pointer(&g)),
-		"getting kitty graphics storage",
-	); err != nil {
-		return nil, err
-	}
-	if g == nil {
-		return nil, fmt.Errorf("kitty graphics unavailable in this build")
+func (t *Terminal) graphics() (*libghostty.KittyGraphics, error) {
+	g, err := t.term.KittyGraphics()
+	if err != nil {
+		return nil, check(err, "getting kitty graphics storage")
 	}
 	return g, nil
 }
@@ -206,28 +177,20 @@ func (t *Terminal) Placements() ([]Placement, error) {
 		return nil, err
 	}
 
-	var it C.GhosttyKittyGraphicsPlacementIterator
-	// A nil allocator asks libghostty for its default, which is libc malloc since cm links libc.
-	if err := check(
-		C.ghostty_kitty_graphics_placement_iterator_new(nil, &it),
-		"creating a placement iterator",
-	); err != nil {
-		return nil, err
+	it, err := libghostty.NewKittyGraphicsPlacementIterator()
+	if err != nil {
+		return nil, check(err, "creating a placement iterator")
 	}
-	defer C.ghostty_kitty_graphics_placement_iterator_free(it)
+	defer it.Close()
 
 	// Populating the iterator from the storage is a separate step from creating it, so one iterator can
 	// be refilled rather than reallocated.
-	if err := check(
-		C.ghostty_kitty_graphics_get(g, C.GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-			unsafe.Pointer(&it)),
-		"populating the placement iterator",
-	); err != nil {
-		return nil, err
+	if err := g.PlacementIterator(it); err != nil {
+		return nil, check(err, "populating the placement iterator")
 	}
 
 	var out []Placement
-	for bool(C.ghostty_kitty_graphics_placement_next(it)) {
+	for it.Next() {
 		p, err := placementAt(it)
 		if err != nil {
 			return nil, err
@@ -250,98 +213,69 @@ func (t *Terminal) Placements() ([]Placement, error) {
 // was placed but not where, so a re-emission had to use a=T and display at whatever the cursor
 // happened to be, which is how a restored image landed on top of a full-screen program instead of in
 // its own row.
-func (t *Terminal) placementPos(
-	it C.GhosttyKittyGraphicsPlacementIterator,
-	g C.GhosttyKittyGraphics,
-	p *Placement,
-) error {
+func (t *Terminal) placementPos(it *libghostty.KittyGraphicsPlacementIterator, g *libghostty.KittyGraphics, p *Placement) error {
 	// A virtual placement has no cursor position at all, so libghostty declines it and there is
 	// nothing to ask for.
 	if p.Virtual {
 		return nil
 	}
-	img := C.ghostty_kitty_graphics_image(g, C.uint32_t(p.ImageID))
+	img := g.Image(p.ImageID)
 	if img == nil {
 		// A placement whose image storage evicted. Nothing to place, and the caller already has to
 		// cope with this: ImageByID documents the same outcome.
 		return nil
 	}
 
-	var col, row C.int32_t
-	rc := C.ghostty_kitty_graphics_placement_viewport_pos(it, img, t.ptr, &col, &row)
-	if rc == C.GHOSTTY_NO_VALUE {
+	col, row, err := it.ViewportPos(img, t.term)
+	if errors.Is(err, libghostty.ErrNoValue) {
 		// Scrolled entirely out of the viewport, or virtual. Not an error: a screen holding one is
 		// normal and a caller restoring a screen wants to skip it.
 		return nil
 	}
-	if err := check(rc, "reading placement viewport position"); err != nil {
-		return err
+	if err != nil {
+		return check(err, "reading placement viewport position")
 	}
-	p.Col, p.Row, p.OnScreen = int32(col), int32(row), true
+	p.Col, p.Row, p.OnScreen = col, row, true
 	return nil
 }
 
 // placementAt reads the iterator's current placement.
-//
-// Each field is fetched individually rather than through the _multi form. The multi call exists to
-// amortize FFI overhead and would be worth using on a hot path; this runs on attach, and one call per
-// field is far easier to keep correct against an API whose output types differ per key.
-func placementAt(it C.GhosttyKittyGraphicsPlacementIterator) (Placement, error) {
+func placementAt(it *libghostty.KittyGraphicsPlacementIterator) (Placement, error) {
 	var p Placement
-
-	u32 := func(kind C.GhosttyKittyGraphicsPlacementData, dst *uint32, what string) error {
-		var v C.uint32_t
-		if err := check(
-			C.ghostty_kitty_graphics_placement_get(it, kind, unsafe.Pointer(&v)),
-			"reading placement "+what,
-		); err != nil {
-			return err
-		}
-		*dst = uint32(v)
-		return nil
-	}
-
 	for _, f := range []struct {
-		kind C.GhosttyKittyGraphicsPlacementData
+		get  func() (uint32, error)
 		dst  *uint32
 		what string
 	}{
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IMAGE_ID, &p.ImageID, "image id"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_PLACEMENT_ID, &p.PlacementID, "placement id"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_X_OFFSET, &p.XOffset, "x offset"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Y_OFFSET, &p.YOffset, "y offset"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_X, &p.SourceX, "source x"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_Y, &p.SourceY, "source y"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_WIDTH, &p.SourceWidth, "source width"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_SOURCE_HEIGHT, &p.SourceHeight, "source height"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS, &p.Columns, "columns"},
-		{C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS, &p.Rows, "rows"},
+		{it.ImageID, &p.ImageID, "image id"},
+		{it.PlacementID, &p.PlacementID, "placement id"},
+		{it.XOffset, &p.XOffset, "x offset"},
+		{it.YOffset, &p.YOffset, "y offset"},
+		{it.SourceX, &p.SourceX, "source x"},
+		{it.SourceY, &p.SourceY, "source y"},
+		{it.SourceWidth, &p.SourceWidth, "source width"},
+		{it.SourceHeight, &p.SourceHeight, "source height"},
+		{it.Columns, &p.Columns, "columns"},
+		{it.Rows, &p.Rows, "rows"},
 	} {
-		if err := u32(f.kind, f.dst, f.what); err != nil {
-			return Placement{}, err
+		v, err := f.get()
+		if err != nil {
+			return Placement{}, check(err, "reading placement "+f.what)
 		}
+		*f.dst = v
 	}
 
-	var virtual C.bool
-	if err := check(
-		C.ghostty_kitty_graphics_placement_get(it,
-			C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL, unsafe.Pointer(&virtual)),
-		"reading placement virtual flag",
-	); err != nil {
-		return Placement{}, err
+	virtual, err := it.IsVirtual()
+	if err != nil {
+		return Placement{}, check(err, "reading placement virtual flag")
 	}
-	p.Virtual = bool(virtual)
+	p.Virtual = virtual
 
-	var z C.int32_t
-	if err := check(
-		C.ghostty_kitty_graphics_placement_get(it,
-			C.GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_Z, unsafe.Pointer(&z)),
-		"reading placement z",
-	); err != nil {
-		return Placement{}, err
+	z, err := it.Z()
+	if err != nil {
+		return Placement{}, check(err, "reading placement z")
 	}
-	p.Z = int32(z)
-
+	p.Z = z
 	return p, nil
 }
 
@@ -358,54 +292,40 @@ func (t *Terminal) ImageByID(id uint32) (img Image, ok bool, err error) {
 	if err != nil {
 		return Image{}, false, err
 	}
-
-	h := C.ghostty_kitty_graphics_image(g, C.uint32_t(id))
+	h := g.Image(id)
 	if h == nil {
 		return Image{}, false, nil
 	}
 
-	u32 := func(kind C.GhosttyKittyGraphicsImageData, dst *uint32, what string) error {
-		var v C.uint32_t
-		if err := check(
-			C.ghostty_kitty_graphics_image_get(h, kind, unsafe.Pointer(&v)),
-			"reading image "+what,
-		); err != nil {
-			return err
-		}
-		*dst = uint32(v)
-		return nil
-	}
 	for _, f := range []struct {
-		kind C.GhosttyKittyGraphicsImageData
+		get  func() (uint32, error)
 		dst  *uint32
 		what string
 	}{
-		{C.GHOSTTY_KITTY_IMAGE_DATA_ID, &img.ID, "id"},
-		{C.GHOSTTY_KITTY_IMAGE_DATA_NUMBER, &img.Number, "number"},
-		{C.GHOSTTY_KITTY_IMAGE_DATA_WIDTH, &img.Width, "width"},
-		{C.GHOSTTY_KITTY_IMAGE_DATA_HEIGHT, &img.Height, "height"},
+		{h.ID, &img.ID, "id"},
+		{h.Number, &img.Number, "number"},
+		{h.Width, &img.Width, "width"},
+		{h.Height, &img.Height, "height"},
 	} {
-		if err := u32(f.kind, f.dst, f.what); err != nil {
-			return Image{}, false, err
+		v, err := f.get()
+		if err != nil {
+			return Image{}, false, check(err, "reading image "+f.what)
 		}
+		*f.dst = v
 	}
 
-	var format C.GhosttyKittyImageFormat
-	if err := check(
-		C.ghostty_kitty_graphics_image_get(h, C.GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
-			unsafe.Pointer(&format)),
-		"reading image format",
-	); err != nil {
-		return Image{}, false, err
+	format, err := h.Format()
+	if err != nil {
+		return Image{}, false, check(err, "reading image format")
 	}
 	switch format {
-	case C.GHOSTTY_KITTY_IMAGE_FORMAT_RGB:
+	case libghostty.KittyImageFormatRGB:
 		img.Format = FormatRGB
-	case C.GHOSTTY_KITTY_IMAGE_FORMAT_RGBA:
+	case libghostty.KittyImageFormatRGBA:
 		img.Format = FormatRGBA
-	case C.GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA:
+	case libghostty.KittyImageFormatGrayAlpha:
 		img.Format = FormatGrayAlpha
-	case C.GHOSTTY_KITTY_IMAGE_FORMAT_GRAY:
+	case libghostty.KittyImageFormatGray:
 		img.Format = FormatGray
 	default:
 		// PNG is documented as impossible here, so seeing it means the header's guarantee changed and
@@ -413,25 +333,20 @@ func (t *Terminal) ImageByID(id uint32) (img Image, ok bool, err error) {
 		return Image{}, false, fmt.Errorf("unexpected stored image format %d", int(format))
 	}
 
-	var dataLen C.size_t
-	if err := check(
-		C.ghostty_kitty_graphics_image_get(h, C.GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
-			unsafe.Pointer(&dataLen)),
-		"reading image data length",
-	); err != nil {
-		return Image{}, false, err
+	dataLen, err := h.DataLen()
+	if err != nil {
+		return Image{}, false, check(err, "reading image data length")
 	}
 	img.DataLen = int(dataLen)
-
 	return img, true, nil
 }
 
 // ImagePixels copies a stored image's pixel data out.
 //
-// A copy rather than a view, deliberately. The pointer libghostty hands back is borrowed and is
+// A copy rather than a view, deliberately. The slice the binding hands back is borrowed and is
 // invalidated by the next mutating terminal call, and the pump mutates the terminal on every chunk of
 // output, so a slice aliasing that memory would be a use-after-free waiting for the next keystroke.
-// Copying keeps the unsafe lifetime inside this function.
+// Copying keeps the borrowed lifetime inside this function.
 //
 // Reports ok=false when no image has that id, matching ImageByID.
 func (t *Terminal) ImagePixels(id uint32) (pixels []byte, ok bool, err error) {
@@ -442,35 +357,20 @@ func (t *Terminal) ImagePixels(id uint32) (pixels []byte, ok bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-
-	h := C.ghostty_kitty_graphics_image(g, C.uint32_t(id))
+	h := g.Image(id)
 	if h == nil {
 		return nil, false, nil
 	}
-
-	var dataLen C.size_t
-	if err := check(
-		C.ghostty_kitty_graphics_image_get(h, C.GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
-			unsafe.Pointer(&dataLen)),
-		"reading image data length",
-	); err != nil {
-		return nil, false, err
-	}
-	if dataLen == 0 {
+	data, err := h.Data()
+	if errors.Is(err, libghostty.ErrNoValue) {
+		// Pending: the transmission has not completed, so there are no pixels yet.
 		return nil, true, nil
 	}
-
-	var ptr unsafe.Pointer
-	if err := check(
-		C.ghostty_kitty_graphics_image_get(h, C.GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
-			unsafe.Pointer(&ptr)),
-		"reading image data pointer",
-	); err != nil {
-		return nil, false, err
+	if err != nil {
+		return nil, false, check(err, "reading image data")
 	}
-	if ptr == nil {
+	if len(data) == 0 {
 		return nil, true, nil
 	}
-
-	return C.GoBytes(ptr, C.int(dataLen)), true, nil
+	return append([]byte(nil), data...), true, nil
 }

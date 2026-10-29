@@ -2,17 +2,14 @@
 
 package vt
 
-/*
-#include <ghostty/vt.h>
-#include <stdlib.h>
-#include "callbacks.h"
-*/
-import "C"
-
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"unsafe"
+
+	"go.mitchellh.com/libghostty"
+
+	"github.com/chancez/cm/internal/ansi"
 )
 
 // OnAltScreen reports whether the model is on the alternate screen.
@@ -25,7 +22,7 @@ func (t *Terminal) OnAltScreen() (bool, error) {
 	if t.closed {
 		return false, fmt.Errorf("terminal is closed")
 	}
-	return t.mode(C.cm_mode_alt_screen_save())
+	return t.mode(libghostty.ModeAltScreenSave)
 }
 
 // Restore returns bytes that reproduce the current screen when written to a fresh terminal.
@@ -47,7 +44,7 @@ func (t *Terminal) Restore() ([]byte, error) {
 	// currently showing it. Replaying it to a new client leaves that client withholding
 	// renders until its own timeout fires, so it is suppressed across serialization and
 	// restored afterwards.
-	syncMode := C.cm_mode_sync_output()
+	syncMode := libghostty.ModeSyncOutput
 	hadSync, err := t.mode(syncMode)
 	if err == nil && hadSync {
 		_ = t.setMode(syncMode, false)
@@ -177,18 +174,18 @@ func (t *Terminal) Restore() ([]byte, error) {
 // Content only, no modes or cursor: these lines are meant to scroll past the viewport into
 // the client's own scrollback, and emitting state with them would apply it at the wrong time.
 func (t *Terminal) emitScrollback(buf *bytes.Buffer) (bool, error) {
-	screenTop, ok, err := t.gridRef(C.GHOSTTY_POINT_TAG_SCREEN, 0, 0)
+	screenTop, ok, err := t.gridRef(libghostty.PointTagScreen, 0, 0)
 	if err != nil || !ok {
 		return false, err
 	}
-	activeTop, ok, err := t.gridRef(C.GHOSTTY_POINT_TAG_ACTIVE, 0, 0)
+	activeTop, ok, err := t.gridRef(libghostty.PointTagActive, 0, 0)
 	if err != nil || !ok {
 		return false, err
 	}
 
 	// Equal refs mean the active area starts at the top of the screen, so there is no
 	// scrollback to emit.
-	if screenTop == activeTop {
+	if *screenTop == *activeTop {
 		return false, nil
 	}
 
@@ -206,20 +203,14 @@ func (t *Terminal) emitScrollback(buf *bytes.Buffer) (bool, error) {
 		return false, err
 	}
 
-	sbEnd, ok, err := t.gridRef(C.GHOSTTY_POINT_TAG_SCREEN, cols-1, activeY-1)
+	sbEnd, ok, err := t.gridRef(libghostty.PointTagScreen, cols-1, activeY-1)
 	if err != nil || !ok {
 		return false, err
 	}
 
-	sel := C.GhosttySelection{}
-	sel.size = C.size_t(unsafe.Sizeof(sel))
-	sel.start = screenTop
-	sel.end = sbEnd
-	sel.rectangle = C.bool(false)
-
 	out, err := t.format(formatOptions{
-		emit:      C.GHOSTTY_FORMATTER_FORMAT_VT,
-		selection: &sel,
+		emit:      libghostty.FormatterFormatVT,
+		selection: &libghostty.Selection{Start: *screenTop, End: *sbEnd},
 	})
 	if err != nil {
 		return false, err
@@ -231,7 +222,7 @@ func (t *Terminal) emitScrollback(buf *bytes.Buffer) (bool, error) {
 // emitViewport writes the visible screen along with the terminal state needed to reproduce it.
 func (t *Terminal) emitViewport(buf *bytes.Buffer) error {
 	opts := formatOptions{
-		emit: C.GHOSTTY_FORMATTER_FORMAT_VT,
+		emit: libghostty.FormatterFormatVT,
 		// Modes, the scrolling region, and keyboard state are what make a restored screen
 		// behave rather than merely look right.
 		//
@@ -263,7 +254,7 @@ func (t *Terminal) emitViewport(buf *bytes.Buffer) error {
 	// row rows-1 exists. After output ending in a newline the cursor sits on a row that has no
 	// cells yet, and a reference to it does not resolve, which would silently drop a real row
 	// of content from this phase.
-	topLeft, okTL, err := t.gridRef(C.GHOSTTY_POINT_TAG_ACTIVE, 0, 0)
+	topLeft, okTL, err := t.gridRef(libghostty.PointTagActive, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -272,11 +263,11 @@ func (t *Terminal) emitViewport(buf *bytes.Buffer) error {
 		return err
 	}
 	var (
-		bottomRight C.GhosttyGridRef
+		bottomRight *libghostty.GridRef
 		okBR        bool
 	)
 	for y := int(rows) - 1; y >= 0; y-- {
-		ref, ok, err := t.gridRef(C.GHOSTTY_POINT_TAG_ACTIVE, cols-1, uint32(y))
+		ref, ok, err := t.gridRef(libghostty.PointTagActive, cols-1, uint32(y))
 		if err != nil {
 			return err
 		}
@@ -286,14 +277,8 @@ func (t *Terminal) emitViewport(buf *bytes.Buffer) error {
 		}
 	}
 
-	var sel C.GhosttySelection
 	if okTL && okBR {
-		sel = C.GhosttySelection{}
-		sel.size = C.size_t(unsafe.Sizeof(sel))
-		sel.start = topLeft
-		sel.end = bottomRight
-		sel.rectangle = C.bool(false)
-		opts.selection = &sel
+		opts.selection = &libghostty.Selection{Start: *topLeft, End: *bottomRight}
 	}
 	// If either ref could not be resolved the whole screen is emitted instead. Slightly wrong
 	// is better than empty.
@@ -311,7 +296,7 @@ func (t *Terminal) Plain() ([]byte, error) {
 	if t.closed {
 		return nil, fmt.Errorf("terminal is closed")
 	}
-	return t.format(formatOptions{emit: C.GHOSTTY_FORMATTER_FORMAT_PLAIN})
+	return t.format(formatOptions{emit: libghostty.FormatterFormatPlain})
 }
 
 // Tail returns the last lines of the terminal's contents as plain text.
@@ -332,7 +317,7 @@ func (t *Terminal) Tail(lines int, unwrap bool) ([]byte, error) {
 		return nil, fmt.Errorf("terminal is closed")
 	}
 	out, err := t.format(formatOptions{
-		emit:   C.GHOSTTY_FORMATTER_FORMAT_PLAIN,
+		emit:   libghostty.FormatterFormatPlain,
 		unwrap: unwrap,
 		// Trailing whitespace is padding the terminal added to fill a row, not content. Keeping it makes
 		// every line look ragged to a caller matching on it.
@@ -386,13 +371,45 @@ func (t *Terminal) TailVT(lines int) ([]byte, error) {
 		return nil, fmt.Errorf("terminal is closed")
 	}
 	out, err := t.format(formatOptions{
-		emit:  C.GHOSTTY_FORMATTER_FORMAT_VT,
+		emit:  libghostty.FormatterFormatVT,
 		style: true,
 	})
 	if err != nil || lines <= 0 {
 		return out, err
 	}
-	return lastLines(out, lines), nil
+	return lastContentLines(out, lines), nil
+}
+
+// lastContentLines returns the final n lines of VT output that have visible content, along with any blank
+// rows after them.
+//
+// Counted by content rather than by newline because the formatter emits the screen's trailing blank rows in
+// VT output, since libghostty c7cbc9b: a replay without them scrolls too little and leaves the rows above
+// too low. Counting those rows made `cm read --raw --lines 1` return "\x1b[0m\n", a blank row's reset,
+// instead of the last line that said anything. Kept rather than trimmed off, because they are part of what
+// the screen holds and the raw form is meant to be that.
+func lastContentLines(p []byte, n int) []byte {
+	if n <= 0 || len(p) == 0 {
+		return p
+	}
+	count := 0
+	end := len(p)
+	for end > 0 {
+		// The line ending at end, without its terminator.
+		lineEnd := end
+		if p[lineEnd-1] == '\n' {
+			lineEnd--
+		}
+		start := bytes.LastIndexByte(p[:lineEnd], '\n') + 1
+		if len(bytes.TrimSpace(ansi.Strip(p[start:lineEnd]))) > 0 {
+			count++
+			if count == n {
+				return p[start:]
+			}
+		}
+		end = start
+	}
+	return p
 }
 
 // HTML returns the terminal's contents as HTML, preserving styling.
@@ -400,7 +417,7 @@ func (t *Terminal) HTML() ([]byte, error) {
 	if t.closed {
 		return nil, fmt.Errorf("terminal is closed")
 	}
-	return t.format(formatOptions{emit: C.GHOSTTY_FORMATTER_FORMAT_HTML, style: true})
+	return t.format(formatOptions{emit: libghostty.FormatterFormatHTML, style: true})
 }
 
 // VT returns the terminal's full contents, scrollback included, as escape sequences.
@@ -412,7 +429,7 @@ func (t *Terminal) VT() ([]byte, error) {
 	// --format vt` is the only way to see what a fresh client would receive, so an option set here
 	// that differs from emitViewport's makes this view lie about it.
 	return t.format(formatOptions{
-		emit:          C.GHOSTTY_FORMATTER_FORMAT_VT,
+		emit:          libghostty.FormatterFormatVT,
 		modes:         true,
 		keyboard:      true,
 		kittyKeyboard: true,
@@ -424,10 +441,10 @@ func (t *Terminal) VT() ([]byte, error) {
 // formatOptions mirrors the subset of the formatter's options cm uses, so callers above do not
 // deal with C structs.
 type formatOptions struct {
-	emit            C.GhosttyFormatterFormat
+	emit            libghostty.FormatterFormat
 	unwrap          bool
 	trim            bool
-	selection       *C.GhosttySelection
+	selection       *libghostty.Selection
 	modes           bool
 	scrollingRegion bool
 	keyboard        bool
@@ -441,97 +458,84 @@ type formatOptions struct {
 }
 
 // format runs the formatter and returns its output.
+//
+// Every option is passed explicitly, false included, rather than only the ones set. The binding leaves
+// an option it was not given at libghostty's default, and cm's restore depends on several being off:
+// tabstops move the cursor after it has been positioned, and the palette overrides the user's theme.
 func (t *Terminal) format(o formatOptions) ([]byte, error) {
-	opts := C.GhosttyFormatterTerminalOptions{}
-	opts.size = C.size_t(unsafe.Sizeof(opts))
-	opts.emit = o.emit
-	opts.unwrap = C.bool(o.unwrap)
-	opts.trim = C.bool(o.trim)
-	opts.selection = o.selection
-	opts.extra.modes = C.bool(o.modes)
-	opts.extra.scrolling_region = C.bool(o.scrollingRegion)
-	opts.extra.keyboard = C.bool(o.keyboard)
-	opts.extra.tabstops = C.bool(o.tabstops)
-	opts.extra.palette = C.bool(o.palette)
-	opts.extra.pwd = C.bool(o.pwd)
-	opts.extra.screen.kitty_keyboard = C.bool(o.kittyKeyboard)
-	opts.extra.screen.cursor = C.bool(o.cursor)
-	opts.extra.screen.style = C.bool(o.style)
-	opts.extra.screen.hyperlink = C.bool(o.hyperlink)
-
-	var f C.GhosttyFormatter
-	if err := check(C.ghostty_formatter_terminal_new(nil, &f, t.ptr, opts),
-		"creating formatter"); err != nil {
-		return nil, err
+	opts := []libghostty.FormatterOption{
+		libghostty.WithFormatterFormat(o.emit),
+		libghostty.WithFormatterUnwrap(o.unwrap),
+		libghostty.WithFormatterTrim(o.trim),
+		libghostty.WithFormatterExtraModes(o.modes),
+		libghostty.WithFormatterExtraScrollingRegion(o.scrollingRegion),
+		libghostty.WithFormatterExtraKeyboard(o.keyboard),
+		libghostty.WithFormatterExtraTabstops(o.tabstops),
+		libghostty.WithFormatterExtraPalette(o.palette),
+		libghostty.WithFormatterExtraPwd(o.pwd),
+		libghostty.WithFormatterExtraKittyKeyboard(o.kittyKeyboard),
+		libghostty.WithFormatterExtraCursor(o.cursor),
+		libghostty.WithFormatterExtraStyle(o.style),
+		libghostty.WithFormatterExtraHyperlink(o.hyperlink),
 	}
-	defer C.ghostty_formatter_free(f)
-
-	var (
-		out    *C.uint8_t
-		outLen C.size_t
-	)
-	if err := check(C.ghostty_formatter_format_alloc(f, nil, &out, &outLen),
-		"formatting terminal"); err != nil {
-		return nil, err
+	if o.selection != nil {
+		opts = append(opts, libghostty.WithFormatterSelection(o.selection))
 	}
-	if out == nil || outLen == 0 {
+
+	f, err := libghostty.NewFormatter(t.term, opts...)
+	if err != nil {
+		return nil, check(err, "creating formatter")
+	}
+	defer f.Close()
+
+	out, err := f.Format()
+	if err != nil {
+		return nil, check(err, "formatting terminal")
+	}
+	if len(out) == 0 {
 		return nil, nil
 	}
-	// Copy into Go memory before releasing the C allocation.
-	defer C.free(unsafe.Pointer(out))
-	return C.GoBytes(unsafe.Pointer(out), C.int(outLen)), nil
+	return out, nil
 }
 
 // gridRef resolves a point to a grid reference, reporting whether it exists.
 //
 // An out-of-bounds point is not an error: an empty or short screen legitimately has no cell at
 // a given position, and callers fall back rather than fail.
-func (t *Terminal) gridRef(tag C.GhosttyPointTag, x uint16, y uint32) (C.GhosttyGridRef, bool, error) {
-	var pt C.GhosttyPoint
-	pt.tag = tag
-	coord := (*C.GhosttyPointCoordinate)(unsafe.Pointer(&pt.value))
-	coord.x = C.uint16_t(x)
-	coord.y = C.uint32_t(y)
-
-	var ref C.GhosttyGridRef
-	rc := C.ghostty_terminal_grid_ref(t.ptr, pt, &ref)
-	switch rc {
-	case C.GHOSTTY_SUCCESS:
+func (t *Terminal) gridRef(tag libghostty.PointTag, x uint16, y uint32) (*libghostty.GridRef, bool, error) {
+	ref, err := t.term.GridRef(libghostty.Point{Tag: tag, X: x, Y: y})
+	switch {
+	case err == nil:
 		return ref, true, nil
-	case C.GHOSTTY_INVALID_VALUE, C.GHOSTTY_NO_VALUE:
-		return ref, false, nil
+	case errors.Is(err, libghostty.ErrInvalidValue), errors.Is(err, libghostty.ErrNoValue):
+		return nil, false, nil
 	default:
-		return ref, false, check(rc, "resolving grid reference")
+		return nil, false, check(err, "resolving grid reference")
 	}
 }
 
 // Size reports the terminal's dimensions.
 func (t *Terminal) Size() (rows, cols uint16, err error) {
-	var v C.uint16_t
-	if err := check(C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_ROWS,
-		unsafe.Pointer(&v)), "reading rows"); err != nil {
-		return 0, 0, err
+	rows, err = t.term.Rows()
+	if err != nil {
+		return 0, 0, check(err, "reading rows")
 	}
-	rows = uint16(v)
-	if err := check(C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_COLS,
-		unsafe.Pointer(&v)), "reading cols"); err != nil {
-		return 0, 0, err
+	cols, err = t.term.Cols()
+	if err != nil {
+		return 0, 0, check(err, "reading cols")
 	}
-	return rows, uint16(v), nil
+	return rows, cols, nil
 }
 
 // mode reports whether a terminal mode is set.
-func (t *Terminal) mode(m C.GhosttyMode) (bool, error) {
-	var set C.bool
-	if err := check(C.ghostty_terminal_mode_get(t.ptr, m, &set), "reading mode"); err != nil {
-		return false, err
-	}
-	return bool(set), nil
+func (t *Terminal) mode(m libghostty.Mode) (bool, error) {
+	on, err := t.term.Mode(m)
+	return on, check(err, "reading mode")
 }
 
 // setMode turns a terminal mode on or off.
-func (t *Terminal) setMode(m C.GhosttyMode, on bool) error {
-	return check(C.ghostty_terminal_mode_set(t.ptr, m, C.bool(on)), "setting mode")
+func (t *Terminal) setMode(m libghostty.Mode, on bool) error {
+	return check(t.term.SetMode(m, on), "setting mode")
 }
 
 // screenY converts a grid reference to its row in screen coordinates, which count from the top
@@ -539,15 +543,14 @@ func (t *Terminal) setMode(m C.GhosttyMode, on bool) error {
 //
 // Reports false when the reference cannot be expressed in screen coordinates, which callers
 // treat as "cannot determine" rather than as an error.
-func (t *Terminal) screenY(ref C.GhosttyGridRef) (uint32, bool, error) {
-	var coord C.GhosttyPointCoordinate
-	rc := C.ghostty_terminal_point_from_grid_ref(t.ptr, &ref, C.GHOSTTY_POINT_TAG_SCREEN, &coord)
-	switch rc {
-	case C.GHOSTTY_SUCCESS:
-		return uint32(coord.y), true, nil
-	case C.GHOSTTY_NO_VALUE, C.GHOSTTY_INVALID_VALUE:
+func (t *Terminal) screenY(ref *libghostty.GridRef) (uint32, bool, error) {
+	pt, err := t.term.PointFromGridRef(ref, libghostty.PointTagScreen)
+	switch {
+	case err == nil:
+		return pt.Y, true, nil
+	case errors.Is(err, libghostty.ErrNoValue), errors.Is(err, libghostty.ErrInvalidValue):
 		return 0, false, nil
 	default:
-		return 0, false, check(rc, "converting grid reference to a screen point")
+		return 0, false, check(err, "converting grid reference to a screen point")
 	}
 }

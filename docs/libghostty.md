@@ -5,54 +5,64 @@ reflow, and formatting screen contents back out as plain text, VT sequences, or 
 does not provide pty allocation, process spawning, or an event loop. Those are internal
 to the Ghostty app and not exported, so cm implements them.
 
-The API is explicitly unstable while the behavior is stable, and there is no tagged
-release, so `mise.toml` pins a commit. Bumping `GHOSTTY_REF` is deliberate.
+cm reaches it through `go.mitchellh.com/libghostty`, the Go binding, rather than cgo of its own.
 
-## All cgo lives in internal/vt
+## internal/vt is the only package that uses it
 
-`internal/vt` is the only package that imports "C". Everything else works with Go types
-and never sees a `Ghostty*` handle, an `unsafe.Pointer`, or a `GhosttyResult`. Errors are
-translated at the boundary, and C memory is freed there.
+Everything else works with cm's own types and never sees a binding type or a Ghostty handle.
+Errors are translated at the boundary.
 
-This is worth enforcing rather than merely intending. The API is unstable by upstream's
-own description, so a breaking change should mean editing one package.
+This is worth enforcing rather than merely intending. Both libghostty's API and the binding's are
+unstable by their authors' own description, so a breaking change should mean editing one package.
 
-It no longer keeps `CGO_ENABLED=0` builds possible: cgo is required, and the `!cgo` stub that
-used to prove the containment was retired along with the degraded build it enabled. See
-`docs/architecture.md` for why.
+No package in cm imports "C" any more; the binding owns the cgo. What that removed is the part that
+was easiest to get wrong: callback trampolines installed from C, because a Go local's address cannot
+be handed to libghostty, and function pointers passed by value where userdata is passed by address.
+
+cgo is still required, and there is no `CGO_ENABLED=0` build. See `docs/architecture.md` for why.
 
 ## Why cgo is not a performance problem here
 
-A multiplexer's hot path moves bytes and never inspects cells. libghostty is called once
-per pty read, and the kernel caps a read from a pty master at 4KB, so the cost is roughly
-one ~100ns cgo call per 4KB of output. Cell-level reads, where cgo overhead would
-actually matter and why the C API offers batch getters, happen only on attach and when
+A multiplexer's hot path moves bytes and never inspects cells. libghostty is called once per chunk
+of pty output, so the cost is one cgo call of roughly 100ns per chunk. Cell-level reads, where cgo
+overhead would actually matter and why the C API offers batch getters, happen only on attach and when
 dumping history.
 
-## Verified before committing to Go
+## Two pins, one commit
 
-A throwaway cgo program confirmed the pieces cm depends on, in particular the one
-non-obvious requirement: reproducing zmx's two-phase state restore needs
-selection-restricted VT formatting, which must be reachable from C rather than only from
-Zig. It is:
+libghostty has no tagged release, so it is pinned by commit, and two places name that commit:
+`GHOSTTY_REF` in `mise.toml`, which every build reads, and the `GIT_TAG` in the binding's own
+`CMakeLists.txt`, which moves when `go.mod` does. They must agree, since the binding is written against
+the C API at its pin, and `TestGhosttyRefMatchesBinding` fails when they do not.
 
-- `ghostty_terminal_new`, `ghostty_terminal_vt_write`, `ghostty_terminal_resize`
-- `ghostty_terminal_grid_ref` with `GHOSTTY_POINT_TAG_SCREEN` and `_ACTIVE`, giving the
-  endpoints a restore needs
-- `GhosttyFormatterTerminalOptions.selection`, which does restrict output: formatting the
-  same terminal produced 404 bytes unrestricted and 192 bytes for a
-  screen-top-to-active-top selection
+To bump: `go get go.mitchellh.com/libghostty@<version>`, set `GHOSTTY_REF` to the `GIT_TAG` in that
+version's `CMakeLists.txt`, and build. The build fetches and compiles the new pin itself.
 
 ## Building
 
-```
-mise run libghostty
-```
+`mise run build`, `test`, `vet` and `install` depend on the `libghostty` task, which builds the pinned
+commit when it has not been built yet and returns in about 0.1s when it has. A first build takes about
+a minute with a warm zig cache.
 
-Three flags are load-bearing and not redundant. `-Demit-xcframework=false` is required
-because the default is "xcodebuild is on PATH", which is true even with only the
-Command Line Tools stub, and configuring the iOS target then fails without full Xcode.
-`-Demit-macos-app=false` avoids building the GUI app that cm does not use.
+Each pin builds into its own directory, `third_party/libghostty-vt/<ref>/`, and `PKG_CONFIG_PATH` in
+`mise.toml` points the binding there. A branch on another pin, or a worktree sharing `third_party`
+through a symlink, therefore uses its own build rather than rebuilding the one every other checkout
+links, and switching back costs nothing. The pkg-config files record their prefix, so a build has to
+stay where it was made.
+
+`GHOSTTY_DIR`, `third_party/ghostty`, is only a git repository to fetch into. The build runs from an
+exported copy of the pinned commit, so a real ghostty checkout there keeps its working tree, and a
+complete clone is not made shallow.
+
+`scripts/libghostty.sh` is the only place the build is written down. The mise task, `Dockerfile.test`,
+and both workflows run it, and take the pin, the zig version and the glibc floor from `mise.toml`.
+Each used to carry its own copy of the build, the copies drifted, and the task's copy had no coverage
+in CI, which is how it shipped broken twice.
+
+Three of its flags are load-bearing. `-Demit-xcframework=false` is required because the default is
+"xcodebuild is on PATH", which is true even with only the Command Line Tools stub, and configuring the
+iOS target then fails without full Xcode. `-Demit-macos-app=false` avoids building the GUI app that cm
+does not use.
 
 `-Doptimize=ReleaseSafe` is the third, and omitting it is a correctness problem rather than a
 missed optimization.
@@ -78,26 +88,38 @@ lagged while scrolling down stayed instant. Measured with a real `less` over a r
 half-page scroll, which is not worth giving up bounds and overflow checks in a parser whose input
 is whatever a program inside a session decides to print.
 
-Every build site must agree on the optimize mode: `mise.toml`'s `libghostty` task,
-`Dockerfile.test`, and both workflows. A timing assumption that holds in one and not the other is
-how a test passes locally and fails in CI. The Linux sites pass one flag the mise task does not,
-`-Dtarget`, for the reason below.
-
-Two things guard this now, because a build flag is easy to drop and its symptom is easy to
+Two things guard this, because a build flag is easy to drop and its symptom is easy to
 misattribute. `internal/vt/scroll_test.go` asserts on the *ratio* between scrolling up and down
 rather than an absolute duration, since a ratio is a property of the build and not of the
 machine: about 4x correct, about 45x in Debug. And `cm doctor`'s `slow-emulator` check measures a
 half-page scroll at startup, so an installation built wrong says so instead of feeling slow.
 
-The build emits `libghostty-vt.a`, a versioned dylib, headers, and pkg-config files under
-`zig-out`. Prefer the static archive so cm ships one binary with no runtime library path
-to manage.
+The binding links the static archive by default, so cm ships one binary with no runtime library
+path to manage. Building it needs `pkg-config`, which macOS gets from Homebrew and Debian has by
+default.
+
+## What f54340a changed for cm
+
+Moving from `4d605bf0d` to `f54340a` was meant to change no behavior, and two things had to follow the
+emulator to keep that true:
+
+- **It answers more queries itself**: the ANSI form of DECRQM (`CSI 4 $ p`) and DECXCPR (`CSI ? 6 n`).
+  `internal/query` decides which queries cm forwards to a client, so it had to learn these too; left as
+  unanswered, a client would reply as well and the program would read two answers.
+  `TestEmulatorAnsweredQueries` pins the set, and now includes the title report (`CSI 21 t`), which was
+  answered before and is opt-in through the binding, so `vt` turns it on.
+- **The formatter keeps a screen's trailing blank rows** in VT output, so counting newlines made
+  `cm read --raw --lines 1` return a blank row's `\x1b[0m` instead of the last line. `TailVT` counts
+  lines with content.
+
+It also needs zig 0.17. What the new version offers beyond that is in `docs/ideas.md`.
 
 ## The glibc floor is decided by the zig target, not by the runner
 
 A released Linux binary runs on glibc 2.34 and newer: Ubuntu 22.04+, Debian 12+, RHEL 9+.
-`GLIBC_FLOOR` in `mise.toml` holds the number, both workflows and `Dockerfile.test` read it, and
-release.yml checks the built artifact against it with `objdump -T` before publishing.
+`GLIBC_FLOOR` in `mise.toml` holds the number, both workflows and `Dockerfile.test` pass it to
+`scripts/libghostty.sh` as the zig target, and release.yml checks the built artifact against it with
+`objdump -T` before publishing.
 
 The floor has to be stated because zig decides it silently. Zig's std selects glibc functions at
 comptime from the *target* glibc version, so building with the native target on an `ubuntu-24.04`
@@ -133,7 +155,7 @@ inside `vt_write` and must not re-enter `vt_write` on the same terminal. From Go
 means a callback should only enqueue and return, never call back into code that might
 touch the same terminal.
 
-`GHOSTTY_TERMINAL_OPT_WRITE_PTY` must be wired for correctness, not convenience: query
+`WithWritePty` must be wired for correctness, not convenience: query
 responses the emulator generates have to reach the pty or programs that probe the
 terminal will hang waiting.
 
@@ -180,12 +202,11 @@ about the emulator and misleading about the terminal, since a program asking wha
 talking to gets the name of a library rather than the multiplexer holding its pty. It only
 reaches a program when nothing is attached, which is exactly when cm *is* the terminal.
 
-The value is process-wide, in a C buffer, and that is a constraint rather than a detail.
-libghostty requires the reply to stay valid until its callback returns, so it cannot live in
-Go memory, and there is one buffer: two terminals constructed with different values both
-report the second. Verified. Hence `vt.SetXtversion` is a package function and `Callbacks`
-carries only a bool, so the API cannot promise per-terminal identity it does not deliver.
-Per-session identity would need a buffer keyed on the handle.
+The value is process-wide, set once with `vt.SetXtversion`. That used to be forced: libghostty requires
+the reply to outlive its callback, so it lived in one C buffer, and two terminals constructed with
+different values both reported the second. The binding's callback returns a string per terminal, so
+per-session identity is possible now; cm reports its own version from every session and has no use for
+it, so the API is unchanged.
 
 DA1 is *not* wired, and the reply cm sends when detached (`?62;22c`, vt220 plus `ansi_color`)
 comes from a Zig struct default rather than a decision. Left alone deliberately: with a client
@@ -203,5 +224,5 @@ An earlier attempt stripped these queries from client-bound output so cm was the
 answerer. That fixed a visible duplicate DA1 reply but not the injection above, and it is
 incompatible with letting the terminal answer, so it was removed.
 
-Kitty graphics pass through as APC bytes but the formatter does not re-emit them, so
-images are absent after a reattach. zmx has the same limitation.
+Kitty graphics are restored on reattach by cm rather than by the formatter, which does not re-emit
+them. See "Kitty graphics" in `docs/architecture.md`.

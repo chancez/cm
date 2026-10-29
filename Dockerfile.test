@@ -13,21 +13,21 @@
 # does not build. Expensive to build the first time, since it compiles libghostty with zig, and cached after.
 FROM golang:1.26-bookworm AS ghostty
 
-# Zig is fetched rather than installed from apt, which has no 0.16 package.
-ARG ZIG_VERSION=0.16.0
-# The full SHA, matching GHOSTTY_REF in mise.toml, which now carries the full one too. The reason is on
-# that side: `git fetch --depth 1 origin <abbrev>` answers "couldn't find remote ref", since the protocol
-# matches refs and complete object names and not prefixes. This file used to be the only place with a
-# working ref, and that is how the mise task shipped broken.
-ARG GHOSTTY_REF=4d605bf0d819df901a0332bbb320dc849fdd82e4
-# Matches GLIBC_FLOOR in mise.toml, which explains what it is for: zig picks glibc functions at
-# comptime from the target version, so an unpinned build here would compile calls this image's glibc
-# has and an older distribution does not. Pinned so the tests run against the same emulator code a
-# release ships.
-ARG GLIBC_FLOOR=2.34
+# No defaults: `mise run test-linux` passes each from mise.toml, which is the one place they are written. A
+# default here was a second copy, and it is how this image once kept building an emulator mise.toml had
+# moved past.
+ARG ZIG_VERSION
+ARG GHOSTTY_REF
+# Matches GLIBC_FLOOR in mise.toml, which explains what it is for: zig picks glibc functions at comptime from
+# the target version, so an unpinned build here would compile calls this image's glibc has and an older
+# distribution does not. Pinned so the tests run against the same emulator code a release ships.
+ARG GLIBC_FLOOR
+RUN test -n "$ZIG_VERSION" && test -n "$GHOSTTY_REF" && test -n "$GLIBC_FLOOR" \
+    || { echo "build with mise run test-linux, which passes ZIG_VERSION, GHOSTTY_REF and GLIBC_FLOOR" >&2; exit 1; }
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates xz-utils curl \
     && rm -rf /var/lib/apt/lists/*
+# Zig is fetched rather than installed from apt, which does not package the version mise.toml pins.
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \
@@ -42,27 +42,11 @@ RUN set -eux; \
     ln -s /opt/zig/zig /usr/local/bin/zig; \
     zig version
 
-# A shallow fetch of the pinned commit, matching what mise.toml uses. The ref is a commit rather than
-# a tag because libghostty-vt has no releases and its API is explicitly unstable.
-RUN set -eux; \
-    git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git /src/ghostty; \
-    cd /src/ghostty; \
-    git fetch --depth 1 origin "${GHOSTTY_REF}"; \
-    git checkout --detach FETCH_HEAD
-
-# Only the vt library. The macOS app and xcframework are irrelevant here and emit-xcframework
-# defaults to "xcodebuild on PATH", which would fail.
-#
-# -Doptimize must match mise.toml's libghostty task. Zig's default is Debug, which enables ghostty's
-# slow_runtime_safety and makes a reverse index at the top row cost 14ms instead of 10us. See that
-# task for the measurements. Matching matters beyond speed: a timing assumption that holds here and
-# not on a developer's machine is how a test passes in one place and fails in the other.
-RUN cd /src/ghostty && zig build \
-      -Demit-lib-vt=true \
-      -Demit-xcframework=false \
-      -Demit-macos-app=false \
-      -Doptimize=ReleaseSafe \
-      -Dtarget="$(uname -m)-linux-gnu.${GLIBC_FLOOR}"
+# The same script mise's libghostty task runs, so the image builds what a developer builds. Installed at the
+# path the final stage uses, because the pkg-config files record it.
+COPY scripts/libghostty.sh /usr/local/bin/libghostty.sh
+RUN GHOSTTY_DIR=/src/ghostty GHOSTTY_PREFIX=/opt/libghostty-vt \
+    GHOSTTY_TARGET="$(uname -m)-linux-gnu.${GLIBC_FLOOR}" sh /usr/local/bin/libghostty.sh
 
 FROM golang:1.26-bookworm
 # zsh, because the OSC 133 tests need a shell that emits the markers, and skipping them here would leave
@@ -74,12 +58,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# Into third_party/ rather than somewhere tidier, and after COPY . so it is not overwritten by it.
-#
-# internal/vt hardcodes these paths in its cgo directives, relative to the package source. Overriding
-# them with CGO_CFLAGS/CGO_LDFLAGS does not work: a #cgo LDFLAGS naming an archive by path is used as
-# given, so the build would look for an archive that is not there. Putting the artifacts where the
-# source already expects them means the image tests the same directives a developer uses.
-COPY --from=ghostty /src/ghostty/zig-out /src/third_party/ghostty/zig-out
+# go.mitchellh.com/libghostty links through pkg-config, so this is all the Go build needs to find it.
+COPY --from=ghostty /opt/libghostty-vt /opt/libghostty-vt
+ENV PKG_CONFIG_PATH=/opt/libghostty-vt/share/pkgconfig
 ENV CGO_ENABLED=1
 CMD ["go", "test", "./..."]
