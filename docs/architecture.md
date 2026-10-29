@@ -302,6 +302,13 @@ a warning out of the log for a client whose connection is closing as its Detach 
 measured at about 40% of runs, and warning about intended behavior made `cm doctor` report a
 healthy installation as having a problem.
 
+`no_ack` covers only cm's own reply. ttrpc still writes the stream's closing status when the handler
+returns, and a client that has closed its connection by then makes that write fail: ttrpc logs
+"failed sending message on channel ... broken pipe" at ERROR, which doctor reports as a server error for a
+day. Measured at 8 in 20 `cm run -d` creates. So a detaching client waits for the stream to end before
+closing, bounded at a second, which costs one local round trip. `awaitStreamEnd` in `internal/client` is
+the wait, and `TestDetachWaitsForTheServerToEndTheStream` holds the handler open to pin it.
+
 The server-to-client `Detached` message stays, and is now only ever the server's own initiative.
 `cm detach` needs it: without it an evicted client reads the clean close as the server going away
 and reconnects within a second, silently undoing the detach.

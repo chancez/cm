@@ -847,7 +847,11 @@ func runSession(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	stream, err := cl.Attach(ctx)
+	// Not ended by ctx, so a client interrupted by SIGTERM can still wait for the server to end the stream
+	// after its Detach: see awaitStreamEnd. Ended on return instead, which is every other way out.
+	streamCtx, endStream := context.WithCancel(context.WithoutCancel(ctx))
+	defer endStream()
+	stream, err := cl.Attach(streamCtx)
 	if err != nil {
 		return outcomeReconnect, err
 	}
@@ -934,16 +938,16 @@ func runSession(
 	// loop is behind, and a ttrpc stream can no longer be left waiting: it is closed with
 	// "ttrpc: stream buffer full" one second later. See outQueue.
 	out := newOutQueue()
+	// Closed once the stream has ended, which is what a detaching client waits for.
+	streamEnded := make(chan struct{})
 	go func() {
+		defer close(streamEnded)
 		for {
 			resp, err := stream.Recv()
 			out.push(outMsg{resp: resp, err: err})
+			// Deliberately not watching ctx: pushing cannot block, so the only way out of this loop is the
+			// stream ending, which the server does after a Detach and endStream does on return.
 			if err != nil {
-				return
-			}
-			// Deliberately not selecting on ctx.Done() around the push: pushing cannot block, so the only
-			// way out of this loop is the stream ending, which cancelling the context does.
-			if ctx.Err() != nil {
 				return
 			}
 		}
@@ -1150,6 +1154,7 @@ func runSession(
 					Detach: &serverv1.Detach{NoAck: true},
 				},
 			})
+			awaitStreamEnd(streamEnded)
 			result.Detached = true
 			return outcomeDone, true
 		}
@@ -1498,6 +1503,7 @@ func runSession(
 						Detach: &serverv1.Detach{NoAck: true},
 					},
 				})
+				awaitStreamEnd(streamEnded)
 				result.Detached = true
 				return outcomeDone, nil
 			}
@@ -1577,10 +1583,47 @@ func runSession(
 					Detach: &serverv1.Detach{NoAck: true},
 				},
 			})
+			awaitStreamEnd(streamEnded)
 			result.Detached = true
 			return outcomeDone, nil
 		}
 	}
+}
+
+// detachDrain bounds how long a detaching client waits for the server to end the stream.
+//
+// One local round trip in practice. Bounded so a server that has stopped answering cannot keep a client that
+// is trying to leave.
+const detachDrain = time.Second
+
+// awaitStreamEnd waits, up to detachDrain, for an attach stream the client has sent a Detach on to end.
+//
+// When the server's Attach handler returns, ttrpc writes the stream's closing status. A client that closes its
+// connection before that write makes it fail, ttrpc logs "failed sending message on channel ... broken pipe" at
+// ERROR, and `cm doctor` then reports a server error for a day. `cm run -d` lost that race in 8 of 20 creates.
+// NoAck already spared the server's own acknowledgement; this covers the write ttrpc makes regardless.
+func awaitStreamEnd(ended <-chan struct{}) {
+	t := time.NewTimer(detachDrain)
+	defer t.Stop()
+	select {
+	case <-ended:
+	case <-t.C:
+	}
+}
+
+// DrainAfterDetach is awaitStreamEnd for a caller that reads the stream itself: it discards what is left of an
+// attach stream after a Detach until the server ends it, or detachDrain passes.
+func DrainAfterDetach(stream serverv1.Server_AttachClient) {
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		for {
+			if _, err := stream.Recv(); err != nil {
+				return
+			}
+		}
+	}()
+	awaitStreamEnd(ended)
 }
 
 // dial connects to the server's socket.

@@ -165,6 +165,13 @@ func TestDoctorIsQuietAfterACleanKill(t *testing.T) {
 	// straight afterwards legitimately sees it as an orphan -- a real finding about a transient state,
 	// and not the one under test here.
 	var out string
+	// Printed on failure, since "timed out" alone does not say which finding kept doctor from going quiet:
+	// this test failed in CI for weeks on a server error that was read as a leaked shim.
+	defer func() {
+		if t.Failed() {
+			t.Logf("last doctor output:\n%s", out)
+		}
+	}()
 	e.waitFor("doctor to report nothing", 15*time.Second, func() bool {
 		r := e.run("doctor")
 		out = r.stdout

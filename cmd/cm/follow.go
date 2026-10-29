@@ -445,6 +445,7 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	_ = stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
+	client.DrainAfterDetach(stream)
 
 	// The name, since the caller may not have chosen one and needs it to attach later. Printed even when the
 	// session already existed, because the useful answer to "make sure this exists" is its name either way.

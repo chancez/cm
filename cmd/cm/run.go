@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -272,6 +273,7 @@ func startRun(
 	_ = stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
+	client.DrainAfterDetach(stream)
 	// The ID rather than the name. Polling by name would find nothing at all for a `cm run` that named
 	// no session, and could find a *different* session if the name were pointed elsewhere while the
 	// command ran.
