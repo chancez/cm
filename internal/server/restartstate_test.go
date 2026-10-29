@@ -41,7 +41,7 @@ func restartAdopting(t *testing.T, name, script, marker string) *Session {
 	rec.LastSeq, rec.ClientSeq = first.resumePoints()
 	first.Close()
 
-	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestARPCReportSurvivesARestart(t *testing.T) {
 	// The record as the next server reads it, report included.
 	rec.LastSeq, rec.ClientSeq = shimSeq, clientSeq
 	rec.Reported = stored
-	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -233,7 +233,7 @@ func TestAStaleReportIsDroppedWhenTheShellIsIdle(t *testing.T) {
 	rec.Reported = stored
 	first.Close()
 
-	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestAReportSurvivesWhenTheShellReportsNoMarkers(t *testing.T) {
 	rec.Reported = stored
 	first.Close()
 
-	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}

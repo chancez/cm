@@ -253,7 +253,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 
 		// Resume from where the previous server stopped consuming.
-		sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+		sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 		if err != nil {
 			// The shim answered a moment ago, so this is worth reporting but not fatal:
 			// the remaining sessions should still come back.
@@ -371,7 +371,7 @@ const socketRefusalGrace = 250 * time.Millisecond
 // machine. Both are seeded here, before newSession starts the pump, because content written to the model
 // after that lands after whatever the new shell has already printed.
 func (m *Manager) adopt(
-	ctx context.Context, rec store.Session, fromSeq seq.Shim, clientSeq seq.Log, restoreFrom string,
+	ctx context.Context, rec store.Session, fromSeq seq.Shim, clientSeq seq.Log, restore persistedRestore,
 ) (*Session, error) {
 	term, err := m.buildTerminal(uint16(rec.Rows), uint16(rec.Cols))
 	if err != nil {
@@ -391,7 +391,7 @@ func (m *Manager) adopt(
 	rp := replayed{}
 	if term != nil {
 		rp.gfx = graphics.NewStore(0)
-		if restoreFrom != "" {
+		if restore.path != "" {
 			limits := seqlog.FileLimits{}
 			if m.persist != nil {
 				limits = m.persist.Limits
@@ -399,13 +399,13 @@ func (m *Manager) adopt(
 			// Not fatal, but the user asked for their content back and did not get it, so this is exactly
 			// the kind of silent degradation the log exists for. ErrNothingToRestore is the ordinary case
 			// for a session that never persisted and is not worth a line.
-			if err := seedFromPersistedLog(restoreFrom, term, rp.gfx, limits); err != nil {
+			if err := seedFromPersistedLog(restore, term, rp.gfx, limits); err != nil {
 				if !errors.Is(err, ErrNothingToRestore) {
 					m.log.Warn("replaying persisted session failed",
-						"session", rec.ID, "path", restoreFrom, "error", err)
+						"session", rec.ID, "path", restore.path, "error", err)
 				}
 			} else {
-				m.log.Info("restored session from disk", "session", rec.ID, "path", restoreFrom)
+				m.log.Info("restored session from disk", "session", rec.ID, "path", restore.path)
 			}
 		}
 	}
@@ -994,7 +994,7 @@ func (m *Manager) openExisting(
 		// Try once more before giving up: only ENOENT is conclusive, and a shim that was merely busy is
 		// still holding a live shell.
 		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
-			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, "")
+			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 			if err == nil {
 				sess.setLabel(opts.name)
 				m.mu.Lock()
@@ -1227,6 +1227,25 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
+	// The previous run's end, read before the spawn: from here on the new shim appends to the same log.
+	restore := persistedRestore{path: opts.restoreFrom}
+	if restore.path != "" {
+		limits := seqlog.FileLimits{}
+		if m.persist != nil {
+			limits = m.persist.Limits
+		}
+		end, err := persistedEnd(restore.path, limits)
+		if err != nil {
+			// Not fatal: a session without its old content still works. Without a bound the seed cannot
+			// tell the two runs apart, so it is skipped rather than allowed to replay the new output twice.
+			m.log.Warn("reading where the previous run ended failed, not restoring its content",
+				"session", opts.id, "path", restore.path, "error", err)
+			restore = persistedRestore{}
+		} else {
+			restore.until = end
+		}
+	}
+
 	pid, err := m.spawnShim(ctx, opts, socket, logPath)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.id)
@@ -1237,7 +1256,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		return nil, err
 	}
 
-	sess, err := m.adopt(ctx, rec, 0, 0, opts.restoreFrom)
+	sess, err := m.adopt(ctx, rec, 0, 0, restore)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.id)
 		return nil, err

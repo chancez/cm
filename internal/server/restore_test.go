@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,12 +43,27 @@ func seedLog(t *testing.T, name, content string, limits seqlog.FileLimits) strin
 	return path
 }
 
+// wholeLog is a restore bounded at the log's current end, which is what a revival sees when nothing has
+// appended since the previous run. A path that does not exist is passed through unbounded, for the tests
+// asserting there is nothing to restore.
+func wholeLog(t *testing.T, path string) persistedRestore {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		return persistedRestore{path: path}
+	}
+	end, err := persistedEnd(path, seqlog.FileLimits{})
+	if err != nil {
+		t.Fatalf("persistedEnd(%q) error = %v", path, err)
+	}
+	return persistedRestore{path: path, until: end}
+}
+
 // The property reboot persistence rests on: a saved log becomes a screen in the session's own model.
 func TestSeedFromPersistedLogRebuildsScreen(t *testing.T) {
 	path := seedLog(t, "session.log", "line one\r\nline two\r\n", seqlog.FileLimits{})
 
 	term := &fakeTerminal{restore: []byte("REPLAYED_SCREEN")}
-	if err := seedFromPersistedLog(path, term, nil, seqlog.FileLimits{}); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, nil, seqlog.FileLimits{}); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 
@@ -66,7 +82,7 @@ func TestSeedFromPersistedLogDiscardsGeneratedInput(t *testing.T) {
 		restore: []byte("SCREEN"),
 		pending: [][]byte{[]byte("\x1b[0n")},
 	}
-	if err := seedFromPersistedLog(path, term, nil, seqlog.FileLimits{}); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, nil, seqlog.FileLimits{}); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 	if len(term.TakePending()) != 0 {
@@ -91,7 +107,7 @@ func TestSeedFromPersistedLogMissingCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := seedFromPersistedLog(tt.path, tt.term, nil, seqlog.FileLimits{})
+			err := seedFromPersistedLog(wholeLog(t, tt.path), tt.term, nil, seqlog.FileLimits{})
 			if !errors.Is(err, ErrNothingToRestore) {
 				t.Errorf("error = %v, want ErrNothingToRestore", err)
 			}
@@ -105,7 +121,7 @@ func TestSeedFromPersistedLogEmptyLog(t *testing.T) {
 	path := seedLog(t, "empty.log", "", seqlog.FileLimits{})
 
 	term := &fakeTerminal{restore: []byte("SCREEN")}
-	err := seedFromPersistedLog(path, term, nil, seqlog.FileLimits{})
+	err := seedFromPersistedLog(wholeLog(t, path), term, nil, seqlog.FileLimits{})
 	if !errors.Is(err, ErrNothingToRestore) {
 		t.Errorf("error = %v, want ErrNothingToRestore for an empty log", err)
 	}
@@ -134,7 +150,7 @@ func TestSeedFromPersistedLogAfterTrim(t *testing.T) {
 	}
 
 	term := &fakeTerminal{restore: []byte("SCREEN")}
-	if err := seedFromPersistedLog(path, term, nil, limits); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, nil, limits); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 	if got, want := term.Written(), "kept one\r\nkept two\r\n"; got != want {
@@ -151,7 +167,7 @@ func TestSeedFromPersistedLogRecordsImages(t *testing.T) {
 
 	term := &fakeTerminal{restore: []byte("SCREEN")}
 	gfx := graphics.NewStore(0)
-	if err := seedFromPersistedLog(path, term, gfx, seqlog.FileLimits{}); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, gfx, seqlog.FileLimits{}); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 
@@ -197,7 +213,7 @@ func TestRevivedSessionServesEveryClientFromItsModel(t *testing.T) {
 		t.Fatalf("NewSessionTerminal() error = %v", err)
 	}
 	gfx := graphics.NewStore(0)
-	if err := seedFromPersistedLog(path, term, gfx, seqlog.FileLimits{}); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, gfx, seqlog.FileLimits{}); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 

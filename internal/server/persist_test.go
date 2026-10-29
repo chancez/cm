@@ -295,7 +295,7 @@ func TestAdoptSeedsFromAPersistedLog(t *testing.T) {
 	recordSession(t, st, rec)
 	path := seedLog(t, "adoptseed.log", "OUTPUT_FROM_BEFORE\r\n", seqlog.FileLimits{})
 
-	sess, err := mgr.adopt(ctx, rec, 0, 0, path)
+	sess, err := mgr.adopt(ctx, rec, 0, 0, wholeLog(t, path))
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -304,6 +304,105 @@ func TestAdoptSeedsFromAPersistedLog(t *testing.T) {
 	if got := term.Written(); !strings.Contains(got, "OUTPUT_FROM_BEFORE") {
 		t.Errorf("the persisted log did not reach the model; emulator saw %q", got)
 	}
+}
+
+// A revived session's new output reaches the model once, not twice.
+//
+// The revived shim is given the same log directory and continues its numbering, so by the time adopt
+// seeds from disk the log already holds whatever the new program printed first. Seeding to the end fed
+// that output from the log and then again through the pump, and every revived session showed
+// its first line twice in `cm read` and `cm history`: three revivals out of three in a sandbox, because a
+// program prints faster than adopt runs. Waiting for the append rather than racing it is what makes this
+// deterministic.
+func TestAdoptSeedsOnlyThePreviousRunFromAPersistedLog(t *testing.T) {
+	newTerm, term := replayTerminal(t)
+	mgr, st, _ := newTestManager(t, newTerm)
+	mgr.SetPersistPolicy(testPolicy())
+	ctx := context.Background()
+
+	dir := filepath.Join(shortTempDir(t), "revive.log.d")
+	before := seedDir(t, dir, "OUTPUT_FROM_BEFORE\r\n")
+
+	const newOutput = "NEW_OUTPUT\r\n"
+	cfg := shimConfigFor("revive", "echo NEW_OUTPUT; sleep 5")
+	cfg.PersistDir = dir
+	rec := startShimFor(t, cfg)
+	recordSession(t, st, rec)
+	after := before + seq.Shim(len(newOutput))
+	waitForLogEnd(t, dir, after)
+
+	sess, err := mgr.adopt(ctx, rec, 0, 0, persistedRestore{path: dir, until: before})
+	if err != nil {
+		t.Fatalf("adopt() error = %v", err)
+	}
+	defer sess.Close()
+
+	// The new output reaches the model through the pump, asynchronously, so the comparison waits for the
+	// pump to have consumed all of it. Comparing any sooner could pass with the bug present, since the
+	// doubled copy was the one the seed wrote first and the pump's arrived after.
+	waitForPumpAt(t, sess, after)
+
+	if got, want := term.Written(), "OUTPUT_FROM_BEFORE\r\n"+newOutput; got != want {
+		t.Errorf("emulator saw %q, want %q", got, want)
+	}
+}
+
+// waitForPumpAt blocks until a session's pump has consumed the shim's output up to want, and the model
+// has been fed all of it.
+//
+// Two positions, because lastSeq alone returns too early: the pump advances it before feeding the model,
+// the window processChunk calls the model lag. modelSeq is set after the model's write, so the model has
+// everything once it reaches the end of the client log.
+func waitForPumpAt(t *testing.T, sess *Session, want seq.Shim) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		sess.mu.Lock()
+		pumped := sess.lastSeq
+		sess.mu.Unlock()
+		sess.termMu.Lock()
+		modelled := sess.modelSeq == sess.recent.Next()
+		sess.termMu.Unlock()
+		if pumped >= want && modelled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pump never reached %d with the model caught up", want)
+}
+
+// seedDir writes a segmented persisted log holding content and returns the sequence number after it.
+func seedDir(t *testing.T, dir, content string) seq.Shim {
+	t.Helper()
+	d, err := seqlog.OpenDir[seq.Shim](dir, seqlog.FileLimits{})
+	if err != nil {
+		t.Fatalf("OpenDir() error = %v", err)
+	}
+	defer d.Close()
+	if err := d.Append([]byte(content)); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	_, next := d.Bounds()
+	return next
+}
+
+// waitForLogEnd blocks until the log at dir holds everything before want.
+func waitForLogEnd(t *testing.T, dir string, want seq.Shim) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		d, err := seqlog.OpenDir[seq.Shim](dir, seqlog.FileLimits{})
+		if err != nil {
+			t.Fatalf("OpenDir() error = %v", err)
+		}
+		_, next := d.Bounds()
+		d.Close()
+		if next >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the log at %s never reached %d", dir, want)
 }
 
 // An ordinary adoption must not touch a persisted log, or the pre-restart content is fed twice: once
@@ -318,7 +417,7 @@ func TestAdoptWithoutARestoreDoesNotReadTheLog(t *testing.T) {
 	rec.LogPath = seedLog(t, "adoptplain.log", "OUTPUT_FROM_BEFORE\r\n", seqlog.FileLimits{})
 	recordSession(t, st, rec)
 
-	sess, err := mgr.adopt(ctx, rec, 0, 0, "")
+	sess, err := mgr.adopt(ctx, rec, 0, 0, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}
@@ -344,7 +443,7 @@ func TestRevivedSessionModelHoldsBothIncarnations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSessionTerminal() error = %v", err)
 	}
-	if err := seedFromPersistedLog(path, term, nil, seqlog.FileLimits{}); err != nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), term, nil, seqlog.FileLimits{}); err != nil {
 		t.Fatalf("seedFromPersistedLog() error = %v", err)
 	}
 
@@ -498,7 +597,7 @@ func TestReplayFailureDoesNotBlockSession(t *testing.T) {
 	}
 
 	// A corrupt file resets to empty, so there is nothing to restore rather than an error.
-	err := seedFromPersistedLog(path, &fakeTerminal{restore: []byte("SCREEN")}, nil, seqlog.FileLimits{})
+	err := seedFromPersistedLog(wholeLog(t, path), &fakeTerminal{restore: []byte("SCREEN")}, nil, seqlog.FileLimits{})
 	if err == nil {
 		t.Error("seedFromPersistedLog() = nil error for a reset log, want ErrNothingToRestore")
 	}
@@ -510,7 +609,7 @@ func TestReplayReportsTerminalFailure(t *testing.T) {
 	writeSavedLog(t, path, "content\r\n")
 
 	failing := &fakeTerminal{writeErr: errWriteFailed}
-	if err := seedFromPersistedLog(path, failing, nil, seqlog.FileLimits{}); err == nil {
+	if err := seedFromPersistedLog(wholeLog(t, path), failing, nil, seqlog.FileLimits{}); err == nil {
 		t.Error("seedFromPersistedLog() = nil error when the emulator failed, want an error")
 	}
 }
@@ -593,7 +692,7 @@ func TestExpireSkipsLiveSessions(t *testing.T) {
 	rec.State = store.StateDead // deliberately wrong, as a lagging record would be
 	recordSession(t, st, rec)
 
-	sess, err := mgr.adopt(ctx, rec, 0, 0, "")
+	sess, err := mgr.adopt(ctx, rec, 0, 0, persistedRestore{})
 	if err != nil {
 		t.Fatalf("adopt() error = %v", err)
 	}

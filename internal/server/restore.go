@@ -13,6 +13,41 @@ import (
 // ErrNothingToRestore reports that a session left no content worth replaying.
 var ErrNothingToRestore = errors.New("session has no persisted content")
 
+// persistedRestore is a saved log to seed a revived session from, and where its previous run ended.
+//
+// The end is needed because the log is not the previous run's alone by the time it is read. A revived
+// session keeps its ID, so its new shim is given the same log directory and appends to it, continuing the
+// numbering. The seed happens after that shim is spawned, and a program prints faster than adopt runs, so
+// the log already holds the new run's first output, which the pump then feeds again from the shim. Seeding to the end showed every revived session's first line twice in `cm read` and
+// `cm history`, three revivals out of three. until is the log's end read before the spawn: everything
+// below it is the previous run's, everything from it is the new shim's.
+//
+// An explicit bound rather than zero meaning "to the end", because zero is a real bound: a previous run
+// that printed nothing leaves an empty log, and treating that as unbounded would replay the new run's
+// output from disk exactly as before.
+type persistedRestore struct {
+	path  string
+	until seq.Shim
+}
+
+// persistedEnd returns where a saved log ends, for a persistedRestore's bound. Read before the revived
+// session's shim is spawned, since that is the moment the log stops being the previous run's alone.
+//
+// A log that does not exist ends at zero, and is not opened: opening one creates it, and a stray empty
+// file is what that would leave behind. seedFromPersistedLog reports there is nothing to restore.
+func persistedEnd(path string, limits seqlog.FileLimits) (seq.Shim, error) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, nil
+	}
+	f, err := seqlog.OpenPersisted[seq.Shim](path, limits)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	_, end := f.Bounds()
+	return end, nil
+}
+
 // seedFromPersistedLog rebuilds a revived session's screen inside its own terminal model.
 //
 // This is what makes a session survive a reboot. The log holds the bytes the pty produced, so feeding
@@ -33,20 +68,21 @@ var ErrNothingToRestore = errors.New("session has no persisted content")
 // pre-reboot screen below the new prompt.
 //
 // The model is not told the log's sequence positions, and must not be: those numbers belong to a dead
-// incarnation, and the new shim numbers from zero. What the model holds is therefore history with no
+// incarnation. The new shim continues them, but only so a stored position keeps naming the same byte; the
+// model starts its own log at zero either way. What the model holds is therefore history with no
 // position plus, once the pump runs, everything the log does account for. That is exactly the pairing
 // attach relies on, because a client receives the serialized screen, which carries the history, and then
 // streams from the model's position in the current log.
 func seedFromPersistedLog(
-	logPath string,
+	from persistedRestore,
 	term Terminal,
 	gfx *graphics.Store,
 	limits seqlog.FileLimits,
 ) error {
-	if logPath == "" {
+	if from.path == "" {
 		return ErrNothingToRestore
 	}
-	if _, statErr := os.Stat(logPath); statErr != nil {
+	if _, statErr := os.Stat(from.path); statErr != nil {
 		// A missing log is the normal case for a session that never persisted, so it is not an
 		// error worth surfacing as one.
 		return ErrNothingToRestore
@@ -57,14 +93,18 @@ func seedFromPersistedLog(
 		return ErrNothingToRestore
 	}
 
-	f, err := seqlog.OpenPersisted[seq.Shim](logPath, limits)
+	f, err := seqlog.OpenPersisted[seq.Shim](from.path, limits)
 	if err != nil {
 		return fmt.Errorf("opening persisted log: %w", err)
 	}
 	defer f.Close()
 
+	// Bounded by where the previous run ended, so output the new shim has already appended is left to
+	// the pump rather than fed twice. See persistedRestore. A bound at or below the oldest
+	// retained byte means the new run's appends have already trimmed away everything before it.
 	oldest, end := f.Bounds()
-	if end == oldest {
+	end = min(end, from.until)
+	if end <= oldest {
 		return ErrNothingToRestore
 	}
 
@@ -72,6 +112,7 @@ func seedFromPersistedLog(
 	if err != nil {
 		return fmt.Errorf("reading persisted log: %w", err)
 	}
+	data = data[:min(uint64(len(data)), uint64(end-oldest))]
 	if len(data) == 0 {
 		return ErrNothingToRestore
 	}

@@ -172,9 +172,19 @@ discard them. It breaks all three. A later client gets a session with no history
 the new shell has printed, and the blob bypasses the transmit-then-place split, so a restored image is
 drawn wherever the cursor happens to be and then erased by the screen that follows it.
 
-The seeded content carries no sequence position. Those numbers belonged to the dead incarnation and the
-new shim numbers from zero, so the model holds history with no position plus, once the pump runs,
+The seeded content carries no sequence position. Those numbers belonged to the dead incarnation, and the
+model starts its own log at zero, so it holds history with no position plus, once the pump runs,
 everything the new log does account for. That is the pairing attach already relies on.
+
+The seed stops where the previous run ended, as read before the new shim is spawned. A revived session
+keeps its ID and so its log directory, and the new shim appends to it, continuing the numbering so a stored
+position keeps naming the same byte. The seed runs after the spawn, and a program prints faster than it
+does, so reading to the end fed the new run's first output from disk and then again from the pump: every
+revived session showed its first line twice in `cm read` and `cm history`, three revivals out of three in
+a sandbox. The bound is explicit rather than zero meaning "to the end", since a previous run that printed
+nothing leaves a real bound of zero. `TestRevivedSessionShowsEachRunOnce` drives a real revive, the only
+path that exercises the read-before-spawn order: with the read moved after the spawn it failed 7 runs of
+7.
 
 Query responses the emulator generates during replay are dropped. They answer questions a program
 asked before the reboot, and that program no longer exists, so delivering them would inject stray
