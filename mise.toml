@@ -6,7 +6,7 @@ go = "prefix:1.27"
 protoc = "35.1"
 buf = "1.72.0"
 # Only needed by the `libghostty` task to build libghostty-vt from source.
-zig = "0.16.0"
+zig = "0.17.0"
 # Pinned so the shell-integration tests exercise fish rather than skipping it. bash and zsh are not here
 # on purpose: both ship with macOS and every Linux image used for these tests, and pinning a second copy
 # would test a shell nobody runs cm under. fish is the one a machine may genuinely lack, and a skipped
@@ -22,9 +22,16 @@ zig = "0.16.0"
 # as "4d605bf0d" and the libghostty task therefore could not work on a fresh checkout at all -- it cloned,
 # then died on the next line. Dockerfile.test already carried the full SHA with a comment naming the
 # abbreviation here as the reason, so the workaround outlived the bug by being in the wrong file.
-GHOSTTY_REF = "4d605bf0d819df901a0332bbb320dc849fdd82e4"
+GHOSTTY_REF = "f54340ad77814fe319d136e5e915d6a48de8dd23"
 GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
 GHOSTTY_PREFIX = "{{config_root}}/third_party/ghostty/zig-out"
+# Where go.mitchellh.com/libghostty finds the library. The binding links through pkg-config, static by
+# default, and the zig build writes libghostty-vt-static.pc with an absolute prefix, so the archive has to
+# stay where it was built: a copy elsewhere names a prefix that does not exist.
+#
+# GHOSTTY_REF has to be the commit the binding's own CMakeLists.txt pins, since the binding is written
+# against that API. Bump both together.
+PKG_CONFIG_PATH = "{{config_root}}/third_party/ghostty/zig-out/share/pkgconfig"
 # The oldest glibc a released Linux binary runs against, and the version the zig build targets there.
 # Read from here by both workflows and by Dockerfile.test, so the number lives in one place.
 #

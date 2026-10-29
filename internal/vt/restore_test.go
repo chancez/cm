@@ -630,3 +630,26 @@ func TestRecoveredConvertsPanics(t *testing.T) {
 		}
 	}
 }
+
+// A bounded raw read counts lines that say something, not the blank rows libghostty emits after them.
+//
+// The formatter keeps a screen's trailing blank rows in VT output, so counting newlines made
+// `cm read --raw --lines 1` return a blank row's "\x1b[0m" rather than the last line of output.
+func TestLastContentLinesSkipsTrailingBlankRows(t *testing.T) {
+	in := []byte("one\r\n\x1b[1mtwo\x1b[0m\r\nthree\r\n\x1b[0m\n   \n\n")
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{1, "three\r\n\x1b[0m\n   \n\n"},
+		{2, "\x1b[1mtwo\x1b[0m\r\nthree\r\n\x1b[0m\n   \n\n"},
+		{3, string(in)},
+		{9, string(in)},
+		{0, string(in)},
+	}
+	for _, tt := range tests {
+		if got := string(lastContentLines(in, tt.n)); got != tt.want {
+			t.Errorf("lastContentLines(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}

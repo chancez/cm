@@ -8,6 +8,8 @@ import (
 	"fmt"
 
 	"go.mitchellh.com/libghostty"
+
+	"github.com/chancez/cm/internal/ansi"
 )
 
 // OnAltScreen reports whether the model is on the alternate screen.
@@ -375,7 +377,39 @@ func (t *Terminal) TailVT(lines int) ([]byte, error) {
 	if err != nil || lines <= 0 {
 		return out, err
 	}
-	return lastLines(out, lines), nil
+	return lastContentLines(out, lines), nil
+}
+
+// lastContentLines returns the final n lines of VT output that have visible content, along with any blank
+// rows after them.
+//
+// Counted by content rather than by newline because the formatter emits the screen's trailing blank rows in
+// VT output, since libghostty c7cbc9b: a replay without them scrolls too little and leaves the rows above
+// too low. Counting those rows made `cm read --raw --lines 1` return "\x1b[0m\n", a blank row's reset,
+// instead of the last line that said anything. Kept rather than trimmed off, because they are part of what
+// the screen holds and the raw form is meant to be that.
+func lastContentLines(p []byte, n int) []byte {
+	if n <= 0 || len(p) == 0 {
+		return p
+	}
+	count := 0
+	end := len(p)
+	for end > 0 {
+		// The line ending at end, without its terminator.
+		lineEnd := end
+		if p[lineEnd-1] == '\n' {
+			lineEnd--
+		}
+		start := bytes.LastIndexByte(p[:lineEnd], '\n') + 1
+		if len(bytes.TrimSpace(ansi.Strip(p[start:lineEnd]))) > 0 {
+			count++
+			if count == n {
+				return p[start:]
+			}
+		}
+		end = start
+	}
+	return p
 }
 
 // HTML returns the terminal's contents as HTML, preserving styling.
