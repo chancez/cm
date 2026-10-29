@@ -36,11 +36,11 @@ func TestTerminalFactoryProducesATerminal(t *testing.T) {
 
 // Expiry has to be configured even when persistence is disabled.
 //
-// These are separate concerns that shared one flag. persist.enabled decides whether a session *saves
-// output*; every session that ends leaves a record either way. Gating the whole policy on the flag
-// left the manager with no expiry at all, so a default install kept every finished session forever
-// and `cm list` filled with every command ever run: 23 records from one test run, none of which held
-// anything recoverable.
+// These are separate concerns that shared one flag. persist.enabled decides whether a session saves
+// output because of its name; every session that ends leaves a record either way. Gating the whole
+// policy on the flag left the manager with no expiry at all, so a default install kept every
+// finished session forever and `cm list` filled with every command ever run: 23 records from one
+// test run, none of which held anything recoverable.
 func TestPersistPolicyConfiguresExpiryWithPersistenceOff(t *testing.T) {
 	cfg := &config.Config{}
 	if cfg.Persist.Enabled {
@@ -66,8 +66,10 @@ func TestPersistPolicyConfiguresExpiryWithPersistenceOff(t *testing.T) {
 			policy.ForgetUnpersistedAfter, policy.ExpireAfter)
 	}
 
-	// And nothing is persisted, since that is what the flag actually controls.
+	// And no name persists by configuration, since that is all the flag controls. An explicit
+	// --persist still does: the policy existing is what lets the manager honor one, which
+	// TestPersistsSessionRespectsPolicy covers.
 	if policy.Matches("anything") {
-		t.Error("Matches() = true with persistence disabled, want nothing persisted")
+		t.Error("Matches() = true with persistence disabled, want no name persisted by config")
 	}
 }

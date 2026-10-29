@@ -84,7 +84,7 @@ exclude = ["SSH_AUTH_SOCK"]
 # capture_only = ["TERM", "KITTY_*"]
 
 [persist]
-# Let session content survive a reboot. Off by default.
+# Persist the sessions named below. Off by default. An explicit --persist works either way.
 enabled = true
 
 # Name patterns that persist automatically. A trailing "*" matches by prefix.
@@ -498,8 +498,9 @@ gone unconditionally. See [persistence.md](persistence.md) for how restore works
 | `expire_after` | Go duration, must be positive | `168h` (a week) |
 | `forget_unpersisted_after` | Go duration, must be positive | `5m` |
 
-- **`enabled`** turns persistence on for sessions matching `sessions`, or for any session started
-  with an explicit request.
+- **`enabled`** turns on the name patterns in `sessions`, and nothing else. A session started with an
+  explicit `--persist` persists whatever `enabled` says, so the setting is needed only to persist
+  sessions by name.
 - **`on_restore`** decides what happens when a dead session is attached to. `shell` starts a fresh
   shell in the recorded directory, `none` leaves the restored content as history and starts nothing,
   and `command` re-runs the recorded command verbatim.

@@ -28,7 +28,8 @@ including the ones never reopened.
 
 ## Which sessions persist
 
-Opt-in, either per session or by name pattern:
+Opt-in, either per session or by name pattern. The two are independent: `--persist` on one session
+needs no config, and `enabled` turns on only the patterns in `sessions`.
 
 ```toml
 [persist]

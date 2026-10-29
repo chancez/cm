@@ -213,8 +213,10 @@ type OverlayConfig struct {
 // unconditionally. Restoring means replaying what was on screen and optionally starting something
 // fresh, never resuming a process.
 type PersistConfig struct {
-	// Enabled turns persistence on for sessions matching Sessions, or for any session started with
-	// an explicit request.
+	// Enabled turns on the name patterns in Sessions, and nothing else. An explicit --persist
+	// persists a session whatever this says: the request is per session and needs no config to
+	// honor it. Measured with enabled = false: a --persist session wrote its log and restored its
+	// scrollback on revive, and the same session without the flag did neither.
 	Enabled bool `toml:"enabled"`
 
 	// Sessions are name patterns that persist automatically, with a trailing "*" matching by
