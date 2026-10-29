@@ -571,6 +571,25 @@ restoring on attach: the serializer exists ([restore.md](restore.md)) but it is 
 is about to start painting, not one already mid-stream. The measurement that decides whether this is worth
 it is how far behind a real client actually gets, which nothing currently reports.
 
+## What libghostty f54340a offers
+
+The bump to `f54340a` and the Go binding was done with no behavior change. These are what it makes
+available, each to be weighed against what cm does by hand today. Recorded together so they are evaluated
+as a set rather than adopted one at a time, since several touch the same code.
+
+- **`vt_write_until`**, which stops at CSI, OSC and DCS boundaries. That is what `ansi.Tracker` and
+  `osc.BoundaryTracker` compute for the server's model. The client side would still need the tracker
+  unless it runs a parser of its own, which libghostty would make cheap.
+- **More queries answered**: XTGETTCAP, `CSI 8 t` resize requests, the XT checksum queries, a device
+  attributes callback, and a callback for sequences it does not recognize. Each changes which queries cm
+  asks a client for, so each needs `TestQuerySetsAgreeWithEmulator` re-run and `internal/query` updated.
+- **Semantic prompts**: a callback on OSC 133 and navigation by prompt. Overlaps `osc.CommandTracker`,
+  `osc.BoundaryTracker`, and `cm read --since-commands`.
+- **OSC 7501** as an alternative to cm's own status tracking (OSC 25453).
+- **More kitty graphics support**, against cm's own retransmission on restore.
+- **Paste encoding**, for `cm send` and the auto-indented heredoc idea above.
+- **A memory usage query** per terminal, for `cm status` and `cm doctor`.
+
 ## Bigger expansions
 
 Each of these is a larger change than anything above, and each has a specific reason it is not a small one.
