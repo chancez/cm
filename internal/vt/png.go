@@ -1,12 +1,6 @@
-package vt
+//go:build cgo
 
-/*
-// The #cgo CFLAGS and LDFLAGS live in vt.go and apply to the whole package.
-#include <ghostty/vt.h>
-#include <stdlib.h>
-#include "callbacks.h"
-*/
-import "C"
+package vt
 
 import (
 	"bytes"
@@ -14,7 +8,8 @@ import (
 	"image/draw"
 	"image/png"
 	"sync"
-	"unsafe"
+
+	"go.mitchellh.com/libghostty"
 )
 
 // InstallPNGDecoder teaches libghostty to accept PNG images, once per process.
@@ -32,34 +27,23 @@ import (
 // The decode itself is Go's image/png, which cm already links transitively and which needs no C
 // dependency. The cost lands on the pump goroutine that fed the transmission, once per image.
 func InstallPNGDecoder() {
-	installPNGOnce.Do(func() { C.cm_install_png_decoder() })
+	installPNGOnce.Do(func() { _ = libghostty.SysSetDecodePng(decodePNG) })
 }
 
 var installPNGOnce sync.Once
 
-// cmDecodePNG decodes a PNG payload into the RGBA buffer libghostty expects.
+// decodePNG decodes a PNG payload into the RGBA pixels libghostty expects.
 //
-// The output buffer must come from libghostty's own allocator, because the library takes ownership and
-// frees it with the same one. Allocating with Go's memory and handing over the pointer would be freed by
-// a C allocator, which is a crash rather than a leak.
-//
-//export cmDecodePNG
-func cmDecodePNG(
-	_ unsafe.Pointer,
-	allocator *C.GhosttyAllocator,
-	data *C.uint8_t,
-	dataLen C.size_t,
-	out *C.GhosttySysImage,
-) C.bool {
-	// A copy, because the decoder reads it after this returns nothing but the pointer is only valid for
-	// the call. GoBytes copies.
-	raw := C.GoBytes(unsafe.Pointer(data), C.int(dataLen))
-
-	img, err := png.Decode(bytes.NewReader(raw))
+// The binding copies the pixels into memory libghostty's own allocator owns, which is the part that
+// used to be easy to get wrong: the library frees that buffer itself, so handing it Go memory was a
+// crash rather than a leak.
+func decodePNG(data []byte) (*libghostty.SysImage, error) {
+	img, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		// False rather than a panic: a malformed PNG is a program's mistake, and libghostty answers the
-		// program with a protocol error. A panic here would cross the cgo boundary and end the server.
-		return C.bool(false)
+		// An error rather than a panic: a malformed PNG is a program's mistake, and libghostty answers
+		// the program with a protocol error. A panic here would cross the cgo boundary and end the
+		// server.
+		return nil, err
 	}
 
 	// Normalized to RGBA, which is the one layout the struct documents. png.Decode returns whatever the
@@ -74,16 +58,5 @@ func cmDecodePNG(
 		draw.Draw(conv, conv.Bounds(), img, b.Min, draw.Src)
 		pix = conv.Pix
 	}
-
-	buf := C.ghostty_alloc(allocator, C.size_t(len(pix)))
-	if buf == nil {
-		return C.bool(false)
-	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(buf)), len(pix)), pix)
-
-	out.width = C.uint32_t(b.Dx())
-	out.height = C.uint32_t(b.Dy())
-	out.data = buf
-	out.data_len = C.size_t(len(pix))
-	return C.bool(true)
+	return &libghostty.SysImage{Width: uint32(b.Dx()), Height: uint32(b.Dy()), Data: pix}, nil
 }

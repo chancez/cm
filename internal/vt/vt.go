@@ -1,8 +1,16 @@
-// Package vt wraps libghostty-vt, and is the only package in cm that uses cgo.
+//go:build cgo
+
+// Package vt wraps libghostty-vt, through the go.mitchellh.com/libghostty binding, and is the only
+// package in cm that touches it.
 //
-// Everything outside works with Go types: no Ghostty handles, no unsafe.Pointer, no result
-// codes. That containment is deliberate: libghostty's API is unstable by upstream's own
-// description, so a breaking change should mean editing one package.
+// Everything outside works with cm's own types: no binding types, no Ghostty handles, no result
+// codes. That containment is deliberate: both libghostty's API and the binding's are unstable by
+// their authors' own description, so a breaking change should mean editing one package.
+//
+// The binding owns the cgo. cm wrote its own until this package was moved onto it, and what that
+// removed is the part that was easiest to get wrong: callback trampolines installed from C because a
+// Go local's address cannot be handed to libghostty, function pointers passed as values where
+// userdata is passed by address, and a process-wide C buffer for the XTVERSION reply.
 //
 // cgo is required. There was a stub standing in for this package without it, on the theory that cm should
 // degrade rather than fail, and the degraded build was not worth having: `cm read`, `cm history`, and screen
@@ -16,24 +24,12 @@
 // event loop; cm implements those itself.
 package vt
 
-/*
-// These are the only #cgo directives in the package. They are package-scoped, so another file in
-// package vt needing <ghostty/vt.h> just includes it; repeating the LDFLAGS line puts the same
-// archive on the link line twice and ld warns about duplicate libraries on every build.
-#cgo CFLAGS: -I${SRCDIR}/../../third_party/ghostty/zig-out/include
-#cgo LDFLAGS: ${SRCDIR}/../../third_party/ghostty/zig-out/lib/libghostty-vt.a
-#include <ghostty/vt.h>
-#include <stdlib.h>
-#include "callbacks.h"
-*/
-import "C"
-
 import (
 	"errors"
 	"fmt"
-	"runtime/cgo"
-	"sync"
-	"unsafe"
+	"strings"
+
+	"go.mitchellh.com/libghostty"
 )
 
 // Errors returned when libghostty rejects a call.
@@ -50,19 +46,20 @@ var (
 	ErrNoValue     = errors.New("libghostty: no value")
 )
 
-// check converts a GhosttyResult into an error.
-func check(rc C.GhosttyResult, op string) error {
-	switch rc {
-	case C.GHOSTTY_SUCCESS:
+// check translates a binding error into one of cm's, so callers outside this package match on
+// these sentinels rather than on the binding's.
+func check(err error, op string) error {
+	switch {
+	case err == nil:
 		return nil
-	case C.GHOSTTY_OUT_OF_MEMORY:
+	case errors.Is(err, libghostty.ErrOutOfMemory):
 		return fmt.Errorf("%s: %w", op, ErrOutOfMemory)
-	case C.GHOSTTY_INVALID_VALUE:
+	case errors.Is(err, libghostty.ErrInvalidValue):
 		return fmt.Errorf("%s: %w", op, ErrInvalid)
-	case C.GHOSTTY_NO_VALUE:
+	case errors.Is(err, libghostty.ErrNoValue):
 		return fmt.Errorf("%s: %w", op, ErrNoValue)
 	default:
-		return fmt.Errorf("%s: libghostty error %d", op, int(rc))
+		return fmt.Errorf("%s: %w", op, err)
 	}
 }
 
@@ -94,15 +91,11 @@ type Callbacks struct {
 // SetXtversion records what every terminal reports for XTVERSION (CSI > q), naming the terminal a
 // program believes it is talking to.
 //
-// Process-wide, and deliberately shaped to say so. libghostty requires the reply to stay valid until
-// its callback returns, so the value lives in a C buffer rather than in Go memory, and there is one
-// buffer: a terminal created with one value and then another created with a different one makes
-// *both* report the second. Verified rather than assumed, and it is why this is a package function
-// instead of a field on Callbacks.
-//
-// That costs nothing here, since cm reports its own version and every session agrees on it. It would
-// matter to anything wanting per-session identity, which would need a per-terminal buffer keyed on
-// the handle.
+// Process-wide, and kept that way for the callers rather than for the binding. The C side used to
+// force it: libghostty requires the reply to outlive its callback, so it lived in one C buffer and a
+// second terminal created with another value made both report the second. The binding's callback
+// returns a string per terminal, so that limit is gone, but cm reports its own version from every
+// session and has no use for per-terminal identity, so the API is unchanged.
 //
 // Left unset, libghostty answers "libghostty", which is true about the emulator and misleading about
 // the terminal: a program asking what it is talking to gets the name of a library rather than the
@@ -113,12 +106,11 @@ func SetXtversion(v string) {
 	if v == "" {
 		return
 	}
-	cs := C.CString(v)
-	// Freed immediately: cm_set_xtversion copies into its own buffer, so this allocation only has to
-	// survive the call.
-	defer C.free(unsafe.Pointer(cs))
-	C.cm_set_xtversion(cs)
+	xtversion = v
 }
+
+// xtversion is what SetXtversion recorded.
+var xtversion string
 
 // Terminal is a terminal emulator: it consumes output and can render its screen back out as
 // escape sequences.
@@ -126,10 +118,7 @@ func SetXtversion(v string) {
 // A Terminal is not safe for concurrent use. cm relies on that being cheap to guarantee,
 // since exactly one goroutine feeds each session's output.
 type Terminal struct {
-	ptr C.GhosttyTerminal
-	// handle keeps the Go side reachable from C without passing a Go pointer, which cgo
-	// forbids for anything stored across a call boundary.
-	handle cgo.Handle
+	term   *libghostty.Terminal
 	cb     Callbacks
 	closed bool
 }
@@ -146,33 +135,58 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 	InstallPNGDecoder()
 
 	t := &Terminal{cb: cb}
-	if err := check(C.ghostty_terminal_new(nil, &t.ptr, C.uint16_t(cols), C.uint16_t(rows)),
-		"creating terminal"); err != nil {
-		return nil, err
+	opts := []libghostty.TerminalOption{
+		libghostty.WithSize(cols, rows),
+		// CSI 21 t, the title report, became opt-in in libghostty. On, because cm answered it before
+		// and internal/query classifies it as answered: off, the query is stripped from every client
+		// and nothing replies. TestQuerySetsAgreeWithEmulator caught the change as an OVERREACH.
+		libghostty.WithTitleReport(true),
+	}
+	// Each callback is installed only when wanted, so a caller that does not want one does not pay for
+	// it. The closures check closed for the same reason the C trampolines did: libghostty only calls
+	// back during a write, so a callback after Close cannot normally happen, and a cheap guard is worth
+	// it when the alternative would be a use-after-free.
+	if cb.WritePty != nil {
+		opts = append(opts, libghostty.WithWritePty(func(_ *libghostty.Terminal, data []byte) {
+			if t.closed {
+				return
+			}
+			// Copied: the buffer is only valid for this call, and the consumer will queue it.
+			t.cb.WritePty(append([]byte(nil), data...))
+		}))
+	}
+	if cb.TitleChanged != nil {
+		opts = append(opts, libghostty.WithTitleChanged(func(*libghostty.Terminal) {
+			if t.closed {
+				return
+			}
+			if title, err := t.Title(); err == nil {
+				t.cb.TitleChanged(title)
+			}
+		}))
+	}
+	if cb.PwdChanged != nil {
+		opts = append(opts, libghostty.WithPwdChanged(func(*libghostty.Terminal) {
+			if t.closed {
+				return
+			}
+			if pwd, err := t.Pwd(); err == nil {
+				t.cb.PwdChanged(pwd)
+			}
+		}))
+	}
+	if cb.ReportXtversion {
+		// An empty reply makes libghostty report its own default, "libghostty", so an unset value
+		// degrades to that rather than to an empty answer.
+		opts = append(opts, libghostty.WithXtversion(func(*libghostty.Terminal) string { return xtversion }))
 	}
 
-	t.handle = cgo.NewHandle(t)
-	if err := t.wireCallbacks(); err != nil {
-		t.Close()
-		return nil, err
+	term, err := libghostty.NewTerminal(opts...)
+	if err != nil {
+		return nil, check(err, "creating terminal")
 	}
+	t.term = term
 	return t, nil
-}
-
-// wireCallbacks installs the trampolines libghostty should call.
-//
-// Done entirely in C. ghostty_terminal_set takes a pointer to the value being set, so doing this
-// from Go would mean handing libghostty the address of a Go local: cgo forbids passing such a
-// pointer, and it crashes with SIGBUS once that stack slot is reused.
-func (t *Terminal) wireCallbacks() error {
-	return check(C.cm_install_callbacks(
-		t.ptr,
-		C.uintptr_t(t.handle),
-		C.bool(t.cb.WritePty != nil),
-		C.bool(t.cb.TitleChanged != nil),
-		C.bool(t.cb.PwdChanged != nil),
-		C.bool(t.cb.ReportXtversion),
-	), "installing callbacks")
 }
 
 // Write feeds terminal output to the emulator.
@@ -182,10 +196,7 @@ func (t *Terminal) Write(p []byte) error {
 	if t.closed {
 		return errors.New("terminal is closed")
 	}
-	if len(p) == 0 {
-		return nil
-	}
-	C.ghostty_terminal_vt_write(t.ptr, (*C.uint8_t)(unsafe.Pointer(&p[0])), C.size_t(len(p)))
+	t.term.VTWrite(p)
 	return nil
 }
 
@@ -203,11 +214,7 @@ func (t *Terminal) Resize(rows, cols, cellWidth, cellHeight uint16) error {
 	if t.closed {
 		return errors.New("terminal is closed")
 	}
-	return check(
-		C.ghostty_terminal_resize(t.ptr, C.uint16_t(cols), C.uint16_t(rows),
-			C.uint32_t(cellWidth), C.uint32_t(cellHeight)),
-		"resizing terminal",
-	)
+	return check(t.term.Resize(cols, rows, uint32(cellWidth), uint32(cellHeight)), "resizing terminal")
 }
 
 // SetScrollbackLimit bounds retained scrollback in lines.
@@ -216,19 +223,9 @@ func (t *Terminal) Resize(rows, cols, cellWidth, cellHeight uint16) error {
 // requested. Zero means unlimited.
 func (t *Terminal) SetScrollbackLimit(lines int) error {
 	if lines <= 0 {
-		return check(
-			C.ghostty_terminal_set(t.ptr, C.GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, nil),
-			"clearing scrollback limit",
-		)
+		return check(t.term.SetScrollbackMaxLines(nil), "clearing scrollback limit")
 	}
-	n := C.size_t(lines)
-	// Safe to pass the address of a local here: libghostty reads the value during the call and
-	// does not retain the pointer, unlike the callback options.
-	return check(
-		C.ghostty_terminal_set(t.ptr, C.GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
-			unsafe.Pointer(&n)),
-		"setting scrollback limit",
-	)
+	return check(t.term.SetScrollbackMaxLines(new(uint(lines))), "setting scrollback limit")
 }
 
 // Close releases the terminal.
@@ -240,36 +237,17 @@ func (t *Terminal) Close() error {
 		return nil
 	}
 	t.closed = true
-	if t.ptr != nil {
-		C.ghostty_terminal_free(t.ptr)
-		t.ptr = nil
-	}
-	if t.handle != 0 {
-		t.handle.Delete()
-		t.handle = 0
+	if t.term != nil {
+		t.term.Close()
+		t.term = nil
 	}
 	return nil
 }
 
-// stringData reads a string-valued field from the terminal.
-func (t *Terminal) stringData(field C.GhosttyTerminalData) (string, error) {
-	var s C.GhosttyString
-	rc := C.ghostty_terminal_get(t.ptr, field, unsafe.Pointer(&s))
-	if rc == C.GHOSTTY_NO_VALUE {
-		return "", nil
-	}
-	if err := check(rc, "reading terminal data"); err != nil {
-		return "", err
-	}
-	if s.ptr == nil || s.len == 0 {
-		return "", nil
-	}
-	return C.GoStringN((*C.char)(unsafe.Pointer(s.ptr)), C.int(s.len)), nil
-}
-
 // Title returns the terminal's current title, or an empty string if unset.
 func (t *Terminal) Title() (string, error) {
-	return t.stringData(C.GHOSTTY_TERMINAL_DATA_TITLE)
+	title, err := t.term.Title()
+	return title, check(err, "reading the title")
 }
 
 // Pwd returns the directory the shell last reported, unparsed, so usually a file:// URI.
@@ -278,91 +256,23 @@ func (t *Terminal) Title() (string, error) {
 // must not be forwarded to a client: kitty records it into its session file and then fails to
 // parse its own state back. See zmx issue 222.
 func (t *Terminal) Pwd() (string, error) {
-	pwd, err := t.stringData(C.GHOSTTY_TERMINAL_DATA_PWD)
+	pwd, err := t.term.Pwd()
 	if err != nil {
-		return "", err
+		return "", check(err, "reading the working directory")
 	}
 	// Trim the sentinel rather than relying on callers to know about it.
-	for len(pwd) > 0 && pwd[len(pwd)-1] == 0 {
-		pwd = pwd[:len(pwd)-1]
-	}
-	return pwd, nil
+	return strings.TrimRight(pwd, "\x00"), nil
 }
 
-// callbackRegistry guards against a callback firing on a terminal that is being torn down.
-//
-// libghostty only calls back during Write, so this cannot normally happen, but a stale handle
-// would be a use-after-free rather than an error, which is worth a cheap guard.
-var callbackRegistry sync.Mutex
-
-// terminalFromHandle recovers the Go terminal for a callback.
-//
-// userdata is the cgo handle itself, passed as an integer through C, so this converts it back
-// rather than dereferencing anything.
-func terminalFromHandle(userdata unsafe.Pointer) *Terminal {
-	if userdata == nil {
-		return nil
-	}
-	h := cgo.Handle(uintptr(userdata))
-	t, _ := h.Value().(*Terminal)
-	return t
-}
-
-//export cmWritePty
-func cmWritePty(_ C.GhosttyTerminal, userdata unsafe.Pointer, data *C.uint8_t, length C.size_t) {
-	callbackRegistry.Lock()
-	defer callbackRegistry.Unlock()
-
-	t := terminalFromHandle(userdata)
-	if t == nil || t.cb.WritePty == nil || t.closed {
-		return
-	}
-	// Copy: the buffer is only valid for this call, and the consumer will queue it.
-	t.cb.WritePty(C.GoBytes(unsafe.Pointer(data), C.int(length)))
-}
-
-//export cmTitleChanged
-func cmTitleChanged(_ C.GhosttyTerminal, userdata unsafe.Pointer) {
-	callbackRegistry.Lock()
-	defer callbackRegistry.Unlock()
-
-	t := terminalFromHandle(userdata)
-	if t == nil || t.cb.TitleChanged == nil || t.closed {
-		return
-	}
-	title, err := t.Title()
-	if err != nil {
-		return
-	}
-	t.cb.TitleChanged(title)
-}
-
-//export cmPwdChanged
-func cmPwdChanged(_ C.GhosttyTerminal, userdata unsafe.Pointer) {
-	callbackRegistry.Lock()
-	defer callbackRegistry.Unlock()
-
-	t := terminalFromHandle(userdata)
-	if t == nil || t.cb.PwdChanged == nil || t.closed {
-		return
-	}
-	pwd, err := t.Pwd()
-	if err != nil {
-		return
-	}
-	t.cb.PwdChanged(pwd)
-}
-
-// cmSyncMode exposes the synchronized-output mode to tests in this package, which cannot
-// reference the C accessor from a non-cgo file.
-func cmSyncMode() C.GhosttyMode { return C.cm_mode_sync_output() }
+// cmSyncMode exposes the synchronized-output mode to tests in this package.
+func cmSyncMode() libghostty.Mode { return libghostty.ModeSyncOutput }
 
 // focusEventMode reports whether DECSET 1004 focus reporting is enabled.
 func (t *Terminal) focusEventMode() (bool, error) {
 	if t.closed {
 		return false, nil
 	}
-	return t.mode(C.cm_mode_focus_event())
+	return t.mode(libghostty.ModeFocusEvent)
 }
 
 // kittyKeyboardFlags reports the kitty keyboard protocol flags in effect, 0 when the protocol is off.
@@ -374,10 +284,9 @@ func (t *Terminal) kittyKeyboardFlags() (uint8, error) {
 	if t.closed {
 		return 0, nil
 	}
-	var flags C.uint8_t
-	if err := check(C.ghostty_terminal_get(t.ptr, C.GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS,
-		unsafe.Pointer(&flags)), "reading kitty keyboard flags"); err != nil {
-		return 0, err
+	flags, err := t.term.KittyKeyboardFlags()
+	if err != nil {
+		return 0, check(err, "reading kitty keyboard flags")
 	}
 	return uint8(flags), nil
 }
@@ -393,5 +302,5 @@ func (t *Terminal) InBandResizeMode() (bool, error) {
 	if t.closed {
 		return false, nil
 	}
-	return t.mode(C.cm_mode_in_band_resize())
+	return t.mode(libghostty.ModeInBandResize)
 }

@@ -440,8 +440,8 @@ func classifyDCS(p []byte) (n int, answered bool) {
 // Parsed structurally rather than matched against whole strings, because the parameter bytes vary: a
 // terminal query carries an optional private-marker prefix and optional numeric parameters, and the
 // forms that differ only by that prefix are answered differently. CSI 5 n is answered while
-// CSI ? 996 n is not, and CSI ? 1049 $ p is answered while CSI 4 $ p is not, so a match that ignored
-// the prefix would strip a query nobody answers and hang the program that sent it.
+// CSI ? 996 n is not, so a match that ignored the prefix would strip a query nobody answers and hang
+// the program that sent it.
 func classifyCSI(p []byte) (n int, answered bool) {
 	params, inter, final, length, ok := parseCSI(p)
 	if !ok {
@@ -496,13 +496,22 @@ func classifyCSI(p []byte) (n int, answered bool) {
 		}
 		return length, string(digits) == "21"
 	case 'n':
-		// Device status report. Only the unmarked forms are answered: the emulator answers 5n and 6n
-		// but not the private CSI ? 996 n colour-scheme query, and stripping that one would hang
-		// whatever asked it.
-		if marker != 0 || len(inter) > 0 {
+		// Device status report. The emulator answers 5n and 6n, and DECXCPR, CSI ? 6 n, the extended
+		// cursor position report, but not the private CSI ? 996 n colour-scheme query, and stripping that
+		// one would hang whatever asked it.
+		//
+		// DECXCPR is answered since libghostty f54340a. Left classified as unanswered, it would reach a
+		// client as well as being answered by the model, and the program would get two replies.
+		if len(inter) > 0 {
 			return length, false
 		}
-		return length, string(digits) == "5" || string(digits) == "6"
+		switch marker {
+		case 0:
+			return length, string(digits) == "5" || string(digits) == "6"
+		case '?':
+			return length, string(digits) == "6"
+		}
+		return length, false
 	case 'q':
 		// XTVERSION. The intermediate check is load-bearing: CSI 2 SP q sets the cursor style and must
 		// pass through untouched.
@@ -517,13 +526,16 @@ func classifyCSI(p []byte) (n int, answered bool) {
 		}
 		return length, marker == '?'
 	case 'p':
-		// DECRQM, asking whether a mode is set. Only the private form is answered; the ANSI form
-		// (no marker) is not.
+		// DECRQM, asking whether a mode is set, in both the private form and the ANSI form (no marker).
+		//
+		// The ANSI form is answered since libghostty f54340a, and was not before, which is why the comment
+		// at the top of classifyCSI uses CSI 4 $ p as its example of a query nobody answered. Left
+		// unanswered here, a client would answer it as well as the model.
 		//
 		// A mode number is required. CSI ? $ p names no mode, so the emulator ignores it, and stripping
 		// it was the one over-reach the sweep found. That direction is the dangerous one: the query is
 		// removed from every client and nothing replies, so whatever sent it waits forever.
-		return length, marker == '?' && string(inter) == "$" && len(digits) > 0
+		return length, (marker == '?' || marker == 0) && string(inter) == "$" && len(digits) > 0
 	}
 	return length, false
 }

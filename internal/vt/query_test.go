@@ -35,6 +35,10 @@ func TestEmulatorAnsweredQueries(t *testing.T) {
 		{"kitty keyboard", "\x1b[?u", true},
 		{"DECRQM sync output", "\x1b[?2026$p", true},
 		{"DECRQM alt screen", "\x1b[?1049$p", true},
+		// Both answered since libghostty f54340a, and neither was before.
+		{"ANSI DECRQM", "\x1b[4$p", true},
+		{"DECXCPR", "\x1b[?6n", true},
+		{"title report", "\x1b[21t", true},
 
 		// Not answered, and must not be: only the real terminal knows a background color, the
 		// clipboard contents, or a window's pixel size. `wallfacer -h` blocks on the OSC 11 one, so a
@@ -45,7 +49,6 @@ func TestEmulatorAnsweredQueries(t *testing.T) {
 		{"XTGETTCAP", "\x1bP+q544e\x1b\\", false},
 		{"XTWINOPS pixel size", "\x1b[14t", false},
 		{"XTWINOPS char size", "\x1b[18t", false},
-		{"ANSI DECRQM", "\x1b[4$p", false},
 		{"color scheme", "\x1b[?996n", false},
 
 		// Ordinary output, which must not produce a reply at all.
