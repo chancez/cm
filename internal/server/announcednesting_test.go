@@ -218,6 +218,11 @@ func TestAnnouncedClientsAreCounted(t *testing.T) {
 // justifies freezing metadata for a known child does apply, but the derived values are all a local
 // consumer has for a session on another host: the OSC 7 that arrives carries the remote host, and
 // cm_launch.py reads exactly that to open a split there. See docs/ideas.md on a session's location.
+//
+// The remote host is one no machine is named, the same as osc_test.go uses. IsLocal compares against
+// os.Hostname, falling back to the first label alone, so a real hostname makes the test pass or fail by
+// where it runs: it named white, and failed every run on the machine called white. Hence .invalid, which
+// is reserved, and a first label nobody names a machine. See osc_test.go.
 func TestAnnouncedNestingDoesNotFreezeMetadata(t *testing.T) {
 	term := &fakeTerminal{}
 	sess := newNestedTestSession(t, term)
@@ -226,12 +231,12 @@ func TestAnnouncedNestingDoesNotFreezeMetadata(t *testing.T) {
 
 	term.mu.Lock()
 	term.title = "remote-title"
-	term.pwd = "file://white/home/chance"
+	term.pwd = "file://cm-test-not-this-host.invalid/home/chance"
 	term.mu.Unlock()
 	sess.noteMetadata()
 
 	title, cwd := sess.Metadata()
-	wantCwd := osc.Cwd{Path: "/home/chance", Host: "white", IsLocal: false}
+	wantCwd := osc.Cwd{Path: "/home/chance", Host: "cm-test-not-this-host.invalid", IsLocal: false}
 	if title != "remote-title" || !reflect.DeepEqual(cwd, wantCwd) {
 		t.Errorf("Metadata() = (%q, %+v), want (%q, %+v): an announced nesting must not freeze what the "+
 			"stream reports, or a split loses the host it should open on",

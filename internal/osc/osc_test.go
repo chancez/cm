@@ -39,9 +39,14 @@ func TestParseCwd(t *testing.T) {
 		{
 			// A session that ssh'd elsewhere reports a path that does not exist here, so
 			// treating it as local would open new windows in the wrong place or fail.
+			//
+			// The host has to be one no machine running this is named, since isLocalHost compares
+			// against os.Hostname, falling back to the first label alone. So .invalid, which is
+			// reserved and never resolves, and a first label nobody names a machine: a real-looking
+			// name made a test in internal/server fail on every run on the machine it named.
 			name:  "remote host is not local",
-			input: "file://some-other-machine/home/user",
-			want:  Cwd{Path: "/home/user", Host: "some-other-machine", IsLocal: false},
+			input: "file://cm-test-not-this-host.invalid/home/user",
+			want:  Cwd{Path: "/home/user", Host: "cm-test-not-this-host.invalid", IsLocal: false},
 			ok:    true,
 		},
 		{
