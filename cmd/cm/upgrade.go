@@ -133,7 +133,8 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 
 	// The command to run, which only matters when this attach creates the session. Preserved because a
 	// replacement that reattaches never uses it, and one that finds the session gone recreates it the
-	// same way the original was asked to.
+	// same way the original was asked to. The replacement reattaches rather than refusing under
+	// --if-running=error because it resumes a position: see runSession.
 	if n := cmd.ArgsLenAtDash(); n >= 0 && n <= len(args) {
 		argv = append(argv, "--")
 		argv = append(argv, args[n:]...)

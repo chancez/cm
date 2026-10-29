@@ -53,6 +53,33 @@ instead of killing the session, which is what a per-window name wants once its w
 session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
 teardown script should treat them apart: the session named there is still running.
 
+## Attaching with a command
+
+`cm attach NAME -- CMD` runs CMD only when the attach creates the session or revives one whose shell
+has ended. When the session is already running there is nothing to run it in, and what happens is
+`--if-running`:
+
+| `--if-running` | Session running, command given |
+| --- | --- |
+| `error` (default) | fails, naming the session, and leaves it untouched |
+| `attach` | attaches, and does not run the command |
+
+Without a command `--if-running` has no effect, since attaching drops nothing; that is what a terminal
+emulator restoring a window by name does. `CM_IF_RUNNING` sets it, like every flag.
+
+`error` is the default because `attach` was the only behavior and it failed silently: `cm attach work --
+make` on a running work attached, exited 0, and never ran make, which reads as success to whoever passed
+it. Measured with `--no-attach` and with an interactive attach alike.
+
+The policy applies to an attach's first Open only. A reconnect after a server restart, a `cm clients
+upgrade` replacement, and a switch all return to a session this client already has, and the first two
+re-send the command, so `error` there would refuse the session the client itself created: a reconnect
+would wait out the refusal as an outage, forever, and an upgrade would close the window. An Open from a
+client predating the flag attaches as it always did.
+
+It is an enum rather than a boolean because a third answer is foreseeable: replacing the running session
+with one running the command, the same idea as `cm rebind --replace`.
+
 ## Ending a session, and forgetting one
 
 Two operations, deliberately two commands, because they act on different things. `cm kill` stops a

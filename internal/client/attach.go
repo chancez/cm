@@ -80,6 +80,7 @@ func (o Options) Open(session string) *serverv1.Open {
 		Persist:       o.Persist,
 		OnRestore:     o.OnRestore,
 		Tags:          o.Tags,
+		IfRunning:     o.IfRunning,
 		NoRestore:     o.NoRestore,
 		InsideSession: o.InsideSession,
 		// Set here rather than by each caller, which is the whole point of this constructor: a field
@@ -136,6 +137,10 @@ type Options struct {
 	Persist bool
 	// OnRestore overrides the configured restore behavior for this session.
 	OnRestore string
+	// IfRunning is what Command does when the session is already running: refused, or dropped with an
+	// attach. The zero value attaches, which is what every caller but `cm attach` wants. Applies to the
+	// first Open only; see runSession.
+	IfRunning serverv1.IfRunning
 	// Tags label a session being created, for grouping and filtering. Ignored when attaching to a
 	// session that already exists, since an attach is not how tags are changed.
 	Tags map[string]string
@@ -850,6 +855,20 @@ func runSession(
 	rows, cols := tty.Size()
 	xpixel, ypixel := tty.PixelSize()
 	open := opts.Open(ref)
+	// The policy is for the session this client asked for, so it applies until one has been opened. Every
+	// Open after that is a return, not a request: a reconnect after a server restart re-sends the command,
+	// and the session it reaches is the one this client created and is still running, so ERROR would refuse
+	// it, and a refusal of a session already opened is waited out as an outage, forever. A switch targets a
+	// session the command was never meant for.
+	//
+	// A resume position means the same thing from a different process. `cm clients upgrade` re-execs with
+	// the original argv, command included, and the replacement's first Open is a return to the session its
+	// predecessor had on screen; refused, the window would close mid-upgrade. Read from the position rather
+	// than written into that argv as --if-running=attach, since the argv is what ps and a terminal's saved
+	// session report from then on.
+	if result.SessionID != "" || *resumeFrom != nil {
+		open.IfRunning = serverv1.IfRunning_IF_RUNNING_ATTACH
+	}
 	open.Rows = uint32(rows)
 	open.Cols = uint32(cols)
 	open.XPixel = uint32(xpixel)

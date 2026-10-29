@@ -64,7 +64,9 @@ cm attach notes --read-only     # watch without being able to type
 cm attach work --detach-key ctrl-]
 ```
 
-Reusing a name reuses the session, so a command that creates one is safe to re-run.
+Reusing a name reuses the session, so a command that creates one is safe to re-run. The exception is a
+command after `--`: if the session is already running, the attach fails rather than attaching and not
+running it, unless `--if-running=attach` says to attach anyway.
 
 A name is not the session, though. Every session has an id, allocated once and never changed, and a name is
 a label pointing at one, so a session can have several names or none. That is what makes `cm bind` able to

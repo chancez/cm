@@ -613,6 +613,50 @@ func TestRunSessionAdvancesTheResumePoint(t *testing.T) {
 	}
 }
 
+// The caller's --if-running reaches the first Open, and only the first.
+//
+// After a session has been opened, every Open is a return to it rather than a request: a reconnect after a
+// server restart re-sends the command, the session it reaches is the one this client created and still
+// running, and ERROR would refuse it. A refusal of a session already opened is waited out as an outage,
+// forever, so the window would hang. A replacement from `cm clients upgrade` is the same return from a new
+// process, recognised by its resume position, and would close mid-upgrade instead.
+func TestRunSessionAppliesIfRunningToTheFirstOpenOnly(t *testing.T) {
+	seq := uint64(500)
+	tests := []struct {
+		name       string
+		sessionID  string
+		resumeFrom *uint64
+		want       serverv1.IfRunning
+	}{
+		{name: "first attach", want: serverv1.IfRunning_IF_RUNNING_ERROR},
+		{name: "reconnect", sessionID: "a7k2m9x4", want: serverv1.IfRunning_IF_RUNNING_ATTACH},
+		{name: "upgrade replacement", resumeFrom: &seq, want: serverv1.IfRunning_IF_RUNNING_ATTACH},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.opts.Command = []string{"make"}
+			h.opts.IfRunning = serverv1.IfRunning_IF_RUNNING_ERROR
+			h.result.SessionID = tt.sessionID
+			h.resumeFrom = tt.resumeFrom
+
+			h.stream.opened("test", 500, nil)
+			h.stream.exited(0)
+			if _, err := h.run(context.Background()); err != nil {
+				t.Fatalf("runSession() error = %v", err)
+			}
+
+			reqs := h.stream.requests()
+			if len(reqs) == 0 || reqs[0].GetOpen() == nil {
+				t.Fatalf("requests = %+v, want an Open first", reqs)
+			}
+			if got := reqs[0].GetOpen().IfRunning; got != tt.want {
+				t.Errorf("Open.IfRunning = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // The resume point is sent on the next connection, which is what makes a reconnect resume rather than repaint.
 func TestRunSessionSendsTheResumePointOnReconnect(t *testing.T) {
 	h := newHarness(t)

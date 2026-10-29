@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/sessionenv"
 	"github.com/chancez/cm/internal/tags"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 func newAttachCommand(g *globals) *cobra.Command {
@@ -28,6 +31,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		prefixKeyArg string
 		noAttach     bool
 		tagArgs      []string
+		ifRunningArg string
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -46,6 +50,11 @@ session is created without the caller inventing names.
 pre-creating one that something else will attach to later. Distinct from
 'cm run -d', which needs a command and captures its output for a few minutes: this
 makes an ordinary shell session with ordinary persistence.
+
+A command after -- runs only when this attach creates or revives the session. If
+the session is already running, the attach fails rather than attaching and
+silently not running it; --if-running=attach attaches anyway, without running the
+command. Without a command, --if-running has no effect.
 
 Detaching leaves the session running. The key is ctrl-\ by default, set by
 detach_key in the config file, and overridden for one attachment by --detach-key.
@@ -84,6 +93,11 @@ matters for another multiplexer, which sees the key first and never passes it on
 			sessionTags, err := tags.ParseAll(tagArgs)
 			if err != nil {
 				return err
+			}
+			ifRunning, ok := ifRunningValues[ifRunningArg]
+			if !ok {
+				return fmt.Errorf("--if-running %q, want one of %s",
+					ifRunningArg, strings.Join(ifRunningNames(), ", "))
 			}
 			dirs, err := g.dirs()
 			if err != nil {
@@ -187,6 +201,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Persist:   persist,
 				OnRestore: onRestore,
 				Tags:      sessionTags,
+				// What the command does when the session is already running. Applied to this attach's
+				// first Open only, so a reconnect or an upgrade returns to the session it created.
+				IfRunning: ifRunning,
 				// Set on the session rather than inherited, because the shim is spawned by the server:
 				// whatever this process exported is not in the server's environment and so never
 				// reaches the shell. Only applies when this call creates the session.
@@ -251,6 +268,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 		`key that opens cm's overlay: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
+	f.StringVar(&ifRunningArg, "if-running", "error",
+		"what a command does if the session is already running: "+strings.Join(ifRunningNames(), " or "))
 	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,
 	// because an argv survives the exec as the process's reported command line while a position is true
 	// for one instant. See resumeEnvVar.
@@ -260,6 +279,26 @@ matters for another multiplexer, which sees the key first and never passes it on
 	// writes none: checked by comparing each client's running image against the installed binary, and by
 	// ps showing no positions left in any argv.
 	return cmd
+}
+
+// ifRunningValues maps --if-running to its wire enum.
+//
+// error is the default because the alternative is the silent drop this exists to end: `cm attach work --
+// make` on a running session attached, exited 0, and never ran make. An enum rather than a bool, so a
+// third answer, replacing the running session, is a new value rather than a second flag.
+var ifRunningValues = map[string]serverv1.IfRunning{
+	"error":  serverv1.IfRunning_IF_RUNNING_ERROR,
+	"attach": serverv1.IfRunning_IF_RUNNING_ATTACH,
+}
+
+// ifRunningNames lists the accepted --if-running values in a stable order, for help and errors.
+func ifRunningNames() []string {
+	names := make([]string, 0, len(ifRunningValues))
+	for name := range ifRunningValues {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // runAttach attaches a terminal to a session and reports how it ended.

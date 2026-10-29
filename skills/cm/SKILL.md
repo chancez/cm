@@ -23,6 +23,8 @@ The installed binary is the authority on its own syntax. `cm --help` lists the c
 
 A session has a name you choose, or no name at all when you do not give one. Reusing a name reuses the session, which is what makes cm idempotent and safe to re-run.
 
+The exception is a command. `cm attach NAME -- CMD` on a session that is already running fails rather than attaching and never running CMD; an ended session is revived with CMD as usual. Pass `--if-running=attach` (or set `CM_IF_RUNNING=attach`) when reaching the existing session is what you want and the command was only for creating it.
+
 A name is a label rather than the session itself. Every session has an id, allocated once and never changed, and a name points at one, so a session can carry several names or none and a name can be moved to a different session. Any command that takes a session takes either: a name, or an id with an `@` in front of it.
 
 **Hold the id when you will come back to a session later.** `cm list --json` and `cm info --json` report it as `id`, and it is what `CM_SESSION` contains inside a session. A name is the friendlier thing to type and the wrong thing to store, because whoever owns that name can point it elsewhere while you are working; an id either finds the same session or finds nothing, which is the failure you want. A session with no name is only reachable by id, and `cm list` shows it that way in the NAME column.
