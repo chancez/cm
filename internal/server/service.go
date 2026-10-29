@@ -126,8 +126,24 @@ func openOptionsFrom(open *serverv1.Open) OpenOptions {
 		CaptureOutput: open.CaptureOutput,
 		OnRestore:     RestoreAction(open.OnRestore),
 		Tags:          open.Tags,
+		IfRunning:     ifRunningFrom(open.IfRunning),
 		// Carried so a reader is not given a new shell in place of the session it asked to observe.
 		ReadOnly: open.ReadOnly,
+	}
+}
+
+// ifRunningFrom translates the wire value. Unspecified attaches, since that is what an Open did before
+// the field existed and so what an older client expects.
+//
+// A value this build does not know refuses rather than attaching. It can only come from a newer client
+// asking for something else to happen to its command, a replace for instance, and attaching instead would
+// drop the command silently, which is the failure the field exists to end.
+func ifRunningFrom(v serverv1.IfRunning) IfRunning {
+	switch v {
+	case serverv1.IfRunning_IF_RUNNING_UNSPECIFIED, serverv1.IfRunning_IF_RUNNING_ATTACH:
+		return IfRunningAttach
+	default:
+		return IfRunningError
 	}
 }
 

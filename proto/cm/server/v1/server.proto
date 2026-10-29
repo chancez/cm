@@ -548,6 +548,27 @@ message Open {
   // direction: the cost is an image a capable terminal would have drawn, against a screen of payload on one
   // that would not.
   bool terminal_kitty_graphics = 24;
+
+  // What to do when the session is already running and this Open carries a command.
+  //
+  // Unspecified attaches and ignores the command, which is what every Open did before this field and so
+  // what an older client gets. That silence was the problem: `cm attach work -- make` on a running session
+  // attached, exited 0, and never ran make, which reads as success to whoever passed it. `cm attach` now
+  // sends ERROR unless asked otherwise. Without a command there is nothing to drop, so this has no effect.
+  IfRunning if_running = 25;
+}
+
+// IfRunning is what an Open carrying a command does when its session is already running.
+//
+// An enum rather than a bool because a third answer is foreseeable: replacing the running session with
+// one running the command, the same idea as rebind's --replace.
+enum IfRunning {
+  // UNSPECIFIED behaves as ATTACH, so an Open from a client predating the field is served as before.
+  IF_RUNNING_UNSPECIFIED = 0;
+  // ATTACH attaches to the running session and does not run the command.
+  IF_RUNNING_ATTACH = 1;
+  // ERROR refuses the Open, saying the session is running and the command was not run.
+  IF_RUNNING_ERROR = 2;
 }
 
 // TerminalGraphics reports what this client's terminal answered about drawing images, after Open.

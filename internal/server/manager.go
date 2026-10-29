@@ -128,6 +128,30 @@ const (
 	RestoreCommand RestoreAction = "command"
 )
 
+// IfRunning is what an Open carrying a command does when its session is already running. See
+// serverv1.IfRunning, which this mirrors so the manager does not depend on the wire types.
+type IfRunning int
+
+const (
+	// IfRunningAttach attaches and does not run the command. The zero value, because it is what an Open
+	// did before the choice existed, and so what an older client and every internal caller still get.
+	IfRunningAttach IfRunning = iota
+	// IfRunningError refuses, saying the session is running and the command was not run.
+	IfRunningError
+)
+
+// RunningSessionError reports an Open refused because its session is already running and the caller
+// asked for that to be an error rather than an attach that silently drops the command.
+type RunningSessionError struct {
+	// Ref is the reference the caller gave, so the message names what they typed.
+	Ref string
+}
+
+func (e *RunningSessionError) Error() string {
+	return fmt.Sprintf("session %s is already running, so the command was not run "+
+		"(attach without a command, or pass --if-running=attach to attach anyway)", e.Ref)
+}
+
 // NewManager creates a manager. Call Reconcile before serving clients.
 func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (*Manager, error) {
 	exe, err := os.Executable()
@@ -872,6 +896,9 @@ type OpenOptions struct {
 	// ClientEnv holds terminal-related variables from the attaching client, recorded so a shell
 	// in the session can refresh them later.
 	ClientEnv map[string]string
+	// IfRunning decides what a command does when the session is already running. Without a command it has
+	// no effect, since attaching drops nothing. See refuseRunning.
+	IfRunning IfRunning
 	// ReadOnly marks a caller that only observes: `cm read --follow`, `cm attach --read-only`, and the
 	// follower half of `cm send --follow`.
 	//
@@ -956,6 +983,22 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 	return sess, created, err
 }
 
+// refuseRunning reports whether an Open must be refused because its session is already running.
+//
+// Only for a caller that asked, and only when it carried a command: the command is what an attach to a
+// running session drops, and dropping it silently is what this exists to stop. `cm attach work -- make` on
+// a running session attached, exited 0, and never ran make. A session whose shell has exited is not
+// running, and an Open with a command still revives it and runs the command.
+func refuseRunning(opts OpenOptions, sess *Session) error {
+	if opts.IfRunning != IfRunningError || len(opts.Command) == 0 {
+		return nil
+	}
+	if ended, _ := sess.Ended(); ended {
+		return nil
+	}
+	return &RunningSessionError{Ref: opts.Ref}
+}
+
 // openExisting returns the session with this ID, reviving it when its shell is gone.
 //
 // Reviving keeps the ID rather than allocating a new one, which is the point: an ID is the handle cm
@@ -980,6 +1023,9 @@ func (m *Manager) openExisting(
 	sess, ok := m.sessions[id]
 	m.mu.Unlock()
 	if ok {
+		if err := refuseRunning(opts, sess); err != nil {
+			return nil, false, err
+		}
 		sess.setLabel(opts.name)
 		return sess, false, nil
 	}
@@ -996,10 +1042,15 @@ func (m *Manager) openExisting(
 		if alive, _ := probeShim(ctx, rec.ShimSocket); alive {
 			sess, err := m.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 			if err == nil {
-				sess.setLabel(opts.name)
+				// Registered before the refusal rather than after: the adoption is worth keeping whatever
+				// this caller wanted, since the shell it found is alive and was missing from the registry.
 				m.mu.Lock()
 				m.sessions[rec.ID] = sess
 				m.mu.Unlock()
+				if err := refuseRunning(opts, sess); err != nil {
+					return nil, false, err
+				}
+				sess.setLabel(opts.name)
 				return sess, false, nil
 			}
 		}
