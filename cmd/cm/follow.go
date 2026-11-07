@@ -390,7 +390,7 @@ func followSessionSignalling(
 // comment claimed otherwise until it was measured: no session dies from an abandoned stream, so removing
 // the detach changes nothing observable. Kept because it states the intent, that this client is leaving on
 // purpose.
-func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options) error {
+func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options, size windowSize) error {
 	// opts carries the logger already, since this is called from attach, which opens one.
 	//
 	// Both halves follow the Options rather than this machine: a remote attachment creating a session must
@@ -416,17 +416,13 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	// Built from the options rather than field by field, so a field added to Open reaches this path too.
 	// Listing them here is what let `--tag` work everywhere except this command.
 	open := opts.Open(opts.Session)
-	// A conventional size, since there is no terminal to ask. A client attaching later resizes it, and a
-	// program that checks in the meantime gets a plausible answer rather than zeros.
-	open.Rows = 24
-	open.Cols = 80
-	// Pixels are deliberately left at zero, unlike rows and cols above. There is no convention to fall
-	// back on, since pixels depend on the font a client renders with, and zero is exactly the value a
-	// program reads as "this terminal cannot report pixel sizes". A made-up number would instead have it
-	// compute cell dimensions from a window that does not exist.
+	// Sizes a session this creates or revives, and nothing else: see Open.no_attach.
+	open.Rows = uint32(size.rows)
+	open.Cols = uint32(size.cols)
+	open.XPixel = uint32(size.xpixel)
+	open.YPixel = uint32(size.ypixel)
 	// No repaint to receive, since nothing is being painted.
 	open.NoRestore = true
-	// The size above is for a session this creates. A running one keeps the size its windows gave it.
 	open.NoAttach = true
 
 	if err := stream.Send(&serverv1.AttachRequest{

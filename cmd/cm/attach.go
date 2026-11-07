@@ -230,7 +230,11 @@ matters for another multiplexer, which sees the key first and never passes it on
 
 			// Checked before anything that assumes a terminal, since this path has none.
 			if noAttach {
-				return createWithoutAttaching(cmd.Context(), dirs, opts)
+				size, ok := callerSize(os.Stdout, os.Stderr, os.Stdin)
+				if !ok {
+					size = conventionalSize
+				}
+				return createWithoutAttaching(cmd.Context(), dirs, opts, size)
 			}
 
 			// Forward the session's title to the outer terminal.
