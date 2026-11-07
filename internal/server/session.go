@@ -169,26 +169,6 @@ type Session struct {
 	outPartial    []byte
 	outPartialSeq seq.Shim
 
-	// modelTrack follows the same bytes the model consumes, so modelPending below knows how much of an
-	// incomplete sequence is sitting at the end of them. Guarded by termMu, like modelSeq.
-	modelTrack ansi.Tracker
-	// modelPending is how many bytes at the end of what the model consumed belong to a sequence that is
-	// not finished.
-	//
-	// It exists because those bytes reach a client from nowhere. A model fed a partial sequence holds it in
-	// its parser rather than on its screen, and Restore serializes the screen, so they are in neither the
-	// snapshot a fresh attach replays nor the stream that follows it. Measured: a program writing
-	// `ESC ] 2;fidelity BEL ESC [ 38:2:1` and then pausing left an attaching client with the title set and
-	// `:2:3m` arriving as text, the nine bytes that opened the SGR gone from both halves. Failed about one
-	// attach in eight.
-	//
-	// A count rather than a second position, deliberately. The pair "position, and the position of the last
-	// boundary" has to be kept consistent by everything that sets either, and a Session built in a test
-	// that set only modelSeq streamed from zero and replayed the whole log. A backlog whose zero value
-	// means "nothing pending" is correct by default, which is the property worth having for a field that
-	// exists to prevent a subtle bug.
-	modelPending int
-
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
 	// log type as the shim means the gap semantics are identical on both hops.
@@ -563,6 +543,9 @@ type Terminal interface {
 	Write(p []byte) error
 	// Restore returns bytes that reproduce the current screen on a fresh terminal.
 	Restore() ([]byte, error)
+	// Continuation returns the unfinished escape sequence or UTF-8 character the model is holding in its
+	// parser, which the screen Restore serializes cannot carry, or nil when there is none.
+	Continuation() ([]byte, error)
 	// Resize changes the model's size so a restore matches the terminal showing it.
 	//
 	// cellWidth and cellHeight are one cell in pixels, and they are what lets the model say where an
@@ -1292,10 +1275,6 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 	err := term.Write(data)
 	if err == nil {
 		s.modelSeq = modelEnd
-		// Fed the same bytes as the model, so the boundary is expressed in the same positions. modelEnd
-		// minus the tracker's own backlog is where the last complete sequence ended.
-		s.modelTrack.Feed(data)
-		s.modelPending = int(s.modelTrack.Fed() - s.modelTrack.Boundary())
 	}
 	s.termMu.Unlock()
 
@@ -2589,6 +2568,10 @@ type attachment struct {
 	reader *seqlog.Reader[seq.Log]
 	// restore holds bytes reproducing the current screen, empty when resuming.
 	restore []byte
+	// pending is the unfinished sequence restore ends with, which a follower is sent in place of
+	// restore. The stream starts partway through that sequence, so a follower given nothing would
+	// receive its tail as text.
+	pending []byte
 	// first reports that this is the only attached client, so a program that tracks focus should
 	// be told someone is watching again.
 	first bool
@@ -2693,13 +2676,10 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// describe one instant. A placement read after the pump advanced the model would name a row the
 		// restored screen does not have.
 		placements, placeErr := s.term.Placements()
-		// Backed off to the last complete sequence, so a partial one is replayed rather than lost. Clamped
-		// at the log's start, which matters only for a session whose very first bytes are a partial
-		// sequence, where the backlog can be the whole of what the model has seen.
+		// The sequence the model has started and not finished, read in the same critical section as the
+		// screen because the next chunk would finish it. See the end of the restore below.
+		pending, pendErr := s.term.Continuation()
 		modelEnd := s.modelSeq
-		if pending := seq.Log(s.modelPending); pending <= modelEnd {
-			modelEnd -= pending
-		}
 		s.termMu.Unlock()
 		if err != nil {
 			return attachment{}, fmt.Errorf("serializing terminal state: %w", err)
@@ -2752,6 +2732,27 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 			restore = append(restore, graphics.PlaceCommands(placements, s.gfxCellHeight)...)
 		}
 
+		// The unfinished sequence last, after the images, because the stream that follows completes it:
+		// anything cm wrote between the two would land inside it. A program that wrote `ESC [ 38:2:1` and
+		// paused left an attaching client printing `:2:3m`, since the screen cannot express a half-parsed
+		// sequence and the stream starts after it.
+		//
+		// From libghostty rather than from a tracker of cm's own, which this replaced. ansi.Tracker gave up
+		// on a string control after 4096 bytes and knew nothing of UTF-8, so an OSC 52 clipboard write, a
+		// sixel DCS, a split character, or ESC restarting a CSI all read as finished and reached the client
+		// as text. It also counted bytes to rewind the stream by, which is wrong in a way the model's own
+		// answer is not: a control inside a CSI has already taken effect, so libghostty continues
+		// `ESC [ 3 LF 1` as `ESC [ 31` rather than replaying the line feed.
+		//
+		// A failure costs the sequence and nothing else, which is what every attach cost before this. The
+		// one expected failure is a sequence past vt.MaxContinuation, which the model stops tracking.
+		if pendErr != nil {
+			s.log.Warn("reading the model's unfinished sequence failed, an attaching client may print part of it",
+				"session", s.label, "error", pendErr)
+			pending = nil
+		}
+		restore = append(restore, pending...)
+
 		// State is replayed, so streaming starts where the replayed screen ends rather than repeating
 		// history the snapshot already covers.
 		//
@@ -2761,12 +2762,8 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// client would never see those bytes from anywhere. Starting at the model's end replays them,
 		// which is correct because the snapshot does not contain them.
 		//
-		// The model's last sequence *boundary* rather than its raw position, which is the other half of
-		// the same problem. A model fed a partial sequence holds it in its parser, and the screen the
-		// snapshot serializes cannot express that, so resuming at the raw position drops those bytes from
-		// both halves: a client saw the title set and `:2:3m` arrive as text with the nine bytes that
-		// opened the SGR missing. Resuming at the boundary replays the partial sequence, which costs a
-		// few duplicated bytes the terminal parses correctly. See modelBoundary.
+		// Exactly there, not backed off to the start of an unfinished sequence: the restore above ends
+		// with that sequence, so the stream picks up with the bytes that complete it.
 		//
 		// Both are positions in the log's numbering, not lastSeq's. lastSeq counts the shim's bytes
 		// while the log numbers the rewritten ones, and prompt rewriting makes those differ by however
@@ -2774,6 +2771,9 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// which slices the ESC off and leaves a cursor move rendering as literal text beside the
 		// prompt.
 		from = modelEnd
+		att := s.newAttachmentLocked(from, restore, tok)
+		att.pending = pending
+		return att, nil
 	}
 
 	return s.newAttachmentLocked(from, restore, tok), nil

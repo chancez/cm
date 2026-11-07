@@ -29,12 +29,12 @@ type Tracker struct {
 	// fed is how many bytes have passed through, and boundary is the value fed had the last time the
 	// stream was not mid-sequence.
 	//
-	// Positions rather than a bare flag, because one caller needs to know *where* the last safe point was
-	// rather than whether it is at one. Attaching a client replays a serialized screen and then streams
-	// from where the model stopped, and a screen cannot express "a half-parsed CSI is pending": those
-	// bytes are in neither the snapshot nor the stream, so the client received `:2:3m` with the
-	// `ESC [ 38:2:1` that opened it missing. Resuming at the boundary replays the partial sequence
-	// instead, which the client completes. See Session.attach.
+	// Positions rather than a bare flag, because PartialTailLen needs to know *where* the last safe point
+	// was rather than whether it is at one: the pump holds back exactly the unfinished tail of a chunk.
+	//
+	// The server's attach used these too, to rewind a fresh client's stream to the start of a sequence the
+	// model had not finished. That now asks the model instead, since this tracker gives up on a string
+	// after maxPending bytes and does not see UTF-8, and both reached clients as text. See Session.attach.
 	fed      int64
 	boundary int64
 }

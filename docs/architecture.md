@@ -2254,15 +2254,28 @@ receives the tail of a sequence whose front nothing ever sent. Measured on a pro
 `ESC ] 2;fidelity BEL ESC [ 38:2:1` and then pausing: the attaching client had the title set and printed
 `:2:3m` as text, the nine bytes that opened the SGR gone, on about one attach in eight.
 
-So `modelPending` counts the bytes of an unfinished sequence at the end of what the model consumed, and
-attach backs off by that much. Replaying a partial sequence is free, since the client's terminal completes
-it when the rest arrives; skipping it is not.
+So the restore ends with that sequence, and the stream starts at `modelSeq` exactly, with the bytes that
+complete it. Which bytes are unfinished is libghostty's answer, `vt.Terminal.Continuation`, read under
+`termMu` with the screen. The sequence goes last, after the image placements, because anything cm wrote
+between it and the stream would land inside it. A follower, which drops the restore, is sent the sequence
+alone in its place, since it starts at the same position and would otherwise receive a tail.
 
-Stored as a count rather than as a second position on purpose. "The position, and the position of the last
-boundary" has to be kept consistent by everything that writes either, and the first version was: a
-`Session` built in a test set only `modelSeq`, so the boundary stayed zero and the attach replayed the
-entire log. A backlog whose zero value means "nothing pending" is right by default, which is what a field
-guarding a subtle bug should be.
+This replaced a tracker of cm's own, `modelPending`, which counted the unfinished bytes with `ansi.Tracker`
+and rewound the stream by that many. The tracker said "between sequences" in four cases where the model was
+not, each reproduced against the real model, and each reaching an attaching client as text:
+
+- a string control past the tracker's 4096 byte give-up point: an OSC 52 clipboard write, a sixel DCS
+- a UTF-8 character split across chunks, which the tracker does not model at all
+- ESC inside a CSI, which aborts it and starts another, where the tracker took the `[` for a final byte
+
+Rewinding was also wrong in a way the model's answer is not. A control character inside a CSI takes effect
+at once, so `ESC [ 3 LF 1` continues as `ESC [ 31`: the continuation is not a suffix of the log, and replaying
+the log's bytes would apply the line feed twice.
+
+The pump's own holdback (`maxHeldTail`, 256 bytes) means a short unfinished sequence rarely reaches the model
+at all, so in practice this is the long ones. Tracking is bounded at `vt.MaxContinuation`, 1 MiB, the same
+bound `graphics.Scanner` holds a command to; past it the attach logs a warning and sends the screen alone,
+which is what every attach did before.
 
 ## What a session reports about itself
 

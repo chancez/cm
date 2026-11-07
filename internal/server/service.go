@@ -350,7 +350,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// last lines twice, once rendered and once inside the restored screen.
 	restore := att.restore
 	if open.NoRestore {
-		restore = nil
+		// Except the unfinished sequence the restore ends with. The stream starts partway through it,
+		// so a follower sent nothing would print its tail: an OSC 52 payload or a CSI's parameters as
+		// text. A follower paints no terminal, so the client writes these bytes and nothing ahead of them.
+		restore = att.pending
 	}
 	if err := srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Opened{

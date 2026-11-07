@@ -118,6 +118,14 @@ func (s *SessionTerminal) Restore() (out []byte, err error) {
 	return s.term.Restore()
 }
 
+// Continuation returns the unfinished sequence the model's parser is holding, or nil.
+func (s *SessionTerminal) Continuation() (out []byte, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "reading the model's continuation") }()
+	return s.term.Continuation()
+}
+
 // Resize changes the model's size to match the terminal showing it.
 //
 // cellWidth and cellHeight are one cell in pixels, which the model needs to place kitty graphics. Zero

@@ -28,12 +28,16 @@ type fakeTerminal struct {
 	written  []byte
 	restore  []byte
 	writeErr error
-	closed   bool
-	rows     uint16
-	cols     uint16
-	pending  [][]byte
-	title    string
-	pwd      string
+	// continuation stands in for an unfinished sequence in the model's parser, and continuationErr for
+	// reading it failing.
+	continuation    []byte
+	continuationErr error
+	closed          bool
+	rows            uint16
+	cols            uint16
+	pending         [][]byte
+	title           string
+	pwd             string
 	// restoreRows and restoreCols are the size the model held the last time Restore was called, and
 	// restoredAt counts the calls. Together they answer "was the screen serialized at the size the
 	// client will display it at", which is the ordering a snapshot depends on.
@@ -115,6 +119,12 @@ func (f *fakeTerminal) Restore() ([]byte, error) {
 	f.restoreRows, f.restoreCols = f.rows, f.cols
 	f.restoredAt++
 	return f.restore, nil
+}
+
+func (f *fakeTerminal) Continuation() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.continuation, f.continuationErr
 }
 
 func (f *fakeTerminal) Close() error {
