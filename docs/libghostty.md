@@ -251,3 +251,21 @@ incompatible with letting the terminal answer, so it was removed.
 
 Kitty graphics are restored on reattach by cm rather than by the formatter, which does not re-emit
 them. See "Kitty graphics" in `docs/architecture.md`.
+
+`cm version` and `cm doctor` print the libghostty-vt each side links, as `1.1.0-dev+5813c9461d5a`. The
+string is asked of the linked library through `ghostty_build_info` rather than passed in with `-ldflags`, so
+it cannot disagree with what is linked. The commit is there because `scripts/libghostty.sh` passes
+`-Dlib-version-string`: ghostty reads the commit from git, the script builds from a `git archive` export
+with no repository, and without the flag the string was a bare `1.1.0-dev`, which names no build when the
+pin is a commit rather than a release. The server's copy comes over the `Doctor` RPC and is the one that
+matters, since the server holds every session's terminal model.
+
+`1.1.0-dev` is not a mistake for 1.0: GHOSTTY_REF is 4 commits past the `vt-1.0.0` tag, and ghostty bumps
+`lib_version` to the next minor's `-dev` right after tagging. Only a build at a tag reports a bare `1.0.0`.
+
+Go's build cache keys a cgo link on the flags, not on the contents of the library they name, so rebuilding
+libghostty into the same prefix left `go test` linking the old archive: the first run after adding the stamp
+reported `1.1.0-dev` from a library whose `.pc` said `1.1.0-dev+5813c9461d5a`, and passed with a fresh
+`GOCACHE`. The prefix is keyed by GHOSTTY_REF, so a pin change gets a new path and is unaffected. A rebuild
+at the same ref, as after changing a flag in `scripts/libghostty.sh`, needs `go clean -cache` to take
+effect.

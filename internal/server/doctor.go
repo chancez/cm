@@ -12,6 +12,7 @@ import (
 	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/vt"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -260,6 +261,7 @@ func (s *Service) Doctor(
 		// So `cm version` can list them from the Doctor call it already makes for the version, rather than
 		// making a second call to Status for the same question.
 		ServerCapabilities: capability.Server().Strings(),
+		ServerLibghostty:   vt.LibraryVersion(),
 	}
 	if req.Repair {
 		resp.Repaired = s.mgr.Repair(ctx, findings)

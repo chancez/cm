@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/vt"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -113,6 +115,9 @@ type doctorJSON struct {
 	// Versions of both sides, so a report pasted into an issue says which builds it came from.
 	ClientVersion string `json:"client_version"`
 	ServerVersion string `json:"server_version"`
+	// The libghostty-vt each side links. Empty for the server when it predates the field.
+	ClientLibghostty string `json:"client_libghostty"`
+	ServerLibghostty string `json:"server_libghostty"`
 	// What each side can do, which is the question two build strings cannot answer. Empty for the server
 	// when it predates capability reporting, and that emptiness is itself the explanation for a feature
 	// that appears not to work.
@@ -159,8 +164,10 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 
 	if asJSON {
 		out := doctorJSON{
-			ClientVersion: paths.Version(),
-			ServerVersion: resp.ServerVersion,
+			ClientVersion:    paths.Version(),
+			ServerVersion:    resp.ServerVersion,
+			ClientLibghostty: vt.LibraryVersion(),
+			ServerLibghostty: resp.GetServerLibghostty(),
 			// Both sides' capabilities, so a script or a bug report carries what each can do rather than
 			// only two opaque build strings. Empty from a server predating the field, which is itself the
 			// answer to why a feature is missing.
@@ -183,6 +190,8 @@ func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool
 		// Printed always, not only on a problem: the first question about any report is which builds
 		// produced it, and a clean run is the one most likely to be pasted somewhere as evidence.
 		fmt.Fprintf(os.Stdout, "client %s, server %s\n", paths.Version(), resp.ServerVersion)
+		fmt.Fprintf(os.Stdout, "libghostty: client %s, server %s\n",
+			vt.LibraryVersion(), cmp.Or(resp.GetServerLibghostty(), "unknown"))
 		if len(resp.Findings) == 0 {
 			fmt.Fprintln(os.Stdout, "no problems found")
 		}

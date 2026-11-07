@@ -30,7 +30,8 @@ diagnosing anything.
 
 Also prints whether this build has the terminal emulator, since without it
 reattaching shows a blank screen and 'cm history' is unavailable, and that is
-otherwise invisible.
+otherwise invisible, and which libghostty build each side links, since the
+server's is the one that renders every session.
 
 The server is not started just to be asked. With none running the server line
 says so, which is a normal state rather than a problem.`,
@@ -49,10 +50,14 @@ type versionJSON struct {
 	// Server is empty when none is running, which is distinguishable from an unknown version.
 	Server string `json:"server,omitempty"`
 	// ServerRunning separates "no server" from "a server that did not answer".
-	ServerRunning bool   `json:"server_running"`
-	Terminal      bool   `json:"terminal"`
-	Go            string `json:"go"`
-	Platform      string `json:"platform"`
+	ServerRunning bool `json:"server_running"`
+	Terminal      bool `json:"terminal"`
+	// The libghostty-vt each side links, with the commit it was built from. The server's is empty when none
+	// is running or it predates the field.
+	ClientLibghostty string `json:"client_libghostty"`
+	ServerLibghostty string `json:"server_libghostty,omitempty"`
+	Go               string `json:"go"`
+	Platform         string `json:"platform"`
 	// What each side can do. The server's is empty when none is running and also when it predates
 	// capability reporting, which the running flag above separates.
 	//
@@ -69,6 +74,7 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// the answer rather than assuming it. A server without the emulator shows a blank screen on
 		// reattach, which looks like a bug in restore rather than a build problem.
 		Terminal:           vt.Available,
+		ClientLibghostty:   vt.LibraryVersion(),
 		Go:                 runtime.Version(),
 		Platform:           runtime.GOOS + "/" + runtime.GOARCH,
 		ClientCapabilities: capability.Client().Strings(),
@@ -94,6 +100,7 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 				out.Server = resp.ServerVersion
 				out.ServerRunning = true
 				out.ServerCapabilities = resp.GetServerCapabilities()
+				out.ServerLibghostty = resp.GetServerLibghostty()
 			case isUnimplemented(rerr):
 				// A server too old to answer. Saying so is the point: that is version skew, and it is the
 				// one case this command cannot report a number for.
@@ -107,27 +114,33 @@ func runVersion(cmd *cobra.Command, g *globals, asJSON bool) error {
 		return writeJSON(os.Stdout, out)
 	}
 
-	fmt.Fprintf(os.Stdout, "client   %s\n", out.Client)
+	fmt.Fprintf(os.Stdout, "client     %s\n", out.Client)
 	switch {
 	case !out.ServerRunning:
-		fmt.Fprintln(os.Stdout, "server   not running")
+		fmt.Fprintln(os.Stdout, "server     not running")
 	default:
-		fmt.Fprintf(os.Stdout, "server   %s\n", out.Server)
+		fmt.Fprintf(os.Stdout, "server     %s\n", out.Server)
 	}
 	if out.ServerRunning && out.Server != out.Client && out.Server != "too old to report" {
 		// Called out rather than left for the reader to compare, since the whole reason for printing both is
 		// that a mismatch is silent. Not an error: cm is designed for a session to outlive its server.
 		fmt.Fprintf(os.Stdout,
-			"         (differs from this binary; restart with `%s server restart` to pick this one up)\n",
+			"           (differs from this binary; restart with `%s server restart` to pick this one up)\n",
 			paths.Name)
 	}
 	if !out.Terminal {
-		fmt.Fprintln(os.Stdout, "terminal no (screen restore and history unavailable in this build)")
+		fmt.Fprintln(os.Stdout, "terminal   no (screen restore and history unavailable in this build)")
 	} else {
-		fmt.Fprintln(os.Stdout, "terminal yes")
+		fmt.Fprintln(os.Stdout, "terminal   yes")
 	}
-	fmt.Fprintf(os.Stdout, "go       %s\n", out.Go)
-	fmt.Fprintf(os.Stdout, "platform %s\n", out.Platform)
+	fmt.Fprintf(os.Stdout, "libghostty %s\n", out.ClientLibghostty)
+	// Only when it differs, the same way a differing server build is called out above. The server's copy is
+	// the one that matters, since it holds the terminal model behind screen restore and history.
+	if out.ServerLibghostty != "" && out.ServerLibghostty != out.ClientLibghostty {
+		fmt.Fprintf(os.Stdout, "           (server links %s)\n", out.ServerLibghostty)
+	}
+	fmt.Fprintf(os.Stdout, "go         %s\n", out.Go)
+	fmt.Fprintf(os.Stdout, "platform   %s\n", out.Platform)
 	// Printed only when the server cannot say what it can do, which is the case that explains a feature
 	// appearing not to work. A running server of any current build is left silent.
 	//

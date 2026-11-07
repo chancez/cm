@@ -1080,8 +1080,12 @@ type DoctorResponse struct {
 	// Duplicated from StatusResponse deliberately: these are the two things a client asks when it wants to
 	// know what it is talking to, and a client should not have to make both calls to find out.
 	ServerCapabilities []string `protobuf:"bytes,4,rep,name=server_capabilities,json=serverCapabilities,proto3" json:"server_capabilities,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The libghostty-vt linked into the server, which is the copy that matters: the server holds every
+	// session's terminal model, so screen restore and history are this build's behavior and not the
+	// client's. Empty from a server that predates the field.
+	ServerLibghostty string `protobuf:"bytes,5,opt,name=server_libghostty,json=serverLibghostty,proto3" json:"server_libghostty,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DoctorResponse) Reset() {
@@ -1140,6 +1144,13 @@ func (x *DoctorResponse) GetServerCapabilities() []string {
 		return x.ServerCapabilities
 	}
 	return nil
+}
+
+func (x *DoctorResponse) GetServerLibghostty() string {
+	if x != nil {
+		return x.ServerLibghostty
+	}
+	return ""
 }
 
 // Finding is one thing wrong with an installation.
@@ -5177,12 +5188,13 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rDoctorRequest\x12\x16\n" +
 	"\x06repair\x18\x01 \x01(\bR\x06repair\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12/\n" +
-	"\x13client_capabilities\x18\x03 \x03(\tR\x12clientCapabilities\"\xb7\x01\n" +
+	"\x13client_capabilities\x18\x03 \x03(\tR\x12clientCapabilities\"\xe4\x01\n" +
 	"\x0eDoctorResponse\x121\n" +
 	"\bfindings\x18\x01 \x03(\v2\x15.cm.server.v1.FindingR\bfindings\x12\x1a\n" +
 	"\brepaired\x18\x02 \x03(\tR\brepaired\x12%\n" +
 	"\x0eserver_version\x18\x03 \x01(\tR\rserverVersion\x12/\n" +
-	"\x13server_capabilities\x18\x04 \x03(\tR\x12serverCapabilities\"\xb9\x01\n" +
+	"\x13server_capabilities\x18\x04 \x03(\tR\x12serverCapabilities\x12+\n" +
+	"\x11server_libghostty\x18\x05 \x01(\tR\x10serverLibghostty\"\xb9\x01\n" +
 	"\aFinding\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x16\n" +

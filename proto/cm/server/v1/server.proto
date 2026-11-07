@@ -357,6 +357,10 @@ message DoctorResponse {
   // Duplicated from StatusResponse deliberately: these are the two things a client asks when it wants to
   // know what it is talking to, and a client should not have to make both calls to find out.
   repeated string server_capabilities = 4;
+  // The libghostty-vt linked into the server, which is the copy that matters: the server holds every
+  // session's terminal model, so screen restore and history are this build's behavior and not the
+  // client's. Empty from a server that predates the field.
+  string server_libghostty = 5;
 }
 
 // Finding is one thing wrong with an installation.

@@ -12,8 +12,11 @@ type versionResult struct {
 	Server        string `json:"server"`
 	ServerRunning bool   `json:"server_running"`
 	Terminal      bool   `json:"terminal"`
-	Go            string `json:"go"`
-	Platform      string `json:"platform"`
+	// The libghostty-vt each side links.
+	ClientLibghostty string `json:"client_libghostty"`
+	ServerLibghostty string `json:"server_libghostty"`
+	Go               string `json:"go"`
+	Platform         string `json:"platform"`
 }
 
 // cmVersion runs the command and parses its report.
@@ -55,6 +58,12 @@ func TestVersionReportsClientAndServer(t *testing.T) {
 	}
 	if got.Go == "" || got.Platform == "" {
 		t.Errorf("version = %+v, want the Go version and platform filled in", got)
+	}
+	// The server's comes over the Doctor RPC, so this is what proves the field is carried rather than only
+	// that the client can ask its own library.
+	if got.ClientLibghostty == "" || got.ClientLibghostty == "unknown" || got.ClientLibghostty != got.ServerLibghostty {
+		t.Errorf("libghostty client %q, server %q, want one known version for one binary",
+			got.ClientLibghostty, got.ServerLibghostty)
 	}
 }
 
