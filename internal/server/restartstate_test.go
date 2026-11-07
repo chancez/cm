@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/store"
 )
 
@@ -38,8 +39,7 @@ func restartAdopting(t *testing.T, name, script, marker string) *Session {
 	readUntil(t, sub, marker)
 	sub.Close()
 
-	rec.LastSeq, rec.ClientSeq = first.resumePoints()
-	first.Close()
+	rec.LastSeq, rec.ClientSeq = releaseForRestart(t, first)
 
 	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
@@ -47,6 +47,27 @@ func restartAdopting(t *testing.T, name, script, marker string) *Session {
 	}
 	t.Cleanup(second.Close)
 	return second
+}
+
+// releaseForRestart lets go of a session the way a stopping server does, and returns the resume positions
+// the next server would be handed.
+//
+// Read after the pump has returned, never while it runs. The pump appends a chunk to the client log before
+// it advances lastSeq, so a marker can be visible to a subscriber while the shim position does not cover
+// it yet; resumePoints documents that window. Reading the positions as soon as the marker was seen landed
+// in it about 1 run in 40: the next server resubscribed from before the marker's chunk and received it
+// again as live output, so a recovered report counted as a new one and an exit status was missing when
+// asserted. Done is closed by the pump's own exit path, so waiting on it leaves no chunk half processed and
+// no timing to depend on.
+func releaseForRestart(t *testing.T, sess *Session) (seq.Shim, seq.Log) {
+	t.Helper()
+	sess.Close()
+	select {
+	case <-sess.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session's pump did not return after Close")
+	}
+	return sess.resumePoints()
 }
 
 // A session running a command still says what it is running after a server restart.
@@ -102,12 +123,12 @@ func TestAdoptionRecoversTheLastExitStatus(t *testing.T) {
 // the case that matters for a shell hook, since the hook only writes the sequence again on the next
 // state change.
 func TestAdoptionRecoversAReportedState(t *testing.T) {
-	// MARK2 comes after a pause so it is certainly live output for the adopted session rather than part
-	// of the history the replay covers: the first session's resume position is taken the moment MARK
-	// arrives, and anything printed later is past it however long the adoption takes.
+	// MARK2 waits for a line of input, which the test sends only once the adopted session exists, so it is
+	// certainly live output for that session rather than part of the history the replay covers. It used to
+	// follow a half-second sleep, which only made that likely.
 	sess := restartAdopting(t, "reportstate",
 		"printf '\\033]25453;state=blocked;detail=needs\\ approval;source=agent\\007'; "+
-			"printf 'MARK\\r\\n'; sleep 0.5; printf 'MARK2\\r\\n'; sleep 5",
+			"printf 'MARK\\r\\n'; read line; printf 'MARK2\\r\\n'; sleep 5",
 		"MARK")
 
 	got := sess.Reported()
@@ -129,6 +150,9 @@ func TestAdoptionRecoversAReportedState(t *testing.T) {
 	// recovery that left it in place would have the first chunk of live output publish it again as a
 	// change, which a `cm wait` reads as the program having just moved.
 	sub := sess.recent.Subscribe(sess.recent.Next())
+	if err := sess.Write(t.Context(), []byte("\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
 	readUntil(t, sub, "MARK2")
 	sub.Close()
 	sess.mu.Lock()
@@ -177,8 +201,7 @@ func TestARPCReportSurvivesARestart(t *testing.T) {
 	// would either be flaky or slow.
 	stored := waitForStoredReport(t, st, rec.ID)
 
-	shimSeq, clientSeq := first.resumePoints()
-	first.Close()
+	shimSeq, clientSeq := releaseForRestart(t, first)
 
 	// The record as the next server reads it, report included.
 	rec.LastSeq, rec.ClientSeq = shimSeq, clientSeq
@@ -229,9 +252,8 @@ func TestAStaleReportIsDroppedWhenTheShellIsIdle(t *testing.T) {
 	first.setReported(Reported{State: "blocked", Detail: "needs approval", Source: "agent"})
 	stored := waitForStoredReport(t, st, rec.ID)
 
-	rec.LastSeq, rec.ClientSeq = first.resumePoints()
+	rec.LastSeq, rec.ClientSeq = releaseForRestart(t, first)
 	rec.Reported = stored
-	first.Close()
 
 	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
@@ -273,9 +295,8 @@ func TestAReportSurvivesWhenTheShellReportsNoMarkers(t *testing.T) {
 	first.setReported(Reported{State: "busy", Detail: "building", Source: "agent"})
 	stored := waitForStoredReport(t, st, rec.ID)
 
-	rec.LastSeq, rec.ClientSeq = first.resumePoints()
+	rec.LastSeq, rec.ClientSeq = releaseForRestart(t, first)
 	rec.Reported = stored
-	first.Close()
 
 	second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
 	if err != nil {
