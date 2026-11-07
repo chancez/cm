@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/cmlog"
+	"github.com/chancez/cm/internal/fault"
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
@@ -2089,6 +2090,34 @@ func (m *Manager) Close() error {
 	m.sessions = make(map[string]*Session)
 	m.mu.Unlock()
 
+	// Every session is let go of before any position is read, and each pump has returned before its own is.
+	//
+	// The pump appends a chunk to the client log before it advances lastSeq, the window resumePoints
+	// documents. Positions read while a pump is inside it count the chunk in the client position and not in
+	// the shim one, so the next server resubscribes from before the chunk, receives it again, and appends it
+	// to a log already numbered past it: the output shows twice, and a report in it counts as a new one, which
+	// satisfies a `cm wait` issued after the restart. Done is closed on the pump's way out, so after it no
+	// chunk is half processed.
+	//
+	// All released first, then all waited for, so the pumps wind down together rather than one after another.
+	for _, sess := range sessions {
+		sess.Close()
+		fault.At(fault.AfterSessionRelease)
+	}
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelWait()
+	for _, sess := range sessions {
+		select {
+		case <-sess.Done():
+		case <-waitCtx.Done():
+			// Recorded anyway: a pair that may repeat one chunk is far better than none, which would make the
+			// next server resubscribe from wherever the record last said.
+			m.log.Warn("session output pump did not stop before shutdown; resume point may repeat output",
+				"session", sess.id)
+		}
+	}
+
+	// Its own deadline, so a slow pump cannot spend the time the writes need.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, sess := range sessions {
@@ -2103,7 +2132,6 @@ func (m *Manager) Close() error {
 			m.log.Error("recording resume point failed",
 				"session", sess.id, "seq", shimSeq, "error", err)
 		}
-		sess.Close()
 	}
 	return nil
 }

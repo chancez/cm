@@ -127,7 +127,7 @@ session sustaining more than roughly 9 MB/s through the whole restart window ove
 interactive shell or a coding agent does not. The lever is `shim.DefaultLogBytes`, at a fixed memory
 cost per session.
 
-What did go wrong three times was bookkeeping. The bytes were retained and the client asked for them
+What did go wrong four times was bookkeeping. The bytes were retained and the client asked for them
 by the wrong number: see "Adoption needs both resume points" below, and `docs/restore.md` for the
 reservation window that made a query go unanswered.
 
@@ -149,6 +149,20 @@ sub-millisecond, so a dialing loop passes with the bug present, which is worse t
 regression test wraps the listener and reads the store inside `Close`, which is the exact instant a
 replacement server could observe. And it was confirmed by reverting the fix, where it fails every run
 with the same `(0, 0)` the live incident produced.
+
+A fourth was in `Manager.Close`, which read each session's resume points while its pump was still
+running. The pump appends a chunk to the client log before it advances `lastSeq`, so a shutdown inside
+that window stored a client position counting the chunk and a shim position that did not. The next
+server resubscribed from before the chunk and appended it again: output shown twice, and a report in it
+counted as new, which satisfies a `cm wait` issued after the restart. `Close` now releases every session,
+waits for each pump to return, and only then reads the positions. Found through a test flake rather than
+a live restart, since the window is a few instructions wide.
+
+The regression test, `TestShutdownInsideTheAppendWindowStoresConsistentPositions`, orders the race with
+two fault pauses rather than timing: the pump held at `after-log-append`, and `Close` held at
+`after-session-release`, which both the old and the fixed ordering reach without the pump moving. With the
+old ordering it stores `{Shim:0 Client:7}` and then `{Shim:7 Client:14}` after a quiet restart, the
+seven bytes of MARK appended twice, on every run.
 
 ## State: sqlite for metadata, files for bytes
 

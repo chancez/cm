@@ -77,6 +77,14 @@ const (
 	// before the reply is delivered. Placed ahead of the guard rather than behind it, so the guard decides
 	// with the state it would really see.
 	BeforeReplyWrite Point = "before-reply-write"
+
+	// AfterSessionRelease is in Manager.Close, right after a session is told to let go of its shim.
+	//
+	// Both orderings of shutdown pass it before needing the pump to finish a chunk, which is what makes it
+	// usable against the pump paused at AfterLogAppend. Manager.Close stored resume positions read while
+	// the pump was inside that window, so a restart landing there resubscribed from before a chunk the log
+	// already counted, received it again, and counted a report in it as new.
+	AfterSessionRelease Point = "after-session-release"
 )
 
 // points is every point, for validating a spec against something rather than accepting any string.
@@ -92,4 +100,5 @@ var points = map[Point]bool{
 	BeforeShimReady:       true,
 	BeforeClientCanAnswer: true,
 	BeforeReplyWrite:      true,
+	AfterSessionRelease:   true,
 }
