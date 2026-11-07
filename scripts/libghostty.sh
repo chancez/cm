@@ -47,10 +47,16 @@ if [ -n "$target" ]; then
   set -- "$@" "-Dtarget=$target"
 fi
 
+# The commit goes into the library's own version string as semver build metadata, so `cm version` can ask the
+# linked library which commit it is rather than trusting a value passed separately that could disagree with it.
+# Without this the string is a bare "1.1.0-dev": ghostty takes the commit from git, and the build below runs
+# from a `git archive` export, which has no repository to ask.
+short_ref="$(printf '%s' "$GHOSTTY_REF" | cut -c1-12)"
+
 # What a finished build was made from. Written last, so a build that failed partway is rebuilt rather than
 # mistaken for complete, and compared whole, so changing a flag above rebuilds too.
 stamp="$GHOSTTY_PREFIX/.cm-build"
-want="ref=$GHOSTTY_REF flags=$*"
+want="ref=$GHOSTTY_REF flags=$* version-build=$short_ref"
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
   exit 0
 fi
@@ -72,6 +78,15 @@ fi
 src="$(mktemp -d "${TMPDIR:-/tmp}/libghostty.XXXXXX")"
 trap 'rm -rf "$src"' EXIT
 git -C "$GHOSTTY_DIR" archive "$GHOSTTY_REF" | tar -x -C "$src"
+
+# -Dlib-version-string replaces the whole version, so the base comes from the line ghostty declares it on.
+# build.zig asks for that line to stay in this form because CMakeLists.txt and its CI parse it the same way.
+lib_version="$(sed -n 's/^const lib_version = "\(.*\)";$/\1/p' "$src/build.zig")"
+if [ -z "$lib_version" ]; then
+  echo "could not find lib_version in build.zig at $GHOSTTY_REF" >&2
+  exit 1
+fi
+set -- "$@" "-Dlib-version-string=$lib_version+$short_ref"
 
 echo "building libghostty-vt $GHOSTTY_REF into $GHOSTTY_PREFIX" >&2
 rm -rf "$GHOSTTY_PREFIX"
