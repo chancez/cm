@@ -664,6 +664,11 @@ func (s *Service) sizeForAttach(
 	tok *attachToken,
 	open *serverv1.Open,
 ) error {
+	// A client that is leaving has no window to size for. A session it created already has its size, from
+	// the same Open, and a running one keeps the size its own windows gave it. See Open.no_attach.
+	if open.NoAttach {
+		return nil
+	}
 	resuming := open.ResumeFromSeq != nil
 	register := sess.registerClientSize
 	if resuming {

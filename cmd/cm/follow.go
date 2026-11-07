@@ -426,6 +426,8 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	// compute cell dimensions from a window that does not exist.
 	// No repaint to receive, since nothing is being painted.
 	open.NoRestore = true
+	// The size above is for a session this creates. A running one keeps the size its windows gave it.
+	open.NoAttach = true
 
 	if err := stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Open{Open: open},

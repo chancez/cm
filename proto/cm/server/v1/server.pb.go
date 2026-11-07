@@ -1597,7 +1597,14 @@ type Open struct {
 	// what an older client gets. That silence was the problem: `cm attach work -- make` on a running session
 	// attached, exited 0, and never ran make, which reads as success to whoever passed it. `cm attach` now
 	// sends ERROR unless asked otherwise. Without a command there is nothing to drop, so this has no effect.
-	IfRunning     IfRunning `protobuf:"varint,25,opt,name=if_running,json=ifRunning,proto3,enum=cm.server.v1.IfRunning" json:"if_running,omitempty"`
+	IfRunning IfRunning `protobuf:"varint,25,opt,name=if_running,json=ifRunning,proto3,enum=cm.server.v1.IfRunning" json:"if_running,omitempty"`
+	// This client leaves as soon as the session is open: `cm attach --no-attach`.
+	//
+	// Its rows and cols size a session this Open creates or revives, and nothing else. Without this the
+	// server registered it as a sizing client like any other, so `cm attach --no-attach` on a running,
+	// detached 40x150 session resized it to the 24x80 the command sent and signalled the shell, which
+	// redrew for a window that never existed. False from an older client, which sizes as it always did.
+	NoAttach      bool `protobuf:"varint,26,opt,name=no_attach,json=noAttach,proto3" json:"no_attach,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1791,6 +1798,13 @@ func (x *Open) GetIfRunning() IfRunning {
 		return x.IfRunning
 	}
 	return IfRunning_IF_RUNNING_UNSPECIFIED
+}
+
+func (x *Open) GetNoAttach() bool {
+	if x != nil {
+		return x.NoAttach
+	}
+	return false
 }
 
 // TerminalGraphics reports what this client's terminal answered about drawing images, after Open.
@@ -5211,7 +5225,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detach\x12M\n" +
 	"\x11terminal_graphics\x18\x05 \x01(\v2\x1e.cm.server.v1.TerminalGraphicsH\x00R\x10terminalGraphicsB\a\n" +
-	"\x05event\"\xc5\a\n" +
+	"\x05event\"\xe2\a\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -5241,7 +5255,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x13client_capabilities\x18\x17 \x03(\tR\x12clientCapabilities\x126\n" +
 	"\x17terminal_kitty_graphics\x18\x18 \x01(\bR\x15terminalKittyGraphics\x126\n" +
 	"\n" +
-	"if_running\x18\x19 \x01(\x0e2\x17.cm.server.v1.IfRunningR\tifRunning\x1a<\n" +
+	"if_running\x18\x19 \x01(\x0e2\x17.cm.server.v1.IfRunningR\tifRunning\x12\x1b\n" +
+	"\tno_attach\x18\x1a \x01(\bR\bnoAttach\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

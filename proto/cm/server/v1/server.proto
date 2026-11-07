@@ -560,6 +560,14 @@ message Open {
   // attached, exited 0, and never ran make, which reads as success to whoever passed it. `cm attach` now
   // sends ERROR unless asked otherwise. Without a command there is nothing to drop, so this has no effect.
   IfRunning if_running = 25;
+
+  // This client leaves as soon as the session is open: `cm attach --no-attach`.
+  //
+  // Its rows and cols size a session this Open creates or revives, and nothing else. Without this the
+  // server registered it as a sizing client like any other, so `cm attach --no-attach` on a running,
+  // detached 40x150 session resized it to the 24x80 the command sent and signalled the shell, which
+  // redrew for a window that never existed. False from an older client, which sizes as it always did.
+  bool no_attach = 26;
 }
 
 // IfRunning is what an Open carrying a command does when its session is already running.
