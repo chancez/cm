@@ -140,6 +140,8 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 		// and internal/query classifies it as answered: off, the query is stripped from every client
 		// and nothing replies. TestQuerySetsAgreeWithEmulator caught the change as an OVERREACH.
 		libghostty.WithTitleReport(true),
+		// Tracked so Continuation can say what a fresh terminal needs to pick up mid-sequence. See there.
+		libghostty.WithContinuationMaxBytes(MaxContinuation),
 	}
 	// Each callback is installed only when wanted, so a caller that does not want one does not pay for
 	// it. The closures check closed for the same reason the C trampolines did: libghostty only calls
@@ -197,6 +199,33 @@ func (t *Terminal) Write(p []byte) error {
 	}
 	t.term.VTWrite(p)
 	return nil
+}
+
+// MaxContinuation bounds the unfinished sequence Continuation can report.
+//
+// 1 MiB, the same bound graphics.Scanner holds an unfinished command to, which is the largest sequence cm
+// expects to see whole. An OSC 52 clipboard write or a sixel DCS longer than this is not tracked, and
+// Continuation fails for it rather than reporting a truncated prefix.
+const MaxContinuation = 1 << 20
+
+// Continuation returns the bytes that bring a fresh terminal to the parser state this one is in: the
+// unfinished escape sequence or UTF-8 character at the end of what was written, or nil when the stream
+// is between sequences.
+//
+// It exists because Restore serializes the screen, and a sequence the parser has started but not finished
+// is not on the screen. A client attaching then gets neither the start of that sequence nor, from the
+// stream, anything but its tail, which renders as text. A program writing `ESC [ 38:2:1` and pausing left
+// an attaching client printing `:2:3m`.
+//
+// Not necessarily a suffix of what was written. A control character inside a CSI takes effect at once
+// and is left out, so `ESC [ 3 LF 1` continues as `ESC [ 31`: the line feed is already on the screen,
+// and replaying it would apply it twice.
+func (t *Terminal) Continuation() ([]byte, error) {
+	if t.closed {
+		return nil, errors.New("terminal is closed")
+	}
+	b, err := t.term.Continuation()
+	return b, check(err, "reading continuation")
 }
 
 // Resize changes the terminal size, reflowing existing content.
