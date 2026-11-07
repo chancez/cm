@@ -117,6 +117,10 @@ type Session struct {
 	// from after replaying a screen. Streaming from the log's end instead would silently drop
 	// everything the model had not caught up to yet, which is output the client would never see.
 	modelSeq seq.Log
+	// modelMoved is closed and cleared whenever the model advances or is discarded, so a caller that needs
+	// the model to reach a position can wait for it. Guarded by termMu, and made on demand by
+	// modelMovedLocked, since most sessions never have anything waiting.
+	modelMoved chan struct{}
 	// resumeOrders remembers a client's attach order by process id, so one that comes back after a dropped
 	// stream keeps its place rather than becoming the newest attachment.
 	//
@@ -1025,6 +1029,47 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	s.feedTerminal(gfxData, s.recent.Next())
 }
 
+// modelMovedLocked returns a channel closed the next time the model advances or is discarded.
+func (s *Session) modelMovedLocked() chan struct{} {
+	if s.modelMoved == nil {
+		s.modelMoved = make(chan struct{})
+	}
+	return s.modelMoved
+}
+
+// wakeModelWaitersLocked releases everything waiting on modelMovedLocked.
+func (s *Session) wakeModelWaitersLocked() {
+	if s.modelMoved != nil {
+		close(s.modelMoved)
+		s.modelMoved = nil
+	}
+}
+
+// waitForModelLocked waits, holding termMu on return, until the model has consumed the log up to target.
+//
+// Reports false when it never will: the session ended, or the model was discarded after a write failed. Called
+// and returns with termMu held; mu is taken only while termMu is released, which keeps the lock order.
+func (s *Session) waitForModelLocked(target seq.Log) bool {
+	for s.modelSeq < target {
+		moved := s.modelMovedLocked()
+		s.termMu.Unlock()
+		select {
+		case <-moved:
+		case <-s.done:
+			s.termMu.Lock()
+			return false
+		}
+		s.mu.Lock()
+		gone := s.term == nil
+		s.mu.Unlock()
+		s.termMu.Lock()
+		if gone {
+			return false
+		}
+	}
+	return true
+}
+
 // imagesFor builds the image half of a restore for a client that has just said it can draw them.
 //
 // The same bytes the restore would have carried, and in the same order: transmissions rewritten to a=t so
@@ -1082,6 +1127,9 @@ func (s *Session) imagesFor(tok *attachToken) []byte {
 	if term == nil {
 		return nil
 	}
+	// Everything this client could have been sent so far. Taken after the token is marked, so any chunk
+	// past it is forwarded to this client with its images intact rather than stripped.
+	sent := s.recent.Next()
 
 	transmissions := s.graphicsRestore()
 	if len(transmissions) == 0 {
@@ -1090,7 +1138,17 @@ func (s *Session) imagesFor(tok *attachToken) []byte {
 
 	// Read under termMu for the reason attach does: a placement read while the pump is advancing the model
 	// names a row the client is not looking at yet.
+	//
+	// And only once the model has consumed what this client was sent. The pump delivers a chunk before it
+	// feeds the model, and the client loop strips images from a client that has not answered yet, so an
+	// answer landing between the two found the transmission in the store and no placement in the model.
+	// The push came out empty, the stream had been stripped, and the client never got the image. The wait
+	// is the model lag, one chunk's write.
 	s.termMu.Lock()
+	if !s.waitForModelLocked(sent) {
+		s.termMu.Unlock()
+		return nil
+	}
 	placements, err := term.Placements()
 	s.termMu.Unlock()
 	if err != nil {
@@ -1276,6 +1334,7 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 	if err == nil {
 		s.modelSeq = modelEnd
 	}
+	s.wakeModelWaitersLocked()
 	s.termMu.Unlock()
 
 	// A full-screen program has quit. Any client that attached while it was running holds no main-screen
@@ -1298,6 +1357,11 @@ func (s *Session) feedTerminal(data []byte, modelEnd seq.Log) {
 		s.mu.Lock()
 		s.term = nil
 		s.mu.Unlock()
+		// Again, now that the model is gone: a waiter woken by the write above may have looked before term
+		// was cleared and gone back to waiting for a model that will never advance.
+		s.termMu.Lock()
+		s.wakeModelWaitersLocked()
+		s.termMu.Unlock()
 		return
 	}
 
