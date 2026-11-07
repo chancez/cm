@@ -52,7 +52,12 @@ func TestImagesSurviveAServerRestart(t *testing.T) {
 	waitForOnPty(t, first, marker)
 
 	// It reached this client, so the transmission really happened and the fixture is sound.
-	if got := first.output(); !strings.Contains(got, payload) {
+	//
+	// Waited for rather than checked when the marker appears. The script runs as soon as the session exists,
+	// so its output can reach the model before this client's attach: the client is then served a restore
+	// that shows the marker and omits the image, because it has not answered the probe yet, and the image
+	// follows as a push once it does. Checking at the marker failed in the gap between the two.
+	if got := first.waitForOutput(payload, 15*time.Second); !strings.Contains(got, payload) {
 		t.Fatalf("the first client never received the transmission, so nothing below is being tested:\n%q",
 			got)
 	}
