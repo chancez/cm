@@ -218,12 +218,11 @@ func TestRevivedSessionServesEveryClientFromItsModel(t *testing.T) {
 	}
 
 	rec := startShimFor(t, shimConfigFor("revived", "sleep 5"))
-	sess, err := newSession(rec, term, 0, 0)
+	sess, err := newSession(rec, term, 0, 0, withGraphicsStore(gfx))
 	if err != nil {
 		t.Fatalf("newSession() error = %v", err)
 	}
 	defer sess.Close()
-	sess.setGraphicsStore(gfx)
 
 	// The cell metrics a client's attach carries, without which every placement reports itself
 	// off-screen and the images are silently dropped from the restore.

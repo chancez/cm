@@ -85,6 +85,14 @@ const (
 	// the pump was inside that window, so a restart landing there resubscribed from before a chunk the log
 	// already counted, received it again, and counted a report in it as new.
 	AfterSessionRelease Point = "after-session-release"
+
+	// AfterSessionStart is in Manager.adopt, right after newSession has started the session's pump.
+	//
+	// Everything adopt does from here runs alongside live output. It used to replace the session's graphics
+	// store at this stage, so an image the program printed straight away was recorded into a store that was
+	// then thrown away: the client watching live saw it, and every later attach, late push and restore had
+	// nothing to send. Pausing here lets the pump record a chunk before adopt finishes.
+	AfterSessionStart Point = "after-session-start"
 )
 
 // points is every point, for validating a spec against something rather than accepting any string.
@@ -101,4 +109,5 @@ var points = map[Point]bool{
 	BeforeClientCanAnswer: true,
 	BeforeReplyWrite:      true,
 	AfterSessionRelease:   true,
+	AfterSessionStart:     true,
 }

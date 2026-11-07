@@ -717,7 +717,7 @@ func newSession(
 		// Not positioned like the boundary tracker above, because an image is addressed by the id the
 		// program chose rather than by a position in the stream.
 		//
-		// Empty here, and adoption replaces it: see setGraphicsStore. This used to say that an adopted
+		// Empty here, and adoption replaces it: see withGraphicsStore. This used to say that an adopted
 		// session starts with no images and regains them as the program transmits, "the same bound the model
 		// has on its own storage", and that was wrong in the part that mattered. The model does *not* have
 		// that bound, because adoption rebuilds it by replaying the shim's retained history. So the model had
@@ -1290,18 +1290,22 @@ func recordGraphics(store *graphics.Store, resolved graphics.Command) {
 	}
 }
 
-// setGraphicsStore replaces the store, for a session whose screen was rebuilt before it existed.
+// withGraphicsStore starts the session with a store, for one whose screen was rebuilt before it existed.
 //
 // Both revivals need it: an adopted session's images come from replaying the shim's retained history, and
-// one restored from disk from replaying its persisted log. A setter rather than a parameter on newSession,
-// which would be threaded through every call site that never needs it.
-func (s *Session) setGraphicsStore(store *graphics.Store) {
-	if store == nil {
-		return
+// one restored from disk from replaying its persisted log. Creating a session goes through adoption too.
+//
+// An option rather than a setter called after newSession, which is what it was. newSession starts the pump,
+// so the setter replaced the store while live output was already being recorded into it: an image a program
+// printed straight away, `cm attach work -- kitten icat pic.png`, went into the store that was then thrown
+// away. The client watching live saw it, and every later attach, late push and restore had nothing to send.
+// The pump also read the field without the lock the setter wrote it under.
+func withGraphicsStore(store *graphics.Store) sessionOpt {
+	return func(s *Session) {
+		if store != nil {
+			s.gfxStore = store
+		}
 	}
-	s.mu.Lock()
-	s.gfxStore = store
-	s.mu.Unlock()
 }
 
 // feedTerminal advances the terminal model, recording how far into the log it has consumed.

@@ -2097,6 +2097,14 @@ The replay now records into a store as well as feeding the model, using the same
 transmission's payload is chunked and reassembles across calls; a scanner per chunk sees fragments and records
 nothing.
 
+That store has to be the session's from its first chunk, which it was not either. It was installed by a setter
+called after `newSession` had started the pump, and creating a session goes through adoption too, so an image a
+program printed straight away (`cm attach work -- kitten icat pic.png`) was recorded into a store that was then
+replaced. The client watching live saw it; every later attach, late push and restore had nothing to send. It is
+a `newSession` option now, applied before the subscription. Found as `TestImagesSurviveAServerRestart` failing
+about 1 run in 90, and reproduced every run by `TestAnImagePrintedAtStartupSurvivesForLaterClients`, which
+holds adoption open with a fault pause while the pump records the image.
+
 ### The part that is not understood, so do not repeat the attempt
 
 A graphics query has **two** answerers, and the interaction between them is unresolved.

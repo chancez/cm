@@ -456,14 +456,17 @@ func (m *Manager) adopt(
 	// decided on: see withRecoveredCommands on why leaving it in the tracker would republish it.
 	fromLog, inLog := rp.reports.Take()
 	reported := recoveredReport(rec, rp.commands, fromLog, inLog)
+	// The images the replay found, so a client attaching to this adopted session receives the transmissions
+	// its screen's placements refer to. See recordGraphics, and withGraphicsStore for why this is an option.
 	sess, err := newSession(rec, term, fromSeq, clientSeq,
-		withRecoveredCommands(rp.commands, rp.reports, reported))
+		withRecoveredCommands(rp.commands, rp.reports, reported), withGraphicsStore(rp.gfx))
 	if err != nil {
 		if term != nil {
 			term.Close()
 		}
 		return nil, err
 	}
+	fault.At(fault.AfterSessionStart)
 	sess.log = m.log.With("session", rec.ID)
 	// Labelled from the store, so a session adopted after a server restart is described by the name a
 	// person knows it by rather than by its ID. Without this every message about an adopted session, and
@@ -472,9 +475,6 @@ func (m *Manager) adopt(
 		sess.setLabel(names[0])
 	}
 	sess.SetResizePolicy(m.resizePolicy)
-	// The images the replay found, so a client attaching to this adopted session receives the transmissions
-	// its screen's placements refer to. See recordGraphics.
-	sess.setGraphicsStore(rp.gfx)
 
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.
