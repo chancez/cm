@@ -55,3 +55,9 @@ type Point string
 // Unknown points and types are reported rather than ignored, since a fault that silently does nothing
 // makes a test pass for the wrong reason, which is the failure mode this whole package is meant to expose.
 const SpecEnvSuffix = "TESTHOOK_FAULTS"
+
+// Reached is the file a pause creates when code arrives at it, before waiting for path.
+//
+// A test waits for this to know the paused code is held, then creates path to release it. Compiled into
+// every build, like the points, so a test can name it without the tag.
+func Reached(path string) string { return path + ".reached" }

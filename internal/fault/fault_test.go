@@ -4,6 +4,7 @@ package fault
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -155,6 +156,47 @@ func TestPauseReleasesWhenTheFileAppears(t *testing.T) {
 	case <-done:
 		t.Fatal("At() returned before the release file existed, so the pause did not hold")
 	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := touch(release); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("At() did not return after the release file appeared")
+	}
+}
+
+// A pause marks itself reached before it waits, so a test can tell the code is held there without inferring
+// it from a side effect.
+func TestPauseMarksItselfReached(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "go")
+	t.Setenv("CM_TESTHOOK_FAULTS", "after-log-append:pause="+release)
+	resetForTest()
+
+	done := make(chan struct{})
+	go func() {
+		At(AfterLogAppend)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(Reached(release)); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never appeared while At() was paused", Reached(release))
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// Reached while still held, which is the whole point: a marker written on the way out would let a test
+	// act after the window had already closed.
+	select {
+	case <-done:
+		t.Fatal("At() returned before the release file existed, so the marker was not written while held")
+	default:
 	}
 
 	if err := touch(release); err != nil {

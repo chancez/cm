@@ -222,7 +222,11 @@ func touch(path string) error {
 	return f.Close()
 }
 
-// waitFor blocks until path exists.
+// waitFor blocks until path exists, after marking the pause as reached.
+//
+// The marker is Reached(path), touched on entry. Without it a test can release a pause but cannot tell
+// whether anything is held at it, so ordering two pauses against each other came down to observing some
+// side effect of the paused code, and shutdown has none a client can see.
 //
 // A file rather than a signal or a socket, because the coordination has to cross a process boundary: the
 // test is a Go test and the paused code is inside a server or a shim that the test spawned. A path both
@@ -232,6 +236,9 @@ func touch(path string) error {
 // suite's timeout, where the failure names neither the test nor the point. Polled rather than watched,
 // since a filesystem watcher is a dependency and a platform difference for something that waits once.
 func waitFor(path string) {
+	if err := touch(Reached(path)); err != nil {
+		fmt.Fprintf(os.Stderr, "cm: fault pause could not mark %s as reached: %v\n", path, err)
+	}
 	const limit = 30 * time.Second
 	deadline := time.Now().Add(limit)
 	for {
