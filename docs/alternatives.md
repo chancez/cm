@@ -247,8 +247,8 @@ Two things follow that a user will notice.
 **cgo is required.** `internal/vt` wraps the C API, and `cm read`, `cm history`, and screen restore
 all depend on it. There is no pure-Go build.
 
-**The API is unstable by upstream's own description**, so `mise.toml` pins a commit and bumping it is
-deliberate.
+**The Go binding is untagged** and pins a ghostty commit, so `mise.toml` pins the same commit and bumping
+it is deliberate. libghostty's C ABI has been stable since 1.0; the binding's Go API has not.
 
 The cost is not where people expect. A multiplexer's hot path moves bytes and never inspects cells,
 so libghostty is called once per pty read, and the kernel caps a read from a pty master at 4KB: about

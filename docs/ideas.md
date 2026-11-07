@@ -842,14 +842,14 @@ log is O(bytes). And it dissolves the retroactive problem outright: the server a
 for every session in the registry, fed by the pump whatever the client count, so "start persisting this
 now" becomes "snapshot it now" with nothing needed at spawn time.
 
-What argues for waiting. The format is unstable until the first tagged release and cm pins a commit, which
-is the one combination where bumping the pin silently invalidates saved state. Workable with the discipline
+What argues for waiting. The snapshot format is outside libghostty's 1.0 ABI promise, versioned separately
+according to `snapshot.h`, and cm pins a commit, which is the one combination where bumping the pin silently invalidates saved state. Workable with the discipline
 the store already has, tag the snapshot with the libghostty version and on mismatch discard it, but only if
 the byte log stays authoritative, which it must anyway: a snapshot is of a *terminal model*, and only the
 server has one, while the shim deliberately knows nothing about terminals. Snapshots also say nothing about
 kitty graphics state, so cm's graphics store and the transmit-then-place restore path stay either way.
 
-One experiment carries none of the format risk, and is worth doing before a tagged release: use snapshot
+One experiment carries none of the format risk, and is worth doing first: use snapshot
 export and import as a **test oracle** for `internal/vt`. Round-trip a model through a snapshot and diff it
 against what cm's serializer produces for the same state. Nothing ships and nothing reaches disk, and it is
 a differential test against ghostty's own understanding of the state, which is what the restore bugs needed.

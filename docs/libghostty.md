@@ -12,8 +12,9 @@ cm reaches it through `go.mitchellh.com/libghostty`, the Go binding, rather than
 Everything else works with cm's own types and never sees a binding type or a Ghostty handle.
 Errors are translated at the boundary.
 
-This is worth enforcing rather than merely intending. Both libghostty's API and the binding's are
-unstable by their authors' own description, so a breaking change should mean editing one package.
+This is worth enforcing rather than merely intending. libghostty's C ABI is stable since 1.0, but the
+binding is untagged and its Go API still changes: the move to 1.0 renamed constants and replaced whole
+option sets. A breaking change should mean editing one package.
 
 No package in cm imports "C" any more; the binding owns the cgo. What that removed is the part that
 was easiest to get wrong: callback trampolines installed from C, because a Go local's address cannot
@@ -30,7 +31,8 @@ dumping history.
 
 ## Two pins, one commit
 
-libghostty has no tagged release, so it is pinned by commit, and two places name that commit:
+The binding is untagged and pins a ghostty commit rather than a release, so cm pins that commit, and two
+places name it:
 `GHOSTTY_REF` in `mise.toml`, which every build reads, and the `GIT_TAG` in the binding's own
 `CMakeLists.txt`, which moves when `go.mod` does. They must agree, since the binding is written against
 the C API at its pin, and `TestGhosttyRefMatchesBinding` fails when they do not.
@@ -113,6 +115,29 @@ emulator to keep that true:
   lines with content.
 
 It also needs zig 0.17. What the new version offers beyond that is in `docs/ideas.md`.
+
+## What 1.0 changed for cm
+
+Moving from `f54340a` to libghostty 1.0 took a binding bump as well, to `b13f277`, which pins `5813c94`: four
+commits past the `vt-1.0.0` tag, changing only the header version to 1.1.0-dev. Pinning the tag instead
+would link the binding against a library older than its headers, which the binding documents as
+unsupported.
+
+- **Renames** in the binding, compile errors only: the kitty image `DataLen` and `Data` became
+  `ExpectedLen` and `Pixels`, three mode constants were renamed, and the twelve per-extra formatter options
+  became one `FormatterExtras` bitmask.
+- **`SetKittyImageStorageLimit(nil)` now restores the 10 MB default** rather than disabling storage, so
+  `SetGraphicsStorageLimit(0)` silently kept storing images. It passes an explicit zero now.
+  `TestGraphicsStorageCanBeDisabled` caught it; nothing else would have, since the change compiles.
+- **The pkg-config files moved** from `share/pkgconfig` to `lib/pkgconfig`, on every platform, and a shared
+  library is installed beside the static one. The static `.pc` names the archive by path, so cm still links
+  statically.
+
+Measured on Linux amd64: the glibc floor holds at 2.34, and the stripped binary is 36 KB larger.
+
+**Switching libghostty builds needs a clean Go build cache.** With only `PKG_CONFIG_PATH` changed, `go
+build` reused the binding compiled against the old headers, linked it to the new archive, and reported
+success, and a whole test run went by that way. `go build -a` or a fresh `GOCACHE` shows the real result.
 
 ## The glibc floor is decided by the zig target, not by the runner
 
