@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -32,6 +33,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		noAttach     bool
 		tagArgs      []string
 		ifRunningArg string
+		sizeArg      string
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -50,6 +52,8 @@ session is created without the caller inventing names.
 pre-creating one that something else will attach to later. Distinct from
 'cm run -d', which needs a command and captures its output for a few minutes: this
 makes an ordinary shell session with ordinary persistence.
+It is created at this terminal's size, or at --size COLSxROWS, or at 24x80 when
+there is no terminal; a running session keeps its own size.
 
 A command after -- runs only when this attach creates or revives the session. If
 the session is already running, the attach fails rather than attaching and
@@ -98,6 +102,20 @@ matters for another multiplexer, which sees the key first and never passes it on
 			if !ok {
 				return fmt.Errorf("--if-running %q, want one of %s",
 					ifRunningArg, strings.Join(ifRunningNames(), ", "))
+			}
+			// Refused without --no-attach rather than ignored: an attaching client sizes the session from its
+			// own terminal, so a size given here would be dropped without a word.
+			if sizeArg != "" && !noAttach {
+				return errors.New("--size only applies with --no-attach; an attach takes its terminal's size")
+			}
+			size, ok := callerSize(os.Stdout, os.Stderr, os.Stdin)
+			if !ok {
+				size = conventionalSize
+			}
+			if sizeArg != "" {
+				if size, err = parseSize(sizeArg); err != nil {
+					return err
+				}
 			}
 			dirs, err := g.dirs()
 			if err != nil {
@@ -230,10 +248,6 @@ matters for another multiplexer, which sees the key first and never passes it on
 
 			// Checked before anything that assumes a terminal, since this path has none.
 			if noAttach {
-				size, ok := callerSize(os.Stdout, os.Stderr, os.Stdin)
-				if !ok {
-					size = conventionalSize
-				}
 				return createWithoutAttaching(cmd.Context(), dirs, opts, size)
 			}
 
@@ -272,6 +286,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 		`key that opens cm's overlay: "ctrl-<key>" or "none" (default from config)`)
 	f.BoolVar(&noAttach, "no-attach", false,
 		"create the session and print its name without attaching")
+	f.StringVar(&sizeArg, "size", "",
+		"with --no-attach, create the session at COLSxROWS rather than this terminal's size")
 	f.StringVar(&ifRunningArg, "if-running", "error",
 		"what a command does if the session is already running: "+strings.Join(ifRunningNames(), " or "))
 	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,

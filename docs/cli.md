@@ -80,6 +80,27 @@ client predating the flag attaches as it always did.
 It is an enum rather than a boolean because a third answer is foreseeable: replacing the running session
 with one running the command, the same idea as `cm rebind --replace`.
 
+## Creating without attaching
+
+`cm attach --no-attach` creates a session at a size, since no window is there to give it one:
+
+| Caller | Size |
+| --- | --- |
+| `--size COLSxROWS` | that size |
+| stdout, stderr, or stdin is a terminal | that terminal's size, the first of the three that is one |
+| none of them | 24x80 |
+
+A shell draws its first prompt at whatever size it starts with, and a window attaching later does not
+undo that. Created at 80 columns and attached from a wider window, zsh's right prompt sat mid-line until
+the next prompt. The caller's terminal is the best guess at the window that will attach; `--size` is for
+a caller with no terminal that knows the window, such as an editor plugin about to open a split. stdout is
+not enough on its own because `name=$(cm attach --no-attach)` captures it. `--size` without `--no-attach`
+is refused, since an attaching client sizes the session from its own terminal.
+
+The size applies only to a session the command creates or revives. A running session keeps its size:
+until `Open.no_attach` existed, a `--no-attach` on a detached 40x150 session resized it to 24x80, since a
+session with no leader handed sizing to the first client to open it.
+
 ## Ending a session, and forgetting one
 
 Two operations, deliberately two commands, because they act on different things. `cm kill` stops a

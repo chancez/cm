@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -36,4 +39,22 @@ func callerSize(files ...*os.File) (windowSize, bool) {
 		return windowSize{rows: ws.Row, cols: ws.Col, xpixel: ws.Xpixel, ypixel: ws.Ypixel}, true
 	}
 	return windowSize{}, false
+}
+
+// parseSize reads --size, written COLSxROWS like a terminal's geometry.
+//
+// For a caller with no terminal of its own that knows the window a session will be shown in: an editor
+// plugin creating a session for a split it is about to open. Pixels are left at zero, since a size given
+// by hand says nothing about the font.
+func parseSize(s string) (windowSize, error) {
+	colsArg, rowsArg, ok := strings.Cut(s, "x")
+	if !ok {
+		return windowSize{}, fmt.Errorf("invalid size %q: want COLSxROWS, e.g. 120x40", s)
+	}
+	cols, colsErr := strconv.ParseUint(colsArg, 10, 16)
+	rows, rowsErr := strconv.ParseUint(rowsArg, 10, 16)
+	if colsErr != nil || rowsErr != nil || cols == 0 || rows == 0 {
+		return windowSize{}, fmt.Errorf("invalid size %q: want COLSxROWS, each between 1 and 65535", s)
+	}
+	return windowSize{rows: uint16(rows), cols: uint16(cols)}, nil
 }
