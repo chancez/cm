@@ -137,18 +137,17 @@ func (t *Terminal) graphicsStorageLimit() (uint64, error) {
 
 // SetGraphicsStorageLimit bounds the bytes of decoded image data this terminal retains.
 //
-// Zero disables storage, which is libghostty's default and therefore cm's behavior until this is
-// called. A limit is required rather than optional: the stored form is decoded pixels, so an image is
+// Zero disables storage. libghostty's default is 10 MB, which is cm's behavior until this is called.
+// A limit is required rather than optional: the stored form is decoded pixels, so an image is
 // far larger in the terminal than it was on the wire, and an unbounded store on a long-lived session
 // is a leak measured in screens of images rather than in bytes.
 //
 // Note this does not by itself make PNG payloads work. libghostty needs a decoder installed
 // process-wide for those, and rejects them otherwise. RGB and RGBA payloads need no decoder.
 func (t *Terminal) SetGraphicsStorageLimit(bytes int) error {
-	if bytes <= 0 {
-		return check(t.term.SetKittyImageStorageLimit(nil), "clearing kitty image storage limit")
-	}
-	return check(t.term.SetKittyImageStorageLimit(new(uint64(bytes))), "setting kitty image storage limit")
+	// An explicit zero rather than nil. Through libghostty f54340a nil disabled storage, but at 1.0 it
+	// restores the 10 MB default, so a limit of zero silently retained images.
+	return check(t.term.SetKittyImageStorageLimit(new(uint64(max(bytes, 0)))), "setting kitty image storage limit")
 }
 
 // graphics borrows the terminal's image storage handle.
@@ -333,7 +332,7 @@ func (t *Terminal) ImageByID(id uint32) (img Image, ok bool, err error) {
 		return Image{}, false, fmt.Errorf("unexpected stored image format %d", int(format))
 	}
 
-	dataLen, err := h.DataLen()
+	dataLen, err := h.ExpectedLen()
 	if err != nil {
 		return Image{}, false, check(err, "reading image data length")
 	}
@@ -361,7 +360,7 @@ func (t *Terminal) ImagePixels(id uint32) (pixels []byte, ok bool, err error) {
 	if h == nil {
 		return nil, false, nil
 	}
-	data, err := h.Data()
+	data, err := h.Pixels()
 	if errors.Is(err, libghostty.ErrNoValue) {
 		// Pending: the transmission has not completed, so there are no pixels yet.
 		return nil, true, nil

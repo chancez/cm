@@ -264,7 +264,7 @@ func (t *Terminal) Pwd() (string, error) {
 }
 
 // cmSyncMode exposes the synchronized-output mode to tests in this package.
-func cmSyncMode() libghostty.Mode { return libghostty.ModeSyncOutput }
+func cmSyncMode() libghostty.Mode { return libghostty.ModeSynchronizedOutput }
 
 // focusEventMode reports whether DECSET 1004 focus reporting is enabled.
 func (t *Terminal) focusEventMode() (bool, error) {
@@ -301,5 +301,5 @@ func (t *Terminal) InBandResizeMode() (bool, error) {
 	if t.closed {
 		return false, nil
 	}
-	return t.mode(libghostty.ModeInBandResize)
+	return t.mode(libghostty.ModeInBandSizeReports)
 }

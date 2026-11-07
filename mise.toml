@@ -14,9 +14,9 @@ zig = "0.17.0"
 "aqua:fish-shell/fish-shell" = "4.8.1"
 
 [env]
-# libghostty-vt has no tagged release and its API is explicitly unstable, so pin a commit. It has to be the
-# commit go.mitchellh.com/libghostty pins in its CMakeLists.txt, since the binding is written against that
-# API: bump both together, and TestGhosttyRefMatchesBinding fails when they disagree. build, test and
+# libghostty-vt has had a stable ABI since its 1.0 release, but go.mitchellh.com/libghostty is untagged and
+# pins a commit in its CMakeLists.txt, and GHOSTTY_REF has to be that commit: the binding states it works
+# only with a library at least as new as the headers it compiled against. Bump both together, and TestGhosttyRefMatchesBinding fails when they disagree. build, test and
 # install build the new pin themselves.
 #
 # The full SHA, and it has to be: `git fetch --depth 1 origin <abbrev>` answers "couldn't find remote ref",
@@ -24,7 +24,7 @@ zig = "0.17.0"
 # as "4d605bf0d" and the libghostty task therefore could not work on a fresh checkout at all -- it cloned,
 # then died on the next line. Dockerfile.test already carried the full SHA with a comment naming the
 # abbreviation here as the reason, so the workaround outlived the bug by being in the wrong file.
-GHOSTTY_REF = "f54340ad77814fe319d136e5e915d6a48de8dd23"
+GHOSTTY_REF = "5813c9461d5af78b6307a1254d00b1bc190eaccd"
 # A git repository the build fetches into. Only its objects are used: the build runs from an exported copy
 # of GHOSTTY_REF, so a checkout here can be a real one with work in it.
 GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
@@ -33,7 +33,7 @@ GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
 GHOSTTY_PREFIX = "{{config_root}}/third_party/libghostty-vt/{{env.GHOSTTY_REF}}"
 # Where go.mitchellh.com/libghostty finds the library. The binding links through pkg-config, static by
 # default, and the .pc files record the prefix they were built for, so a build has to stay where it was made.
-PKG_CONFIG_PATH = "{{env.GHOSTTY_PREFIX}}/share/pkgconfig"
+PKG_CONFIG_PATH = "{{env.GHOSTTY_PREFIX}}/lib/pkgconfig"
 # The oldest glibc a released Linux binary runs against, and the version the zig build targets there.
 # Read from here by both workflows and by Dockerfile.test, so the number lives in one place.
 #

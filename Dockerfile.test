@@ -60,6 +60,6 @@ RUN go mod download
 COPY . .
 # go.mitchellh.com/libghostty links through pkg-config, so this is all the Go build needs to find it.
 COPY --from=ghostty /opt/libghostty-vt /opt/libghostty-vt
-ENV PKG_CONFIG_PATH=/opt/libghostty-vt/share/pkgconfig
+ENV PKG_CONFIG_PATH=/opt/libghostty-vt/lib/pkgconfig
 ENV CGO_ENABLED=1
 CMD ["go", "test", "./..."]

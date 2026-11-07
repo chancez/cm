@@ -109,7 +109,7 @@ jobs:
       - name: Point pkg-config at libghostty
         run: |
           set -euo pipefail
-          pc="$GITHUB_WORKSPACE/third_party/libghostty-vt/share/pkgconfig"
+          pc="$GITHUB_WORKSPACE/third_party/libghostty-vt/lib/pkgconfig"
           echo "PKG_CONFIG_PATH=$pc" >> "$GITHUB_ENV"
           command -v pkg-config >/dev/null || brew install pkgconf
           PKG_CONFIG_PATH="$pc" pkg-config --static --libs libghostty-vt-static

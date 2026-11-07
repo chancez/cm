@@ -22,7 +22,7 @@ func (t *Terminal) OnAltScreen() (bool, error) {
 	if t.closed {
 		return false, fmt.Errorf("terminal is closed")
 	}
-	return t.mode(libghostty.ModeAltScreenSave)
+	return t.mode(libghostty.ModeAltScreenSaveCursorClearEnter)
 }
 
 // Restore returns bytes that reproduce the current screen when written to a fresh terminal.
@@ -44,7 +44,7 @@ func (t *Terminal) Restore() ([]byte, error) {
 	// currently showing it. Replaying it to a new client leaves that client withholding
 	// renders until its own timeout fires, so it is suppressed across serialization and
 	// restored afterwards.
-	syncMode := libghostty.ModeSyncOutput
+	syncMode := libghostty.ModeSynchronizedOutput
 	hadSync, err := t.mode(syncMode)
 	if err == nil && hadSync {
 		_ = t.setMode(syncMode, false)
@@ -457,26 +457,43 @@ type formatOptions struct {
 	hyperlink       bool
 }
 
+// extras is the formatter's extras bitmask for o.
+func (o formatOptions) extras() libghostty.FormatterExtras {
+	var e libghostty.FormatterExtras
+	for _, x := range []struct {
+		on  bool
+		bit libghostty.FormatterExtras
+	}{
+		{o.modes, libghostty.FormatterExtraModes},
+		{o.scrollingRegion, libghostty.FormatterExtraScrollingRegion},
+		{o.keyboard, libghostty.FormatterExtraKeyboard},
+		{o.tabstops, libghostty.FormatterExtraTabstops},
+		{o.palette, libghostty.FormatterExtraPalette},
+		{o.pwd, libghostty.FormatterExtraPwd},
+		{o.kittyKeyboard, libghostty.FormatterExtraKittyKeyboard},
+		{o.cursor, libghostty.FormatterExtraCursor},
+		{o.style, libghostty.FormatterExtraStyle},
+		{o.hyperlink, libghostty.FormatterExtraHyperlink},
+	} {
+		if x.on {
+			e |= x.bit
+		}
+	}
+	return e
+}
+
 // format runs the formatter and returns its output.
 //
-// Every option is passed explicitly, false included, rather than only the ones set. The binding leaves
-// an option it was not given at libghostty's default, and cm's restore depends on several being off:
-// tabstops move the cursor after it has been positioned, and the palette overrides the user's theme.
+// Every option is passed explicitly rather than only the ones set. The binding leaves an option it was
+// not given at libghostty's default, and cm's restore depends on several extras being off that the
+// default turns on: the palette overrides the user's theme. Tabstops, also off, move the cursor after it
+// has been positioned. The extras are one bitmask, so an unset bit is an extra turned off.
 func (t *Terminal) format(o formatOptions) ([]byte, error) {
 	opts := []libghostty.FormatterOption{
 		libghostty.WithFormatterFormat(o.emit),
 		libghostty.WithFormatterUnwrap(o.unwrap),
 		libghostty.WithFormatterTrim(o.trim),
-		libghostty.WithFormatterExtraModes(o.modes),
-		libghostty.WithFormatterExtraScrollingRegion(o.scrollingRegion),
-		libghostty.WithFormatterExtraKeyboard(o.keyboard),
-		libghostty.WithFormatterExtraTabstops(o.tabstops),
-		libghostty.WithFormatterExtraPalette(o.palette),
-		libghostty.WithFormatterExtraPwd(o.pwd),
-		libghostty.WithFormatterExtraKittyKeyboard(o.kittyKeyboard),
-		libghostty.WithFormatterExtraCursor(o.cursor),
-		libghostty.WithFormatterExtraStyle(o.style),
-		libghostty.WithFormatterExtraHyperlink(o.hyperlink),
+		libghostty.WithFormatterExtras(o.extras()),
 	}
 	if o.selection != nil {
 		opts = append(opts, libghostty.WithFormatterSelection(o.selection))
