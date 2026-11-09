@@ -254,17 +254,7 @@ func (t *ReportTracker) holdBack(buf []byte) {
 }
 
 // reportPrefixLen returns how many trailing bytes of buf could begin a report.
-func reportPrefixLen(buf []byte) int {
-	if i := bytes.LastIndex(buf, []byte(reportIntro)); i >= 0 {
-		return len(buf) - i
-	}
-	for n := min(len(reportIntro)-1, len(buf)); n > 0; n-- {
-		if bytes.HasSuffix(buf, []byte(reportIntro[:n])) {
-			return n
-		}
-	}
-	return 0
-}
+func reportPrefixLen(buf []byte) int { return introPrefixLen(buf, reportIntro) }
 
 // NestingSequence returns the bytes a client writes to announce itself to whatever owns its stdout.
 //
