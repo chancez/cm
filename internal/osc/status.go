@@ -85,23 +85,48 @@ var statusKinds = map[string]bool{
 	"auth":       true,
 }
 
-// StatusTracker follows program status reports across a stream of output.
+// StatusEvent is one thing a StatusTracker found, in the order the stream carried it.
+type StatusEvent struct {
+	// Prompt is a shell prompt starting (OSC 133;A), which ends working and blocked records. Status is
+	// empty when it is set.
+	Prompt bool
+	// Status is the report, when Prompt is not set.
+	Status Status
+}
+
+// StatusTracker follows program status reports across a stream of output, together with the prompts that
+// end them.
 //
 // Stateful for the reason ReportTracker is, and queued rather than last-one-wins: a report is about one
 // record of possibly many, so two reports in one chunk can describe two different things, and collapsing
 // them would drop one.
 //
+// A full reset (RIS) is deliberately not a clear, though the specification says it removes every record and
+// libghostty reports it as one. cm's own client writes RIS when it detaches, to put its terminal back, and a
+// client attached inside a session has that session's pty as its terminal. So every nested detach reset the
+// parent: its report vanished the moment the child left, after the nesting had ended and its bytes were the
+// parent's again. Fixing the order in the client would not reach an older cm across an ssh. What ignoring it
+// costs is a done or error record surviving a `reset`; working and blocked end at the next prompt anyway.
+//
+// Prompts are found here rather than taken from a CommandTracker because the order between a report and a
+// prompt decides what survives, and two parsers cannot say which came first in one chunk. Recovering a
+// session after a restart reads its log in large chunks, so "working, prompt, working" in one chunk is the
+// normal case there: applying the prompt last ended the second report too.
+//
 // Not safe for concurrent use. In cm only the output pump feeds one.
 type StatusTracker struct {
-	pending []Status
+	pending []StatusEvent
 	partial []byte
 }
 
-// Feed consumes a chunk of output and reports whether it completed any report.
+// Feed consumes a chunk of output and reports whether it completed any event.
 func (t *StatusTracker) Feed(p []byte) bool {
+	// The overwhelmingly common chunk holds no OSC, and checking for exactly that is one scan where checking
+	// for each introducer was several: 29ns per 1022-byte read against 2.25us. Every introducer begins with
+	// ESC, so a chunk ending in one may be holding the start of the next.
 	if len(t.partial) == 0 &&
-		!bytes.Contains(p, []byte(statusIntro)) &&
-		introPrefixLen(p, statusIntro) == 0 {
+		!bytes.Contains(p, []byte("\x1b]")) &&
+		(len(p) == 0 || p[len(p)-1] != 0x1b) {
 		return false
 	}
 
@@ -113,20 +138,35 @@ func (t *StatusTracker) Feed(p []byte) bool {
 
 	found := false
 	for {
-		i := bytes.Index(buf, []byte(statusIntro))
+		i, what := t.next(buf)
 		if i < 0 {
 			t.holdBack(buf)
 			break
 		}
 		tail := buf[i:]
+		if what == promptStart {
+			// A prompt when followed by a parameter separator or a terminator, so "133;AB" is not one.
+			if len(tail) == len(promptStart) {
+				// The byte that decides whether this is a prompt has not arrived.
+				t.holdTail(tail)
+				return found
+			}
+			if c := tail[len(promptStart)]; c == ';' || c == 0x07 || c == 0x1b {
+				t.queue(StatusEvent{Prompt: true})
+				found = true
+			}
+			buf = tail[len(promptStart):]
+			continue
+		}
 		end, termLen := oscEnd(tail)
 		if end < 0 {
-			t.holdBack(tail)
+			// Unterminated: the parameters are still arriving.
+			t.holdTail(tail)
 			break
 		}
 		if end+termLen <= maxStatusSequence {
-			if s, ok := ParseStatus(tail[len(statusIntro):end]); ok && len(t.pending) < maxPendingStatus {
-				t.pending = append(t.pending, s)
+			if s, ok := ParseStatus(tail[len(statusIntro):end]); ok {
+				t.queue(StatusEvent{Status: s})
 				found = true
 			}
 		}
@@ -135,11 +175,36 @@ func (t *StatusTracker) Feed(p []byte) bool {
 	return found
 }
 
-// Take returns the reports since the last call, oldest first, and clears them.
+// next returns where the earliest event in buf begins and which kind it is, or -1. One walk over the ESC
+// bytes rather than a search per introducer, each of which would rescan the rest of the chunk.
+func (t *StatusTracker) next(buf []byte) (int, string) {
+	for off := 0; ; {
+		i := bytes.IndexByte(buf[off:], 0x1b)
+		if i < 0 {
+			return -1, ""
+		}
+		i += off
+		for _, intro := range [...]string{statusIntro, promptStart} {
+			if bytes.HasPrefix(buf[i:], []byte(intro)) {
+				return i, intro
+			}
+		}
+		off = i + 1
+	}
+}
+
+// queue appends an event, dropping it once a drain already holds the limit.
+func (t *StatusTracker) queue(e StatusEvent) {
+	if len(t.pending) < maxPendingStatus {
+		t.pending = append(t.pending, e)
+	}
+}
+
+// Take returns the events since the last call, oldest first, and clears them.
 //
-// In order because a later report replaces an earlier one about the same record, and a clear removes
-// what came before it.
-func (t *StatusTracker) Take() []Status {
+// In order because a later report replaces an earlier one about the same record, a clear removes what
+// came before it, and a prompt ends only what was reported before it.
+func (t *StatusTracker) Take() []StatusEvent {
 	if len(t.pending) == 0 {
 		return nil
 	}
@@ -148,14 +213,32 @@ func (t *StatusTracker) Take() []Status {
 	return out
 }
 
-// holdBack retains the part of buf that could be the start of a report.
+// holdBack retains the end of a chunk in which next found nothing, as far as it could be the start of an
+// event. Only a suffix check: next already ruled out a whole introducer anywhere in buf. Searching for one
+// again from the end, as ReportTracker does, measured 2.3us per 1022-byte read carrying a prompt; this is
+// 86ns.
 func (t *StatusTracker) holdBack(buf []byte) {
-	keep := introPrefixLen(buf, statusIntro)
-	if keep == 0 || keep > maxPartial {
+	keep := 0
+	for _, intro := range [...]string{statusIntro, promptStart} {
+		for n := min(len(intro)-1, len(buf)); n > keep; n-- {
+			if bytes.HasSuffix(buf, []byte(intro[:n])) {
+				keep = n
+				break
+			}
+		}
+	}
+	if keep > 0 {
+		t.partial = append([]byte(nil), buf[len(buf)-keep:]...)
+	}
+}
+
+// holdTail retains an event that began but has not finished arriving.
+func (t *StatusTracker) holdTail(tail []byte) {
+	if len(tail) > maxPartial {
 		// Longer than the specification lets a report be, so this was not one.
 		return
 	}
-	t.partial = append([]byte(nil), buf[len(buf)-keep:]...)
+	t.partial = append([]byte(nil), tail...)
 }
 
 // introPrefixLen returns how many trailing bytes of buf could begin a sequence with the given introducer:

@@ -87,7 +87,7 @@ func TestStatusParserAgreesWithEmulator(t *testing.T) {
 		tr.Feed([]byte("\x1b]7501;" + p + "\x1b\\"))
 		got := tr.Take()
 		gotOK := len(got) == 1
-		if gotOK != wantOK || (gotOK && got[0] != want) || len(got) > 1 {
+		if gotOK != wantOK || (gotOK && got[0] != osc.StatusEvent{Status: want}) || len(got) > 1 {
 			t.Errorf("tracker on %q took %+v; the emulator says %+v, %v", p, got, want, wantOK)
 		}
 	}
