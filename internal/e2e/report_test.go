@@ -117,7 +117,8 @@ func TestReportDefaultsToTheSurroundingSession(t *testing.T) {
 	if r := e.runInSession("inside", "report", "other", "--state", "busy"); r.code != 0 {
 		t.Fatalf("report with an explicit session exited %d: %s", r.code, r.stderr)
 	}
-	if s, _ := e.session("other"); s.ReportedState != "busy" {
+	// "busy" is reported back as the protocol's name for it.
+	if s, _ := e.session("other"); s.ReportedState != "working" {
 		t.Errorf("other session = %+v, want the explicit name to win over CM_SESSION", s)
 	}
 	// And the surrounding one is untouched by that call.

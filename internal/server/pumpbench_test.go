@@ -96,6 +96,28 @@ func BenchmarkReportTrackerFeed(b *testing.B) {
 	}
 }
 
+// BenchmarkStatusTrackerFeed measures the scan for program status reports (OSC 7501), which runs beside the
+// report scan above and does the same work for a different introducer, plus a search for RIS.
+func BenchmarkStatusTrackerFeed(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"plain", benchChunk(ptyChunk)},
+		{"prompt", benchChunkWithPrompt(ptyChunk)},
+		{"graphics", benchChunkWithGraphics(ptyChunk)},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			var t osc.StatusTracker
+			b.SetBytes(int64(len(tc.data)))
+			b.ResetTimer()
+			for range b.N {
+				t.Feed(tc.data)
+			}
+		})
+	}
+}
+
 // BenchmarkBoundaryTrackerFeed measures the third per-byte pass, which records where each command's
 // output begins.
 func BenchmarkBoundaryTrackerFeed(b *testing.B) {

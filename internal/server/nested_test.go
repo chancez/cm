@@ -158,7 +158,8 @@ func TestNestedReportDoesNotBecomeTheParentsState(t *testing.T) {
 	// A program inside the child says it is blocked. The sequence travels through the parent's pty,
 	// so the parent's tracker sees it exactly as if its own shell had written it.
 	sess.reports.Feed([]byte("\x1b]25453;state=blocked;detail=child work;source=test\x07"))
-	sess.noteReport()
+	sess.statuses.Feed([]byte("\x1b]7501;state=blocked:app=test\x07"))
+	sess.noteStatus()
 
 	if got := sess.Reported(); got != (Reported{}) {
 		t.Errorf("Reported() = %+v, want the zero value: the child's report became the parent's "+
@@ -172,9 +173,9 @@ func TestNestedReportDoesNotBecomeTheParentsState(t *testing.T) {
 	// Once the nesting ends the parent's own reports work normally again.
 	sess.endHosting("child")
 	sess.reports.Feed([]byte("\x1b]25453;state=busy;detail=my work;source=test\x07"))
-	sess.noteReport()
+	sess.noteStatus()
 
-	want := Reported{State: "busy", Detail: "my work", Source: "test"}
+	want := Reported{State: "working", Detail: "my work", Source: "test", Progress: -1}
 	checkReported(t, sess.Reported(), want, "the parent stopped accepting its own reports")
 }
 

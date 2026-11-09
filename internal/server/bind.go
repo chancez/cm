@@ -303,7 +303,7 @@ func waitForNoClients(sess *Session, within time.Duration) bool {
 // report about itself when it has made one.
 func sessionBusy(sess *Session) (bool, string) {
 	if r := sess.Reported(); r.State != "" {
-		if r.State == "idle" {
+		if !r.Busy() {
 			return false, ""
 		}
 		what := r.Detail

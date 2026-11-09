@@ -25,6 +25,7 @@ import (
 	"github.com/chancez/cm/internal/input"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/progstatus"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -218,6 +219,10 @@ type Session struct {
 	// change to publish once the nesting ended.
 	baseCommand osc.CommandState
 
+	// records are the session's program status records, one per id a program reported on. reported
+	// below is their summary. Guarded by mu.
+	records progstatus.Records
+
 	// reported is what a program inside the session said about itself, and takes precedence over
 	// command above.
 	//
@@ -248,6 +253,10 @@ type Session struct {
 	// into reported above, so a sequence and a `cm report` call end up in exactly the same field: the
 	// sequence is a faster transport for the same statement, not a second kind of state.
 	reports osc.ReportTracker
+
+	// statuses parses program status reports (OSC 7501) out of the output stream, the protocol whose
+	// records reported is now the summary of. Outside mu for the reason commands is.
+	statuses osc.StatusTracker
 
 	// boundaries records where each command's output begins, so a caller can read back the last N
 	// commands instead of guessing with a line count.
@@ -644,19 +653,23 @@ type sessionOpt func(*Session)
 // fall inside a sequence, and a tracker starting empty there reads the tail of that sequence as ordinary
 // output and misses the next real marker with it.
 //
-// reported is taken from the report tracker by the caller rather than read here, because Take drains: a
-// report left in the tracker would be published again by the first chunk of live output, restating a
-// state the program had moved on from.
-func withRecoveredCommands(cmds osc.CommandTracker, reports osc.ReportTracker, reported Reported) sessionOpt {
+// records are built by the caller from the replay rather than here, and the trackers handed over already
+// drained, because Take drains: a report left in a tracker would be applied again by the first chunk of
+// live output, restating a state the program had moved on from.
+func withRecoveredCommands(
+	cmds osc.CommandTracker, reports osc.ReportTracker, statuses osc.StatusTracker, records progstatus.Records,
+) sessionOpt {
 	return func(s *Session) {
 		s.commands = cmds
 		s.reports = reports
+		s.statuses = statuses
+		s.records = records
 		// Both, and equal: command is what callers read, baseCommand is what the next marker is measured
 		// against. Seeding only the first would make the next change look like it had already been
 		// published, and seeding only the second would leave `list` blank until the shell said something.
 		s.command = cmds.State()
 		s.baseCommand = s.command
-		s.reported = reported
+		s.reported = summarize(&s.records)
 	}
 }
 
@@ -895,13 +908,13 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 		s.noteCommand()
 	}
 
-	// cm's own sequence, read from the same stream for the same reason: a shell integration writes it
-	// straight to the pty, which costs nothing, where shelling out to `cm report` from a prompt hook
-	// costs about 23ms twice per command. That was measured before choosing this design, and it is the
-	// whole reason the sequence exists rather than only the command.
-	if s.reports.Feed(data) {
-		s.noteReport()
-	}
+	// cm's own sequence and the program status protocol, read from the same stream for the same reason: a
+	// program writes them straight to the pty, which costs nothing, where shelling out to `cm report` from a
+	// prompt hook costs about 23ms twice per command. That was measured before choosing this design, and it
+	// is the whole reason the sequence exists rather than only the command.
+	s.reports.Feed(data)
+	s.statuses.Feed(data)
+	s.noteStatus()
 
 	// A client announcing that it is attached inside this session rides the same sequence, and is drained
 	// separately because it is not a statement about the shell. Read here rather than anywhere else for
@@ -1408,6 +1421,12 @@ func (s *Session) finish() {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// The program exiting ends its working and blocked records, as a prompt does. Only for an exit that
+	// really happened: a shim that vanished says nothing about whether the program is still at work.
+	if exited {
+		s.updateRecords(func(recs *progstatus.Records) bool { return recs.Ended() })
+	}
+
 	s.mu.Lock()
 	s.ended = true
 	s.exitCode = code
@@ -1575,25 +1594,23 @@ func (s *Session) Command() osc.CommandState {
 	return s.command
 }
 
-// noteReport applies a report the shell integration wrote into the output stream.
+// noteStatus applies what one chunk of output said about the program's status: cm's own report, and the
+// program status reports with the prompts between them.
 //
-// Routed through setReported so a sequence and a `cm report` call are indistinguishable once received.
-// They are two transports for one statement, and keeping one destination means a waiter cannot see
-// different behavior depending on which the reporter happened to use.
-//
-// "clear" becomes the zero value, which is how setReported already expresses "nothing has reported": the
-// session falls back to what cm derives from OSC 133. Mapping it here rather than storing "clear" as a
-// state keeps that vocabulary out of everything downstream, none of which should have to know that one
-// state name means the absence of a state.
-func (s *Session) noteReport() {
-	r, ok := s.reports.Take()
-	if !ok {
+// Routed through updateRecords like a `cm report` call, so a sequence and an RPC are indistinguishable
+// once received. They are two transports for one statement, and keeping one destination means a waiter
+// cannot see different behavior depending on which the reporter happened to use.
+func (s *Session) noteStatus() {
+	legacy, hasLegacy := s.reports.Take()
+	events := s.statuses.Take()
+	if !hasLegacy && len(events) == 0 {
 		return
 	}
 	// A report arriving while a nested attach is running was written by a program inside the child,
 	// which reached this pty only because the child's output passes through it. Dropped rather than
 	// baselined: unlike a title or a directory this is an event rather than a value, so there is no
 	// baseline to keep, and the child's own server has already recorded it against the right session.
+	// The child's prompts are dropped for the same reason: they end the child's records, not these.
 	//
 	// This is the case that made the bug more than cosmetic. With `cm wait outer --until blocked`
 	// running, a blocked report sent into the inner session satisfied the outer wait.
@@ -1603,26 +1620,50 @@ func (s *Session) noteReport() {
 	if nested {
 		return
 	}
-	if r.State == "clear" {
-		s.setReported(Reported{})
-		return
+	var lp *osc.Report
+	if hasLegacy {
+		lp = &legacy
 	}
-	s.setReported(Reported{State: r.State, Detail: r.Detail, Source: r.Source})
+	now := time.Now()
+	s.updateRecords(func(recs *progstatus.Records) bool {
+		return applyStatusChunk(recs, lp, events, now)
+	})
 }
 
-// setReported records what a program in the session said about itself, and tells clients.
+// setReported records what `cm report` said, as a report about the session's root record. A zero value
+// clears every record, so the session falls back to what cm derives.
+//
+// A time that is already set is kept: that is a report recovered at adoption, and it has to keep the
+// moment it was made rather than claim to be current.
+func (s *Session) setReported(r Reported) {
+	at := r.At
+	if at.IsZero() {
+		at = time.Now()
+	}
+	s.updateRecords(func(recs *progstatus.Records) bool {
+		state := r.State
+		if state == "" {
+			state = "clear"
+		}
+		return recs.Apply(recordFromReport(state, r.Detail, r.Source, at, false))
+	})
+}
+
+// updateRecords changes the session's records and, when their summary says something new, publishes it.
 //
 // Published like the derived state, because a terminal emulator or a waiting script reacts to it the same
-// way. A zero value clears the report, so the session falls back to what cm derives.
-func (s *Session) setReported(r Reported) {
-	// Stamped here rather than by each caller, so there is one clock in the path and a caller only has
-	// to say what the program said. A time that is already set is kept: that is a report recovered at
-	// adoption, and it has to keep the moment it was made rather than claim to be current.
-	if r.State != "" && r.At.IsZero() {
-		r.At = time.Now()
-	}
+// way.
+func (s *Session) updateRecords(change func(*progstatus.Records) bool) {
 	s.mu.Lock()
+	if !change(&s.records) {
+		s.mu.Unlock()
+		return
+	}
+	r := summarize(&s.records)
 	if r.sameStatement(s.reported) {
+		// A record changed without changing what the session says, such as a working child beneath a
+		// blocked one. Kept current, timestamp included, but not counted as a change.
+		s.reported = r
 		s.mu.Unlock()
 		return
 	}

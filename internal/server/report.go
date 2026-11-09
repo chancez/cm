@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/progstatus"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -16,12 +20,18 @@ import (
 // look the same from here. That is the whole design difference from a screen-scraping approach, which has
 // to know what each program's UI looks like and chase it as it changes.
 type Reported struct {
-	// State is "idle", "busy", or "blocked". Empty when nothing has reported.
+	// State is the program status protocol's (OSC 7501): "idle", "working", "done", "blocked", or "error".
+	// Empty when nothing has reported.
 	State string
-	// Detail is a short note to show alongside the state.
+	// Detail is a short note to show alongside the state, a report's message or failing that its title.
 	Detail string
-	// Source names the reporter, so one program's report is distinguishable from another's.
+	// Source names the reporter, so one program's report is distinguishable from another's: what `cm report`
+	// or OSC 25453 named, or failing that an OSC 7501 report's app.
 	Source string
+	// Kind says what a blocked program needs: "permission", "question", or "auth". Empty otherwise.
+	Kind string
+	// Progress is a percentage, or -1 for none. Meaningful only while working or blocked.
+	Progress int
 	// At is when the report was made. Zero when nothing has reported.
 	//
 	// Carried so a caller can tell a report made a moment ago from one made before the last server
@@ -40,13 +50,87 @@ type Reported struct {
 // state must not count: with the time compared, a hook that reports "busy" on every prompt would satisfy
 // every wait issued against it.
 func (r Reported) sameStatement(other Reported) bool {
-	return r.State == other.State && r.Detail == other.Detail && r.Source == other.Source
+	return r.State == other.State && r.Detail == other.Detail && r.Source == other.Source &&
+		r.Kind == other.Kind && r.Progress == other.Progress
+}
+
+// Busy reports whether the program says it is still at work: working, or blocked mid-task. What cm used to
+// call "busy", and what a listing's busy column and a `cm wait --until busy` mean by it.
+func (r Reported) Busy() bool { return r.State == "working" || r.State == "blocked" }
+
+// Finished reports whether the program says it has nothing in progress: idle, done, or failed. What a
+// `cm wait --until idle` waits for. done and error count because both are a program that has stopped, and
+// a wait for an agent to finish would otherwise hang on the agent saying exactly that.
+func (r Reported) Finished() bool {
+	return r.State == "idle" || r.State == "done" || r.State == "error"
+}
+
+// summarize describes a session by its most urgent record, or reports nothing when there are no records.
+func summarize(recs *progstatus.Records) Reported {
+	rec, ok := recs.Summary()
+	if !ok {
+		return Reported{}
+	}
+	detail := rec.Message
+	if detail == "" {
+		detail = rec.Title
+	}
+	source := rec.Source
+	if source == "" {
+		source = rec.App
+	}
+	return Reported{
+		State:    rec.State,
+		Detail:   detail,
+		Source:   source,
+		Kind:     rec.Kind,
+		Progress: rec.Progress,
+		At:       rec.At,
+	}
+}
+
+// recordFromReport turns a report in cm's own vocabulary, from `cm report` or OSC 25453, into a record
+// about the session's root.
+//
+// "busy" is the name cm used before adopting the program status protocol, and becomes "working". The
+// source stays free-form, carried beside the app rather than as one: cm does not care what reports, and
+// an app is restricted to 32 bytes of [A-Za-z0-9_.+-]. The detail is fitted to what a message may carry
+// rather than rejected, so a report that used to be shown does not start vanishing.
+func recordFromReport(state, detail, source string, at time.Time, legacy bool) progstatus.Record {
+	if state == "busy" {
+		state = "working"
+	}
+	return progstatus.Record{
+		Status: osc.Status{State: state, Progress: -1, Message: fitText(detail, 2048)},
+		Source: source,
+		Legacy: legacy,
+		At:     at,
+	}
+}
+
+// fitText drops control characters, which a report may not carry, and cuts to limit bytes without
+// splitting a character.
+func fitText(s string, limit int) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) <= limit {
+		return s
+	}
+	s = s[:limit]
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // reportedStateNames maps the wire enum to what a caller sees.
 var reportedStateNames = map[serverv1.ReportedState]string{
 	serverv1.ReportedState_REPORTED_STATE_IDLE:    "idle",
-	serverv1.ReportedState_REPORTED_STATE_BUSY:    "busy",
+	serverv1.ReportedState_REPORTED_STATE_BUSY:    "working",
 	serverv1.ReportedState_REPORTED_STATE_BLOCKED: "blocked",
 }
 

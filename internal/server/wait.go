@@ -209,9 +209,11 @@ func satisfied(sess *Session, until serverv1.WaitState) bool {
 	if r := sess.Reported(); r.State != "" {
 		switch until {
 		case serverv1.WaitState_WAIT_STATE_IDLE:
-			return r.State == "idle"
+			return r.Finished()
 		case serverv1.WaitState_WAIT_STATE_BUSY:
-			return r.State == "busy"
+			// working only, not Busy(): a blocked program is not doing the work a caller waiting for it to
+			// start is waiting on, and blocked has a wait of its own.
+			return r.State == "working"
 		case serverv1.WaitState_WAIT_STATE_BLOCKED:
 			return r.State == "blocked"
 		}
@@ -255,7 +257,7 @@ func waitResult(sess *Session, ok bool) *serverv1.WaitResponse {
 	}
 	// A report describes the session better than the derived state, so busy reflects it when present.
 	if r.State != "" {
-		resp.Busy = r.State != "idle"
+		resp.Busy = r.Busy()
 	}
 	if ended, code := sess.Ended(); ended {
 		resp.State = serverv1.SessionState_SESSION_STATE_EXITED

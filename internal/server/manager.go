@@ -20,6 +20,7 @@ import (
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/progstatus"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
@@ -452,14 +453,13 @@ func (m *Manager) adopt(
 		// restart, and far better than starting the log at zero.
 		clientSeq = seq.Log(fromSeq)
 	}
-	// Drained here rather than inside the option, so the report that survives is the one this function
-	// decided on: see withRecoveredCommands on why leaving it in the tracker would republish it.
-	fromLog, inLog := rp.reports.Take()
-	reported := recoveredReport(rec, rp.commands, fromLog, inLog)
+	// The trackers were drained chunk by chunk as the replay applied them, so nothing in them is applied
+	// twice: see withRecoveredCommands on why leaving a report in one would republish it.
+	records := recoveredRecords(rec, rp)
 	// The images the replay found, so a client attaching to this adopted session receives the transmissions
 	// its screen's placements refer to. See recordGraphics, and withGraphicsStore for why this is an option.
 	sess, err := newSession(rec, term, fromSeq, clientSeq,
-		withRecoveredCommands(rp.commands, rp.reports, reported), withGraphicsStore(rp.gfx))
+		withRecoveredCommands(rp.commands, rp.reports, rp.statuses, records), withGraphicsStore(rp.gfx))
 	if err != nil {
 		if term != nil {
 			term.Close()
@@ -484,13 +484,13 @@ func (m *Manager) adopt(
 	return sess, nil
 }
 
-// recoveredReport decides what a session being adopted last said about itself.
+// recoveredRecords decides what a session being adopted last said about itself.
 //
-// Two sources, and they are not equivalent. A report in the retained output is cm's own OSC 25453,
-// written by a shell integration; a stored one came from `cm report`, which is an RPC and leaves no trace
-// in any stream. The log wins when it has one, because it is at least as new: the stored value was written
-// while the previous server read that same stream, so anything still retained either produced it or came
-// after it.
+// Two sources, and they are not equivalent. A report in the retained output is a sequence a program wrote,
+// OSC 7501 or cm's own OSC 25453; a stored one may have come from `cm report`, which is an RPC and leaves
+// no trace in any stream. The log wins when it has one, because it is at least as new: the stored value was
+// written while the previous server read that same stream, so anything still retained either produced it
+// or came after it.
 //
 // The guard is the interesting part. A stored report is a claim nobody retracted, which is right for a
 // program still sitting there blocked and wrong for one that finished during the restart. The replayed
@@ -499,28 +499,29 @@ func (m *Manager) adopt(
 // as the state, because "no markers at all" is not "at a prompt" -- it is a shell with no integration
 // loaded, or a window whose markers scrolled out, and dropping a report on that evidence would forget
 // every session that does not report OSC 133.
-func recoveredReport(rec store.Session, cmds osc.CommandTracker, fromLog osc.Report, inLog bool) Reported {
-	if inLog {
-		r := Reported{State: fromLog.State, Detail: fromLog.Detail, Source: fromLog.Source}
-		// The stored timestamp when it describes the same statement, since that is the accurate one. A
-		// different statement is one nothing recorded the time of, so now is used: it is the moment cm
-		// learned of it, and the only bound available for a sequence whose write time was never kept.
-		if r.sameStatement(reportedFromStore(rec)) {
-			r.At = rec.Reported.At
-		} else {
-			r.At = time.Now()
+func recoveredRecords(rec store.Session, rp replayed) progstatus.Records {
+	stored := reportedFromStore(rec)
+	if rp.sawStatus {
+		recs := rp.records
+		// The stored timestamp when the summary is the statement it describes, since that is the accurate
+		// one. A different statement is one nothing recorded the time of, so the replay's time stands: it
+		// is the moment cm learned of it, and the only bound available for a sequence whose write time was
+		// never kept.
+		if sum, ok := recs.Summary(); ok && summarize(&recs).sameStatement(stored) {
+			recs.Restamp(sum.ID, stored.At)
 		}
-		return r
+		return recs
 	}
 
-	stored := reportedFromStore(rec)
+	var recs progstatus.Records
 	if stored.State == "" {
-		return Reported{}
+		return recs
 	}
-	if cmds.Seen() && !cmds.State().Running {
-		return Reported{}
+	if rp.commands.Seen() && !rp.commands.State().Running {
+		return recs
 	}
-	return stored
+	recs.Apply(recordFromReport(stored.State, stored.Detail, stored.Source, stored.At, false))
+	return recs
 }
 
 // reportedFromStore converts a stored report into the server's own shape.
@@ -546,6 +547,12 @@ type replayed struct {
 	// any fragment of a sequence that was still arriving at the replay's end.
 	commands osc.CommandTracker
 	reports  osc.ReportTracker
+	statuses osc.StatusTracker
+	// records are the program status records the replay rebuilt, and sawStatus says whether it found
+	// any report at all: a report followed by its own clear leaves no records and is still evidence, newer
+	// than anything stored, that nothing is being reported.
+	records   progstatus.Records
+	sawStatus bool
 }
 
 // replayShimHistory feeds a shim's retained output into a terminal model and the OSC trackers, up to
@@ -650,6 +657,21 @@ func (m *Manager) replayShimHistory(
 		// which does this for live output; this is the same two lines against history.
 		rp.commands.Feed(data)
 		rp.reports.Feed(data)
+		rp.statuses.Feed(data)
+		// The same application the pump makes, nesting aside: a replay cannot tell which of these bytes
+		// came from a nested child, and the live session would have dropped those. The cost is a child's
+		// report standing in the parent until the parent's next prompt or report replaces it.
+		legacy, hasLegacy := rp.reports.Take()
+		var lp *osc.Report
+		if hasLegacy {
+			lp = &legacy
+		}
+		events := rp.statuses.Take()
+		for _, e := range events {
+			rp.sawStatus = rp.sawStatus || !e.Prompt
+		}
+		rp.sawStatus = rp.sawStatus || hasLegacy
+		applyStatusChunk(&rp.records, lp, events, time.Now())
 		if term != nil {
 			if err := term.Write(data); err != nil {
 				return fmt.Errorf("replaying output: %w", err)

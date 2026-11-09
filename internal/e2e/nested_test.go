@@ -49,9 +49,10 @@ func TestANestedAttachDoesNotRewriteItsParentsBookkeeping(t *testing.T) {
 
 	outer.typeLine(osc7("/nested/outer"))
 	outer.typeLine(osc25453("busy", "outer work"))
+	// cm's own report reads back in the program status protocol's vocabulary, so busy becomes working.
 	e.waitFor("the outer session to report its own directory and state", 15*time.Second, func() bool {
 		s, ok := e.session("outer")
-		return ok && s.Cwd == "/nested/outer" && s.ReportedState == "busy"
+		return ok && s.Cwd == "/nested/outer" && s.ReportedState == "working"
 	})
 
 	// A nested attach, started by the shell inside the outer session. Nothing is arranged for it: the
@@ -93,10 +94,10 @@ func TestANestedAttachDoesNotRewriteItsParentsBookkeeping(t *testing.T) {
 		t.Errorf("outer cwd = %q, want %q: the child's directory was recorded against the parent",
 			s.Cwd, "/nested/outer")
 	}
-	if s.ReportedState != "busy" || s.ReportedDetail != "outer work" {
+	if s.ReportedState != "working" || s.ReportedDetail != "outer work" {
 		t.Errorf("outer reported = (%q, %q), want (%q, %q): the child's report became the parent's "+
 			"state, which is what satisfied a `cm wait` on the parent",
-			s.ReportedState, s.ReportedDetail, "busy", "outer work")
+			s.ReportedState, s.ReportedDetail, "working", "outer work")
 	}
 
 	// The nesting ends. The key detaches the innermost session, which is also the thing that makes this
@@ -114,9 +115,9 @@ func TestANestedAttachDoesNotRewriteItsParentsBookkeeping(t *testing.T) {
 	// The parent's own last values survived, rather than the child's being published the moment the
 	// freeze lifted. That is the half a freeze alone gets wrong, and it fails silently.
 	s, _ = e.session("outer")
-	if s.Cwd != "/nested/outer" || s.ReportedState != "busy" {
+	if s.Cwd != "/nested/outer" || s.ReportedState != "working" {
 		t.Errorf("after nesting: outer cwd = %q, state = %q, want %q and %q: the child's last values "+
-			"were published once the freeze lifted", s.Cwd, s.ReportedState, "/nested/outer", "busy")
+			"were published once the freeze lifted", s.Cwd, s.ReportedState, "/nested/outer", "working")
 	}
 
 	// And the parent is tracking again rather than frozen for good, which is the other failure mode:

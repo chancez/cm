@@ -33,7 +33,7 @@ func TestReportTakesPrecedenceOverTheDerivedState(t *testing.T) {
 		t.Fatalf("Report() error = %v", err)
 	}
 
-	want := Reported{State: "blocked", Detail: "needs approval", Source: "my-agent"}
+	want := Reported{State: "blocked", Detail: "needs approval", Source: "my-agent", Progress: -1}
 	checkReported(t, sess.Reported(), want, "")
 
 	// A wait for blocked is satisfied by the report, and a wait for busy is not: the report replaces the

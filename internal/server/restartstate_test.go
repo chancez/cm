@@ -138,7 +138,7 @@ func TestAdoptionRecoversAReportedState(t *testing.T) {
 	if got.At.IsZero() {
 		t.Errorf("Reported() = %+v with no timestamp, so its age can never be shown", got)
 	}
-	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", At: got.At}
+	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", Progress: -1, At: got.At}
 	if got != want {
 		t.Errorf("Reported() = %+v, want %+v.\n"+
 			"A blocked program is still blocked after a server restart: nothing about the restart tells it "+
@@ -212,7 +212,7 @@ func TestARPCReportSurvivesARestart(t *testing.T) {
 	}
 	defer second.Close()
 
-	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", At: stored.At}
+	want := Reported{State: "blocked", Detail: "needs approval", Source: "agent", Progress: -1, At: stored.At}
 	if got := second.Reported(); got != want {
 		t.Errorf("Reported() = %+v, want %+v.\n"+
 			"An RPC report is in no byte stream, so adoption has to read it from the record. The "+
@@ -304,7 +304,7 @@ func TestAReportSurvivesWhenTheShellReportsNoMarkers(t *testing.T) {
 	}
 	defer second.Close()
 
-	want := Reported{State: "busy", Detail: "building", Source: "agent", At: stored.At}
+	want := Reported{State: "working", Detail: "building", Source: "agent", Progress: -1, At: stored.At}
 	if got := second.Reported(); got != want {
 		t.Errorf("Reported() = %+v, want %+v.\n"+
 			"No markers is not the same as at a prompt. A shell with no integration loaded says nothing "+

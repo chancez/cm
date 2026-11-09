@@ -549,11 +549,10 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			if err := srv.Send(&serverv1.AttachResponse{
 				Event: &serverv1.AttachResponse_Metadata{
 					Metadata: &serverv1.Metadata{
-						Title:      meta.Title,
-						Cwd:        meta.Cwd.Path,
-						CwdIsLocal: meta.Cwd.IsLocal,
-						Busy: meta.Command.Running || meta.Reported.State == "busy" ||
-							meta.Reported.State == "blocked",
+						Title:               meta.Title,
+						Cwd:                 meta.Cwd.Path,
+						CwdIsLocal:          meta.Cwd.IsLocal,
+						Busy:                meta.Command.Running || meta.Reported.Busy(),
 						Command:             meta.Command.Command,
 						LastCommandExitCode: int32(meta.Command.ExitCode),
 						CommandFinished:     meta.Command.Exited,
@@ -1115,7 +1114,7 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 					item.ReportedAtUnix = r.At.Unix()
 				}
 				// Reflected in busy too, so a caller reading one field still gets the better answer.
-				item.Busy = r.State != "idle"
+				item.Busy = r.Busy()
 			}
 		}
 		out.Sessions = append(out.Sessions, item)
