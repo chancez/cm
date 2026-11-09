@@ -76,6 +76,13 @@ const (
 	// The same hang one field over, and worse in one respect: an older server reads the unknown field as
 	// absent and sees a wait with no condition at all, so it does not even fail loudly.
 	WaitMatch Name = "wait.match"
+
+	// WaitProgramStatus means the server knows the program status protocol's done and error states, so a
+	// wait for either can be satisfied.
+	//
+	// The same hang as WaitReportedState, for the two states that arrived with OSC 7501: an older server
+	// reads the state as one it does not know and never considers the wait satisfied.
+	WaitProgramStatus Name = "wait.program-status"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -250,6 +257,7 @@ func Server() Set {
 		Reported,
 		WaitReportedState,
 		WaitMatch,
+		WaitProgramStatus,
 	)
 }
 

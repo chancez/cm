@@ -1108,6 +1108,10 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 				item.ReportedState = r.State
 				item.ReportedDetail = r.Detail
 				item.ReportedSource = r.Source
+				item.ReportedKind = r.Kind
+				if r.Progress >= 0 {
+					item.ReportedProgress = new(int32(r.Progress))
+				}
 				// Left at zero rather than sending a bogus timestamp, matching the attached-client times
 				// above. Only a report restored from a record that predates the column has none.
 				if !r.At.IsZero() {

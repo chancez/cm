@@ -69,6 +69,8 @@ func TestOnlyTheWaitFormsThatDependOnAServerAskForOne(t *testing.T) {
 	}{
 		{"blocked needs reported state", waitTarget{state: serverv1.WaitState_WAIT_STATE_BLOCKED}, capability.WaitReportedState},
 		{"a match needs match support", waitTarget{match: "DONE"}, capability.WaitMatch},
+		{"done needs program status", waitTarget{state: serverv1.WaitState_WAIT_STATE_DONE}, capability.WaitProgramStatus},
+		{"error needs program status", waitTarget{state: serverv1.WaitState_WAIT_STATE_ERROR}, capability.WaitProgramStatus},
 		{"idle needs nothing", waitTarget{state: serverv1.WaitState_WAIT_STATE_IDLE}, ""},
 		{"busy needs nothing", waitTarget{state: serverv1.WaitState_WAIT_STATE_BUSY}, ""},
 		{"exited needs nothing", waitTarget{state: serverv1.WaitState_WAIT_STATE_EXITED}, ""},

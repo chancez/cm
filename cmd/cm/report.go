@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -13,30 +14,48 @@ import (
 )
 
 // reportStates maps the flag values to their wire enum.
+//
+// The program status protocol's (OSC 7501) names, so a report reads the same whichever way it was sent.
+// "busy" is what cm called working before, and stays accepted so a hook written against it keeps working.
 var reportStates = map[string]serverv1.ReportedState{
 	"idle":    serverv1.ReportedState_REPORTED_STATE_IDLE,
+	"working": serverv1.ReportedState_REPORTED_STATE_BUSY,
 	"busy":    serverv1.ReportedState_REPORTED_STATE_BUSY,
+	"done":    serverv1.ReportedState_REPORTED_STATE_DONE,
 	"blocked": serverv1.ReportedState_REPORTED_STATE_BLOCKED,
+	"error":   serverv1.ReportedState_REPORTED_STATE_ERROR,
 	"clear":   serverv1.ReportedState_REPORTED_STATE_CLEAR,
 }
 
+// reportKinds is what --kind accepts, the protocol's set.
+var reportKinds = map[string]bool{"permission": true, "question": true, "auth": true}
+
 func newReportCommand(g *globals) *cobra.Command {
 	var (
-		state  string
-		detail string
-		source string
+		state    string
+		detail   string
+		source   string
+		kind     string
+		progress int
 	)
 	cmd := &cobra.Command{
 		Use:   "report [session]",
 		Short: "Report what a program in a session is doing",
 		Long: `Report what a program in a session is doing, so others can see and wait for it.
 
-  busy     working on something
-  blocked  needs input and will not progress without it
-  idle     finished, waiting on nothing
+  working  running on its own (busy is accepted for this too)
+  blocked  needs the user and will not progress without them
+  done     finished a piece of work, the result is ready to look at
+  error    failed and stopped
+  idle     at rest, waiting for its next instruction
   clear    remove the report, falling back to what cm sees itself
 
 With no session, the one this command is running in is used, from CM_SESSION.
+
+This is the program status protocol (OSC 7501) as a command. A program can
+write the sequence to its terminal instead, which costs nothing and reaches cm
+the same way; cm reads both, and answers a program that asks whether the
+protocol is supported. The shell integration's cm_report writes the sequence.
 
 Nothing here is specific to any program. cm does not know or care what is
 reporting: a build script, a test runner, and a coding agent's hook all use the
@@ -51,8 +70,9 @@ in 'cm list' and can be waited for:
 
 A report takes precedence over what cm derives from the shell, because a program
 describing itself is better evidence than a shell marker. It lasts until changed
-or cleared, and is not persisted: it describes a running program, so a stored
-value would come back after a restart describing one that has since finished.
+or cleared, except that working and blocked end when the shell next shows a
+prompt or the program exits: by then whatever was working has stopped. Done and
+error stay until replaced. A report survives a server restart.
 
 For a coding agent, wire this to whatever hook the agent already has for
 "finished" and "needs input". Nothing needs to be added to cm per agent.`,
@@ -62,7 +82,20 @@ For a coding agent, wire this to whatever hook the agent already has for
 			want, ok := reportStates[state]
 			if !ok {
 				return fmt.Errorf(
-					"unknown state %q, want one of busy, blocked, idle, clear", state)
+					"unknown state %q, want one of working, blocked, done, error, idle, clear", state)
+			}
+			// Refused rather than dropped, which is what the server does with a kind or progress the state
+			// cannot carry: a caller typing one wants it shown, and silence would read as a display bug.
+			if kind != "" && (!reportKinds[kind] || state != "blocked") {
+				return fmt.Errorf("--kind %q needs --state blocked and one of permission, question, auth", kind)
+			}
+			if cmd.Flags().Changed("progress") {
+				if progress < 0 || progress > 100 {
+					return fmt.Errorf("--progress %d is not a percentage from 0 to 100", progress)
+				}
+				if want != serverv1.ReportedState_REPORTED_STATE_BUSY && state != "blocked" {
+					return errors.New("--progress needs --state working or blocked")
+				}
 			}
 
 			name, err := reportTarget(args)
@@ -77,23 +110,36 @@ For a coding agent, wire this to whatever hook the agent already has for
 			// server here would create one that has never heard of it.
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				_, err := cl.Report(ctx, &serverv1.ReportRequest{
-					Session: name,
-					State:   want,
-					Detail:  detail,
-					Source:  source,
+					Session:  name,
+					State:    want,
+					Detail:   detail,
+					Source:   source,
+					Kind:     kind,
+					Progress: reportProgress(cmd, progress),
 				})
 				return err
 			})
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&state, "state", "", "busy, blocked, idle, or clear")
+	f.StringVar(&state, "state", "", "working, blocked, done, error, idle, or clear")
 	f.StringVar(&detail, "detail", "", "a short note shown with the state")
 	f.StringVar(&source, "source", "", "who is reporting, for display")
+	f.StringVar(&kind, "kind", "", "what a blocked program needs: permission, question, or auth")
+	f.IntVar(&progress, "progress", 0, "how far along working or blocked work is, 0 to 100")
 	// Required, because there is no sensible default: every value means something different and guessing
 	// would report something the caller did not say.
 	_ = cmd.MarkFlagRequired("state")
 	return cmd
+}
+
+// reportProgress returns --progress for the wire, or nil when it was not given: zero is a percentage, so
+// absence cannot be spelled as zero.
+func reportProgress(cmd *cobra.Command, progress int) *int32 {
+	if !cmd.Flags().Changed("progress") {
+		return nil
+	}
+	return new(int32(progress))
 }
 
 // reportTarget resolves which session a report is about.

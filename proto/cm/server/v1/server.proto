@@ -188,9 +188,10 @@ message StatusResponse {
 // for input, and done.
 enum ReportedState {
   REPORTED_STATE_UNSPECIFIED = 0;
-  // IDLE means the program finished and is not waiting on anything.
+  // IDLE means the program is at rest, waiting for its next instruction.
   REPORTED_STATE_IDLE = 1;
-  // BUSY means it is working.
+  // BUSY means it is working, which the program status protocol (OSC 7501) calls "working". The old name
+  // is kept because the number is what travels.
   REPORTED_STATE_BUSY = 2;
   // BLOCKED means it needs input and will not progress until it gets some.
   //
@@ -199,6 +200,10 @@ enum ReportedState {
   REPORTED_STATE_BLOCKED = 3;
   // CLEAR removes a report, so the session falls back to what cm derives from the shell.
   REPORTED_STATE_CLEAR = 4;
+  // DONE means it finished a piece of work whose result is ready to look at.
+  REPORTED_STATE_DONE = 5;
+  // ERROR means it failed and stopped.
+  REPORTED_STATE_ERROR = 6;
 }
 
 message ReportRequest {
@@ -210,6 +215,12 @@ message ReportRequest {
   // Who is reporting, for display and so one reporter's state is distinguishable from another's.
   // Optional; free-form.
   string source = 4;
+  // What a blocked program needs: "permission", "question", or "auth". Only meaningful with BLOCKED.
+  // An older server ignores it and records the report without one.
+  string kind = 5;
+  // How far along the work is, 0 to 100. Only meaningful with BUSY or BLOCKED. Absent means no
+  // percentage, which is why this is optional: zero is a percentage.
+  optional int32 progress = 6;
 }
 
 message ReportResponse {}
@@ -267,6 +278,13 @@ enum WaitState {
   // Only reachable when something reports it: a shell marks a command as running whether it is computing
   // or waiting at a prompt of its own, so this cannot be derived from OSC 133.
   WAIT_STATE_BLOCKED = 4;
+  // DONE means a program in the session reported that it finished a piece of work.
+  //
+  // Reported only, like BLOCKED, and needs capability wait.program-status: an older server does not
+  // know the state and would never consider a wait for it satisfied.
+  WAIT_STATE_DONE = 5;
+  // ERROR means a program in the session reported that it failed. Reported only, like DONE.
+  WAIT_STATE_ERROR = 6;
 }
 
 message WaitRequest {
@@ -1048,7 +1066,9 @@ message Session {
   // caller can tell a remote directory from a local one. cwd holds the decoded local path.
   string cwd_uri = 11;
 
-  // What a program in the session reported about itself, if anything: "idle", "busy", or "blocked".
+  // What a program in the session reported about itself, if anything, in the program status protocol's
+  // (OSC 7501) vocabulary: "idle", "working", "done", "blocked", or "error". A server older than that
+  // reports "busy" for working.
   //
   // Empty when nothing has reported, in which case busy below is what cm derived from the shell. When
   // both are present this one wins, since a program describing itself is better evidence than a shell
@@ -1064,6 +1084,10 @@ message Session {
   // until the program says otherwise, and it survives a server restart, so "blocked" alone cannot
   // distinguish a program waiting on an answer now from one that said so hours ago.
   int64 reported_at_unix = 24;
+  // What a blocked program needs, "permission", "question", or "auth", when it said.
+  string reported_kind = 28;
+  // How far along the reported work is, 0 to 100. Absent when the program gave no percentage.
+  optional int32 reported_progress = 29;
 
   // Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
   //

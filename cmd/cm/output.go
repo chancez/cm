@@ -79,8 +79,9 @@ type sessionJSON struct {
 	// is legal.
 	LastCommandExitCode int32 `json:"last_command_exit_code"`
 	CommandFinished     bool  `json:"command_finished"`
-	// ReportedState is what a program in the session said about itself via `cm report`: "idle", "busy",
-	// or "blocked". Empty when nothing has reported.
+	// ReportedState is what a program in the session said about itself, through OSC 7501 or `cm report`:
+	// "idle", "working", "done", "blocked", or "error". Empty when nothing has reported. A server older
+	// than OSC 7501 support says "busy" for working.
 	//
 	// Takes precedence over Busy, which is derived from the shell. A program describing itself is better
 	// evidence, and "blocked" cannot be derived at all: a shell marks a command as running whether it is
@@ -90,6 +91,10 @@ type sessionJSON struct {
 	// free-form and optional.
 	ReportedDetail string `json:"reported_detail"`
 	ReportedSource string `json:"reported_source"`
+	// ReportedKind is what a blocked program needs, "permission", "question", or "auth", when it said.
+	ReportedKind string `json:"reported_kind"`
+	// ReportedProgress is how far along the reported work is, 0 to 100, null when the program gave none.
+	ReportedProgress *int32 `json:"reported_progress"`
 	// ReportedAt is when the report was made, null when nothing has reported.
 	//
 	// Worth reading rather than assuming a report is current: it is the program's last word and stands
@@ -249,6 +254,8 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedState:       s.ReportedState,
 		ReportedDetail:      s.ReportedDetail,
 		ReportedSource:      s.ReportedSource,
+		ReportedKind:        s.ReportedKind,
+		ReportedProgress:    s.ReportedProgress,
 		ReportedAt:          unixTimeOrNil(s.ReportedAtUnix),
 		Tags:                sessionTags,
 		Hosting:             hosting,
@@ -446,7 +453,15 @@ func sessionStateColumn(s *serverv1.Session) string {
 	case state == "running" && s.ReportedState != "":
 		// A report wins over the derived state, and its detail is the useful part: "blocked" alone
 		// says a program wants something, while "blocked: needs approval" says what.
+		// Kind and progress are short and say what the state alone cannot: "blocked permission" is a
+		// different request from "blocked question", and "working 40%" says how long to wait.
 		out := "running(" + s.ReportedState
+		if s.ReportedKind != "" {
+			out += " " + s.ReportedKind
+		}
+		if s.ReportedProgress != nil {
+			out += fmt.Sprintf(" %d%%", *s.ReportedProgress)
+		}
 		if s.ReportedDetail != "" {
 			// Truncated, not reduced to its first word: a detail is a sentence a human wrote, so
 			// "needs approval" must not become "needs". A bound is still needed, since the column
@@ -785,6 +800,9 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"reported_state", j.ReportedState},
 		{"reported_detail", j.ReportedDetail},
 		{"reported_source", j.ReportedSource},
+		{"reported_kind", j.ReportedKind},
+		// Empty rather than a number when there is none, for the reason reported_at below is.
+		{"reported_progress", formatProgress(j.ReportedProgress)},
 		// When, so a caller can tell a program blocked right now from one that said so before the last
 		// server restart. Empty when nothing has reported: `--field` prints one bare value for a script to
 		// read, so there is no null to print here, unlike the JSON.
@@ -1041,4 +1059,12 @@ func reportKill(w io.Writer, resp *serverv1.KillResponse, asJSON bool) error {
 		return errAlreadyReported
 	}
 	return fmt.Errorf("%s", strings.Join(msgs, "; "))
+}
+
+// formatProgress renders a reported percentage for --field, empty when there is none.
+func formatProgress(p *int32) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprint(*p)
 }

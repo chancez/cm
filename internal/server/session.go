@@ -1630,23 +1630,20 @@ func (s *Session) noteStatus() {
 	})
 }
 
-// setReported records what `cm report` said, as a report about the session's root record. A zero value
-// clears every record, so the session falls back to what cm derives.
+// setReported records what `cm report` said, as a report about the session's root record. An empty state
+// clears every record, so the session falls back to what cm derives. A Progress of zero is zero percent;
+// -1 is none.
 //
 // A time that is already set is kept: that is a report recovered at adoption, and it has to keep the
 // moment it was made rather than claim to be current.
 func (s *Session) setReported(r Reported) {
-	at := r.At
-	if at.IsZero() {
-		at = time.Now()
+	if r.At.IsZero() {
+		r.At = time.Now()
 	}
-	s.updateRecords(func(recs *progstatus.Records) bool {
-		state := r.State
-		if state == "" {
-			state = "clear"
-		}
-		return recs.Apply(recordFromReport(state, r.Detail, r.Source, at, false))
-	})
+	if r.State == "" {
+		r.State = "clear"
+	}
+	s.updateRecords(func(recs *progstatus.Records) bool { return recs.Apply(recordFromReport(r, false)) })
 }
 
 // updateRecords changes the session's records and, when their summary says something new, publishes it.

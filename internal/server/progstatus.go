@@ -34,5 +34,7 @@ func applyStatusChunk(recs *progstatus.Records, legacy *osc.Report, events []osc
 // Its "clear" withdrew the session's only report, so it clears every record: with one record per session
 // the two meant the same thing.
 func applyLegacyReport(recs *progstatus.Records, r osc.Report, at time.Time) bool {
-	return recs.Apply(recordFromReport(r.State, r.Detail, r.Source, at, true))
+	return recs.Apply(recordFromReport(Reported{
+		State: r.State, Detail: r.Detail, Source: r.Source, Progress: -1, At: at,
+	}, true))
 }

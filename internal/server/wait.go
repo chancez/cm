@@ -216,6 +216,10 @@ func satisfied(sess *Session, until serverv1.WaitState) bool {
 			return r.State == "working"
 		case serverv1.WaitState_WAIT_STATE_BLOCKED:
 			return r.State == "blocked"
+		case serverv1.WaitState_WAIT_STATE_DONE:
+			return r.State == "done"
+		case serverv1.WaitState_WAIT_STATE_ERROR:
+			return r.State == "error"
 		}
 		return false
 	}
@@ -226,8 +230,8 @@ func satisfied(sess *Session, until serverv1.WaitState) bool {
 		return !cmd.Running
 	case serverv1.WaitState_WAIT_STATE_BUSY:
 		return cmd.Running
-	case serverv1.WaitState_WAIT_STATE_BLOCKED:
-		// Nothing has reported, and blocked cannot be derived from a shell marker: a command is running
+	case serverv1.WaitState_WAIT_STATE_BLOCKED, serverv1.WaitState_WAIT_STATE_DONE, serverv1.WaitState_WAIT_STATE_ERROR:
+		// Nothing has reported, and none of these can be derived from a shell marker: a command is running
 		// whether it is computing or waiting at a prompt of its own. Unreachable rather than false, so a
 		// caller waiting for it is told instead of timing out.
 		return false
@@ -286,6 +290,10 @@ func waitStateName(s serverv1.WaitState) string {
 		return "exited"
 	case serverv1.WaitState_WAIT_STATE_BLOCKED:
 		return "blocked"
+	case serverv1.WaitState_WAIT_STATE_DONE:
+		return "done"
+	case serverv1.WaitState_WAIT_STATE_ERROR:
+		return "error"
 	}
 	return "unspecified"
 }

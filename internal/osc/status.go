@@ -308,14 +308,11 @@ func ParseStatus(payload []byte) (Status, bool) {
 		s.App = ""
 	}
 
-	if s.State == "blocked" && statusKinds[kind] {
-		s.Kind = kind
+	s.Kind = kind
+	if n, err := strconv.Atoi(progress); err == nil && validDigits(progress) {
+		s.Progress = n
 	}
-	if s.State == "working" || s.State == "blocked" {
-		if n, err := strconv.Atoi(progress); err == nil && n >= 0 && n <= 100 && validDigits(progress) {
-			s.Progress = n
-		}
-	}
+	s = s.Normalized()
 
 	var ok bool
 	if s.Title, ok = decodeStatusText(title, maxStatusTitleEnc, maxStatusTitleDec); !ok {
@@ -325,6 +322,21 @@ func ParseStatus(payload []byte) (Status, bool) {
 		return Status{}, false
 	}
 	return s, true
+}
+
+// Normalized applies the rules for which fields a state may carry: a kind only with "blocked" and only one
+// this build knows, and a progress only with "working" or "blocked" and only from 0 to 100. Anything else
+// is absent, as the specification says, rather than an error.
+//
+// A method so a report that did not come from the wire, such as `cm report`, follows the same rules.
+func (s Status) Normalized() Status {
+	if s.State != "blocked" || !statusKinds[s.Kind] {
+		s.Kind = ""
+	}
+	if (s.State != "working" && s.State != "blocked") || s.Progress < 0 || s.Progress > 100 {
+		s.Progress = -1
+	}
+	return s
 }
 
 // decodeStatusText decodes a title or message, reporting false for anything the specification says

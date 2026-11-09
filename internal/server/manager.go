@@ -520,7 +520,8 @@ func recoveredRecords(rec store.Session, rp replayed) progstatus.Records {
 	if rp.commands.Seen() && !rp.commands.State().Running {
 		return recs
 	}
-	recs.Apply(recordFromReport(stored.State, stored.Detail, stored.Source, stored.At, false))
+	stored.Progress = -1
+	recs.Apply(recordFromReport(stored, false))
 	return recs
 }
 

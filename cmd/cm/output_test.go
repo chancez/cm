@@ -94,6 +94,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		// reported_at makes the state readable: a report stands until the program changes it and
 		// survives a server restart, so its age is what separates "blocked now" from "blocked at 9am".
 		"reported_state", "reported_detail", "reported_source", "reported_at",
+		// From OSC 7501: what a blocked program needs, and how far along the work is.
+		"reported_kind", "reported_progress",
 		"tags", "hosting",
 		// Counted separately from hosting, which names sessions: an announced client is a nonce on another
 		// host, and this is the one nesting state that can be stale.
@@ -971,6 +973,21 @@ func TestSessionStateColumnShowsAnOldReportsAge(t *testing.T) {
 	s.ReportedAtUnix = time.Now().Add(-3 * time.Hour).Unix()
 
 	want := "running(blocked: needs approval, 3h)"
+	if got := sessionStateColumn(s); got != want {
+		t.Errorf("sessionStateColumn() = %q, want %q", got, want)
+	}
+}
+
+// A program status report's kind and progress show in the column, ahead of the detail.
+func TestSessionStateColumnShowsKindAndProgress(t *testing.T) {
+	s := sampleWireSession("work")
+	s.ReportedAtUnix = time.Now().Unix()
+	s.ReportedState = "blocked"
+	s.ReportedKind = "permission"
+	s.ReportedProgress = new(int32(40))
+	s.ReportedDetail = "Apply?"
+
+	want := "running(blocked permission 40%: Apply?)"
 	if got := sessionStateColumn(s); got != want {
 		t.Errorf("sessionStateColumn() = %q, want %q", got, want)
 	}

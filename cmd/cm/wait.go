@@ -26,6 +26,8 @@ var waitStates = map[string]serverv1.WaitState{
 	"busy":    serverv1.WaitState_WAIT_STATE_BUSY,
 	"exited":  serverv1.WaitState_WAIT_STATE_EXITED,
 	"blocked": serverv1.WaitState_WAIT_STATE_BLOCKED,
+	"done":    serverv1.WaitState_WAIT_STATE_DONE,
+	"error":   serverv1.WaitState_WAIT_STATE_ERROR,
 }
 
 // waitStateNames lists the states a wait accepts, in a stable order for help text and error messages.
@@ -58,7 +60,12 @@ func newWaitCommand(g *globals) *cobra.Command {
   idle     the shell is at a prompt with nothing running
   busy     a command is running
   blocked  a program reported that it needs input
+  done     a program reported that it finished a piece of work
+  error    a program reported that it failed
   exited   the session has ended
+
+When a program reports its own state (OSC 7501, or cm report), that wins over
+the shell's: idle is then a report of idle, done, or error, busy one of working.
 
 Idle and busy come from what the shell reports via OSC 133, so they need a shell
 with terminal integration loaded. A session whose shell reports nothing never
@@ -225,8 +232,9 @@ func (t waitTarget) describe() string {
 // Derived rather than stored, so the rule lives in one place: `cm send --wait` runs the same wait through
 // the same server and asks this too, and two copies of "which forms need what" would drift.
 //
-// Only two forms have a dependency. Blocked exists only when a program reports it, and match is a field an
-// older server reads as absent, so both can be asked of a server that will never answer. Idle, busy and
+// Only the reported states and match have a dependency. Blocked, done and error exist only when a program
+// reports them, and match is a field an older server reads as absent, so each can be asked of a server
+// that will never answer. Idle, busy and
 // exited come from OSC 133 and the session's own state, which every server has always done.
 func (t waitTarget) needsCapability() (capability.Name, string) {
 	switch {
@@ -234,6 +242,8 @@ func (t waitTarget) needsCapability() (capability.Name, string) {
 		return capability.WaitMatch, "wait for text to appear in a session's output"
 	case t.state == serverv1.WaitState_WAIT_STATE_BLOCKED:
 		return capability.WaitReportedState, "wait for the blocked state"
+	case t.state == serverv1.WaitState_WAIT_STATE_DONE, t.state == serverv1.WaitState_WAIT_STATE_ERROR:
+		return capability.WaitProgramStatus, "wait for the done or error state"
 	}
 	return "", ""
 }

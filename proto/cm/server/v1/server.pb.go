@@ -39,9 +39,10 @@ type ReportedState int32
 
 const (
 	ReportedState_REPORTED_STATE_UNSPECIFIED ReportedState = 0
-	// IDLE means the program finished and is not waiting on anything.
+	// IDLE means the program is at rest, waiting for its next instruction.
 	ReportedState_REPORTED_STATE_IDLE ReportedState = 1
-	// BUSY means it is working.
+	// BUSY means it is working, which the program status protocol (OSC 7501) calls "working". The old name
+	// is kept because the number is what travels.
 	ReportedState_REPORTED_STATE_BUSY ReportedState = 2
 	// BLOCKED means it needs input and will not progress until it gets some.
 	//
@@ -50,6 +51,10 @@ const (
 	ReportedState_REPORTED_STATE_BLOCKED ReportedState = 3
 	// CLEAR removes a report, so the session falls back to what cm derives from the shell.
 	ReportedState_REPORTED_STATE_CLEAR ReportedState = 4
+	// DONE means it finished a piece of work whose result is ready to look at.
+	ReportedState_REPORTED_STATE_DONE ReportedState = 5
+	// ERROR means it failed and stopped.
+	ReportedState_REPORTED_STATE_ERROR ReportedState = 6
 )
 
 // Enum value maps for ReportedState.
@@ -60,6 +65,8 @@ var (
 		2: "REPORTED_STATE_BUSY",
 		3: "REPORTED_STATE_BLOCKED",
 		4: "REPORTED_STATE_CLEAR",
+		5: "REPORTED_STATE_DONE",
+		6: "REPORTED_STATE_ERROR",
 	}
 	ReportedState_value = map[string]int32{
 		"REPORTED_STATE_UNSPECIFIED": 0,
@@ -67,6 +74,8 @@ var (
 		"REPORTED_STATE_BUSY":        2,
 		"REPORTED_STATE_BLOCKED":     3,
 		"REPORTED_STATE_CLEAR":       4,
+		"REPORTED_STATE_DONE":        5,
+		"REPORTED_STATE_ERROR":       6,
 	}
 )
 
@@ -113,6 +122,13 @@ const (
 	// Only reachable when something reports it: a shell marks a command as running whether it is computing
 	// or waiting at a prompt of its own, so this cannot be derived from OSC 133.
 	WaitState_WAIT_STATE_BLOCKED WaitState = 4
+	// DONE means a program in the session reported that it finished a piece of work.
+	//
+	// Reported only, like BLOCKED, and needs capability wait.program-status: an older server does not
+	// know the state and would never consider a wait for it satisfied.
+	WaitState_WAIT_STATE_DONE WaitState = 5
+	// ERROR means a program in the session reported that it failed. Reported only, like DONE.
+	WaitState_WAIT_STATE_ERROR WaitState = 6
 )
 
 // Enum value maps for WaitState.
@@ -123,6 +139,8 @@ var (
 		2: "WAIT_STATE_BUSY",
 		3: "WAIT_STATE_EXITED",
 		4: "WAIT_STATE_BLOCKED",
+		5: "WAIT_STATE_DONE",
+		6: "WAIT_STATE_ERROR",
 	}
 	WaitState_value = map[string]int32{
 		"WAIT_STATE_UNSPECIFIED": 0,
@@ -130,6 +148,8 @@ var (
 		"WAIT_STATE_BUSY":        2,
 		"WAIT_STATE_EXITED":      3,
 		"WAIT_STATE_BLOCKED":     4,
+		"WAIT_STATE_DONE":        5,
+		"WAIT_STATE_ERROR":       6,
 	}
 )
 
@@ -516,7 +536,13 @@ type ReportRequest struct {
 	Detail string `protobuf:"bytes,3,opt,name=detail,proto3" json:"detail,omitempty"`
 	// Who is reporting, for display and so one reporter's state is distinguishable from another's.
 	// Optional; free-form.
-	Source        string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	Source string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	// What a blocked program needs: "permission", "question", or "auth". Only meaningful with BLOCKED.
+	// An older server ignores it and records the report without one.
+	Kind string `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
+	// How far along the work is, 0 to 100. Only meaningful with BUSY or BLOCKED. Absent means no
+	// percentage, which is why this is optional: zero is a percentage.
+	Progress      *int32 `protobuf:"varint,6,opt,name=progress,proto3,oneof" json:"progress,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -577,6 +603,20 @@ func (x *ReportRequest) GetSource() string {
 		return x.Source
 	}
 	return ""
+}
+
+func (x *ReportRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ReportRequest) GetProgress() int32 {
+	if x != nil && x.Progress != nil {
+		return *x.Progress
+	}
+	return 0
 }
 
 type ReportResponse struct {
@@ -3597,7 +3637,9 @@ type Session struct {
 	// Working directory as the shell reported it, which is a URI for OSC 7 and keeps the host, so a
 	// caller can tell a remote directory from a local one. cwd holds the decoded local path.
 	CwdUri string `protobuf:"bytes,11,opt,name=cwd_uri,json=cwdUri,proto3" json:"cwd_uri,omitempty"`
-	// What a program in the session reported about itself, if anything: "idle", "busy", or "blocked".
+	// What a program in the session reported about itself, if anything, in the program status protocol's
+	// (OSC 7501) vocabulary: "idle", "working", "done", "blocked", or "error". A server older than that
+	// reports "busy" for working.
 	//
 	// Empty when nothing has reported, in which case busy below is what cm derived from the shell. When
 	// both are present this one wins, since a program describing itself is better evidence than a shell
@@ -3613,6 +3655,10 @@ type Session struct {
 	// until the program says otherwise, and it survives a server restart, so "blocked" alone cannot
 	// distinguish a program waiting on an answer now from one that said so hours ago.
 	ReportedAtUnix int64 `protobuf:"varint,24,opt,name=reported_at_unix,json=reportedAtUnix,proto3" json:"reported_at_unix,omitempty"`
+	// What a blocked program needs, "permission", "question", or "auth", when it said.
+	ReportedKind string `protobuf:"bytes,28,opt,name=reported_kind,json=reportedKind,proto3" json:"reported_kind,omitempty"`
+	// How far along the reported work is, 0 to 100. Absent when the program gave no percentage.
+	ReportedProgress *int32 `protobuf:"varint,29,opt,name=reported_progress,json=reportedProgress,proto3,oneof" json:"reported_progress,omitempty"`
 	// Whether a command is running, as opposed to the shell sitting at a prompt, from OSC 133.
 	//
 	// A terminal emulator needs this to decide whether closing a window is destructive: the shell owns
@@ -3847,6 +3893,20 @@ func (x *Session) GetReportedSource() string {
 func (x *Session) GetReportedAtUnix() int64 {
 	if x != nil {
 		return x.ReportedAtUnix
+	}
+	return 0
+}
+
+func (x *Session) GetReportedKind() string {
+	if x != nil {
+		return x.ReportedKind
+	}
+	return ""
+}
+
+func (x *Session) GetReportedProgress() int32 {
+	if x != nil && x.ReportedProgress != nil {
+		return *x.ReportedProgress
 	}
 	return 0
 }
@@ -5163,12 +5223,15 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\aclients\x18\t \x01(\x05R\aclients\x12\x1a\n" +
 	"\bterminal\x18\n" +
 	" \x01(\bR\bterminal\x12\"\n" +
-	"\fcapabilities\x18\v \x03(\tR\fcapabilities\"\x8c\x01\n" +
+	"\fcapabilities\x18\v \x03(\tR\fcapabilities\"\xce\x01\n" +
 	"\rReportRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x121\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1b.cm.server.v1.ReportedStateR\x05state\x12\x16\n" +
 	"\x06detail\x18\x03 \x01(\tR\x06detail\x12\x16\n" +
-	"\x06source\x18\x04 \x01(\tR\x06source\"\x10\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x12\x12\n" +
+	"\x04kind\x18\x05 \x01(\tR\x04kind\x12\x1f\n" +
+	"\bprogress\x18\x06 \x01(\x05H\x00R\bprogress\x88\x01\x01B\v\n" +
+	"\t_progress\"\x10\n" +
 	"\x0eReportResponse\"\xaf\x01\n" +
 	"\vReadRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x14\n" +
@@ -5383,7 +5446,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xf3\a\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xe0\b\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5403,7 +5466,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x0ereported_state\x18\x0e \x01(\tR\rreportedState\x12'\n" +
 	"\x0freported_detail\x18\x0f \x01(\tR\x0ereportedDetail\x12'\n" +
 	"\x0freported_source\x18\x10 \x01(\tR\x0ereportedSource\x12(\n" +
-	"\x10reported_at_unix\x18\x18 \x01(\x03R\x0ereportedAtUnix\x12\x12\n" +
+	"\x10reported_at_unix\x18\x18 \x01(\x03R\x0ereportedAtUnix\x12#\n" +
+	"\rreported_kind\x18\x1c \x01(\tR\freportedKind\x120\n" +
+	"\x11reported_progress\x18\x1d \x01(\x05H\x00R\x10reportedProgress\x88\x01\x01\x12\x12\n" +
 	"\x04busy\x18\f \x01(\bR\x04busy\x12\x18\n" +
 	"\acommand\x18\r \x01(\tR\acommand\x123\n" +
 	"\x16last_command_exit_code\x18\x11 \x01(\x05R\x13lastCommandExitCode\x12)\n" +
@@ -5417,7 +5482,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"M\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +
+	"\x12_reported_progress\"M\n" +
 	"\rLocationFrame\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04argv\x18\x02 \x01(\tR\x04argv\x12\x18\n" +
@@ -5509,19 +5575,23 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03env\x18\x01 \x03(\v2%.cm.server.v1.GetEnvResponse.EnvEntryR\x03env\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x97\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\xca\x01\n" +
 	"\rReportedState\x12\x1e\n" +
 	"\x1aREPORTED_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13REPORTED_STATE_IDLE\x10\x01\x12\x17\n" +
 	"\x13REPORTED_STATE_BUSY\x10\x02\x12\x1a\n" +
 	"\x16REPORTED_STATE_BLOCKED\x10\x03\x12\x18\n" +
-	"\x14REPORTED_STATE_CLEAR\x10\x04*\x80\x01\n" +
+	"\x14REPORTED_STATE_CLEAR\x10\x04\x12\x17\n" +
+	"\x13REPORTED_STATE_DONE\x10\x05\x12\x18\n" +
+	"\x14REPORTED_STATE_ERROR\x10\x06*\xab\x01\n" +
 	"\tWaitState\x12\x1a\n" +
 	"\x16WAIT_STATE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fWAIT_STATE_IDLE\x10\x01\x12\x13\n" +
 	"\x0fWAIT_STATE_BUSY\x10\x02\x12\x15\n" +
 	"\x11WAIT_STATE_EXITED\x10\x03\x12\x16\n" +
-	"\x12WAIT_STATE_BLOCKED\x10\x04*T\n" +
+	"\x12WAIT_STATE_BLOCKED\x10\x04\x12\x13\n" +
+	"\x0fWAIT_STATE_DONE\x10\x05\x12\x14\n" +
+	"\x10WAIT_STATE_ERROR\x10\x06*T\n" +
 	"\tIfRunning\x12\x1a\n" +
 	"\x16IF_RUNNING_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11IF_RUNNING_ATTACH\x10\x01\x12\x14\n" +
@@ -5746,6 +5816,7 @@ func file_cm_server_v1_server_proto_init() {
 	if File_cm_server_v1_server_proto != nil {
 		return
 	}
+	file_cm_server_v1_server_proto_msgTypes[2].OneofWrappers = []any{}
 	file_cm_server_v1_server_proto_msgTypes[13].OneofWrappers = []any{
 		(*AttachRequest_Open)(nil),
 		(*AttachRequest_Input)(nil),
@@ -5764,6 +5835,7 @@ func file_cm_server_v1_server_proto_init() {
 		(*AttachResponse_Hosting)(nil),
 		(*AttachResponse_Images)(nil),
 	}
+	file_cm_server_v1_server_proto_msgTypes[39].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -90,4 +91,46 @@ func TestAdoptionRecoversProgramStatusRecords(t *testing.T) {
 		t.Errorf("records = %+v, want %+v", got, want)
 	}
 	checkReported(t, sess.Reported(), Reported{State: "blocked", Source: "deploy", Progress: -1}, "")
+}
+
+// cm report carries the protocol's states, kind and progress, and the waits follow them: done satisfies a
+// wait for done and one for idle, since a program that has finished is not busy.
+func TestReportCarriesProgramStatus(t *testing.T) {
+	svc, sess := waitFixture(t, "reportstatus", "sleep 5")
+	ctx := context.Background()
+
+	if _, err := svc.Report(ctx, &serverv1.ReportRequest{
+		Session:  "reportstatus",
+		State:    serverv1.ReportedState_REPORTED_STATE_BLOCKED,
+		Detail:   "Apply?",
+		Kind:     "permission",
+		Progress: new(int32(40)),
+	}); err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	checkReported(t, sess.Reported(), Reported{State: "blocked", Detail: "Apply?", Kind: "permission", Progress: 40}, "")
+
+	// A kind on a state that cannot carry one is dropped, as it would be from the sequence.
+	if _, err := svc.Report(ctx, &serverv1.ReportRequest{
+		Session:  "reportstatus",
+		State:    serverv1.ReportedState_REPORTED_STATE_DONE,
+		Kind:     "permission",
+		Progress: new(int32(40)),
+	}); err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	checkReported(t, sess.Reported(), Reported{State: "done", Progress: -1}, "")
+	for _, tc := range []struct {
+		until serverv1.WaitState
+		want  bool
+	}{
+		{serverv1.WaitState_WAIT_STATE_DONE, true},
+		{serverv1.WaitState_WAIT_STATE_IDLE, true},
+		{serverv1.WaitState_WAIT_STATE_ERROR, false},
+		{serverv1.WaitState_WAIT_STATE_BUSY, false},
+	} {
+		if got := satisfied(sess, tc.until); got != tc.want {
+			t.Errorf("satisfied(%v) with a done report = %v, want %v", tc.until, got, tc.want)
+		}
+	}
 }

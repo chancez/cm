@@ -95,16 +95,23 @@ func summarize(recs *progstatus.Records) Reported {
 // "busy" is the name cm used before adopting the program status protocol, and becomes "working". The
 // source stays free-form, carried beside the app rather than as one: cm does not care what reports, and
 // an app is restricted to 32 bytes of [A-Za-z0-9_.+-]. The detail is fitted to what a message may carry
-// rather than rejected, so a report that used to be shown does not start vanishing.
-func recordFromReport(state, detail, source string, at time.Time, legacy bool) progstatus.Record {
+// rather than rejected, so a report that used to be shown does not start vanishing. Kind and progress
+// follow the protocol's rules, so `cm report` cannot say what a sequence could not.
+func recordFromReport(r Reported, legacy bool) progstatus.Record {
+	state := r.State
 	if state == "busy" {
 		state = "working"
 	}
 	return progstatus.Record{
-		Status: osc.Status{State: state, Progress: -1, Message: fitText(detail, 2048)},
-		Source: source,
+		Status: osc.Status{
+			State:    state,
+			Kind:     r.Kind,
+			Progress: r.Progress,
+			Message:  fitText(r.Detail, 2048),
+		}.Normalized(),
+		Source: r.Source,
 		Legacy: legacy,
-		At:     at,
+		At:     r.At,
 	}
 }
 
@@ -132,6 +139,8 @@ var reportedStateNames = map[serverv1.ReportedState]string{
 	serverv1.ReportedState_REPORTED_STATE_IDLE:    "idle",
 	serverv1.ReportedState_REPORTED_STATE_BUSY:    "working",
 	serverv1.ReportedState_REPORTED_STATE_BLOCKED: "blocked",
+	serverv1.ReportedState_REPORTED_STATE_DONE:    "done",
+	serverv1.ReportedState_REPORTED_STATE_ERROR:   "error",
 }
 
 // Report records what a program in a session says it is doing.
@@ -171,10 +180,16 @@ func (s *Service) Report(ctx context.Context, req *serverv1.ReportRequest) (*ser
 		return nil, fmt.Errorf("unknown state %v", req.State)
 	}
 
+	progress := -1
+	if req.Progress != nil {
+		progress = int(*req.Progress)
+	}
 	sess.setReported(Reported{
-		State:  name,
-		Detail: req.Detail,
-		Source: req.Source,
+		State:    name,
+		Detail:   req.Detail,
+		Source:   req.Source,
+		Kind:     req.Kind,
+		Progress: progress,
 	})
 	return &serverv1.ReportResponse{}, nil
 }
