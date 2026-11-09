@@ -370,7 +370,8 @@ func classify(p []byte) (n int, answered bool) {
 	return 0, false
 }
 
-// classifyOSCAnswerable recognizes the one OSC query the emulator answers: OSC 4, a palette entry.
+// classifyOSCAnswerable recognizes the OSC queries the emulator answers: OSC 4, a palette entry, and the
+// OSC 7501 program status support query.
 //
 // Found by the emulator sweep rather than by reading libghostty. It was first classified as terminal-only
 // on the reasoning that a palette belongs to the window, which is true of a real terminal and false of
@@ -384,6 +385,11 @@ func classifyOSCAnswerable(p []byte) (n int, answered bool) {
 	end, body, ok := oscBody(p)
 	if !ok {
 		return 0, false
+	}
+	// Exactly "7501;?". The emulator answers only that spelling: "7501;?:x=1" and "7501;??" go
+	// unanswered, which the sweep checks, and a report such as "7501;state=idle" is not a question.
+	if string(body) == "7501;?" {
+		return end, true
 	}
 	// OSC 4 is "4;index;spec", and the query form has "?" as the spec.
 	if len(body) < 2 || body[0] != '4' || body[1] != ';' {

@@ -60,9 +60,18 @@ func TestQuerySetsAgreeWithEmulator(t *testing.T) {
 			"\x1b]"+s+";c;?\x07",
 		)
 	}
-	for _, n := range []string{"777", "25453"} {
+	for _, n := range []string{"777", "7501", "25453"} {
 		seqs = append(seqs, "\x1b]"+n+";?\x07")
 	}
+	// The program status support query, and the near misses around it: a report is not a query, and
+	// anything after the "?" makes it a different sequence.
+	seqs = append(seqs,
+		"\x1b]7501;?\x1b\\",
+		"\x1b]7501;state=idle\x07",
+		"\x1b]7501;?:x=1\x07",
+		"\x1b]7501;??\x07",
+		"\x1b]7501;\x07",
+	)
 
 	// DCS: XTGETTCAP (+q, terminal-only) and DECRQSS ($q, answerable).
 	seqs = append(seqs,

@@ -142,6 +142,11 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 		libghostty.WithTitleReport(true),
 		// Tracked so Continuation can say what a fresh terminal needs to pick up mid-sequence. See there.
 		libghostty.WithContinuationMaxBytes(MaxContinuation),
+		// Installed only so the emulator answers the OSC 7501 support query: without a program status
+		// callback libghostty stays silent on "OSC 7501 ; ?", and a program asking whether cm tracks its
+		// status concludes it does not. The reports themselves are read by internal/osc, which works with
+		// no model at all, so this callback has nothing to do.
+		libghostty.WithProgramStatus(func(*libghostty.Terminal, libghostty.ProgramStatus) {}),
 	}
 	// Each callback is installed only when wanted, so a caller that does not want one does not pay for
 	// it. The closures check closed for the same reason the C trampolines did: libghostty only calls
