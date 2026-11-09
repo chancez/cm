@@ -211,6 +211,10 @@ cm report --state blocked --detail "needs approval"   # uses $CM_SESSION
 cm wait reviewer --until blocked                      # now reachable
 ```
 
+The states are those of the program status protocol, OSC 7501: `idle`, `working`, `done`,
+`blocked`, `error`. A program that already writes the sequence needs nothing else, since cm reads
+it from the session's output and answers the protocol's support query itself.
+
 From a shell, load the integration and use the function instead, which writes an escape
 sequence directly and costs nothing where a cm invocation costs about 23ms:
 

@@ -40,7 +40,7 @@ Read state from `--json` rather than parsing the table. The fields that matter f
 - `state`: `running`, `exited`, or `dead`. `dead` means cm lost track of the process, which is different from a command that failed.
 - `busy` and `command`: whether a command is running and which. Derived from OSC 133, so they only work when the session's shell emits those markers.
 - `last_command_exit_code` and `command_finished`: the last command's status, distinct from `exit_code`, which is the *session's*. A failing build in a live session has `exit_code` 0 and `last_command_exit_code` non-zero.
-- `reported_state`, `reported_detail`, `reported_source`: what a program inside said about itself. Empty unless something reported.
+- `reported_state`, `reported_detail`, `reported_source`, `reported_kind`, `reported_progress`: what a program inside said about itself, one of `idle`, `working`, `done`, `blocked`, `error`. Empty unless something reported.
 
 If `cm info <name>` says the session is not found, it has ended and been forgotten. That is not an error to retry.
 
@@ -162,10 +162,13 @@ cm can tell that a command is running. It cannot tell whether that command is co
 For a coding agent, that is exactly the interesting state: "I need your input" versus "I am still working". Wire it to whatever hook the agent has:
 
 ```bash
-cm report <name> --state blocked --detail "needs approval"
-cm report --state busy            # inside a session, the session comes from CM_SESSION
+cm report <name> --state blocked --kind permission --detail "needs approval"
+cm report --state working         # inside a session, the session comes from CM_SESSION
+cm report --state done --detail "review complete"
 cm report --state clear           # withdraw, falling back to what cm derives
 ```
+
+This is the program status protocol (OSC 7501), so a program that already emits it reports with no wiring at all. `working` and `blocked` end when the session's shell next prompts or the program exits; `done` and `error` stay until replaced.
 
 From a shell, the cheaper form avoids paying ~23ms per call:
 
@@ -185,8 +188,8 @@ A program with no OSC 133 and no reporting is invisible to `--wait` and `cm wait
 You do not have to guess when a delegated agent is done. Tell it to say so, in the prompt you send:
 
 ```bash
-cm send reviewer 'Review the current diff. When you are finished, run: cm report --state blocked --detail "review complete"' --enter
-cm wait reviewer --until blocked --timeout 10m
+cm send reviewer 'Review the current diff. When you are finished, run: cm report --state done --detail "review complete"' --enter
+cm wait reviewer --until done --timeout 10m
 ```
 
 Keep the instruction on one line. `cm send` writes exactly what you give it, so an embedded newline submits the prompt early and the rest arrives as a second, separate input.
@@ -226,7 +229,7 @@ To check whether anything is reporting in a session, read `reported_state`, not 
 cm info <name> --field reported_state       # non-empty means something reported
 ```
 
-Ask for `blocked` rather than `idle` when the agent is waiting for your next instruction: that is what `blocked` means, and it keeps "waiting for me" distinct from "shell at a prompt".
+Report `done` when the agent has finished what it was asked, and `blocked` when it needs an answer to carry on. Ask for `blocked` rather than `idle` when the agent is waiting for your next instruction: that is what `blocked` means, and it keeps "waiting for me" distinct from "shell at a prompt".
 
 ## Turn-taking with an agent in a session
 

@@ -2364,8 +2364,11 @@ session adopted by a new server reports idle until its next command.
 
 ## State a program reports about itself
 
-`cm report --state busy|blocked|idle|clear` records what a program in a session is doing. It is visible in
-`cm list` and `cm info`, forwarded on the metadata event, and waitable with `cm wait --until blocked`.
+A program says what it is doing with the program status protocol, OSC 7501
+([spec](https://www.superlogical.com/rex/docs/build/program-status)), or with `cm report`, which sends the
+same report as an RPC. The states are the protocol's: `idle`, `working`, `done`, `blocked`, `error`. It is
+visible in `cm list` and `cm info`, forwarded on the metadata event, and waitable with
+`cm wait --until blocked`, `done` or `error`.
 
 The reason it exists is that `blocked` cannot be derived. cm reads OSC 133 to know whether a command is
 running, which is enough for a shell and not enough for anything interactive: the shell reports a command
@@ -2389,9 +2392,8 @@ as the default target of a report moves nothing and retargets nothing, and an ex
 
 Reports survive a server restart, and how they do is the part worth knowing.
 
-A report arrives two ways. A shell integration writes cm's own OSC 25453 into the output, which the shim
-retains and adoption replays, so that half needs no storage at all: it is recovered from the same bytes
-that rebuild the screen. `cm report` is an RPC, reaches the server, and touches no stream, so a server that
+A report arrives two ways. A program writes OSC 7501 into the output, which the shim retains and adoption
+replays, so that half needs no storage at all: it is recovered from the same bytes that rebuild the screen. `cm report` is an RPC, reaches the server, and touches no stream, so a server that
 forgets it destroys the only copy. That half is stored, in four columns beside the session record.
 
 Storing it was reversed from the opposite decision, which was that a report describes a running program and
@@ -2413,6 +2415,39 @@ loaded also leaves the tracker saying "not running", and treating the two alike 
 from a session without shell integration, which is the session a program's own report is most needed for.
 `osc.CommandTracker.Seen` exists for this, because `Feed` cannot answer it -- an A marker arriving at a
 prompt changes nothing, so it reports no change.
+
+### The program status protocol
+
+cm is the terminal for OSC 7501, in the sense of "What cm is, from a program's point of view" above: it
+consumes the reports itself and answers the support query, `OSC 7501 ; ?`, from its own model. So a program
+inside cm finds the protocol supported whatever terminal is attached, and with none.
+
+The reports are parsed in Go, in `osc.StatusTracker`, rather than taken from libghostty's callback, because
+the reported state has to exist without a model: adoption replays the log with no emulator, and the server's
+tests run without one. Two parsers of one spec is the cost, and `TestStatusParserAgreesWithEmulator` is
+what keeps them one. It found three rules the spec does not state, all about which violations drop a field
+and which discard the report. libghostty still gets a no-op callback, since it answers the query only when
+one is installed.
+
+A session holds one record per id, as the spec requires, in `internal/progstatus`. What `cm list` shows is
+the most urgent record, blocked first, so one blocked child of a deploy shows while its siblings work.
+
+Working and blocked records end at the next prompt (OSC 133;A) and when the program exits; done and error
+stay until replaced. The prompt is read by the same tracker as the reports, because their order decides
+what survives and two parsers cannot say which came first in one chunk. Replay reads the log in large
+chunks, so "working, prompt, working" in one is ordinary there, and taking the prompt from the command
+tracker ended both reports.
+
+A full reset (RIS) does not clear records, against the spec. cm's client writes RIS when it detaches, and
+a client nested in a session writes it into that session's pty, after its nesting has ended: honoring it
+erased the parent's report on every nested detach. The cost is a done or error record surviving `reset`.
+
+cm's own OSC 25453 report is read as a report about the root record and exempt from the prompt rule. It is
+what a shell that loaded an older integration still writes, and its meaning cannot change under it.
+
+Not yet done: the reports are forwarded to clients in the byte stream unchanged, so an outer terminal that
+implements the protocol sees them, but nothing restores them on attach or clears them on a switch. See
+docs/ideas.md.
 
 Busy state and the running command are *not* stored, and never were. They come back the other way, from
 the replay, which is why a restart now shows the command a session has been running for an hour instead of

@@ -316,6 +316,26 @@ existing one applied to the input direction, which is currently uncounted.
 already derivable and is not exposed. `cm list` showing "running for 4m" would answer the question people
 actually ask a multiplexer, and the data is in hand.
 
+**Re-send OSC 7501 to each client.** Reports reach an attached terminal only as bytes in the stream, so an
+outer terminal that implements the protocol, ghostty today, is told about a session's records as they
+happen and never again: an attach starts it with none, and a `cm switch` leaves the previous session's on
+the window. Being the terminal for the protocol, as cm is for graphics, means stripping 7501 from the
+stream and sending each client a clear followed by the current records on attach and switch, plus cm's
+own 25453 reports translated. Cost: a strip in the pump, which changes byte counts and so has to happen
+where graphics already does, and a per-client replay at the point restore runs. Only worth it with an
+outer terminal that shows the records; kitty does not.
+
+**Every record in `cm info`.** A session keeps one record per id, and only the most urgent reaches the wire.
+A deploy reporting per region shows one region. Cost: a repeated message in the proto and a table in
+`cm info`, nothing in the server.
+
+**Mark done and error as seen.** The spec keeps them until replaced or cleared and leaves display to the
+terminal: "The terminal decides when to stop showing them, for example when the user returns to the
+terminal and presses a key." cm keeps them until replaced, so a finished agent reads "done" indefinitely.
+Deleting one on an attach is ruled out, because a `cm wait --until done` racing a person who attached to
+look would lose it. A seen flag that only dims the record in `cm ls` and the picker is the safe form: set
+on an interactive attach, a keypress, or a focus-in event cm already forwards.
+
 **A richer shell integration.** The current one provides `cm_report` and deliberately installs no prompt
 hook, because a shell at its prompt is idle rather than blocked and hooking it would mark every session
 blocked forever. What a prompt hook *could* usefully add is a report that includes the command's duration
@@ -585,7 +605,8 @@ as a set rather than adopted one at a time, since several touch the same code.
   asks a client for, so each needs `TestQuerySetsAgreeWithEmulator` re-run and `internal/query` updated.
 - **Semantic prompts**: a callback on OSC 133 and navigation by prompt. Overlaps `osc.CommandTracker`,
   `osc.BoundaryTracker`, and `cm read --since-commands`.
-- **OSC 7501** as an alternative to cm's own status tracking (OSC 25453).
+- **OSC 7501**, done: cm reads it, answers its support query, and it replaced OSC 25453 as the reported
+  state. See docs/architecture.md on the program status protocol.
 - **More kitty graphics support**, against cm's own retransmission on restore.
 - **Paste encoding**, for `cm send` and the auto-indented heredoc idea above.
 - **A memory usage query** per terminal, for `cm status` and `cm doctor`.
