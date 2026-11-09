@@ -1,7 +1,9 @@
 package shellinit
 
 import (
+	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,17 +43,20 @@ func TestScriptRejectsUnknownShell(t *testing.T) {
 	}
 }
 
-// Each script must emit the number the parser reads, since the two are one wire format split across two
-// languages. A change to either alone breaks every installed integration silently.
+// Each script must emit the numbers the parser reads, since the two are one wire format split across two
+// languages. A change to either alone breaks every installed integration silently. Reports are OSC 7501 and
+// command frames are cm's own OSC 25453.
 func TestScriptsUseTheRightOSCNumber(t *testing.T) {
 	for _, shell := range Shells() {
 		script, err := Script(shell)
 		if err != nil {
 			t.Fatalf("Script(%q) error = %v", shell, err)
 		}
-		want := "\\033]25453;"
-		if !strings.Contains(script, want) {
-			t.Errorf("%s script does not emit %q (OSC %d)", shell, want, osc.ReportNumber)
+		for _, n := range []int{osc.StatusNumber, osc.ReportNumber} {
+			want := fmt.Sprintf("\\033]%d;", n)
+			if !strings.Contains(script, want) {
+				t.Errorf("%s script does not emit %q (OSC %d)", shell, want, n)
+			}
 		}
 	}
 }
@@ -78,8 +83,9 @@ func TestScriptsGuardOnSessionEnv(t *testing.T) {
 // the parser was never the broken half.
 func TestRealShellsProduceParseableReports(t *testing.T) {
 	// A detail exercising every character with meaning: the field separator, the escape character, and
-	// printf's format specifier.
-	const detail = `a;b\c 50% x`
+	// printf's format specifier. And a tab, which the shell must remove: the protocol discards a report
+	// whose text holds a control character, so leaving it in makes the whole report vanish.
+	const detail = `a;b\c 50% xz`
 
 	tests := []struct {
 		shell string
@@ -88,15 +94,15 @@ func TestRealShellsProduceParseableReports(t *testing.T) {
 	}{
 		{
 			shell: "zsh",
-			call:  `d='a;b\c 50% x'; cm_report blocked "$d"`,
+			call:  `d=$'a;b\\c 50% x\tz'; cm_report blocked "$d"`,
 		},
 		{
 			shell: "bash",
-			call:  `d='a;b\c 50% x'; cm_report blocked "$d"`,
+			call:  `d=$'a;b\\c 50% x\tz'; cm_report blocked "$d"`,
 		},
 		{
 			shell: "fish",
-			call:  `set d 'a;b\c 50% x'; cm_report blocked $d`,
+			call:  `set d 'a;b\c 50% x'\t'z'; cm_report blocked $d`,
 		},
 	}
 
@@ -126,20 +132,18 @@ func TestRealShellsProduceParseableReports(t *testing.T) {
 				t.Fatalf("running the %s integration failed: %v\n%s", tt.shell, err, out)
 			}
 
-			var tr osc.ReportTracker
-			if !tr.Feed(out) {
-				t.Fatalf("%s emitted no parseable report: %q", tt.shell, out)
-			}
-			got, _ := tr.Take()
-			want := osc.Report{State: "blocked", Detail: detail, Source: tt.shell}
-			if got != want {
-				t.Errorf("report = %+v, want %+v\nraw: %q", got, want, out)
+			var tr osc.StatusTracker
+			tr.Feed(out)
+			want := []osc.StatusEvent{{Status: osc.Status{State: "blocked", Message: detail, App: tt.shell, Progress: -1}}}
+			if got := tr.Take(); !slices.Equal(got, want) {
+				t.Errorf("reports = %+v, want %+v\nraw: %q", got, want, out)
 			}
 		})
 	}
 }
 
-// A state with no detail must still parse, since that is the common call.
+// A state with no detail must still parse, since that is the common call. busy is the name cm used before
+// the protocol, and becomes working, so a hook written against it keeps working.
 func TestRealShellsReportWithoutDetail(t *testing.T) {
 	for _, shell := range Shells() {
 		t.Run(shell, func(t *testing.T) {
@@ -153,21 +157,18 @@ func TestRealShellsReportWithoutDetail(t *testing.T) {
 			}
 			source := strings.Replace(script, "> /dev/tty 2>/dev/null", "", -1)
 
-			cmd := exec.Command(bin, "-c", source+"\ncm_report idle")
+			cmd := exec.Command(bin, "-c", source+"\ncm_report busy")
 			cmd.Env = append(cmd.Environ(), "CM_SESSION=test")
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("running the %s integration failed: %v\n%s", shell, err, out)
 			}
 
-			var tr osc.ReportTracker
-			if !tr.Feed(out) {
-				t.Fatalf("%s emitted no parseable report: %q", shell, out)
-			}
-			got, _ := tr.Take()
-			want := osc.Report{State: "idle", Source: shell}
-			if got != want {
-				t.Errorf("report = %+v, want %+v\nraw: %q", got, want, out)
+			var tr osc.StatusTracker
+			tr.Feed(out)
+			want := []osc.StatusEvent{{Status: osc.Status{State: "working", App: shell, Progress: -1}}}
+			if got := tr.Take(); !slices.Equal(got, want) {
+				t.Errorf("reports = %+v, want %+v\nraw: %q", got, want, out)
 			}
 		})
 	}

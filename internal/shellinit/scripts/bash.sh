@@ -15,33 +15,39 @@
 if [ -n "$CM_SESSION" ] && [ -z "$_cm_loaded" ]; then
 _cm_loaded=1
 
-# cm_report tells cm what this session is doing.
+# cm_report tells cm what this session is doing, as a program status report (OSC 7501).
 #
 #   cm_report blocked "waiting for approval"   # needs input, will not progress without it
-#   cm_report busy    "running tests"          # working on something
-#   cm_report idle                             # finished, waiting on nothing
+#   cm_report working "running tests"          # running on its own (busy is accepted too)
+#   cm_report done    "tests passed"           # finished, the result is ready to look at
+#   cm_report error   "tests failed"           # failed and stopped
+#   cm_report idle                             # at rest, waiting for its next instruction
 #   cm_report clear                            # withdraw the report, back to what cm derives
 #
+# working and blocked end at the next prompt, since whatever was working has stopped by then; done and
+# error stay until replaced. See `cm report --help`.
+#
 # A printf rather than a call to `cm report`, which is the entire reason this exists: any cm invocation
-# costs about 23ms, while this costs nothing, and this works with no server running.
+# costs about 23ms. Measured in zsh: 0.04ms for a report with no detail, and 4.2ms with one, which is the
+# subshell and the base64 the protocol requires for text. It also works with no server running, so a
+# report is not lost while the server is restarting.
 #
 # Written to /dev/tty rather than stdout, so a report still reaches cm when the caller's output is
-# redirected. cm reads the pty, so anything else would report into the wrong place.
+# redirected to a file or a pipe. cm reads the pty, so anything else would report into the wrong place.
 #
-# Semicolons and backslashes in the detail are escaped, since they separate and quote fields on the wire.
+# Control characters are removed from the detail first, because the protocol discards a whole report whose
+# text contains one: a detail with a newline in it would otherwise make the report vanish.
 #
-# The detail is passed as an argument to printf and never interpolated into its format string. printf
-# interprets escapes in its format, so a detail reaching it that way is mangled twice over: a literal
-# backslash-b becomes a backspace byte, and a percent sign becomes a format specifier that consumes
-# whatever follows.
+# The detail reaches printf as an argument, never in its format string, which interprets escapes: a
+# literal backslash-b would become a backspace and a percent sign a format specifier.
 cm_report() {
-  local state=$1 detail=$2
+  local state=$1 detail=${2//[[:cntrl:]]/}
+  [ "$state" = busy ] && state=working
   if [ -n "$detail" ]; then
-    detail=${detail//\\/\\\\}
-    detail=${detail//;/\\;}
-    printf '\033]25453;state=%s;detail=%s;source=bash\007' "$state" "$detail" > /dev/tty 2>/dev/null
+    printf '\033]7501;state=%s:app=bash:msg=%s\007' "$state" \
+      "$(printf '%s' "$detail" | base64 | tr -d '\n')" > /dev/tty 2>/dev/null
   else
-    printf '\033]25453;state=%s;source=bash\007' "$state" > /dev/tty 2>/dev/null
+    printf '\033]7501;state=%s:app=bash\007' "$state" > /dev/tty 2>/dev/null
   fi
 }
 

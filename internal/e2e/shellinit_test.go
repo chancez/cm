@@ -147,13 +147,17 @@ func TestShellIntegrationReportsReachCM(t *testing.T) {
 			// A detail carrying the characters with meaning on the wire: the field separator, the escape,
 			// and printf's format specifier. Passed through a variable so the shell's own quoting, not this
 			// test's, decides what the function receives.
+			//
+			// done rather than blocked, because this is typed at a prompt: blocked ends at the next prompt,
+			// as the program status protocol requires, so it was read back blank once the shell prompted
+			// again. done is what survives one.
 			const detail = `a;b\c 50% x`
 			var send string
 			switch shell {
 			case "fish":
-				send = `set d 'a;b\c 50% x'; cm_report blocked $d`
+				send = `set d 'a;b\c 50% x'; cm_report done $d`
 			default:
-				send = `d='a;b\c 50% x'; cm_report blocked "$d"`
+				send = `d='a;b\c 50% x'; cm_report done "$d"`
 			}
 			e.mustRun("send", name, send, "--enter")
 
@@ -163,16 +167,16 @@ func TestShellIntegrationReportsReachCM(t *testing.T) {
 			deadline := time.Now().Add(10 * time.Second)
 			for time.Now().Before(deadline) {
 				got = strings.TrimSpace(e.mustRun("info", name, "--field", "reported_state"))
-				if got == "blocked" {
+				if got == "done" {
 					break
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
-			if got != "blocked" {
+			if got != "done" {
 				// The session listing and its output both, since the two failures look identical from the
 				// state alone: a report that never arrived, and a shell that never started.
 				r := e.run("read", name)
-				t.Fatalf("reported_state = %q, want \"blocked\"\nsession output: %s%s\nlist: %s",
+				t.Fatalf("reported_state = %q, want \"done\"\nsession output: %s%s\nlist: %s",
 					got, r.stdout, r.stderr, e.run("list").stdout)
 			}
 
@@ -183,7 +187,7 @@ func TestShellIntegrationReportsReachCM(t *testing.T) {
 				t.Errorf("reported_source = %q, want %q", got, want)
 			}
 
-			// Clearing must fall back to what cm derives, rather than leaving the session stuck blocked.
+			// Clearing must fall back to what cm derives, rather than leaving the session stuck done.
 			e.mustRun("send", name, "cm_report clear", "--enter")
 
 			deadline = time.Now().Add(10 * time.Second)
@@ -227,7 +231,9 @@ func TestShellIntegrationUnblocksAWaiter(t *testing.T) {
 
 	// Given to the waiter before reporting, so a report arriving first would not be what satisfied it.
 	time.Sleep(500 * time.Millisecond)
-	e.mustRun("send", name, `cm_report blocked "needs input"`, "--enter")
+	// Followed by a sleep, so the shell does not prompt again: a prompt ends a blocked report, and one
+	// landing in the same read as the report would clear it before the waiter could see it.
+	e.mustRun("send", name, `cm_report blocked "needs input"; sleep 30`, "--enter")
 
 	select {
 	case r := <-done:
