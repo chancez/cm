@@ -52,12 +52,12 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			session, err := sessionTarget(nil, "switch")
+			// --from first, so it names the session without one around it. Resolving CM_SESSION first
+			// failed `cm switch B --from A` from any shell outside a session with "no session given",
+			// before --from was read at all.
+			session, err := sessionTarget([]string{from}, "switch")
 			if err != nil {
 				return err
-			}
-			if from != "" {
-				session = from
 			}
 
 			cfg, err := g.config()
