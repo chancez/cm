@@ -36,7 +36,7 @@ Tests:
 ```
 go test ./...                     # everything
 go test -short ./...              # skips e2e, which spawn real processes and ptys
-go test -race ./internal/... ./cmd/...
+go test -race -timeout 60m ./internal/... ./cmd/...
 mise run test-linux               # the full suite on Linux in Docker
 ```
 
@@ -172,7 +172,9 @@ must correspond to something that actually went wrong, same bar as a `cm doctor`
 **`go test -race ./internal/e2e/` instruments the spawned cm too**, not just the test binary, and timeouts
 scale by 4 to absorb it. Worth running before believing a change to the client/server/shim wiring: the
 unit tests that run under `-race` exercise types in isolation, and this is the only thing that puts three
-real processes under the detector.
+real processes under the detector. Pass `-timeout 60m`: the package takes 1737s under `-race` against
+237s without, so go's 10m default expires mid-run and panics in whichever test is executing, which reads
+as that test hanging.
 
 **Anything touching escape sequences: read `docs/testing.md` first.** That conversation is where most
 of cm's bugs live and it is the hardest thing here to observe, because a wrong result looks like a

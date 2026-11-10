@@ -80,7 +80,7 @@ and an already-running server keeps working on the old one until it is restarted
 mise run check                                # fmt, vet, test, validate the plugin manifests
 go test ./...                                 # everything
 go test -short ./...                          # skips e2e, which spawn real processes and ptys
-go test -race ./internal/... ./cmd/...
+go test -race -timeout 60m ./internal/... ./cmd/...
 mise run test-linux                           # the full suite on Linux, in Docker
 mise run build-linux                          # just check the Linux build compiles
 ```
