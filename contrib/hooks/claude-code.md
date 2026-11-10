@@ -1,22 +1,35 @@
 # Claude Code
 
-An example of wiring an agent's existing hooks to `cm report`. Nothing in cm knows about Claude Code; this
-is one adapter, and any program with equivalent hooks is wired the same way.
+Claude Code writes the program status protocol, OSC 7501, itself, so it needs no hook. Seen in 2.1.304: it
+sends the support query, `OSC 7501 ; ?`, at startup, which cm answers, and reports its state as
+`app=claude-code`, with a `kind` when blocked. cm reads those from the session's output and passes them
+through unchanged, so an outer terminal that implements the protocol, kitty or ghostty, gets them too.
 
-Claude Code has the two events that matter:
+## Do not add the hook as well
 
-- `Notification` with a `permission_prompt|idle_prompt` matcher fires when it wants an answer, which is
-  `blocked`.
-- `Stop` fires when it finishes a turn, which is `idle`.
+An earlier version of this page wired Claude Code's `Notification` and `Stop` hooks to `cm-report-hook`.
+Alongside the native reports that is worse than nothing:
 
-In `~/.claude/settings.json`:
+- Both write the session's root record, so whichever came last replaces the other. The hook's carries a
+  detail and `source=hook`, and drops the `kind`, progress and app Claude Code sent.
+- `cm report` is an RPC and writes no bytes, so the hook's state reaches `cm list` and never the outer
+  terminal. The two then disagree about the same session.
+- The `idle_prompt` notification fires when Claude Code is waiting for the next message, which the hook
+  reported as `blocked`. Claude Code reports the same moment as `idle`.
+
+If you have those entries in `~/.claude/settings.json`, remove them.
+
+## A Claude Code that does not write OSC 7501
+
+`cm list` showing `running` with no state while Claude Code waits on a permission prompt means this
+version does not report. Then the hooks are the fallback:
 
 ```json
 {
   "hooks": {
     "Notification": [
       {
-        "matcher": "permission_prompt|idle_prompt",
+        "matcher": "permission_prompt",
         "hooks": [
           {
             "type": "command",
@@ -38,19 +51,12 @@ In `~/.claude/settings.json`:
 ```
 
 The `Notification` payload arrives on stdin as JSON, so `jq -r .message` turns it into the detail shown in
-`cm list`. Drop that if `jq` is not available; the state is the useful part and the detail is a nicety.
-
-If you already have scripts on these hooks, add a line rather than replacing them: hooks compose, and
-reporting to cm has nothing to do with sending a desktop notification.
-
-There is no `busy` here. Claude Code has no "starting work" hook, and it does not need one: the absence of
-a report leaves cm's own OSC 133 view in charge, which already says a command is running. `blocked` and
-`idle` are the two states cm cannot work out for itself.
+`cm list`. There is no `working`: no hook fires when a turn starts, and without a report cm's own OSC 133
+view already says a command is running.
 
 ## Checking it works
 
 ```
-cm list                              # STATE shows running(blocked: ...) when it wants an answer
-cm wait <session> --until blocked    # blocks until it does
-cm report <session> --state clear    # if a stale report is left behind
+cm info <session> --json | jq '{reported_state, reported_source}'   # source "claude-code" is the native report
+cm wait <session> --until blocked                                    # blocks until it wants an answer
 ```

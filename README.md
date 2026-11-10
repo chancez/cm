@@ -231,7 +231,8 @@ loads anywhere.
 Nothing here is program-specific. cm never learns what is running in a session and has no
 patterns matched against a program's output, so anything that can run a command on a state
 change can report, and a program cm has never heard of works exactly as well as one it has.
-See [contrib/hooks/](contrib/hooks/) for how to wire it up, including a Claude Code example.
+See [contrib/hooks/](contrib/hooks/) for how to wire it up. Claude Code writes the sequence
+itself and needs no hook.
 
 ## Across a reboot
 

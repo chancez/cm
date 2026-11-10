@@ -2453,7 +2453,8 @@ Busy state and the running command are *not* stored, and never were. They come b
 the replay, which is why a restart now shows the command a session has been running for an hour instead of
 a bare "running".
 
-See `contrib/hooks/` for how to wire this to a program, including a Claude Code example.
+See `contrib/hooks/` for how to wire this to a program. Claude Code writes OSC 7501 itself and needs no
+hook.
 
 ## Tags
 
