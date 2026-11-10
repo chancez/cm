@@ -116,3 +116,73 @@ func TestAResumeCommandWithNoFrameIsUnbound(t *testing.T) {
 		t.Errorf("Resume() after ClearResume = %+v, want the zero value", got)
 	}
 }
+
+// How a revive restores a declared command, for each mode and both ways of being allowed to run it.
+//
+// The rows that matter most are the refusals: on_restore = "command" without the allowlist or a per-session
+// request prefills rather than runs, and "shell" ignores the declaration entirely, so a program cannot
+// promote itself into executing at the next boot.
+func TestInheritForRestoreDeclaredCommand(t *testing.T) {
+	claude := []string{"claude", "--resume", "abc"}
+	tests := []struct {
+		name       string
+		configured RestoreAction
+		perSession RestoreAction
+		safe       bool
+		want       *typedRestore
+	}{
+		{name: "shell ignores it", configured: RestoreShell},
+		{name: "none ignores it", configured: RestoreNone},
+		{name: "prefill", configured: RestorePrefill, want: &typedRestore{argv: claude}},
+		{name: "prefill even when allowlisted", configured: RestorePrefill, safe: true,
+			want: &typedRestore{argv: claude}},
+		{name: "command without permission prefills", configured: RestoreCommand,
+			want: &typedRestore{argv: claude}},
+		{name: "command allowlisted runs", configured: RestoreCommand, safe: true,
+			want: &typedRestore{argv: claude, run: true}},
+		{name: "command asked for on the session runs", configured: RestoreShell, perSession: RestoreCommand,
+			want: &typedRestore{argv: claude, run: true}},
+		{name: "prefill asked for on the session", configured: RestoreShell, perSession: RestorePrefill,
+			want: &typedRestore{argv: claude}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, dirs := newTestManager(t, nil)
+			policy := testPolicy()
+			policy.OnRestore = tt.configured
+			policy.CommandIsSafeToRerun = func([]string) bool { return tt.safe }
+			mgr.SetPersistPolicy(policy)
+
+			rec := store.Session{
+				ID:      "revived",
+				LogPath: dirs.SessionLog("revived"),
+				Resume:  store.ResumeCommand{Argv: claude, Frame: "old-1"},
+			}
+			got := mgr.inheritForRestore(OpenOptions{Ref: "revived", OnRestore: tt.perSession}, rec)
+			if !reflect.DeepEqual(got.typeOnStart, tt.want) {
+				t.Errorf("typeOnStart = %+v, want %+v", got.typeOnStart, tt.want)
+			}
+			// Typed into a shell, never exec'd as the session's command, so quitting the resumed program
+			// leaves a prompt. "none" is the one row that runs something, its holding process.
+			if tt.configured != RestoreNone && len(got.Command) != 0 {
+				t.Errorf("Command = %v, want none: a declared command is typed, not exec'd", got.Command)
+			}
+		})
+	}
+}
+
+// A shell's first prompt marker is enough for a revive to know its line editor is up.
+//
+// The marker changes no published state, so it never reaches noteCommand, and recording it there meant a
+// revive always waited out restorePromptWait and typed blind: 13.8s against 3.8s in the e2e test, which
+// passed either way.
+func TestALonePromptMarkerIsSeen(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+	if sess.PromptSeen() {
+		t.Fatal("PromptSeen() = true before any output")
+	}
+	sess.processChunk([]byte("\x1b]133;A\x07$ "), 0)
+	if !sess.PromptSeen() {
+		t.Error("PromptSeen() = false after a prompt marker")
+	}
+}

@@ -275,7 +275,7 @@ matters for another multiplexer, which sees the key first and never passes it on
 	f.BoolVar(&persist, "persist", false,
 		"keep this session's content across a reboot")
 	f.StringVar(&onRestore, "on-restore", "",
-		"what to do when reviving this session: shell, none, or command")
+		"what to do when reviving this session: shell, none, prefill, or command")
 	f.StringArrayVar(&env, "env", nil,
 		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
 	f.StringArrayVar(&tagArgs, "tag", nil,

@@ -436,6 +436,11 @@ type Session struct {
 	// know that something changed, and reads the current value itself. Nil in a Session literal built by a
 	// test, which the non-blocking send tolerates.
 	resumeChanged chan struct{}
+	// promptSeen records that the shell has sent an OSC 133 marker, so a revive knows it has started its
+	// line editor. Guarded by mu, unlike the tracker it is copied from, which only the pump touches.
+	promptSeen bool
+	// promptNoted is the pump's own copy of promptSeen, so it takes the lock once rather than per chunk.
+	promptNoted bool
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -916,7 +921,16 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	// skipped here can split a sequence across the resume and leave the next real report
 	// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
 	// noteReport, not the parsing.
-	if s.commands.Feed(data) {
+	changed := s.commands.Feed(data)
+	// Apart from the change below, which a prompt marker on its own is not: a shell's first prompt changes
+	// no state, and it is the marker a revive waits for. Locked once, on the first, rather than per chunk.
+	if !s.promptNoted && s.commands.Seen() {
+		s.promptNoted = true
+		s.mu.Lock()
+		s.promptSeen = true
+		s.mu.Unlock()
+	}
+	if changed {
 		s.noteCommand()
 	}
 

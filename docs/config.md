@@ -491,7 +491,7 @@ gone unconditionally. See [persistence.md](persistence.md) for how restore works
 | --- | --- | --- |
 | `enabled` | boolean | `false` |
 | `sessions` | name patterns; a trailing `*` matches by prefix | none |
-| `on_restore` | `shell`, `none`, `command` | `shell` |
+| `on_restore` | `shell`, `none`, `prefill`, `command` | `shell` |
 | `safe_commands` | program names | none |
 | `max_lines` | integer; `0` means the default | `10000` |
 | `max_bytes` | integer; `0` means the default | `16777216` (16 MiB) |
@@ -503,7 +503,10 @@ gone unconditionally. See [persistence.md](persistence.md) for how restore works
   sessions by name.
 - **`on_restore`** decides what happens when a dead session is attached to. `shell` starts a fresh
   shell in the recorded directory, `none` leaves the restored content as history and starts nothing,
-  and `command` re-runs the recorded command verbatim.
+  `prefill` types a command declared with `cm restore-with` onto the new shell's prompt without running
+  it, and `command` runs the declared command, or re-runs the recorded one verbatim when nothing was
+  declared. A declared command runs only when `safe_commands` matches it or the session asked with
+  `--on-restore=command`; otherwise it is prefilled. See [restore-command.md](restore-command.md).
 - **`safe_commands`** lists program names that may be re-run on restore without a per-session
   request. It is a convenience, not a safety boundary: it matches the program name only, so listing
   `nvim` also matches an nvim invocation that writes files.

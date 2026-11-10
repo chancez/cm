@@ -1,7 +1,8 @@
 # Program resume protocol (draft)
 
-**Status: draft, not implemented.** A proposal for a sequence a program writes to say how it should be
-started again when its window is restored, plus how cm would implement it. Written to be proposed to
+**Status: the sequence is a draft and unimplemented; cm's side is implemented without it.** A proposal for a
+sequence a program writes to say how it should be started again when its window is restored, plus how cm
+implements the same thing through `cm restore-with`. Written to be proposed to
 terminals beyond cm, ghostty first, so the spec half avoids anything cm-specific.
 
 ## The problem
@@ -196,7 +197,7 @@ nesting without either layer knowing what the other runs.
 
 ## How cm implements it
 
-Three parts, each useful without the others.
+Three parts, each useful without the others. The declared part and the policy are built.
 
 **Inferred: the typed command.** A session's recorded command today is its spawn argv, which for a
 `kitty.*` session is the shell, so `on_restore = "command"` and `safe_commands` never see the program
@@ -226,13 +227,28 @@ way an OSC 7501 report is, because a declaration made at a program's startup has
 
 **Policy: `on_restore`.** Gains `prefill`:
 
-- `shell` starts a shell, as today.
-- `none` shows the restored content and runs nothing, as today.
-- `prefill` starts a shell with the command placed on its prompt, unrun, through the shell integration.
-- `command` runs the command inside a shell, so exiting it leaves the prompt.
+- `shell` starts a shell and ignores the declaration.
+- `none` shows the restored content and runs nothing.
+- `prefill` types the command onto the new shell's prompt, unrun.
+- `command` types the command and submits it, so exiting it leaves the prompt.
 
-A declared command takes precedence over an inferred one. `safe_commands` applies to both, matching the
-program name, and is what promotes `prefill` to `command` for the programs a user trusts.
+`command` runs a declared command only with the same permission it takes to re-run a recorded one: the
+session asked with `--on-restore=command`, or `safe_commands` matches the program name. Without either it
+prefills, which keeps the command one keypress away rather than dropping it. `prefill` never runs, whatever
+the allowlist says, so it is the mode to choose for seeing what would be resumed before it is.
+
+The command is typed once the new shell sends its first OSC 133 prompt mark, and after 10 seconds without
+one it is typed anyway: the tty holds it until the line editor reads it, so a shell with no prompt marks
+still gets it, and only an rc file that reads stdin could take it first. Waiting for the mark is not
+cosmetic. Measured in the e2e test, a revive that missed the mark took 13.8s against 3.8s.
+
+The declaration carried into the revived session binds to the next frame to open, which is the typed
+command's. So quitting the resumed program ends it whether or not the program declares again, and a
+prefilled line the user replaces with something else hands the declaration to that instead, which ends
+with it.
+
+Not yet built: the inferred part above, and fish's quoting is chosen from the server's `SHELL` when the
+session runs the default shell, since the server does not otherwise know which shell the shim started.
 
 ## Examples
 

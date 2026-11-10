@@ -223,7 +223,8 @@ type PersistConfig struct {
 	// prefix. Per-window sessions are the ones worth persisting; a throwaway usually is not.
 	Sessions []string `toml:"sessions"`
 
-	// OnRestore is what happens when a dead session is attached to: "shell", "none", or "command".
+	// OnRestore is what happens when a dead session is attached to: "shell", "none", "prefill", or
+	// "command".
 	// Empty means "shell".
 	OnRestore string `toml:"on_restore"`
 
@@ -257,7 +258,9 @@ const (
 	RestoreShell RestoreMode = "shell"
 	// RestoreNone leaves the restored content as history and starts nothing.
 	RestoreNone RestoreMode = "none"
-	// RestoreCommand re-runs the recorded command verbatim.
+	// RestorePrefill starts a shell with the declared resume command on its prompt, unrun.
+	RestorePrefill RestoreMode = "prefill"
+	// RestoreCommand re-runs the recorded command verbatim, or runs the declared resume command.
 	RestoreCommand RestoreMode = "command"
 )
 
@@ -533,11 +536,13 @@ func (c *Config) RestoreMode() (RestoreMode, error) {
 		return RestoreShell, nil
 	case RestoreNone:
 		return RestoreNone, nil
+	case RestorePrefill:
+		return RestorePrefill, nil
 	case RestoreCommand:
 		return RestoreCommand, nil
 	default:
 		return RestoreShell, fmt.Errorf(
-			"on_restore = %q, want \"shell\", \"none\", or \"command\"", c.Persist.OnRestore)
+			"on_restore = %q, want \"shell\", \"none\", \"prefill\", or \"command\"", c.Persist.OnRestore)
 	}
 }
 

@@ -126,7 +126,10 @@ const (
 	RestoreShell RestoreAction = "shell"
 	// RestoreNone replays the content and starts nothing.
 	RestoreNone RestoreAction = "none"
-	// RestoreCommand re-runs the recorded command verbatim.
+	// RestorePrefill starts a shell with the declared resume command typed on its prompt and not run.
+	RestorePrefill RestoreAction = "prefill"
+	// RestoreCommand re-runs the recorded command verbatim, or types the declared resume command into the
+	// new shell and runs it.
 	RestoreCommand RestoreAction = "command"
 )
 
@@ -906,6 +909,9 @@ type OpenOptions struct {
 	// OnRestore overrides the configured restore behavior for this session. Empty means the
 	// configured default.
 	OnRestore RestoreAction
+	// typeOnStart is a declared resume command to type into the new shell once it prompts, set when a
+	// revive restores one. See restoreDeclared.
+	typeOnStart *typedRestore
 	// Tags are the caller's own labels for a newly created session. Ignored when the session
 	// already exists, since an attach is not how tags are changed.
 	Tags map[string]string
@@ -1210,6 +1216,14 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 		action = RestoreShell
 	}
 
+	// A declared resume command takes precedence over the recorded one: the program said how to bring it
+	// back, and the recorded command is the shell the window was started with. See restoreDeclared.
+	if (action == RestorePrefill || action == RestoreCommand) && len(opts.Command) == 0 &&
+		len(rec.Resume.Argv) > 0 {
+		opts.typeOnStart = m.restoreDeclared(rec.Resume.Argv, action, opts.OnRestore == RestoreCommand)
+		return opts
+	}
+
 	// Re-running the recorded command is the one behavior that executes something the user did not
 	// type just now, so it happens only when asked for explicitly or when the program is on the
 	// allowlist.
@@ -1297,6 +1311,11 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		// Records why there is a log, which is what expiry keys off.
 		PersistRequested: requested,
 	}
+	// Carried into the new incarnation, bound to whichever frame opens next: the typed command's. See
+	// resumeNextFrame.
+	if opts.typeOnStart != nil {
+		rec.Resume = store.ResumeCommand{Argv: opts.typeOnStart.argv, Frame: resumeNextFrame}
+	}
 	// Record before spawning so a shim can never exist without a row describing it. A row
 	// with no shim is recoverable; a shim with no row is invisible.
 	if err := m.store.Create(ctx, rec); err != nil {
@@ -1336,6 +1355,9 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.id)
 		return nil, err
+	}
+	if opts.typeOnStart != nil {
+		go m.typeRestore(sess, *opts.typeOnStart)
 	}
 
 	// Record the shell's pid for reporting. Inline first, so a listing run immediately after this shows

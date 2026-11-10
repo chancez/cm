@@ -35,7 +35,7 @@ needs no config, and `enabled` turns on only the patterns in `sessions`.
 [persist]
 enabled = true
 sessions = ["kitty.*"]      # name patterns that persist automatically
-on_restore = "shell"        # shell | none | command
+on_restore = "shell"        # shell | none | prefill | command
 max_lines = 10000           # retained output per session
 expire_after = "168h"       # remove dead persisted sessions after this
 forget_unpersisted_after = "5m"  # remove ended sessions that saved nothing after this
@@ -66,7 +66,14 @@ Three behaviors, chosen by config with a per-session override:
   sessions.
 - `none` leaves the restored content as read-only history and starts nothing until asked. Nothing is
   re-executed.
-- `command` re-runs the recorded command verbatim.
+- `prefill` types the command a program declared with `cm restore-with` onto a fresh shell's prompt,
+  unrun.
+- `command` runs the declared command, or re-runs the recorded command verbatim when none was declared.
+
+A declared command is how a program whose state is not in its argv comes back as itself: `claude` re-run
+is a new conversation, `claude --resume <id>` is the old one. It is typed into the shell once the shell
+prompts, never exec'd as the session's command, so quitting it leaves a prompt. See
+[restore-command.md](restore-command.md).
 
 ### The allowlist is a convenience, not a safety boundary
 
