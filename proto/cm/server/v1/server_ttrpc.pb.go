@@ -16,6 +16,7 @@ type ServerService interface {
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 	Report(context.Context, *ReportRequest) (*ReportResponse, error)
+	SetResume(context.Context, *SetResumeRequest) (*SetResumeResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
@@ -103,6 +104,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 					return nil, err
 				}
 				return svc.Report(ctx, &req)
+			},
+			"SetResume": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req SetResumeRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.SetResume(ctx, &req)
 			},
 			"Read": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req ReadRequest
@@ -210,6 +218,7 @@ type ServerClient interface {
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 	Report(context.Context, *ReportRequest) (*ReportResponse, error)
+	SetResume(context.Context, *SetResumeRequest) (*SetResumeResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
@@ -319,6 +328,14 @@ func (c *serverClient) GetEnv(ctx context.Context, req *GetEnvRequest) (*GetEnvR
 func (c *serverClient) Report(ctx context.Context, req *ReportRequest) (*ReportResponse, error) {
 	var resp ReportResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Report", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) SetResume(ctx context.Context, req *SetResumeRequest) (*SetResumeResponse, error) {
+	var resp SetResumeResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "SetResume", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

@@ -1013,12 +1013,16 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// From the record rather than the live session: tags are metadata the store owns, so
 			// unlike cwd or the reported state there is no fresher copy in the registry.
 			Tags: rec.Tags,
+			// The record's, which is what a revive of a dead session would run. A live session's is
+			// fresher and replaces it below.
+			ResumeArgv: rec.Resume.Argv,
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.ID); live {
 			// From the cache rather than asked, so this stays free: see shimBuildCached. Empty for a
 			// session the server has not yet had reason to query, which shows as unknown.
 			item.ShimBuild = sess.shimBuildCached()
+			item.ResumeArgv = sess.Resume().Argv
 			// Including its outcome. A session records that it ended before the manager writes it
 			// back, so a caller polling for a short-lived command would otherwise see it as running
 			// and then briefly as dead, since an unwritten record still says running while the shim

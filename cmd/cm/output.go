@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/shquote"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -131,6 +132,9 @@ type sessionJSON struct {
 	// where the directory carries only the host the remote calls itself. Nothing in cm derives one from the
 	// other, and cm does not know which of these commands is an ssh.
 	Location []locationJSON `json:"location"`
+	// Resume is the command a program in the session declared it should be restored with, argument by
+	// argument. Empty rather than null when none is, like Location.
+	Resume []string `json:"resume"`
 	// AttachedClients describes each client attached now, alongside the Clients count above.
 	//
 	// Added because diagnosing a lost session meant reconstructing what was attached from `ps` and
@@ -215,6 +219,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 
 	// Empty rather than null, like the two above.
+	resume := append([]string{}, s.ResumeArgv...)
 	location := make([]locationJSON, 0, len(s.Location))
 	for _, f := range s.Location {
 		location = append(location,
@@ -262,6 +267,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		AnnouncedClients:    s.AnnouncedClients,
 		ShimBuild:           s.ShimBuild,
 		Location:            location,
+		Resume:              resume,
 		AttachedClients:     clients,
 	}
 }
@@ -822,6 +828,8 @@ func sessionFields(s *serverv1.Session) []struct {
 		// the JSON output carries the frames as a list for anything that wants the structure. Same trade as
 		// tags above, which renders a map as "k=v,k" here.
 		{"location", formatLocation(j.Location)},
+		// Shell-quoted, so what is printed is what a restore would type.
+		{"resume", shquote.Join(j.Resume, false)},
 		// Shown as unknown rather than blank: empty here means the server has not asked or the shim cannot
 		// say, and a blank column reads as "same as the server", which is the mistake this exists to stop.
 		{"shim_build", orUnknown(j.ShimBuild)},

@@ -109,6 +109,12 @@ func (s *stubService) Report(
 ) (*serverv1.ReportResponse, error) {
 	panic("unused")
 }
+
+func (s *stubService) SetResume(
+	context.Context, *serverv1.SetResumeRequest,
+) (*serverv1.SetResumeResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Signal(context.Context, *serverv1.SignalRequest) (*serverv1.SignalResponse, error) {
 	panic("unused")
 }

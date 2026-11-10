@@ -428,6 +428,15 @@ type Session struct {
 	// went -- survive a stream of junk.
 	frames []sessionFrame
 
+	// resume is the command a program in this session declared it should be restarted with, bound to the
+	// frame it was declared in. See resume.go.
+	resume store.ResumeCommand
+	// resumeChanged is signalled when resume changes, so the manager can write it to the store off the pump.
+	// Buffered with a depth of one and coalescing, like a metadata subscription: the writer only needs to
+	// know that something changed, and reads the current value itself. Nil in a Session literal built by a
+	// test, which the non-blocking send tolerates.
+	resumeChanged chan struct{}
+
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
 	done      chan struct{}
@@ -759,6 +768,9 @@ func newSession(
 		done:      make(chan struct{}),
 		stopPump:  stopPump,
 		pumpCtx:   pumpCtx,
+		// From the record, so a declaration survives a server restart and reaches a revived session.
+		resume:        rec.Resume,
+		resumeChanged: make(chan struct{}, 1),
 	}
 
 	// Before the subscription, so nothing derived can land after the live stream has started.
@@ -2113,8 +2125,14 @@ func (s *Session) noteFrame(f osc.Frame) {
 			return
 		}
 		s.frames = append(s.frames, sessionFrame{id: f.ID, argv: f.Argv})
+		s.bindResumeLocked(f.ID)
 		return
 	}
+
+	// Before the lookup below, which gives up on an id not on the stack. A declaration keeps its frame's id
+	// across a server restart, but the stack is rebuilt from retained output, and a frame opened long enough
+	// ago has been trimmed out of it. Its close still means the program exited.
+	s.dropResumeLocked(map[string]bool{f.ID: true})
 
 	at := -1
 	for i := len(s.frames) - 1; i >= 0; i-- {
@@ -2134,6 +2152,7 @@ func (s *Session) noteFrame(f osc.Frame) {
 		closed[fr.id] = true
 	}
 	s.frames = s.frames[:at]
+	s.dropResumeLocked(closed)
 
 	for id, a := range s.announced {
 		if a.frame != "" && closed[a.frame] {

@@ -49,6 +49,13 @@ service Server {
   // just a state. A build script, a test runner, and a coding agent's hook all use the same call.
   rpc Report(ReportRequest) returns (ReportResponse);
 
+  // SetResume records the command a program in a session should be restarted with when the session is
+  // revived after its processes are gone, or clears it.
+  //
+  // The declaration binds to the command frame open when it arrives, and ends when that frame closes, so it
+  // lasts as long as the program that made it. See docs/restore-command.md.
+  rpc SetResume(SetResumeRequest) returns (SetResumeResponse);
+
   // Read returns a bounded, parseable view of a session's recent output.
   //
   // Distinct from History, which renders everything: a caller reading a session programmatically wants
@@ -224,6 +231,17 @@ message ReportRequest {
 }
 
 message ReportResponse {}
+
+message SetResumeRequest {
+  // Empty is refused; the client fills it from CM_SESSION, as Report does.
+  string session = 1;
+  // The command, argument by argument. Required unless clear is set.
+  repeated string argv = 2;
+  // Withdraw the declaration instead of setting one.
+  bool clear = 3;
+}
+
+message SetResumeResponse {}
 
 message ReadRequest {
   string session = 1;
@@ -1180,6 +1198,10 @@ message Session {
   // An attachment is live state, and a stored one would come back after a restart describing a
   // client that left with the previous server.
   repeated AttachedClient attached_clients = 21;
+
+  // resume_argv is the command a program in the session declared it should be resumed with, empty when
+  // none is. From the record for a dead session, which is what a revive would run.
+  repeated string resume_argv = 30;
 }
 
 // LocationFrame is one command a session is inside.

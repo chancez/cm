@@ -289,6 +289,11 @@ func (c *fakeClient) Report(
 ) (*serverv1.ReportResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) SetResume(
+	context.Context, *serverv1.SetResumeRequest,
+) (*serverv1.SetResumeResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Signal(context.Context, *serverv1.SignalRequest) (*serverv1.SignalResponse, error) {
 	panic("unused")
 }

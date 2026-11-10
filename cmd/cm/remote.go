@@ -427,15 +427,16 @@ var machineLocal = map[string]bool{
 // work happens and the client contributes nothing but the question.
 var remoteCapable = map[string]bool{
 	// Sessions: what exists, what it is doing, and ending it.
-	"list":    true,
-	"info":    true,
-	"kill":    true,
-	"forget":  true,
-	"run":     true,
-	"history": true,
-	"wait":    true,
-	"report":  true,
-	"get-env": true,
+	"list":         true,
+	"info":         true,
+	"kill":         true,
+	"forget":       true,
+	"run":          true,
+	"history":      true,
+	"wait":         true,
+	"report":       true,
+	"restore-with": true,
+	"get-env":      true,
 	// Input and output, including the --follow forms, which attach the way `cm attach` does and so needed
 	// the same dialer. See globals.pointAtServer.
 	"send": true,

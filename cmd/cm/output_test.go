@@ -102,6 +102,7 @@ func TestSessionJSONKeys(t *testing.T) {
 		"announced_clients",
 		// Where the session is, which the cwd cannot say once an ssh is involved.
 		"location",
+		"resume",
 		// What is attached, alongside the "clients" count above.
 		"attached_clients",
 		// Which build the session's own shim runs, the other half of what attached_clients answers for
@@ -141,6 +142,7 @@ func TestSessionJSONValues(t *testing.T) {
 		// Empty rather than nil, like Tags, so a script indexing into it needs no null check.
 		Hosting:  []string{},
 		Location: []locationJSON{},
+		Resume:   []string{},
 		// Also empty rather than nil. The fixture describes a session whose clients the server did not
 		// report, which is what an older server looks like; TestSessionJSONReportsAttachedClients
 		// covers the populated case.
