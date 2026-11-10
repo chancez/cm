@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/chancez/cm/internal/shquote"
+
 	"github.com/chancez/cm/internal/paths"
 )
 
@@ -410,14 +412,14 @@ func Render(d Diff, f Format) string {
 	switch f {
 	case FormatPosix:
 		for _, k := range names {
-			fmt.Fprintf(&b, "export %s=%s\n", k, posixQuote(d.Set[k]))
+			fmt.Fprintf(&b, "export %s=%s\n", k, shquote.POSIX(d.Set[k]))
 		}
 		for _, k := range d.Unset {
 			fmt.Fprintf(&b, "unset %s\n", k)
 		}
 	case FormatFish:
 		for _, k := range names {
-			fmt.Fprintf(&b, "set -gx %s %s\n", k, fishQuote(d.Set[k]))
+			fmt.Fprintf(&b, "set -gx %s %s\n", k, shquote.Fish(d.Set[k]))
 		}
 		for _, k := range d.Unset {
 			fmt.Fprintf(&b, "set -e %s\n", k)
@@ -433,21 +435,4 @@ func Render(d Diff, f Format) string {
 		}
 	}
 	return b.String()
-}
-
-// posixQuote wraps a value in single quotes for sh, bash, and zsh.
-//
-// Single quotes are literal in all three, so the only character needing care is the quote itself,
-// which is closed, escaped, and reopened. Values here are socket paths and identifiers, but they
-// come from another process's environment and are not trustworthy on that basis alone.
-func posixQuote(v string) string {
-	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
-}
-
-// fishQuote wraps a value in single quotes for fish, where backslash and single quote are the two
-// characters that remain special inside them.
-func fishQuote(v string) string {
-	v = strings.ReplaceAll(v, `\`, `\\`)
-	v = strings.ReplaceAll(v, "'", `\'`)
-	return "'" + v + "'"
 }
