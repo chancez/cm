@@ -203,7 +203,14 @@ type Session struct {
 	// live one. It is only presented for a session that is still running, and adoption drops it outright
 	// when the replayed OSC 133 markers show the shell back at a prompt with nothing running, which no
 	// program that is genuinely blocked can be. See Manager.adopt.
-	Reported  ReportedState
+	Reported ReportedState
+	// Resume is the command a program in the session declared it should be restarted with, for when the
+	// session is revived after its processes are gone. See docs/restore-command.md.
+	//
+	// Stored for the reason Reported is: it arrives by RPC, so the store is the only copy. It also could not
+	// be recovered from the persisted log if it did arrive in the output, since a program declares once at
+	// startup and the log has trimmed that away long before a reboot.
+	Resume    ResumeCommand
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -499,5 +506,14 @@ var migrations = []string{
 	ALTER TABLE sessions ADD COLUMN reported_detail TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sessions ADD COLUMN reported_source TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sessions ADD COLUMN reported_at INTEGER NOT NULL DEFAULT 0;
+	`,
+	// The command a program declared it should be resumed with, and the command frame it was declared in.
+	//
+	// argv as a JSON array rather than a joined string, because the command is exec'd or typed back as
+	// given, and a join loses quoting: zellij's discovery hook splits on whitespace and breaks any argument
+	// containing a space. Empty means nothing is declared.
+	`
+	ALTER TABLE sessions ADD COLUMN resume_argv TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN resume_frame TEXT NOT NULL DEFAULT '';
 	`,
 }

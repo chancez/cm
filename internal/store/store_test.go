@@ -696,3 +696,39 @@ func TestApplyClearsAReport(t *testing.T) {
 		t.Errorf("Reported = %+v, want the zero value", got.Reported)
 	}
 }
+
+// A declared resume command reads back argument for argument, including an argument with a space, and
+// clearing it takes the frame with it.
+//
+// The space is the case a joined string loses: zellij's discovery hook splits on whitespace, so a path
+// with a space in it resurrects as two arguments.
+func TestApplyRoundTripsAResumeCommand(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.Create(ctx, sampleSession("res")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	want := ResumeCommand{Argv: []string{"nvim", "-S", "/tmp/my session.vim"}, Frame: "123-4"}
+	if err := s.Apply(ctx, "res", Update{Resume: &want}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	got, err := s.Get(ctx, "res")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.Resume, want) {
+		t.Errorf("Resume = %+v, want %+v", got.Resume, want)
+	}
+
+	if err := s.Apply(ctx, "res", Update{Resume: &ResumeCommand{}}); err != nil {
+		t.Fatalf("clearing Apply() error = %v", err)
+	}
+	got, err = s.Get(ctx, "res")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.Resume, ResumeCommand{}) {
+		t.Errorf("Resume = %+v, want the zero value", got.Resume)
+	}
+}

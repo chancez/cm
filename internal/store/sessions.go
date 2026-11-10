@@ -14,7 +14,7 @@ import (
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
-	reported_at`
+	reported_at, resume_argv, resume_frame`
 
 // Create inserts a session record.
 //
@@ -32,14 +32,14 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
-		unixMilliOrZero(sess.Reported.At),
+		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -129,6 +129,20 @@ type Update struct {
 	// with the timestamp of a different report, describes something nobody said. A non-nil pointer to
 	// the zero value clears them, which is what withdrawing a report does.
 	Reported *ReportedState
+	// Resume replaces the declared resume command. A non-nil pointer to the zero value clears it, which is
+	// what the program exiting does.
+	Resume *ResumeCommand
+}
+
+// ResumeCommand is what a program declared it should be restarted with.
+//
+// Frame is the command frame that was open when it was declared, so the declaration can end with the
+// program: closing that frame means the program has exited back to a shell, and a declaration that
+// outlived it would resurrect something deliberately quit. Empty when no frame was open, which is a shell
+// without cm's integration; such a declaration lasts until it is replaced or cleared.
+type ResumeCommand struct {
+	Argv  []string
+	Frame string
 }
 
 // ReportedState is a program's own statement about itself, as stored.
@@ -209,6 +223,12 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 		add("reported_source", u.Reported.Source)
 		add("reported_at", unixMilliOrZero(u.Reported.At))
 	}
+	if u.Resume != nil {
+		// Together, for the reason the report's columns are: a command bound to another declaration's
+		// frame would be dropped when the wrong program exits.
+		add("resume_argv", encodeArgv(u.Resume.Argv))
+		add("resume_frame", u.Resume.Frame)
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -249,6 +269,31 @@ func encodeStringMap(m map[string]string) string {
 	return string(b)
 }
 
+// encodeArgv renders an argv column for storage, empty for no command.
+func encodeArgv(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(argv)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeArgv parses a stored argv column, treating anything unreadable as absent: a resume command that
+// cannot be read back exactly must not be run approximately.
+func decodeArgv(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 // decodeStringMap parses a stored map column, treating anything unreadable as absent.
 func decodeStringMap(s string) map[string]string {
 	if s == "" {
@@ -278,13 +323,14 @@ func scanSession(sc scanner) (Session, error) {
 		requested  bool
 		tagsJSON   string
 		reportedAt int64
+		resumeArgv string
 	)
 	err := sc.Scan(
 		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
 		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
-		&sess.Reported.Source, &reportedAt,
+		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
 	)
 	if err != nil {
 		return Session{}, err
@@ -296,6 +342,7 @@ func scanSession(sc scanner) (Session, error) {
 		sess.Reported.At = time.UnixMilli(reportedAt)
 	}
 	sess.Env = decodeStringMap(envJSON)
+	sess.Resume.Argv = decodeArgv(resumeArgv)
 	sess.Tags = decodeStringMap(tagsJSON)
 	// sqlite hands back an int64, so the space is named here. This is the row that stored one number
 	// for both and skipped the difference without a word; see internal/seq.
