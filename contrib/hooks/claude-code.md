@@ -12,8 +12,8 @@ Alongside the native reports that is worse than nothing:
 
 - Both write the session's root record, so whichever came last replaces the other. The hook's carries a
   detail and `source=hook`, and drops the `kind`, progress and app Claude Code sent.
-- `cm report` is an RPC and writes no bytes, so the hook's state reaches `cm list` and never the outer
-  terminal. The two then disagree about the same session.
+- `cm report` is an RPC and writes no bytes, so the hook's state reaches `cm list` and the outer terminal
+  only at the next attach. Until then the two disagree about the same session.
 - The `idle_prompt` notification fires when Claude Code is waiting for the next message, which the hook
   reported as `blocked`. Claude Code reports the same moment as `idle`.
 

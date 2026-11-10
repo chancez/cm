@@ -418,8 +418,10 @@ func TestAttachReplaysStateOnlyOnFreshAttach(t *testing.T) {
 		t.Fatalf("fresh attach() error = %v", err)
 	}
 	defer sess.detach(fresh)
-	if string(fresh.restore) != "RESTORED" {
-		t.Errorf("fresh attach restore = %q, want %q", fresh.restore, "RESTORED")
+	// Preceded by the program status records, here none, so only the clear. See
+	// TestAttachRestoresProgramStatusRecords.
+	if want := "\x1b]7501;state=clear\aRESTORED"; string(fresh.restore) != want {
+		t.Errorf("fresh attach restore = %q, want %q", fresh.restore, want)
 	}
 	if !fresh.first {
 		t.Error("first attach reports first = false, want true so focus can be reported")

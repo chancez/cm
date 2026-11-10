@@ -2419,8 +2419,10 @@ prompt changes nothing, so it reports no change.
 ### The program status protocol
 
 cm is the terminal for OSC 7501, in the sense of "What cm is, from a program's point of view" above: it
-consumes the reports itself and answers the support query, `OSC 7501 ; ?`, from its own model. So a program
-inside cm finds the protocol supported whatever terminal is attached, and with none.
+keeps a session's records itself and answers the support query, `OSC 7501 ; ?`, from its own model. So a
+program inside cm finds the protocol supported whatever terminal is attached, and with none. Keeping them is
+not consuming them: the reports stay in the byte stream and reach every client unchanged, so an outer
+terminal that implements the protocol, kitty or ghostty, keeps its own copy as they happen.
 
 The reports are parsed in Go, in `osc.StatusTracker`, rather than taken from libghostty's callback, because
 the reported state has to exist without a model: adoption replays the log with no emulator, and the server's
@@ -2445,9 +2447,19 @@ erased the parent's report on every nested detach. The cost is a done or error r
 cm's own OSC 25453 report is read as a report about the root record and exempt from the prompt rule. It is
 what a shell that loaded an older integration still writes, and its meaning cannot change under it.
 
-Not yet done: the reports are forwarded to clients in the byte stream unchanged, so an outer terminal that
-implements the protocol sees them, but nothing restores them on attach or clears them on a switch. See
-docs/ideas.md.
+A client's terminal is also given the records when it attaches: a clear, then a report per record, at the
+start of the restore. The restore is the screen re-serialized rather than the bytes that drew it, so it
+carried no 7501, and kitty showed none of a session's records after an attach while `cm list` showed them;
+an agent reports again only when its state changes, so the window could stay empty indefinitely. The clear
+is for `cm switch`, which reattaches in the same terminal and resets nothing, so the window kept the
+previous session's records. It also puts a `cm report` in the terminal, which as an RPC never otherwise
+reaches one, though only at the next attach. Ahead of the screen rather than after it, where the reports
+split a title the screen ends with from an SGR the program had begun.
+
+Not sent while attached: a `cm report` made then, which still reaches only cm. A nested client's restore is
+written into its parent's pty after the parent starts hosting, so the parent ignores the clear like any other
+report from the child; the outer terminal keeps the child's records until the child detaches and its RIS
+clears them, and the parent's are not given back. See docs/ideas.md.
 
 Busy state and the running command are *not* stored, and never were. They come back the other way, from
 the replay, which is why a restart now shows the command a session has been running for an hour instead of

@@ -2823,9 +2823,21 @@ func (s *Session) attach(resumeFrom *seq.Log, tok *attachToken) (attachment, err
 		// tok is nil for a caller that reserved nothing, which no client does: the service always reserves
 		// before attaching. Treated as "did not say yes" for the same reason the field defaults false.
 		drawsImages := tok != nil && tok.images == imagesYes
-		restore = b
+		// The program status records first, as reports the client's terminal can keep. The restore is the
+		// screen re-serialized rather than the bytes that drew it, so it carries no OSC 7501: kitty showed
+		// none of a session's records after an attach, and kept the previous session's after a `cm switch`,
+		// which reattaches in the same terminal and resets nothing. See progstatus.Records.Restore.
+		//
+		// Ahead of the screen, which nothing in it disturbs, rather than between the screen and the
+		// unfinished sequence: there it split a program's bytes, a title the screen ends with and the SGR
+		// it had begun, which TestClientTerminalReceivesTheProgramsBytesIntact holds to be contiguous.
+		//
+		// Read under mu, which attach holds, and possibly a chunk ahead of the screen, since the pump applies
+		// a chunk's reports before feeding the model. The stream then delivers that chunk's reports again,
+		// which changes nothing: a report replaces its record, and the chunk ends on the same records.
+		restore = append(s.records.Restore(), b...)
 		if drawsImages {
-			restore = append(b, s.graphicsRestore()...)
+			restore = append(restore, s.graphicsRestore()...)
 		}
 		// A failure to read placements costs the images on this restore and nothing else, so it is logged
 		// rather than failing the attach: a client with a correct screen and no pictures is far better

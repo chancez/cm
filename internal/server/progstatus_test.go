@@ -6,7 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/cmlog"
 	"github.com/chancez/cm/internal/osc"
+	"github.com/chancez/cm/internal/seq"
+	"github.com/chancez/cm/internal/seqlog"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -132,5 +135,48 @@ func TestReportCarriesProgramStatus(t *testing.T) {
 		if got := satisfied(sess, tc.until); got != tc.want {
 			t.Errorf("satisfied(%v) with a done report = %v, want %v", tc.until, got, tc.want)
 		}
+	}
+}
+
+// An attach gives the client's terminal the session's records, after a clear, ahead of the screen.
+//
+// The symptom without it: kitty, which keeps records per window, showed none of a session's after an
+// attach, because the restore is the screen re-serialized and carries no OSC 7501, and an agent reports
+// again only when its state changes. A `cm switch` reattaches in the same terminal without resetting it,
+// so the window kept the previous session's records, which is what the clear is for.
+//
+// Both kinds of record, since `cm report` writes no bytes and this is the only way its state reaches a
+// terminal. Neither carries what the protocol has no key for: the report's source.
+func TestAttachRestoresProgramStatusRecords(t *testing.T) {
+	const partial = "\x1b[38:2:1"
+	sess := &Session{
+		id:          "attachrecords",
+		log:         cmlog.Discard(),
+		recent:      seqlog.NewAt[seq.Log](DefaultRecentBytes, 0),
+		term:        &fakeTerminal{restore: []byte("SCREEN"), continuation: []byte(partial)},
+		clientSizes: make(map[*attachToken]*clientSize),
+		evicts:      make(map[*attachToken]chan struct{}),
+		metaSubs:    make(map[*metaSub]struct{}),
+		boundaries:  osc.NewBoundaryTracker(0),
+		done:        make(chan struct{}),
+	}
+	sess.setReported(Reported{State: "blocked", Detail: "needs approval", Source: "hook", Progress: -1})
+	sess.statuses.Feed([]byte("\x1b]7501;state=working:id=build/test:progress=40:app=make\x07"))
+	sess.noteStatus()
+	sess.recent.Append([]byte(partial))
+	sess.feedTerminal([]byte(partial), sess.recent.Next())
+
+	att, err := sess.attach(nil, nil)
+	if err != nil {
+		t.Fatalf("attach() error = %v", err)
+	}
+	defer sess.detach(att)
+
+	want := "\x1b]7501;state=clear\a" +
+		"\x1b]7501;state=blocked:msg=bmVlZHMgYXBwcm92YWw=\a" +
+		"\x1b]7501;state=working:id=build/test:progress=40:app=make\a" +
+		"SCREEN" + partial
+	if got := string(att.restore); got != want {
+		t.Errorf("restore = %q, want %q", got, want)
 	}
 }

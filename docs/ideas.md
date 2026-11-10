@@ -316,14 +316,15 @@ existing one applied to the input direction, which is currently uncounted.
 already derivable and is not exposed. `cm list` showing "running for 4m" would answer the question people
 actually ask a multiplexer, and the data is in hand.
 
-**Re-send OSC 7501 to each client.** Reports reach an attached terminal only as bytes in the stream, so an
-outer terminal that implements the protocol, ghostty today, is told about a session's records as they
-happen and never again: an attach starts it with none, and a `cm switch` leaves the previous session's on
-the window. Being the terminal for the protocol, as cm is for graphics, means stripping 7501 from the
-stream and sending each client a clear followed by the current records on attach and switch, plus cm's
-own 25453 reports translated. Cost: a strip in the pump, which changes byte counts and so has to happen
-where graphics already does, and a per-client replay at the point restore runs. Only worth it with an
-outer terminal that shows the records; kitty does not.
+**Send `cm report` to attached clients as it happens.** An attach now gives the client's terminal a clear and
+the session's records (see docs/architecture.md on the program status protocol), and a program's own
+reports pass through in the stream, so kitty and ghostty keep the same records as cm. What still reaches only
+cm is a `cm report` made while a client is attached, since an RPC writes no bytes; it reaches the terminal at
+the next attach. Claude Code reports OSC 7501 itself, so this matters only for programs wired up through
+hooks. Cost: a per-client event carrying the record, written by the client through `screen.inject` the way
+the title is, plus a way to tell a record from `cm report` apart from one already in the stream, so a
+stream report is not sent twice with fewer fields. The same event would give a parent's records back to the
+outer terminal after a nested client detaches, whose RIS clears every record there.
 
 **Every record in `cm info`.** A session keeps one record per id, and only the most urgent reaches the wire.
 A deploy reporting per region shows one region. Cost: a repeated message in the proto and a table in
@@ -605,8 +606,9 @@ as a set rather than adopted one at a time, since several touch the same code.
   asks a client for, so each needs `TestQuerySetsAgreeWithEmulator` re-run and `internal/query` updated.
 - **Semantic prompts**: a callback on OSC 133 and navigation by prompt. Overlaps `osc.CommandTracker`,
   `osc.BoundaryTracker`, and `cm read --since-commands`.
-- **OSC 7501**, done: cm reads it, answers its support query, and it replaced OSC 25453 as the reported
-  state. See docs/architecture.md on the program status protocol.
+- **OSC 7501**, done: cm reads it, answers its support query, gives a client's terminal the records on
+  attach, and it replaced OSC 25453 as the reported state. See docs/architecture.md on the program status
+  protocol.
 - **More kitty graphics support**, against cm's own retransmission on restore.
 - **Paste encoding**, for `cm send` and the auto-indented heredoc idea above.
 - **A memory usage query** per terminal, for `cm status` and `cm doctor`.

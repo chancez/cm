@@ -41,6 +41,9 @@ func TestAttachReplaysASequenceTheModelHasNotFinished(t *testing.T) {
 		// Output the pump delivers after the attach, so the stream read ends without waiting out a
 		// timeout to prove an absence.
 		after = "\x1b[0mNEXT"
+		// The program status records the restore carries, here none. See
+		// TestAttachRestoresProgramStatusRecords.
+		noRecords = "\x1b]7501;state=clear\a"
 	)
 	placements := []graphics.Placement{{ImageID: 7, Row: 1, Col: 2, Columns: 3, Rows: 2}}
 
@@ -55,7 +58,7 @@ func TestAttachReplaysASequenceTheModelHasNotFinished(t *testing.T) {
 		{
 			name:         "unfinished sequence",
 			continuation: []byte(partial),
-			wantRestore:  "SCREEN" + partial,
+			wantRestore:  noRecords + "SCREEN" + partial,
 		},
 		{
 			// Last, after the placements: the stream completes the sequence, so anything between the two
@@ -63,17 +66,17 @@ func TestAttachReplaysASequenceTheModelHasNotFinished(t *testing.T) {
 			name:         "after the images",
 			continuation: []byte(partial),
 			images:       true,
-			wantRestore:  "SCREEN" + string(graphics.PlaceCommands(placements, 0)) + partial,
+			wantRestore:  noRecords + "SCREEN" + string(graphics.PlaceCommands(placements, 0)) + partial,
 		},
 		{
 			name:        "between sequences",
-			wantRestore: "SCREEN",
+			wantRestore: noRecords + "SCREEN",
 		},
 		{
 			// A sequence past vt.MaxContinuation is not tracked. The attach still succeeds with the screen.
 			name:            "unreadable",
 			continuationErr: errors.New("reading continuation: invalid value"),
-			wantRestore:     "SCREEN",
+			wantRestore:     noRecords + "SCREEN",
 		},
 	}
 	for _, tt := range tests {

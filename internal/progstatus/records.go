@@ -132,6 +132,30 @@ func (r *Records) List() []Record {
 	return out
 }
 
+// Restore returns the bytes that put these records on a terminal: a clear, then a report for each record,
+// ordered by id.
+//
+// For a client's terminal at attach, which otherwise learns of a record only as the report passes through
+// on its way out. A restore is the screen re-serialized, not the bytes that drew it, so an attach showed no
+// records until each program reported again, and an agent reports only when its state changes. The clear
+// comes first because a switch reattaches in the same terminal, which kept the previous session's records
+// on the window.
+//
+// Each record carries its own app rather than the inherited one, so the terminal keeps the same records
+// and does its own inheriting.
+func (r *Records) Restore() []byte {
+	b := osc.StatusSequence(osc.Status{State: "clear", Progress: -1})
+	ids := make([]string, 0, len(r.recs))
+	for id := range r.recs {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		b = append(b, osc.StatusSequence(r.recs[id].Status)...)
+	}
+	return b
+}
+
 // app resolves a record's app, walking up its ancestors when it has none of its own. The root, whose id is
 // empty, is every record's last ancestor.
 func (r *Records) app(id, app string) string {
