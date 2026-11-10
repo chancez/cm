@@ -40,6 +40,8 @@ import (
 // buildResult caches one build of cm for the whole package rather than per test.
 type buildResult struct {
 	sync.Once
+	// dir holds the binary, and is removed by TestMain once every test has finished with it.
+	dir  string
 	path string
 	err  error
 }
@@ -50,6 +52,22 @@ var buildOnce buildResult
 // versionBuildOnce is the binary built with the version override enabled, used only by the tests that need
 // two processes to disagree about their versions.
 var versionBuildOnce buildResult
+
+// TestMain removes the cached builds once the package's tests are done.
+//
+// Here rather than in a t.Cleanup because a build is shared by every test, so no single test outlives
+// it. Without this every invocation of the package left its builds behind: one machine had 1535 cmbin
+// directories at 6.9 GB. A run killed by its -timeout panic still leaks, since nothing after m.Run
+// executes.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	for _, b := range []*buildResult{&buildOnce, &versionBuildOnce} {
+		if b.dir != "" {
+			os.RemoveAll(b.dir)
+		}
+	}
+	os.Exit(code)
+}
 
 // cmBinary returns a path to a freshly built cm.
 //
@@ -84,6 +102,7 @@ func buildCM(t *testing.T, once *buildResult, extraArgs []string) string {
 			once.err = err
 			return
 		}
+		once.dir = dir
 		path := filepath.Join(dir, "cm")
 		args := append([]string{"build"}, extraArgs...)
 		// Instrumented when the test binary is, so `go test -race ./internal/e2e/` puts the spawned cm
