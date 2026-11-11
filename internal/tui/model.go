@@ -144,6 +144,11 @@ func newModel(ctx context.Context, opts Options) model {
 	// The list's own help line is suppressed because the picker renders one that covers both its
 	// bindings and the list's. Two help lines disagreeing about what a key does is worse than either.
 	l.SetShowHelp(false)
+	if opts.Filter != "" {
+		// Applied to a list that has no rows yet, which is enough: SetItems re-runs an applied filter, so
+		// the first answer from the server arrives already narrowed.
+		l.SetFilterText(opts.Filter)
+	}
 
 	interval := refreshInterval
 	if opts.Refresh != nil {

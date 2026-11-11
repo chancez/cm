@@ -27,6 +27,7 @@ func newTUICommand(g *globals) *cobra.Command {
 		tagArgs    []string
 		chosenFile string
 		backKey    string
+		filter     string
 	)
 	cmd := &cobra.Command{
 		Use:   "tui",
@@ -115,6 +116,7 @@ to the selected session instead of nesting an attachment inside it.`,
 				Sessions: cl,
 				Keys:     pickerKeys,
 				Tags:     tagArgs,
+				Filter:   filter,
 				Notice:   notice,
 				Self:     os.Getenv(paths.SessionEnv()),
 				Preview:  preview,
@@ -137,6 +139,8 @@ to the selected session instead of nesting an attachment inside it.`,
 		"how often to re-read the session list, or 0 to only refresh after an action")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.StringVar(&filter, "filter", "",
+		`start with the list filtered as though this had been typed after "/"`)
 	f.StringVar(&chosenFile, "chosen-file", "",
 		"write the session the user chose here, for the client that opened this picker")
 	// Hidden because it is a handover between two cm processes rather than something to type: an attached

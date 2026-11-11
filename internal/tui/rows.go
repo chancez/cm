@@ -292,3 +292,22 @@ func rows(sessions []*serverv1.Session) []list.Item {
 	}
 	return items
 }
+
+// Match is the picker's filter as a function: the sessions "/" would leave for query, best match first.
+//
+// Exported so `cm search` prints exactly what `cm search --tui` opens on. Built from the list's own pieces
+// rather than reimplemented: the same FilterValue, the same rows order underneath, and bubbles' own
+// DefaultFilter, which ranks with a stable sort, so ties fall back to the order rows gives them in both.
+func Match(query string, sessions []*serverv1.Session) []*serverv1.Session {
+	items := rows(sessions)
+	targets := make([]string, len(items))
+	for i, it := range items {
+		targets[i] = it.FilterValue()
+	}
+	ranks := list.DefaultFilter(query, targets)
+	out := make([]*serverv1.Session, 0, len(ranks))
+	for _, r := range ranks {
+		out = append(out, items[r.Index].(item).session)
+	}
+	return out
+}
