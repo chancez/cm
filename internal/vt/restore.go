@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	"go.mitchellh.com/libghostty"
 
@@ -437,6 +439,36 @@ func (t *Terminal) VT() ([]byte, error) {
 		style:         true,
 	})
 }
+
+// ANSI returns the terminal's full contents, scrollback included, as text carrying only its styling.
+//
+// For a pager, which is what `less -R` and an editor reading stdin can show: SGR and nothing else.
+// VT is the wrong format for that, since it carries the restore state too (modes, keyboard protocol,
+// and a final cursor move), which a pager prints as junk at the end of the last page. Soft-wrapped
+// lines are rejoined so the pager wraps them to its own width, blank runs are spaces, and lines end in LF
+// rather than the CRLF a terminal needs, which an editor would otherwise show as a stray ^M or a DOS file.
+func (t *Terminal) ANSI() ([]byte, error) {
+	if t.closed {
+		return nil, fmt.Errorf("terminal is closed")
+	}
+	out, err := t.format(formatOptions{emit: libghostty.FormatterFormatVT, unwrap: true})
+	if err != nil {
+		return nil, err
+	}
+	out = bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
+	return cursorForward.ReplaceAllFunc(out, func(m []byte) []byte {
+		n, err := strconv.Atoi(string(m[2 : len(m)-1]))
+		if err != nil || n < 1 {
+			n = 1
+		}
+		return bytes.Repeat([]byte(" "), n)
+	}), nil
+}
+
+// cursorForward is CSI n C, which the formatter writes for a run of cells nothing was drawn in: the gap a
+// right-hand prompt leaves, for one. A pager drops it, so the text either side closed up, and measured in
+// less and nvim both. Spaces are what those cells look like.
+var cursorForward = regexp.MustCompile(`\x1b\[[0-9]*C`)
 
 // formatOptions mirrors the subset of the formatter's options cm uses, so callers above do not
 // deal with C structs.

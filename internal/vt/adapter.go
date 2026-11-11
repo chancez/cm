@@ -223,6 +223,14 @@ func (s *SessionTerminal) VT() (out []byte, err error) {
 	return s.term.VT()
 }
 
+// ANSI returns the terminal contents as styled text.
+func (s *SessionTerminal) ANSI() (out []byte, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "rendering terminal contents") }()
+	return s.term.ANSI()
+}
+
 // HTML returns the terminal contents as HTML.
 func (s *SessionTerminal) HTML() (out []byte, err error) {
 	s.mu.Lock()

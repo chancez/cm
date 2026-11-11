@@ -1506,6 +1506,8 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 		format = HistoryVT
 	case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
 		format = HistoryHTML
+	case serverv1.HistoryFormat_HISTORY_FORMAT_ANSI:
+		format = HistoryANSI
 	default:
 		format = HistoryPlain
 	}

@@ -606,7 +606,7 @@ type Terminal interface {
 	// event in that encoding is one something asked for rather than one left over from a program that
 	// has exited.
 	KittyKeyboardProtocol() bool
-	// Plain, VT, and HTML render the terminal contents, scrollback included, for a history
+	// Plain, VT, ANSI, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
 	// Tail renders the last lines as plain text, optionally rejoining soft-wrapped lines. A lines
@@ -614,6 +614,7 @@ type Terminal interface {
 	Tail(lines int, unwrap bool) ([]byte, error)
 	TailVT(lines int) ([]byte, error)
 	VT() ([]byte, error)
+	ANSI() ([]byte, error)
 	HTML() ([]byte, error)
 	// Close releases emulator resources.
 	Close() error
@@ -3751,6 +3752,8 @@ func (s *Session) History(format HistoryFormat) ([]byte, error) {
 		return term.VT()
 	case HistoryHTML:
 		return term.HTML()
+	case HistoryANSI:
+		return term.ANSI()
 	default:
 		return term.Plain()
 	}
@@ -3766,6 +3769,8 @@ const (
 	HistoryVT
 	// HistoryHTML preserves styling as HTML.
 	HistoryHTML
+	// HistoryANSI is text with its colors and styling, for a pager.
+	HistoryANSI
 )
 
 // Shutdown terminates the session's shell and its shim.

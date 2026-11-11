@@ -1468,6 +1468,9 @@ enum HistoryFormat {
   HISTORY_FORMAT_VT = 1;
   // HTML, preserving styling.
   HISTORY_FORMAT_HTML = 2;
+  // Text with its colors and styling and no other escape sequences, for a pager. A server older than this
+  // value renders plain text instead, which a pager still shows.
+  HISTORY_FORMAT_ANSI = 3;
 }
 
 message HistoryRequest {

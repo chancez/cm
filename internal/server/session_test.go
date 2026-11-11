@@ -219,6 +219,12 @@ func (f *fakeTerminal) VT() ([]byte, error) {
 	return f.written, nil
 }
 
+func (f *fakeTerminal) ANSI() ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.written, nil
+}
+
 func (f *fakeTerminal) HTML() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

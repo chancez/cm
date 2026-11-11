@@ -350,6 +350,28 @@ func TestPlainAndVTAndHTML(t *testing.T) {
 	}
 }
 
+// A pager prints whatever escape sequence it does not understand, so the ANSI form must carry the styling
+// and nothing else: VT's mode and cursor state came out as junk at the end of the last page. A line the
+// terminal wrapped is one line again, blank runs are spaces, and lines end in LF.
+func TestANSIIsStyledTextOnly(t *testing.T) {
+	term := newTerminal(t, 5, 10)
+	// Bracketed paste and a cursor move are both in VT's output, and must not be in this one.
+	// A gap moved over rather than typed, as a right-hand prompt makes, is the formatter's CSI C, and must
+	// come out as spaces: a pager drops the sequence and the gap closes up.
+	if err := term.Write([]byte("\x1b[?2004h\x1b[31mred\x1b[0m plain\r\n0123456789abc\r\nl\x1b[4Cr\r\n\x1b[1;1H")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := term.ANSI()
+	if err != nil {
+		t.Fatalf("ANSI() error = %v", err)
+	}
+	want := "\x1b[0m\x1b[38;5;1mred\x1b[0m plain\n0123456789abc\nl    r\n"
+	if string(got) != want {
+		t.Errorf("ANSI() = %q, want %q", got, want)
+	}
+}
+
 func TestResizeReflowsContent(t *testing.T) {
 	term := newTerminal(t, 24, 80)
 	if err := term.Write([]byte("some text that will reflow\r\n")); err != nil {

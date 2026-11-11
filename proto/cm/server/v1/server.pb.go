@@ -303,6 +303,9 @@ const (
 	HistoryFormat_HISTORY_FORMAT_VT HistoryFormat = 1
 	// HTML, preserving styling.
 	HistoryFormat_HISTORY_FORMAT_HTML HistoryFormat = 2
+	// Text with its colors and styling and no other escape sequences, for a pager. A server older than this
+	// value renders plain text instead, which a pager still shows.
+	HistoryFormat_HISTORY_FORMAT_ANSI HistoryFormat = 3
 )
 
 // Enum value maps for HistoryFormat.
@@ -311,11 +314,13 @@ var (
 		0: "HISTORY_FORMAT_UNSPECIFIED",
 		1: "HISTORY_FORMAT_VT",
 		2: "HISTORY_FORMAT_HTML",
+		3: "HISTORY_FORMAT_ANSI",
 	}
 	HistoryFormat_value = map[string]int32{
 		"HISTORY_FORMAT_UNSPECIFIED": 0,
 		"HISTORY_FORMAT_VT":          1,
 		"HISTORY_FORMAT_HTML":        2,
+		"HISTORY_FORMAT_ANSI":        3,
 	}
 )
 
@@ -5716,11 +5721,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SESSION_STATE_RUNNING\x10\x01\x12\x18\n" +
 	"\x14SESSION_STATE_EXITED\x10\x02\x12\x16\n" +
-	"\x12SESSION_STATE_DEAD\x10\x03*_\n" +
+	"\x12SESSION_STATE_DEAD\x10\x03*x\n" +
 	"\rHistoryFormat\x12\x1e\n" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
-	"\x13HISTORY_FORMAT_HTML\x10\x022\xb2\v\n" +
+	"\x13HISTORY_FORMAT_HTML\x10\x02\x12\x17\n" +
+	"\x13HISTORY_FORMAT_ANSI\x10\x032\xb2\v\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +

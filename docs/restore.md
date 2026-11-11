@@ -154,6 +154,10 @@ stack depth to.
 way to read this state, so an option set in one and not the other makes that view lie about what a
 client would receive.
 
+`ANSI()` is the opposite choice, for a pager: every extra off, wrapped lines rejoined, LF line endings.
+`less -R` prints any sequence it does not understand, so VT's preamble and final cursor move would show
+up as junk on the last page.
+
 ## A main-screen blob has to say so
 
 The formatter emits only modes that *differ* from libghostty's defaults, and the main screen is the

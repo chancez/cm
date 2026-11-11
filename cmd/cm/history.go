@@ -20,8 +20,9 @@ func newHistoryCommand(g *globals) *cobra.Command {
 		Short: "Print a session's contents, scrollback included",
 		Long: `Print a session's contents, including scrollback.
 
-Plain text by default, so it can be piped or paged. --format=vt keeps colors and
-styling; --format=html produces styled markup.
+Plain text by default, so it can be piped or paged. --format=ansi keeps colors and
+styling and nothing else, for 'less -R'; --format=vt adds the terminal state a
+fresh screen needs; --format=html produces styled markup.
 
 The whole thing, always. 'cm read' is the bounded form: it takes --lines, rejoins
 soft-wrapped lines, and with --raw gives the emitted bytes of just the tail, which
@@ -41,10 +42,12 @@ cannot be concatenated into valid markup.`,
 				f = serverv1.HistoryFormat_HISTORY_FORMAT_UNSPECIFIED
 			case "vt":
 				f = serverv1.HistoryFormat_HISTORY_FORMAT_VT
+			case "ansi":
+				f = serverv1.HistoryFormat_HISTORY_FORMAT_ANSI
 			case "html":
 				f = serverv1.HistoryFormat_HISTORY_FORMAT_HTML
 			default:
-				return fmt.Errorf("unknown format %q, want plain, vt, or html", format)
+				return fmt.Errorf("unknown format %q, want plain, ansi, vt, or html", format)
 			}
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
@@ -88,7 +91,7 @@ cannot be concatenated into valid markup.`,
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&format, "format", "plain", "output format: plain, vt, or html")
+	f.StringVar(&format, "format", "plain", "output format: plain, ansi, vt, or html")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"print the sessions with this tag, as key or key=value (repeatable, all must match)")
 	return cmd

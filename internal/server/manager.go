@@ -1992,6 +1992,8 @@ func (m *Manager) HistoryFromDisk(
 			return term.VT()
 		case serverv1.HistoryFormat_HISTORY_FORMAT_HTML:
 			return term.HTML()
+		case serverv1.HistoryFormat_HISTORY_FORMAT_ANSI:
+			return term.ANSI()
 		default:
 			return term.Plain()
 		}
