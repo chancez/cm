@@ -46,6 +46,7 @@ type model struct {
 	attach   AttachFunc
 	// switchTo moves whoever opened the picker, or is nil when there is nobody to move. See SwitchFunc.
 	switchTo SwitchFunc
+	info     InfoFunc
 	tags     []string
 	home     string
 	// self is the session this picker runs in, as a reference, or empty outside one. See Options.Self.
@@ -131,6 +132,9 @@ func newModel(ctx context.Context, opts Options) model {
 	if opts.Switch == nil {
 		keys.Switch.SetEnabled(false)
 	}
+	if opts.Info == nil {
+		keys.Info.SetEnabled(false)
+	}
 
 	l := list.New(nil, delegate{home: home, now: time.Now()}, 0, 0)
 	l.Title = "sessions"
@@ -152,6 +156,7 @@ func newModel(ctx context.Context, opts Options) model {
 		sessions: opts.Sessions,
 		attach:   opts.Attach,
 		switchTo: opts.Switch,
+		info:     opts.Info,
 		tags:     opts.Tags,
 		home:     home,
 		self:     opts.Self,
@@ -259,7 +264,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		// A late answer for a session that is no longer selected is dropped rather than shown. The
 		// request was in flight while the cursor moved, so painting it now would put one session's
 		// output under another session's row, which is a confident wrong answer rather than a gap.
-		if msg.sessionID != m.preview.want || m.preview.mirror != "" {
+		if msg.sessionID != m.preview.want || m.preview.mirror != "" || m.preview.info {
 			return m, nil
 		}
 		m.preview.have = msg.sessionID
@@ -398,12 +403,23 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Preview):
-		m.preview.on = !m.preview.on
+		m.preview.on = !m.preview.on || m.preview.info
+		// p always means output, so from the details it switches back rather than closing.
+		m.preview.info = false
 		if !m.preview.on {
 			// Dropped rather than kept for next time. Content held while the pane is closed is content
 			// that will be stale when it reopens, and the reopen fetches anyway.
 			m.preview = preview{on: false}
 		}
+		m.layout()
+		return m, nil
+
+	case key.Matches(msg, m.keys.Info):
+		// Opens the pane on the details when it is closed, and otherwise swaps what it shows. The pane is
+		// reset either way, so the first frame after the key shows the new kind rather than the old one's
+		// lines under the new label.
+		info := !m.preview.on || !m.preview.info
+		m.preview = preview{on: true, info: info}
 		m.layout()
 		return m, nil
 
@@ -764,6 +780,14 @@ func (m model) syncPreview() (model, tea.Cmd) {
 		m.preview.lines = nil
 		m.preview.err = nil
 		m.preview.due = true
+	}
+	if m.preview.info {
+		// Rendered from the row rather than read, so it costs nothing and is as fresh as the last list.
+		// Rebuilt on every pass for the same reason, since a refresh replaces the row.
+		m.preview.have = it.session.Id
+		m.preview.lines = infoLines(m.info(it.session), m.preview.width, m.previewContentHeight())
+		m.preview.due = false
+		return m, nil
 	}
 	// Decided on every pass rather than when the cursor arrives, since a refresh can report that the
 	// session under the cursor has just started a picker.

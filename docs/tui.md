@@ -62,6 +62,12 @@ Under the list is the selected session's last output, which is what a session is
 by: half of them are named by the server, so the name says nothing, and several usually share a
 directory. `p` closes it, `--preview=false` starts without it, and closing it stops the reads.
 
+**`i` swaps the pane to `cm info`.** Same fields in the same order, from `cmd/cm`'s own list, so the two
+cannot drift. Rendered from the row the list already holds, so it costs no request, and empty fields are
+left out because the pane has a third of the window and `cm info` prints 27. Cut from the bottom, keeping
+the name and state. `p` goes back to the output; `i` again does too. It is in the expanded help only, for
+the short line's width reason below.
+
 **Content comes from Read's plain form**, which renders the terminal model's cells to text. The raw form
 would carry the program's own escape sequences into a frame bubbletea composes, which is cm's largest
 family of bugs. Measured against a session that printed SGR, a CR overwrite, a tab, a BEL and a NUL:

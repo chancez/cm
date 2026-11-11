@@ -119,6 +119,7 @@ to the selected session instead of nesting an attachment inside it.`,
 				Self:     os.Getenv(paths.SessionEnv()),
 				Preview:  preview,
 				Switch:   switchTo,
+				Info:     tuiInfo,
 				BackKey:  backKey,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.
@@ -257,6 +258,16 @@ func runAttachChild(ctx context.Context, argv []string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(said.String()), nil
+}
+
+// tuiInfo is `cm info` for the picker's pane, from the same field list, so the two cannot disagree.
+func tuiInfo(s *serverv1.Session) []tui.InfoField {
+	fields := sessionFields(s)
+	out := make([]tui.InfoField, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, tui.InfoField{Name: f.name, Value: f.value})
+	}
+	return out
 }
 
 // The generated client is what the picker talks to, and tui.Sessions names the four RPCs it uses. This

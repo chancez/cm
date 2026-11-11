@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -34,6 +35,9 @@ type preview struct {
 
 	lines []string
 	err   error
+
+	// info shows the session's details instead of its output. See infoLines.
+	info bool
 
 	// mirror says why the selected session is not being read, or is empty when it is. See mirrorReason.
 	mirror string
@@ -224,6 +228,9 @@ func (p preview) header(label string) string {
 	if label == "" {
 		label = "no session"
 	}
+	if p.info {
+		label += " info"
+	}
 	head := "-- " + label + " "
 	if width := lipgloss.Width(head); p.width > width {
 		head += strings.Repeat("-", p.width-width)
@@ -289,4 +296,33 @@ func isPickerCommand(command string) bool {
 		}
 	}
 	return false
+}
+
+// infoLines lays out a session's details for the pane.
+//
+// Empty fields are left out, which is the difference from `cm info`: the pane has a third of the window,
+// `cm info` prints 27 fields, and a sandbox session running a picker left nine of them empty, so printing
+// them pushes the ones that say something off the bottom. Through previewLines afterwards, because these values are no more trusted than
+// output: a title is whatever a program set with OSC 2.
+func infoLines(fields []InfoField, width, height int) []string {
+	nameWidth := 0
+	for _, f := range fields {
+		if f.Value != "" {
+			nameWidth = max(nameWidth, len(f.Name))
+		}
+	}
+	var b strings.Builder
+	for _, f := range fields {
+		if f.Value == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%-*s  %s\n", nameWidth, f.Name, f.Value)
+	}
+	lines := previewLines([]byte(b.String()), width, len(fields))
+	// The top rather than the tail, unlike output: the fields come in `cm info`'s order, which puts the
+	// name and state first, and those are what a short pane should keep.
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return lines
 }

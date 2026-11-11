@@ -480,3 +480,91 @@ func TestIsPickerCommand(t *testing.T) {
 		}
 	}
 }
+
+// fakeInfo is a stand-in for `cm info`'s fields, with an empty one to be left out.
+func fakeInfo(s *serverv1.Session) []InfoField {
+	return []InfoField{
+		{Name: "name", Value: s.Name},
+		{Name: "reported_state", Value: ""},
+		{Name: "command", Value: s.Command},
+	}
+}
+
+// TestTheInfoKeyShowsDetailsWithoutReading covers i opening the pane on `cm info`.
+//
+// Rendered from the row the list already has, so it costs no request: a pane that read the session for
+// details it already holds would pay the output pane's price for nothing.
+func TestTheInfoKeyShowsDetailsWithoutReading(t *testing.T) {
+	s := session("work", "a7k2m9x4", 100)
+	s.Command = "vim"
+	h := newHarnessWith(t, Options{Info: fakeInfo}, s)
+	h.list()
+
+	h.press("i")
+	h.list()
+
+	if got := len(h.sessions.reads); got != 0 {
+		t.Errorf("%d reads for the info pane, want none", got)
+	}
+	want := preview{
+		on:     true,
+		info:   true,
+		want:   "a7k2m9x4",
+		have:   "a7k2m9x4",
+		lines:  []string{"name     work", "command  vim"},
+		height: h.model.preview.height,
+		width:  h.model.preview.width,
+	}
+	if !reflect.DeepEqual(h.model.preview, want) {
+		t.Errorf("pane is\n%+v\nwant\n%+v", h.model.preview, want)
+	}
+
+	// p goes back to the output rather than closing, and the output is read again.
+	h.press("p")
+	h.list()
+	if !h.model.preview.on || h.model.preview.info {
+		t.Errorf("after p from info the pane is on=%v info=%v, want output", h.model.preview.on, h.model.preview.info)
+	}
+	if got := len(h.sessions.reads); got == 0 {
+		t.Error("returning to the output read nothing")
+	}
+
+	// i from the output switches to the details, and i again back.
+	h.press("i")
+	if !h.model.preview.info {
+		t.Error("i from the output did not show the details")
+	}
+	h.press("i")
+	if h.model.preview.info || !h.model.preview.on {
+		t.Errorf("i from the details left on=%v info=%v, want output", h.model.preview.on, h.model.preview.info)
+	}
+}
+
+// TestTheInfoKeyIsAbsentWithoutARenderer keeps i from being offered when nobody supplied the fields.
+func TestTheInfoKeyIsAbsentWithoutARenderer(t *testing.T) {
+	h := newHarness(t, session("work", "a7k2m9x4", 100))
+	h.list()
+	h.press("i")
+	if h.model.preview.on {
+		t.Error("i opened a pane with no way to render it")
+	}
+}
+
+// TestInfoLinesAreSanitized holds the details to the same rule as output: a title is whatever a program
+// set, so an escape in one would land inside bubbletea's frame.
+func TestInfoLinesAreSanitized(t *testing.T) {
+	got := infoLines([]InfoField{
+		{Name: "title", Value: "a\x1b[31mred\x1b[0m\x07"},
+		{Name: "cwd", Value: ""},
+		{Name: "id", Value: "@a7k2m9x4"},
+	}, 80, 10)
+	want := []string{"title  ared", "id     @a7k2m9x4"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("infoLines = %q, want %q", got, want)
+	}
+
+	// Cut from the bottom, so a short pane keeps the first fields.
+	if got := infoLines([]InfoField{{"a", "1"}, {"b", "2"}, {"c", "3"}}, 80, 2); !reflect.DeepEqual(got, []string{"a  1", "b  2"}) {
+		t.Errorf("a two-row pane holds %q", got)
+	}
+}

@@ -114,6 +114,18 @@ type Attachment struct {
 // be a longer way round to the same place. See the overlay's picker handover in internal/client.
 type SwitchFunc func(ref string) error
 
+// InfoFunc is what `cm info` says about a session, in its order.
+//
+// A function rather than a table here, because the fields and their spelling belong to the command: the
+// pane shows what `cm info` prints rather than a second rendering of the same session that drifts from it.
+type InfoFunc func(s *serverv1.Session) []InfoField
+
+// InfoField is one line of `cm info`.
+type InfoField struct {
+	Name  string
+	Value string
+}
+
 // Options configures a picker.
 type Options struct {
 	// Sessions is the server to ask. Required.
@@ -122,6 +134,8 @@ type Options struct {
 	Attach AttachFunc
 	// Switch moves the caller to a session, or is nil when there is no caller to move. See SwitchFunc.
 	Switch SwitchFunc
+	// Info renders a session's details for the pane, or is nil to leave the info key unbound.
+	Info InfoFunc
 	// Keys is what each key does, from the config file. The zero value means the built-in defaults, which
 	// is what a caller with no config to read wants: see internal/keymap.
 	Keys keymap.Map
