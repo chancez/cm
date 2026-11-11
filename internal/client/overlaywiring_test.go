@@ -6,6 +6,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
+
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // overlayWaitFor takes one value off a channel or fails, rather than blocking forever.
@@ -335,5 +340,96 @@ func TestRunSessionPickerWithoutARunner(t *testing.T) {
 	}
 	if got := h.stream.inputs(); len(got) != 0 {
 		t.Errorf("input reached the session: %q", got)
+	}
+}
+
+// The pager binding fetches the scrollback, hands it and the terminal to the pager, and repaints after.
+//
+// Three things the pager needs and would not otherwise get. The session asked for by ID, for the reason a
+// command is. The ansi format, since vt would put mode and cursor state on its last page. And the terminal
+// in the mode it had before the attachment, since a pager is started the way a shell would start it.
+func TestRunSessionOpensThePager(t *testing.T) {
+	tests := []struct {
+		name     string
+		pagerErr error
+	}{
+		{name: "the pager exits"},
+		{name: "a failed pager repaints too", pagerErr: errors.New("no such pager")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := overlayHarness(t)
+			h.client.history = &serverv1.HistoryResponse{Data: []byte("scrolled off\n")}
+			type paged struct {
+				content []byte
+				lflag   uint64
+			}
+			opened := make(chan paged, 1)
+			h.opts.OpenPager = func(_ context.Context, content []byte) error {
+				termios, err := unix.IoctlGetTermios(int(h.tty.in.Fd()), ioctlGetTermios)
+				if err != nil {
+					t.Errorf("IoctlGetTermios() error = %v", err)
+				}
+				opened <- paged{content: content, lflag: uint64(termios.Lflag)}
+				return tc.pagerErr
+			}
+			h.stream.push(&serverv1.AttachResponse{
+				Event: &serverv1.AttachResponse_Opened{Opened: &serverv1.Opened{
+					Session: "test", SessionId: "a7k2m9x4", NextSeq: 5,
+				}},
+			})
+
+			done := h.runAsync(context.Background())
+			h.input <- []byte("\x1d[")
+			got := overlayWaitFor(t, opened, "the pager to be opened")
+
+			if string(got.content) != "scrolled off\n" {
+				t.Errorf("pager content = %q, want the history", got.content)
+			}
+			if got.lflag&unix.ICANON == 0 {
+				t.Errorf("the pager ran with the terminal in raw mode, want the mode from before the attachment")
+			}
+			if oc := overlayWaitFor(t, done, "the outcome"); oc != outcomeReconnect {
+				t.Errorf("outcome = %v, want outcomeReconnect", oc)
+			}
+			if h.resumeFrom != nil {
+				t.Errorf("resumeFrom = %v, want nil so the screen the pager covered is repainted", *h.resumeFrom)
+			}
+			wantReq := &serverv1.HistoryRequest{
+				Session: "@a7k2m9x4",
+				Format:  serverv1.HistoryFormat_HISTORY_FORMAT_ANSI,
+			}
+			if reqs := h.client.historyReqs; len(reqs) != 1 || !proto.Equal(reqs[0], wantReq) {
+				t.Errorf("History requests = %v, want [%v]", reqs, wantReq)
+			}
+			termios, err := unix.IoctlGetTermios(int(h.tty.in.Fd()), ioctlGetTermios)
+			if err != nil {
+				t.Fatalf("IoctlGetTermios() error = %v", err)
+			}
+			if termios.Lflag&unix.ICANON != 0 {
+				t.Errorf("the terminal was left cooked after the pager, want raw again")
+			}
+			if got := h.stream.inputs(); len(got) != 0 {
+				t.Errorf("input reached the session: %q", got)
+			}
+		})
+	}
+}
+
+// A client with no pager says so rather than appearing to do nothing, as it does for the picker.
+func TestRunSessionPagerWithoutARunner(t *testing.T) {
+	h := overlayHarness(t)
+	h.stream.opened("test", 0, nil)
+
+	done := h.runAsync(context.Background())
+	h.input <- []byte("\x1d[")
+	h.input <- []byte("\r")
+
+	if oc := overlayWaitFor(t, done, "the overlay to close"); oc != outcomeReconnect {
+		t.Errorf("outcome = %v, want outcomeReconnect", oc)
+	}
+	if reqs := h.client.historyReqs; len(reqs) != 0 {
+		t.Errorf("History requests = %v, want none", reqs)
 	}
 }

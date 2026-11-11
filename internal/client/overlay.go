@@ -66,6 +66,8 @@ type overlay struct {
 	// canPick reports that the caller can hand the terminal to the full picker, which every caller that is
 	// not `cm attach` cannot.
 	canPick bool
+	// canPage reports that the caller can hand the terminal to a pager, for the same reason as canPick.
+	canPage bool
 
 	// barStyle, bodyStyle and selectedStyle are how the three regions are drawn. Configurable because no
 	// default survives every theme, which was learned by shipping one that did not: see ParseStyle.
@@ -193,6 +195,11 @@ type overlayResponse struct {
 	// out to the full picker, with its filter and its preview pane, and it is a keypress rather than the
 	// default because it covers the screen.
 	OpenPicker bool
+	// OpenPager asks the caller to show the session's scrollback in the user's pager.
+	//
+	// A pager rather than a scrollback mode drawn by cm, which is what kitty's scrollback_pager does: search,
+	// selection and copying are the pager's, and whoever wants nvim for that configures nvim.
+	OpenPager bool
 	// SwitchTo names a session this client should move to.
 	//
 	// A reference the caller acts on rather than a `cm switch` command, because the client can already do
@@ -420,6 +427,14 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 		// Closed rather than left up: the picker takes the whole screen, so the bar has nowhere to be, and
 		// what comes back is either a switch or a repaint.
 		o.close(resp)
+	case keymap.OverlayPager:
+		if !o.canPage {
+			o.status = "this client cannot open a pager"
+			o.mode = overlayResult
+			return
+		}
+		resp.OpenPager = true
+		o.close(resp)
 	case keymap.OverlayCommand:
 		o.mode = overlayPrompt
 		o.prompt = promptCommand
@@ -500,6 +515,9 @@ func (o *overlay) helpBody() []string {
 	// appears.
 	if entry := o.helpEntry(keymap.OverlayPicker); entry != "" {
 		lines = append(lines, entry+"; "+o.prefix.Name+" there comes back")
+	}
+	if entry := o.helpEntry(keymap.OverlayPager); entry != "" {
+		lines = append(lines, entry)
 	}
 	if entry := o.helpEntry(keymap.OverlaySendDetach); entry != "" {
 		lines = append(lines, fmt.Sprintf("%s  send %s to the program",

@@ -192,6 +192,14 @@ type Options struct {
 	// guarantees: two readers on one terminal means the keystroke goes to whichever the kernel wakes
 	// second.
 	OpenPicker func(ctx context.Context) (chosen string, err error)
+	// OpenPager hands the terminal to the user's pager to show content, the session's scrollback, and
+	// returns when the pager exits.
+	//
+	// Supplied by the caller because which pager to run is configuration, and this package reads none. Nil
+	// disables the overlay's pager binding. Called with nothing in this process reading the terminal and
+	// with the terminal in the mode it had before the attachment, which is what a pager started from a
+	// shell expects.
+	OpenPager func(ctx context.Context, content []byte) error
 	// NoRestore skips the screen repaint that normally opens an attachment, streaming only what arrives from
 	// now on.
 	//
@@ -984,6 +992,7 @@ func runSession(
 		// Where l goes. Held by the loop, so it survives the reconnect that rebuilds this overlay.
 		lastSession: lastRef,
 		canPick:     opts.OpenPicker != nil,
+		canPage:     opts.OpenPager != nil,
 		log:         opts.Log,
 
 		barStyle:      styleOr(opts.BarStyle, DefaultBarStyle),
@@ -1137,6 +1146,39 @@ func runSession(
 			}
 			// Nothing chosen, so the screen the picker covered is repainted from cm's model, which is what a
 			// closing overlay does anyway.
+			*resumeFrom = nil
+			return outcomeReconnect, true
+		}
+		if resp.OpenPager {
+			// Inline, for the reason the picker is: outQueue absorbs the session's output meanwhile, and
+			// whatever the pager covered is repainted from cm's model afterwards.
+			//
+			// By ID, for the reason a command is. The ansi format is text and styling only, which is what
+			// `less -R` and an editor can show; vt would put its mode and cursor state on the last page.
+			hist, err := cl.History(ctx, &serverv1.HistoryRequest{
+				Session: paths.FormatSessionID(result.SessionID),
+				Format:  serverv1.HistoryFormat_HISTORY_FORMAT_ANSI,
+			})
+			if err != nil {
+				opts.Log.Warn("fetching the scrollback for the pager failed", "err", err)
+				*resumeFrom = nil
+				return outcomeReconnect, true
+			}
+			in.suspend()
+			// Raw mode is this client's, not the pager's: a pager started from a shell gets the shell's mode
+			// and sets its own from there. Restored on the way back whatever the pager left behind.
+			if err := tty.cooked(); err != nil {
+				opts.Log.Warn("restoring the terminal mode for the pager failed", "err", err)
+			}
+			if err := opts.OpenPager(ctx, hist.GetData()); err != nil {
+				opts.Log.Warn("the pager failed", "err", err)
+			}
+			if err := tty.raw(); err != nil {
+				opts.Log.Warn("returning the terminal to raw mode failed", "err", err)
+			}
+			if resumeErr := in.resume(); resumeErr != nil {
+				return outcomeDone, true
+			}
 			*resumeFrom = nil
 			return outcomeReconnect, true
 		}

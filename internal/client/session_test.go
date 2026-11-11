@@ -240,6 +240,11 @@ type fakeClient struct {
 	stream *fakeStream
 	// attachErr fails the Attach call itself, before any message is exchanged.
 	attachErr error
+	// history answers History, and historyReqs records what was asked.
+	history     *serverv1.HistoryResponse
+	historyErr  error
+	historyMu   sync.Mutex
+	historyReqs []*serverv1.HistoryRequest
 }
 
 func (c *fakeClient) Attach(context.Context) (serverv1.Server_AttachClient, error) {
@@ -275,9 +280,12 @@ func (c *fakeClient) Send(context.Context, *serverv1.SendRequest) (*serverv1.Sen
 	panic("unused")
 }
 func (c *fakeClient) History(
-	context.Context, *serverv1.HistoryRequest,
+	_ context.Context, req *serverv1.HistoryRequest,
 ) (*serverv1.HistoryResponse, error) {
-	panic("unused")
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	c.historyReqs = append(c.historyReqs, req)
+	return c.history, c.historyErr
 }
 func (c *fakeClient) GetEnv(
 	context.Context, *serverv1.GetEnvRequest,

@@ -123,6 +123,23 @@ func makeRawPreservingSignals(fd int) (*term.State, error) {
 	return prev, nil
 }
 
+// cooked returns the terminal to the mode it had before OpenTTY, for a program the client hands it to.
+// raw undoes it. Both do nothing on a terminal whose mode was never changed.
+func (t *TTY) cooked() error {
+	if t.prevState == nil {
+		return nil
+	}
+	return term.Restore(int(t.in.Fd()), t.prevState)
+}
+
+func (t *TTY) raw() error {
+	if t.prevState == nil {
+		return nil
+	}
+	_, err := makeRawPreservingSignals(int(t.in.Fd()))
+	return err
+}
+
 // Size reports the terminal's current size. Zeros mean it could not be determined, which is
 // normal when output is not a terminal.
 func (t *TTY) Size() (rows, cols uint16) {

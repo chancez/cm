@@ -213,6 +213,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 				// And how it hands the terminal to the full picker. Both are supplied here rather than built
 				// in internal/client, which would have to guess which binary to run and how to hear back.
 				OpenPicker: overlayPicker(g, dirs, pickerBackKey(prefixKeys)),
+				// And how it shows the scrollback: CM_PAGER, then PAGER, then less. See overlayPager.
+				OpenPager: overlayPager(),
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),

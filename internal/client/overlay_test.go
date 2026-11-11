@@ -62,7 +62,8 @@ func newTestOverlayWithKeys(
 func sameResponse(a, b overlayResponse) bool {
 	return string(a.Send) == string(b.Send) &&
 		strings.Join(a.Run, "\x00") == strings.Join(b.Run, "\x00") &&
-		a.List == b.List && a.OpenPicker == b.OpenPicker && a.SwitchTo == b.SwitchTo &&
+		a.List == b.List && a.OpenPicker == b.OpenPicker && a.OpenPager == b.OpenPager &&
+		a.SwitchTo == b.SwitchTo &&
 		a.Detach == b.Detach && a.Repaint == b.Repaint
 }
 

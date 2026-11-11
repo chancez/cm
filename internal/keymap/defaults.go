@@ -60,6 +60,7 @@ const (
 	OverlayName       Action = "name"
 	OverlayKill       Action = "kill"
 	OverlayPicker     Action = "picker"
+	OverlayPager      Action = "scrollback"
 	OverlayDetach     Action = "detach"
 	OverlaySendDetach Action = "send-detach"
 	OverlayCommand    Action = "command"
@@ -134,6 +135,8 @@ var definitions = map[Context][]Definition{
 		{Action: OverlayName, Label: "name this session", Defaults: []string{"b"}},
 		{Action: OverlayKill, Label: "kill a session", Defaults: []string{"k"}},
 		{Action: OverlayPicker, Label: "the full picker", Defaults: []string{"t"}},
+		// tmux enters copy mode with prefix [, which is the habit this serves.
+		{Action: OverlayPager, Label: "scrollback in a pager", Defaults: []string{"["}},
 		{Action: OverlayDetach, Label: "detach", Defaults: []string{"d"}},
 		{Action: OverlaySendDetach, Label: "send the detach key to the program", Defaults: []string{"q"}},
 		{Action: OverlayCommand, Label: "any cm command", Defaults: []string{":"}},

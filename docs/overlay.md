@@ -27,6 +27,7 @@ ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
 ctrl-] t      the full picker: cm tui, with its filter and preview pane
               ctrl-] there comes back, so the round trip is one key each way
+ctrl-] [      the scrollback in a pager: CM_PAGER, then PAGER, then less
 ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        back one level; from the top, out of the overlay
@@ -61,6 +62,35 @@ its argv, and the client then switches with machinery it already had. The obviou
 picker call the Switch RPC itself, has a race: the server would push the switch to a client that is blocked
 on the child, and the repaint afterwards discards the stream, so the window would silently not move. A file
 the parent reads after the child has exited has no such window.
+
+## Scrollback is the pager's job
+
+`[` hands the terminal to a pager showing the session's whole history, which is kitty's `scrollback_pager`:
+cm draws no scrollback mode of its own, so search, selection and copying are whatever the user's pager does.
+The key is tmux's copy mode.
+
+The command is `CM_PAGER`, then `PAGER`, then `less -R +G`, run through `sh -c` as git runs `PAGER`, with
+the text on stdin. So `CM_PAGER='nvim -'` works the way kitty users configure nvim. `+G` opens at the end,
+where the session was. `LESS=R` is added when `LESS` is unset, as git does, so `PAGER=less` shows colors
+rather than escape codes.
+
+Three decisions in it:
+
+- **The `ansi` history format, not `vt`.** vt carries the restore state, modes and a final cursor move,
+  and a pager prints those as junk on the last page. ansi is styled text and nothing else, with wrapped
+  lines rejoined so the pager wraps them to its own width. `cm history --format ansi` is the same text.
+- **The terminal goes back to the mode it had before the attachment**, and raw again afterwards. A pager
+  is a program started from a shell, and it sets its own mode from the shell's rather than from cm's.
+- **The real terminal, not a pty cm proxies.** A pty of cm's own would keep the detach key working while
+  the pager runs, at the cost of forwarding resizes and copying every byte twice. The reader is
+  cancellable, so the pager gets the terminal as the picker does, and the detach key is the pager's until
+  it exits.
+
+A failed pager is logged rather than shown: the repaint afterwards covers anything it printed.
+
+Under a full-screen program the pager shows that program's screen and not the shell's scrollback, as
+`cm history` does: the formatter reaches only the active screen. Measured with vim open: 52 lines of vim,
+none of the 60 lines printed before it.
 
 ## Moving without choosing
 
