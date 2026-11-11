@@ -439,6 +439,11 @@ func sortSessions(sessions []*serverv1.Session) {
 // to special-case "no sessions".
 func printSessionsJSON(w io.Writer, sessions []*serverv1.Session) error {
 	sortSessions(sessions)
+	return writeSessionsJSON(w, sessions)
+}
+
+// writeSessionsJSON is printSessionsJSON in the order given, for `cm search`, whose order is its ranking.
+func writeSessionsJSON(w io.Writer, sessions []*serverv1.Session) error {
 	out := make([]sessionJSON, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, toSessionJSON(s))
@@ -615,10 +620,16 @@ func printSessionsTable(w io.Writer, sessions []*serverv1.Session) error {
 // printSessionsTableWidth is printSessionsTable with the terminal width supplied, so a test can render
 // against a width without owning a terminal of that size.
 func printSessionsTableWidth(w io.Writer, sessions []*serverv1.Session, termCols int) error {
+	sortSessions(sessions)
+	return writeSessionsTable(w, sessions, termCols)
+}
+
+// writeSessionsTable is printSessionsTableWidth in the order given, for `cm search`, whose order is its
+// ranking.
+func writeSessionsTable(w io.Writer, sessions []*serverv1.Session, termCols int) error {
 	if len(sessions) == 0 {
 		return nil
 	}
-	sortSessions(sessions)
 
 	// Optional columns appear only when some session has something to put in them.
 	//

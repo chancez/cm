@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"charm.land/bubbles/v2/list"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -67,5 +70,41 @@ func TestARowElidesWholeNames(t *testing.T) {
 	}
 	if strings.Contains(got, "refactor-the-st") {
 		t.Errorf("view = %q, want no name cut in half", got)
+	}
+}
+
+// TestAStartingFilterShowsWhatMatchReturns is the contract between `cm search` and `cm search --tui`: the
+// command prints Match, the picker opens on its own filter, and the two must be the same sessions in the
+// same order.
+func TestAStartingFilterShowsWhatMatchReturns(t *testing.T) {
+	notes := session("notes", "c9m4p1z6", 300)
+	notes.Cwd = "/src/work"
+	sessions := []*serverv1.Session{
+		session("other", "b8l3n0y5", 200),
+		notes,
+		session("work", "a7k2m9x4", 100),
+	}
+
+	matched := Match("work", sessions)
+	var got []string
+	for _, s := range matched {
+		got = append(got, s.Name)
+	}
+	// work outranks notes, whose match is in its directory, and other does not match.
+	if want := []string{"work", "notes"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Match = %q, want %q", got, want)
+	}
+
+	h := newHarnessWith(t, Options{Filter: "work"}, sessions...)
+	h.list()
+	var shown []*serverv1.Session
+	for _, li := range h.model.list.VisibleItems() {
+		shown = append(shown, li.(item).session)
+	}
+	if !reflect.DeepEqual(shown, matched) {
+		t.Errorf("the picker shows %v, want what Match returned, %v", shown, matched)
+	}
+	if got := h.model.list.FilterState(); got != list.FilterApplied {
+		t.Errorf("filter state %v, want applied so the keys act on the list", got)
 	}
 }

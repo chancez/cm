@@ -62,6 +62,12 @@ Under the list is the selected session's last output, which is what a session is
 by: half of them are named by the server, so the name says nothing, and several usually share a
 directory. `p` closes it, `--preview=false` starts without it, and closing it stops the reads.
 
+**`i` swaps the pane to `cm info`.** Same fields in the same order, from `cmd/cm`'s own list, so the two
+cannot drift. Rendered from the row the list already holds, so it costs no request, and empty fields are
+left out because the pane has a third of the window and `cm info` prints 27. Cut from the bottom, keeping
+the name and state. `p` goes back to the output; `i` again does too. It is in the expanded help only, for
+the short line's width reason below.
+
 **Content comes from Read's plain form**, which renders the terminal model's cells to text. The raw form
 would carry the program's own escape sequences into a frame bubbletea composes, which is cm's largest
 family of bugs. Measured against a session that printed SGR, a CR overwrite, a tab, a BEL and a NUL:
@@ -81,6 +87,15 @@ session that is no longer selected. Painting it is worse than an empty pane: the
 just an answer to a question nobody asked. The pane holds *which* session it is waiting for and drops
 anything else, clears its lines when the cursor moves, and labels itself with the session it is waiting
 for rather than with the selection.
+
+**A picker is never previewed.** The pane shows the tail of a screen, and the tail of a picker's screen is
+its own pane and footer, so previewing one nests another footer on every refresh and the pane scrolls
+upward forever. Measured in a sandbox: two pickers aimed at each other filled both panes with alternating
+footers within six seconds. A picker in a kitty window lists that window's own session, so this was the
+default state rather than a contrived one. The pane shows a one-line reason instead. The picker's own
+session is recognised exactly, from `CM_SESSION`; any other picker only by the command its shell reported
+(`cm ... tui`, anywhere in a compound line), so without shell integration two pickers can still face each
+other.
 
 **The list is sized to its rows, and the pane takes the rest.** bubbles pads a list to whatever height
 it is told, so three sessions on a tall window left ten blank lines above the pane. What the list spends
@@ -188,6 +203,21 @@ v2 modules are at `charm.land/*` rather than `github.com/charmbracelet/*`.
 long-lived connection, chained off each answer so there is never more than one in flight. A request on
 an open connection is nothing like the 23ms a fresh `cm` invocation costs. A subscription would be
 better and is a server change, not a picker change.
+
+## `cm search`
+
+`cm search <query>` prints what `/` would leave for the same text, best match first, and `--tui` opens the
+picker with it already typed. One matcher serves both, `tui.Match`, built from the list's own
+`FilterValue`, row order and bubbles' `DefaultFilter`, so the printed set and the picker's are the same by
+construction rather than by keeping two implementations in step. The output keeps the ranking rather than
+`cm ls`'s age order.
+
+One mode, deliberately. Matching every field of `cm info --json` would match location argv, URIs and
+client lists, and `--tui` could not show that set, since the picker filters on `FilterValue`. Searching
+session output is the other candidate, and costs a Read per session.
+
+Fuzzy over the joined fields is loose: `wor` matches every session whose directory contains `.worktrees`.
+That is the picker's behavior too. No match exits 1, with `[]` for `--json`.
 
 ## Naming
 

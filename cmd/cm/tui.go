@@ -27,6 +27,7 @@ func newTUICommand(g *globals) *cobra.Command {
 		tagArgs    []string
 		chosenFile string
 		backKey    string
+		filter     string
 	)
 	cmd := &cobra.Command{
 		Use:   "tui",
@@ -115,9 +116,12 @@ to the selected session instead of nesting an attachment inside it.`,
 				Sessions: cl,
 				Keys:     pickerKeys,
 				Tags:     tagArgs,
+				Filter:   filter,
 				Notice:   notice,
+				Self:     os.Getenv(paths.SessionEnv()),
 				Preview:  preview,
 				Switch:   switchTo,
+				Info:     tuiInfo,
 				BackKey:  backKey,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.
@@ -135,6 +139,8 @@ to the selected session instead of nesting an attachment inside it.`,
 		"how often to re-read the session list, or 0 to only refresh after an action")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.StringVar(&filter, "filter", "",
+		`start with the list filtered as though this had been typed after "/"`)
 	f.StringVar(&chosenFile, "chosen-file", "",
 		"write the session the user chose here, for the client that opened this picker")
 	// Hidden because it is a handover between two cm processes rather than something to type: an attached
@@ -256,6 +262,16 @@ func runAttachChild(ctx context.Context, argv []string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(said.String()), nil
+}
+
+// tuiInfo is `cm info` for the picker's pane, from the same field list, so the two cannot disagree.
+func tuiInfo(s *serverv1.Session) []tui.InfoField {
+	fields := sessionFields(s)
+	out := make([]tui.InfoField, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, tui.InfoField{Name: f.name, Value: f.value})
+	}
+	return out
 }
 
 // The generated client is what the picker talks to, and tui.Sessions names the four RPCs it uses. This

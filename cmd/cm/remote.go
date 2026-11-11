@@ -428,6 +428,7 @@ var machineLocal = map[string]bool{
 var remoteCapable = map[string]bool{
 	// Sessions: what exists, what it is doing, and ending it.
 	"list":         true,
+	"search":       true,
 	"info":         true,
 	"kill":         true,
 	"forget":       true,

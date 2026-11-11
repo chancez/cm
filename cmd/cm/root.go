@@ -120,6 +120,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newAttachCommand(g),
 		newListCommand(g),
 		newTUICommand(g),
+		newSearchCommand(g),
 		newWaitCommand(g),
 		newReadCommand(g),
 		newReportCommand(g),

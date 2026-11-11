@@ -87,6 +87,7 @@ const (
 	TUIRename       Action = "rename"
 	TUIAddName      Action = "add-name"
 	TUIOutput       Action = "output"
+	TUIInfo         Action = "info"
 	TUIHelp         Action = "help"
 	TUIQuit         Action = "quit"
 	TUIUp           Action = "up"
@@ -164,6 +165,8 @@ var definitions = map[Context][]Definition{
 		// left, h, pageup and u.
 		{Action: TUIAddName, Label: "add a name", Defaults: []string{"b"}},
 		{Action: TUIOutput, Label: "output", Defaults: []string{"p"}},
+		// i for info, which is `cm info` in the pane where the output was.
+		{Action: TUIInfo, Label: "info", Defaults: []string{"i"}},
 		{Action: TUIHelp, Label: "keys", Defaults: []string{"?"}},
 		{Action: TUIQuit, Label: "quit", Defaults: []string{"q"}, Always: []string{"ctrl-c"}},
 		{Action: TUIUp, Label: "up", Defaults: []string{"up", "k"}},

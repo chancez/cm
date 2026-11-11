@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/chancez/cm/internal/ansi"
+	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -31,6 +35,12 @@ type preview struct {
 
 	lines []string
 	err   error
+
+	// info shows the session's details instead of its output. See infoLines.
+	info bool
+
+	// mirror says why the selected session is not being read, or is empty when it is. See mirrorReason.
+	mirror string
 
 	// due marks the content as worth re-reading even though the selection has not changed, which is
 	// what a refresh means: the session is still running and its last lines move.
@@ -184,6 +194,8 @@ func (p preview) view(label string) string {
 
 	body := p.lines
 	switch {
+	case p.mirror != "":
+		body = []string{p.mirror}
 	case p.err != nil:
 		// The reason rather than a blank pane. A session whose output cannot be read is usually one
 		// running on a build without the terminal model, and an empty pane invites the reader to think
@@ -216,9 +228,101 @@ func (p preview) header(label string) string {
 	if label == "" {
 		label = "no session"
 	}
+	if p.info {
+		label += " info"
+	}
 	head := "-- " + label + " "
 	if width := lipgloss.Width(head); p.width > width {
 		head += strings.Repeat("-", p.width-width)
 	}
 	return faintStyle.Render(truncate(head, p.width))
+}
+
+// mirrorReason says why a session's output must not be shown in the pane, or returns empty when it can be.
+//
+// The pane shows the tail of a session's screen, and the tail of a picker's screen is its own pane and
+// footer. So a picker previewing a picker is a camera pointed at its monitor: every refresh nests one more
+// copy of the footer, and the pane scrolls upward forever. Measured in a sandbox, two pickers aimed at each
+// other filled both panes with alternating footers within six seconds. A picker run from a kitty window is
+// inside that window's session, and that session is in the list, so this is the default state rather than
+// a contrived one.
+//
+// Two ways to recognise one. The session this picker runs in is known exactly, from Options.Self. Any
+// other picker is known only by the command its shell reported, so without shell integration two pickers
+// can still face each other; the self case, which needs nothing, is the one every window hits.
+func (m model) mirrorReason(it item) string {
+	if m.isSelf(it.session) {
+		return "this picker is running here, so its output would show this pane"
+	}
+	if isPickerCommand(it.session.Command) {
+		return "a session picker is running here, and its output would show this pane"
+	}
+	return ""
+}
+
+// isSelf reports whether s is the session this picker runs in.
+//
+// Matched as a reference rather than compared as an ID, because CM_SESSION is whatever the shim exported:
+// an ID from a current server, a name from an older one. See paths.SessionRef.
+func (m model) isSelf(s *serverv1.Session) bool {
+	if m.self == "" {
+		return false
+	}
+	value, isID := paths.SessionRef(m.self)
+	if isID {
+		return value == s.Id
+	}
+	return slices.Contains(s.Names, value)
+}
+
+// isPickerCommand reports whether a shell-reported command line runs a picker: `cm tui` or `cm search
+// --tui`, with any global flags before the verb, anywhere in a compound line such as `clear; cm tui`.
+//
+// Read loosely on purpose. A false positive costs one session its preview, with the reason on screen; a
+// false negative is the pane scrolling forever.
+func isPickerCommand(command string) bool {
+	inCm := false
+	for _, f := range strings.Fields(command) {
+		// A separator glued to a word, as in `clear;`, ends that command as surely as one standing alone.
+		word := strings.TrimRight(f, ";&|")
+		switch {
+		case filepath.Base(word) == paths.Name:
+			inCm = true
+		case inCm && (word == "tui" || word == "--tui"):
+			return true
+		}
+		if word != f || word == "" {
+			inCm = false
+		}
+	}
+	return false
+}
+
+// infoLines lays out a session's details for the pane.
+//
+// Empty fields are left out, which is the difference from `cm info`: the pane has a third of the window,
+// `cm info` prints 27 fields, and a sandbox session running a picker left nine of them empty, so printing
+// them pushes the ones that say something off the bottom. Through previewLines afterwards, because these values are no more trusted than
+// output: a title is whatever a program set with OSC 2.
+func infoLines(fields []InfoField, width, height int) []string {
+	nameWidth := 0
+	for _, f := range fields {
+		if f.Value != "" {
+			nameWidth = max(nameWidth, len(f.Name))
+		}
+	}
+	var b strings.Builder
+	for _, f := range fields {
+		if f.Value == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "%-*s  %s\n", nameWidth, f.Name, f.Value)
+	}
+	lines := previewLines([]byte(b.String()), width, len(fields))
+	// The top rather than the tail, unlike output: the fields come in `cm info`'s order, which puts the
+	// name and state first, and those are what a short pane should keep.
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return lines
 }

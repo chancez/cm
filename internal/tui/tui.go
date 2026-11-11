@@ -114,6 +114,18 @@ type Attachment struct {
 // be a longer way round to the same place. See the overlay's picker handover in internal/client.
 type SwitchFunc func(ref string) error
 
+// InfoFunc is what `cm info` says about a session, in its order.
+//
+// A function rather than a table here, because the fields and their spelling belong to the command: the
+// pane shows what `cm info` prints rather than a second rendering of the same session that drifts from it.
+type InfoFunc func(s *serverv1.Session) []InfoField
+
+// InfoField is one line of `cm info`.
+type InfoField struct {
+	Name  string
+	Value string
+}
+
 // Options configures a picker.
 type Options struct {
 	// Sessions is the server to ask. Required.
@@ -122,6 +134,8 @@ type Options struct {
 	Attach AttachFunc
 	// Switch moves the caller to a session, or is nil when there is no caller to move. See SwitchFunc.
 	Switch SwitchFunc
+	// Info renders a session's details for the pane, or is nil to leave the info key unbound.
+	Info InfoFunc
 	// Keys is what each key does, from the config file. The zero value means the built-in defaults, which
 	// is what a caller with no config to read wants: see internal/keymap.
 	Keys keymap.Map
@@ -140,6 +154,8 @@ type Options struct {
 	// Tags filters the list, in the form `cm ls --tag` takes. Applied on the server for every
 	// refresh, so a session that gains a matching tag appears without a restart.
 	Tags []string
+	// Filter starts the picker with this already typed into "/", applied. See Match.
+	Filter string
 	// Preview starts the picker with the output pane open.
 	Preview bool
 	// Refresh is how often the list re-reads the server. Nil means refreshInterval.
@@ -148,6 +164,9 @@ type Options struct {
 	// That is what a test wants, since a timer in a unit test is a second of waiting or a race, and it
 	// is a coherent setting in its own right for someone who would rather the list held still.
 	Refresh *time.Duration
+	// Self is the session this picker runs in, as CM_SESSION spells it, or empty when it runs outside one.
+	// Its output is never previewed, since that output is this picker. See mirrorReason.
+	Self string
 	// Notice is shown in the status line at startup, for something true about this invocation rather
 	// than about a session. The picker running inside a session is the case it exists for: attaching
 	// from there nests, and the detach key belongs to the outermost client, so detaching lands
