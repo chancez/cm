@@ -5,7 +5,13 @@ common case.
 
 The file is TOML, read from `$XDG_CONFIG_HOME/cm/cm.toml` if that is set, otherwise the platform's
 config directory (`~/.config/cm/cm.toml` on Linux, `~/Library/Application Support/cm/cm.toml` on
-macOS). Override with `--config` or `$CM_CONFIG`. Run `cm config` to see which path is in use.
+macOS). On macOS, `~/.config/cm/cm.toml` is read when the platform directory has no file. Override with
+`--config` or `$CM_CONFIG`. Run `cm config` to see which path is in use.
+
+The `~/.config` fallback exists because `XDG_CONFIG_HOME` usually comes from a shell's rc file, and a
+process a GUI app starts directly never sees it. kitty launched from the Dock runs `cm attach` that way, and
+its clients read no file at all while `cm config` in a shell reported the right one: the client's keys,
+`log_level` and `[scrollback] pager` all silently took their defaults.
 
 An unknown key is ignored with a warning, and `cm config` lists it and exits non-zero. The split is
 deliberate. Refusing everywhere is what a misspelled setting deserves, but the server reads the same

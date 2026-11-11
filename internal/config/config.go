@@ -464,6 +464,12 @@ func keyListOr(list KeyList, single string) []string {
 //
 // Found the hard way: `cm config` reported the file as absent while it sat in ~/.config/cm/cm.toml, and a
 // detach_key set there had never taken effect. A missing config is not an error, so nothing said so.
+//
+// Without XDG_CONFIG_HOME, ~/.config/cm/cm.toml is still found when the platform directory holds no file.
+// The variable is usually exported by a shell's rc file, so a process a GUI app starts directly has none:
+// kitty launching `cm attach` from the Dock is that, and its clients read no file at all while `cm config`
+// in a shell reported the right one, so the overlay's pager, the keys and log_level silently took their
+// defaults. The platform directory still wins when it has a file, so nobody using it sees a change.
 func DefaultPath() (string, error) {
 	if p := os.Getenv(paths.Env("CONFIG")); p != "" {
 		return p, nil
@@ -475,7 +481,17 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolving config directory: %w", err)
 	}
-	return filepath.Join(dir, paths.Name, paths.Name+".toml"), nil
+	platform := filepath.Join(dir, paths.Name, paths.Name+".toml")
+	if _, err := os.Stat(platform); err == nil {
+		return platform, nil
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dotConfig := filepath.Join(home, ".config", paths.Name, paths.Name+".toml")
+		if _, err := os.Stat(dotConfig); err == nil {
+			return dotConfig, nil
+		}
+	}
+	return platform, nil
 }
 
 // ScrollbackLimit returns the configured scrollback limit, or the default. The table's spelling wins over

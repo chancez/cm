@@ -454,25 +454,57 @@ func TestDefaultPathPrefersTheExplicitOverride(t *testing.T) {
 	}
 }
 
-// With neither set, the platform's config directory is used.
+// With neither set, the platform's config directory is used, unless only ~/.config holds a file.
 //
 // The fallback, so the XDG support above does not become a requirement: a machine with no XDG variables
-// still finds a config in the conventional place for its platform.
+// still finds a config in the conventional place for its platform. ~/.config is the second place, for a
+// process started without the shell's environment: kitty launched from the Dock runs `cm attach` with no
+// XDG_CONFIG_HOME, and those clients read no file while `cm config` in a shell reported the right one.
+// HOME is a temporary directory, so the developer's own config cannot decide the result.
 func TestDefaultPathFallsBackToTheUserConfigDir(t *testing.T) {
-	t.Setenv(paths.Env("CONFIG"), "")
-	t.Setenv("XDG_CONFIG_HOME", "")
+	tests := []struct {
+		name string
+		// present are the candidate files that exist: "platform" and "dotconfig".
+		present []string
+		want    string
+	}{
+		{name: "neither exists", want: "platform"},
+		{name: "only the platform directory", present: []string{"platform"}, want: "platform"},
+		{name: "only ~/.config", present: []string{"dotconfig"}, want: "dotconfig"},
+		{name: "both, the platform directory wins", present: []string{"platform", "dotconfig"}, want: "platform"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv(paths.Env("CONFIG"), "")
+			t.Setenv("XDG_CONFIG_HOME", "")
+			dir, err := os.UserConfigDir()
+			if err != nil {
+				t.Skipf("no user config dir on this machine: %v", err)
+			}
+			candidates := map[string]string{
+				"platform":  filepath.Join(dir, paths.Name, paths.Name+".toml"),
+				"dotconfig": filepath.Join(home, ".config", paths.Name, paths.Name+".toml"),
+			}
+			for _, name := range tc.present {
+				path := candidates[name]
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	got, err := DefaultPath()
-	if err != nil {
-		t.Fatalf("DefaultPath() error = %v", err)
-	}
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		t.Skipf("no user config dir on this machine: %v", err)
-	}
-	want := filepath.Join(dir, paths.Name, paths.Name+".toml")
-	if got != want {
-		t.Errorf("DefaultPath() = %q, want %q", got, want)
+			got, err := DefaultPath()
+			if err != nil {
+				t.Fatalf("DefaultPath() error = %v", err)
+			}
+			if got != candidates[tc.want] {
+				t.Errorf("DefaultPath() = %q, want %q", got, candidates[tc.want])
+			}
+		})
 	}
 }
 
