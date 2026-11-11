@@ -555,6 +555,12 @@ Six decisions worth keeping.
 - **An unmatched close does nothing.** The far side may have been running before cm was watching, so a close
   naming a frame this session never saw is ordinary rather than corruption. That tolerance is also what lets
   bash announce a frame it never opened, which is what an empty line there produces.
+- **A stopped job keeps its frame until it ends.** ctrl-z returns the shell to its prompt with the program
+  alive, and closing the frame there made the location read `fg` once it was resumed and dropped a resume
+  command the program had declared. The integration reads the job table at each prompt: a job that is newly
+  stopped takes the open frame, `fg`, `bg` and `%N` open none, and the frame closes at the first prompt that
+  finds the job gone, including one killed while stopped. One stopped job is exact. Several are siblings,
+  which a stack cannot express, so ending the first of two takes the second's frame with it.
 - **cm derives nothing from the argv.** It does not know which of these commands is an ssh, and no `host`
   field is offered, because extracting one means parsing ssh's flags and jump hosts: the same opinion about
   what a program means that was rejected when a list of session-hosting commands was ruled out. What the

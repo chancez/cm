@@ -223,3 +223,114 @@ func driveShell(t *testing.T, bin string, args []string, lines ...string) []byte
 	time.Sleep(400 * time.Millisecond)
 	return out.Bytes()
 }
+
+// A job stopped with ctrl-z keeps its frame until it ends, and resuming it opens no frame of its own.
+//
+// The program is still alive while it is stopped, so closing its frame at the prompt said it had exited:
+// the session's location read `fg` once it was resumed rather than the program, and a resume command the
+// program declared with `cm restore-with` was dropped while the program ran on. Seen on a claude that was
+// suspended to look up its own session id and brought back.
+//
+// sleep stands in for the program: stopped partway, a command runs while it is away, then fg finishes it.
+// The ordering is what is asserted, because a frame that closes at the ctrl-z and one that closes when the
+// job ends both produce an open and a close.
+func TestRealShellsKeepAStoppedJobsFrame(t *testing.T) {
+	for _, shell := range Shells() {
+		t.Run(shell, func(t *testing.T) {
+			bin, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s is not installed", shell)
+			}
+			script, err := Script(shell)
+			if err != nil {
+				t.Fatalf("Script() error = %v", err)
+			}
+			path := writeScript(t, shell, script)
+
+			out := driveShell(t, bin, interactiveArgs(shell), "source "+path+"\n",
+				"sleep 2\n", "\x1a", "printf 'JOB%s\\n' AWAY\n", "fg\n", "printf 'JOB%s\\n' DONE\n", "JOBDONE")
+
+			var tr osc.ReportTracker
+			tr.Feed(out)
+			frames := tr.TakeFrames()
+
+			job, away, jobClosed := -1, -1, -1
+			var jobID string
+			for i, f := range frames {
+				switch {
+				case !f.Ended && strings.HasPrefix(f.Argv, "sleep 2"):
+					job, jobID = i, f.ID
+				case !f.Ended && strings.Contains(f.Argv, "AWAY"):
+					away = i
+				case !f.Ended && strings.HasPrefix(f.Argv, "fg"):
+					t.Errorf("%s opened frame %q for fg, which resumes a job that already has one", shell, f.Argv)
+				case f.Ended && jobID != "" && f.ID == jobID:
+					jobClosed = i
+				}
+			}
+			if job < 0 || away < 0 {
+				t.Fatalf("%s: missing frames for the job or the command run while it was stopped, frames=%+v\nraw: %q",
+					shell, frames, out)
+			}
+			if jobClosed < 0 {
+				t.Fatalf("%s never closed the job's frame after it finished, frames=%+v", shell, frames)
+			}
+			if jobClosed < away {
+				t.Errorf("%s closed the job's frame when it was stopped, before the command run while it was away, frames=%+v",
+					shell, frames)
+			}
+		})
+	}
+}
+
+// A stopped job that is killed rather than resumed still closes its frame.
+//
+// No command of its own finishes, so only the job table says it has gone. Missing that leaves the session's
+// location naming a dead program, and a declared resume command bound to it, for as long as the shell runs.
+// SIGKILL rather than TERM because a stopped process acts on nothing else until it is continued.
+//
+// fish kills by pid: its kill is /usr/bin/kill, which does not understand %1, so `kill -9 %1` there failed and
+// left the job stopped, and the frame correctly stayed open. Measured in the Linux image's fish 3.6.
+func TestRealShellsCloseAKilledStoppedJobsFrame(t *testing.T) {
+	killLine := map[string]string{"fish": "kill -9 (jobs -p %1)\n"}
+	for _, shell := range Shells() {
+		t.Run(shell, func(t *testing.T) {
+			bin, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s is not installed", shell)
+			}
+			script, err := Script(shell)
+			if err != nil {
+				t.Fatalf("Script() error = %v", err)
+			}
+			path := writeScript(t, shell, script)
+			kill, ok := killLine[shell]
+			if !ok {
+				kill = "kill -9 %1\n"
+			}
+
+			out := driveShell(t, bin, interactiveArgs(shell), "source "+path+"\n",
+				"sleep 30\n", "\x1a", kill, "printf 'K%s\\n' ONE\n", "printf 'K%s\\n' TWO\n", "KTWO")
+
+			var tr osc.ReportTracker
+			tr.Feed(out)
+			frames := tr.TakeFrames()
+			var jobID string
+			closed := false
+			for _, f := range frames {
+				switch {
+				case !f.Ended && strings.HasPrefix(f.Argv, "sleep 30"):
+					jobID = f.ID
+				case f.Ended && jobID != "" && f.ID == jobID:
+					closed = true
+				}
+			}
+			if jobID == "" {
+				t.Fatalf("%s opened no frame for the job, frames=%+v\nraw: %q", shell, frames, out)
+			}
+			if !closed {
+				t.Errorf("%s never closed the frame of a stopped job that was killed, frames=%+v", shell, frames)
+			}
+		})
+	}
+}

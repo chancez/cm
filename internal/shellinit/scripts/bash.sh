@@ -81,10 +81,36 @@ _cm_frame_id=""
 # opened, which is what pressing enter on an empty line produces: PS0 does not run, and the next prompt
 # closes an id cm never saw. That is deliberately harmless -- an exit whose id is not on the stack closes
 # nothing -- and it is the same tolerance that lets a remote shell's frames travel the same pty.
+#
+# A stopped job keeps its frame until it ends, for the reason given in the zsh script: ctrl-z returns to the
+# prompt with the program alive. The job table is read here, at the prompt, since PS0's subshell cannot keep
+# anything. A job is the command's if it is stopped now and was not there at the previous prompt.
+declare -gA _cm_frame_jobs=()
+declare -gA _cm_job_seen=()
 _cm_frame_prompt() {
+  local pid kept=
+  local -A cur=()
+  # -r and -s rather than plain -p, which also lists a job that has just finished, once, as it reports it.
+  for pid in $(jobs -pr 2>/dev/null); do cur[$pid]=running; done
+  for pid in $(jobs -ps 2>/dev/null); do cur[$pid]=stopped; done
   if [ -n "$_cm_frame_id" ]; then
-    printf '\033]25453;frame=exit;id=%s\007' "$_cm_frame_id" > /dev/tty 2>/dev/null
+    for pid in "${!cur[@]}"; do
+      if [ "${cur[$pid]}" = stopped ] && [ -z "${_cm_job_seen[$pid]-}" ]; then
+        _cm_frame_jobs[$pid]=$_cm_frame_id
+        kept=1
+        break
+      fi
+    done
+    [ -n "$kept" ] || printf '\033]25453;frame=exit;id=%s\007' "$_cm_frame_id" > /dev/tty 2>/dev/null
   fi
+  for pid in "${!_cm_frame_jobs[@]}"; do
+    if [ -z "${cur[$pid]-}" ]; then
+      printf '\033]25453;frame=exit;id=%s\007' "${_cm_frame_jobs[$pid]}" > /dev/tty 2>/dev/null
+      unset "_cm_frame_jobs[$pid]"
+    fi
+  done
+  _cm_job_seen=()
+  for pid in "${!cur[@]}"; do _cm_job_seen[$pid]=1; done
   _cm_frame_n=$((_cm_frame_n + 1))
   _cm_frame_id="${_cm_frame_salt}-${_cm_frame_n}"
 }
@@ -102,6 +128,11 @@ _cm_frame_enter() {
   local cmd
   cmd=$(HISTTIMEFORMAT= history 1 2>/dev/null)
   cmd=${cmd#*[0-9]  }
+  # fg, bg and a bare %job open none: they resume a job, which already has its frame if it was stopped under
+  # this integration. The prompt hook still closes the id it minted for this line, which closes nothing.
+  case ${cmd%% *} in
+    fg|bg|%*) return 0 ;;
+  esac
   cmd=${cmd//\\/\\\\}
   cmd=${cmd//;/\\;}
   cmd=${cmd//$'\n'/ }

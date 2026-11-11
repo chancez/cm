@@ -219,7 +219,8 @@ from one writer per stream in [architecture.md](architecture.md), in a new place
 
 A declaration binds to the command frame open when it arrives, the way an announced nesting does, so the
 frame closing at the next prompt removes it. That is the protocol's OSC 133;A rule with a precise owner,
-since a frame closes for the command that opened it rather than for whichever prompt comes next.
+since a frame closes for the command that opened it rather than for whichever prompt comes next, and stays
+open while the command is a stopped job: a claude suspended with ctrl-z keeps its declaration.
 
 The declaration is written to the store when it arrives. It cannot be recovered from the persisted log the
 way an OSC 7501 report is, because a declaration made at a program's startup has been trimmed out of the

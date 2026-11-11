@@ -87,7 +87,27 @@ typeset -g _cm_frame_salt="${RANDOM}${RANDOM}"
 typeset -gi _cm_frame_n=0
 typeset -g _cm_frame_id=""
 
+# A stopped job keeps its frame until the job ends, so the frame follows the process rather than the prompt.
+#
+# ctrl-z returns the shell to its prompt with the program still alive, and closing the frame there said it
+# had exited: the location read `fg` once it was resumed, and a resume command the program declared with
+# `cm restore-with` was dropped while it ran on. So each prompt looks at the job table, a newly stopped job
+# takes the open frame with it, keyed by its process group, and the frame closes at the first prompt that
+# finds the job gone.
+#
+# One stopped job is exact. Several are siblings, which cm's stack of frames cannot express: closing one
+# discards the frames opened after it, so ending the first of two stopped jobs takes the second's frame too.
+#
+# jobstates is zsh/parameter's, loaded explicitly because `zsh -f` does not. Without it there is no job table
+# to read and frames close at the prompt, as they did before.
+zmodload zsh/parameter 2>/dev/null
+typeset -gA _cm_frame_jobs
+typeset -gA _cm_job_seen
+
 # _cm_frame_enter opens a frame for the command about to run. preexec is passed the command line.
+#
+# fg, bg and a bare %job open none: they resume a job, which already has its frame if it was stopped under
+# this integration, and a frame named `fg` is the location that started this.
 #
 # The command line is escaped like a report's detail, and for the same reason: a semicolon separates fields
 # on the wire, so an unescaped one would truncate the command at it. Newlines become spaces, since a
@@ -98,6 +118,19 @@ typeset -g _cm_frame_id=""
 # inside a hook shadows them.
 _cm_frame_enter() {
   local cmd=$1
+  local v rest
+  _cm_job_seen=()
+  # A jobstates value is `state:mark:pid=state:...`, and the first pid is the group leader.
+  for v in ${(v)jobstates}; do
+    rest=${v#*:*:}
+    _cm_job_seen[${rest%%=*}]=${v%%:*}
+  done
+  # Into an array first: a one-word split is a scalar, and indexing that takes its first character, so
+  # `fg` read as `f` and opened a frame.
+  local -a words=(${(z)cmd})
+  case $words[1] in
+    fg|bg|%*) return 0 ;;
+  esac
   cmd=${cmd//\\/\\\\}
   cmd=${cmd//;/\\;}
   cmd=${cmd//$'\n'/ }
@@ -105,15 +138,38 @@ _cm_frame_enter() {
   printf '\033]25453;frame=enter;id=%s;argv=%s\007' "$_cm_frame_id" "${cmd[1,256]}" > /dev/tty 2>/dev/null
 }
 
-# _cm_frame_exit closes the open frame, which is what tells cm the command returned.
+# _cm_frame_exit closes the open frame, which is what tells cm the command returned, unless the command is
+# now a stopped job; and closes the frames of stopped jobs that have since ended.
 #
 # Guarded on a frame being open, because precmd also runs before the first prompt of a shell, where there is
 # nothing to close. Closing by id rather than "the top frame" is what makes an ssh chain work: an id cm does
-# not hold closes nothing.
+# not hold closes nothing. A job that was there before the command ran is not its job, which is what keeps a
+# stopped job resumed and stopped again from taking a frame that is not its own.
 _cm_frame_exit() {
-  [[ -n $_cm_frame_id ]] || return 0
-  printf '\033]25453;frame=exit;id=%s\007' "$_cm_frame_id" > /dev/tty 2>/dev/null
-  _cm_frame_id=""
+  local -A cur
+  local pid v rest
+  for v in ${(v)jobstates}; do
+    rest=${v#*:*:}
+    cur[${rest%%=*}]=${v%%:*}
+  done
+  if [[ -n $_cm_frame_id ]]; then
+    local kept=
+    for pid in ${(k)cur}; do
+      if [[ ${cur[$pid]} == suspended && -z ${_cm_job_seen[$pid]} ]]; then
+        _cm_frame_jobs[$pid]=$_cm_frame_id
+        kept=1
+        break
+      fi
+    done
+    [[ -n $kept ]] || printf '\033]25453;frame=exit;id=%s\007' "$_cm_frame_id" > /dev/tty 2>/dev/null
+    _cm_frame_id=""
+  fi
+  for pid in ${(k)_cm_frame_jobs}; do
+    if [[ -z ${cur[$pid]} || ${cur[$pid]} == done ]]; then
+      printf '\033]25453;frame=exit;id=%s\007' "${_cm_frame_jobs[$pid]}" > /dev/tty 2>/dev/null
+      unset "_cm_frame_jobs[$pid]"
+    fi
+  done
 }
 
 add-zsh-hook preexec _cm_frame_enter
