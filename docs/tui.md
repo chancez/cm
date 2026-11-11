@@ -204,6 +204,21 @@ long-lived connection, chained off each answer so there is never more than one i
 an open connection is nothing like the 23ms a fresh `cm` invocation costs. A subscription would be
 better and is a server change, not a picker change.
 
+## `cm search`
+
+`cm search <query>` prints what `/` would leave for the same text, best match first, and `--tui` opens the
+picker with it already typed. One matcher serves both, `tui.Match`, built from the list's own
+`FilterValue`, row order and bubbles' `DefaultFilter`, so the printed set and the picker's are the same by
+construction rather than by keeping two implementations in step. The output keeps the ranking rather than
+`cm ls`'s age order.
+
+One mode, deliberately. Matching every field of `cm info --json` would match location argv, URIs and
+client lists, and `--tui` could not show that set, since the picker filters on `FilterValue`. Searching
+session output is the other candidate, and costs a Read per session.
+
+Fuzzy over the joined fields is loose: `wor` matches every session whose directory contains `.worktrees`.
+That is the picker's behavior too. No match exits 1, with `[]` for `--json`.
+
 ## Naming
 
 `cm tui` describes the implementation rather than the purpose, which is worth revisiting. Bare `cm`

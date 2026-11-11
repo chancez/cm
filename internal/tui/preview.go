@@ -275,8 +275,8 @@ func (m model) isSelf(s *serverv1.Session) bool {
 	return slices.Contains(s.Names, value)
 }
 
-// isPickerCommand reports whether a shell-reported command line runs a picker: `cm tui`, with any global
-// flags before the verb, anywhere in a compound line such as `clear; cm tui`.
+// isPickerCommand reports whether a shell-reported command line runs a picker: `cm tui` or `cm search
+// --tui`, with any global flags before the verb, anywhere in a compound line such as `clear; cm tui`.
 //
 // Read loosely on purpose. A false positive costs one session its preview, with the reason on screen; a
 // false negative is the pane scrolling forever.
@@ -288,7 +288,7 @@ func isPickerCommand(command string) bool {
 		switch {
 		case filepath.Base(word) == paths.Name:
 			inCm = true
-		case inCm && word == "tui":
+		case inCm && (word == "tui" || word == "--tui"):
 			return true
 		}
 		if word != f || word == "" {
