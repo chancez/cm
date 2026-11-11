@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -44,13 +43,14 @@ func TestSearchOutputKeepsTheRanking(t *testing.T) {
 	if err := writeSessionsJSON(&buf, []*serverv1.Session{newer, older}); err != nil {
 		t.Fatal(err)
 	}
-	var got []sessionJSON
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	// Compared as encoded bytes: decoding gives CreatedAt a different *time.Location than
+	// toSessionJSON's time.Unix, which reflect.DeepEqual rejects wherever Local is UTC, the Linux image.
+	var want bytes.Buffer
+	if err := writeJSON(&want, []sessionJSON{toSessionJSON(newer), toSessionJSON(older)}); err != nil {
 		t.Fatal(err)
 	}
-	want := []sessionJSON{toSessionJSON(newer), toSessionJSON(older)}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("JSON order = %+v, want %+v", got, want)
+	if got := buf.String(); got != want.String() {
+		t.Errorf("JSON order = %s, want %s", got, want.String())
 	}
 
 	buf.Reset()
