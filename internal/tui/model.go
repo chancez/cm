@@ -48,6 +48,8 @@ type model struct {
 	switchTo SwitchFunc
 	tags     []string
 	home     string
+	// self is the session this picker runs in, as a reference, or empty outside one. See Options.Self.
+	self string
 	// interval is how often the list re-reads the server, zero for not at all. See Options.Refresh.
 	interval time.Duration
 
@@ -152,6 +154,7 @@ func newModel(ctx context.Context, opts Options) model {
 		switchTo: opts.Switch,
 		tags:     opts.Tags,
 		home:     home,
+		self:     opts.Self,
 		list:     l,
 		keys:     keys,
 		help:     help.New(),
@@ -256,7 +259,7 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		// A late answer for a session that is no longer selected is dropped rather than shown. The
 		// request was in flight while the cursor moved, so painting it now would put one session's
 		// output under another session's row, which is a confident wrong answer rather than a gap.
-		if msg.sessionID != m.preview.want {
+		if msg.sessionID != m.preview.want || m.preview.mirror != "" {
 			return m, nil
 		}
 		m.preview.have = msg.sessionID
@@ -761,6 +764,15 @@ func (m model) syncPreview() (model, tea.Cmd) {
 		m.preview.lines = nil
 		m.preview.err = nil
 		m.preview.due = true
+	}
+	// Decided on every pass rather than when the cursor arrives, since a refresh can report that the
+	// session under the cursor has just started a picker.
+	if m.preview.mirror = m.mirrorReason(it); m.preview.mirror != "" {
+		m.preview.have = it.session.Id
+		m.preview.lines = nil
+		m.preview.err = nil
+		m.preview.due = false
+		return m, nil
 	}
 	if !m.preview.due {
 		return m, nil

@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/chancez/cm/internal/paths"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // TestALateAnswerForAnotherSessionIsDiscarded is the bug the pane is built around.
@@ -371,5 +374,109 @@ func TestThePaneIsLabelledWithTheSessionItIsWaitingFor(t *testing.T) {
 
 	if got, want := h.model.previewLabel(), "other"; got != want {
 		t.Errorf("the pane is labelled %q, want %q", got, want)
+	}
+}
+
+// TestAPickerIsNotPreviewed is the pane scrolling forever.
+//
+// The tail of a picker's screen is its own pane and footer, so previewing one nests another copy of the
+// footer on every refresh. A picker in a kitty window lists that window's session, so the first case is the
+// default state: measured in a sandbox before this, the pane filled with repeated footers within seconds.
+func TestAPickerIsNotPreviewed(t *testing.T) {
+	picker := session("other", "b8l3n0y5", 200)
+	picker.Command = "/usr/local/bin/cm --remote ssh://white tui --tag x"
+	byName := session("named", "c9m4p1z6", 300)
+
+	for _, tc := range []struct {
+		name     string
+		self     string
+		selected *serverv1.Session
+		want     string
+	}{
+		{
+			name:     "its own session by ID",
+			self:     "@a7k2m9x4",
+			selected: session("work", "a7k2m9x4", 100),
+			want:     "this picker is running here, so its output would show this pane",
+		},
+		{
+			// An older shim exports the name rather than the ID.
+			name:     "its own session by name",
+			self:     "named",
+			selected: byName,
+			want:     "this picker is running here, so its output would show this pane",
+		},
+		{
+			name:     "another picker",
+			selected: picker,
+			want:     "a session picker is running here, and its output would show this pane",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarnessWith(t, Options{Preview: true, Self: tc.self}, tc.selected)
+			h.sessions.output[paths.FormatSessionID(tc.selected.Id)] = "footer"
+			h.list()
+			h.list()
+
+			if got := len(h.sessions.reads); got != 0 {
+				t.Errorf("%d reads of a picker, want none", got)
+			}
+			want := preview{
+				on:     true,
+				want:   tc.selected.Id,
+				have:   tc.selected.Id,
+				mirror: tc.want,
+				height: h.model.preview.height,
+				width:  h.model.preview.width,
+			}
+			if !reflect.DeepEqual(h.model.preview, want) {
+				t.Errorf("pane is\n%+v\nwant\n%+v", h.model.preview, want)
+			}
+		})
+	}
+}
+
+// TestASessionThatStartsAPickerStopsBeingPreviewed covers the refresh that reports the change.
+//
+// The command arrives with a list, so a session read a second ago can be a picker now. Keeping its old
+// lines would be harmless; reading it again is the loop.
+func TestASessionThatStartsAPickerStopsBeingPreviewed(t *testing.T) {
+	s := session("work", "a7k2m9x4", 100)
+	h := newHarnessPreviewing(t, s)
+	h.sessions.output["@a7k2m9x4"] = "prompt"
+	h.list()
+	if got := len(h.sessions.reads); got != 1 {
+		t.Fatalf("%d reads before the picker started, want 1", got)
+	}
+
+	s.Command = "cm tui"
+	h.list()
+
+	if got := len(h.sessions.reads); got != 1 {
+		t.Errorf("%d reads after the session started a picker, want still 1", got)
+	}
+	if got := h.model.preview.lines; got != nil {
+		t.Errorf("pane still shows %q", got)
+	}
+}
+
+func TestIsPickerCommand(t *testing.T) {
+	for command, want := range map[string]bool{
+		"cm tui":                      true,
+		"/opt/bin/cm tui":             true,
+		"cm --remote ssh://white tui": true,
+		"clear; cm tui":               true,
+		"cd /tmp && cm tui":           true,
+		"cm ls; tui":                  false,
+		"cm ls | tui":                 false,
+		"cm":                          false,
+		"cm ls":                       false,
+		"vim tui":                     false,
+		"cmx tui":                     false,
+		"":                            false,
+	} {
+		if got := isPickerCommand(command); got != want {
+			t.Errorf("isPickerCommand(%q) = %v, want %v", command, got, want)
+		}
 	}
 }

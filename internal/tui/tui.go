@@ -148,6 +148,9 @@ type Options struct {
 	// That is what a test wants, since a timer in a unit test is a second of waiting or a race, and it
 	// is a coherent setting in its own right for someone who would rather the list held still.
 	Refresh *time.Duration
+	// Self is the session this picker runs in, as CM_SESSION spells it, or empty when it runs outside one.
+	// Its output is never previewed, since that output is this picker. See mirrorReason.
+	Self string
 	// Notice is shown in the status line at startup, for something true about this invocation rather
 	// than about a session. The picker running inside a session is the case it exists for: attaching
 	// from there nests, and the detach key belongs to the outermost client, so detaching lands

@@ -82,6 +82,15 @@ just an answer to a question nobody asked. The pane holds *which* session it is 
 anything else, clears its lines when the cursor moves, and labels itself with the session it is waiting
 for rather than with the selection.
 
+**A picker is never previewed.** The pane shows the tail of a screen, and the tail of a picker's screen is
+its own pane and footer, so previewing one nests another footer on every refresh and the pane scrolls
+upward forever. Measured in a sandbox: two pickers aimed at each other filled both panes with alternating
+footers within six seconds. A picker in a kitty window lists that window's own session, so this was the
+default state rather than a contrived one. The pane shows a one-line reason instead. The picker's own
+session is recognised exactly, from `CM_SESSION`; any other picker only by the command its shell reported
+(`cm ... tui`, anywhere in a compound line), so without shell integration two pickers can still face each
+other.
+
 **The list is sized to its rows, and the pane takes the rest.** bubbles pads a list to whatever height
 it is told, so three sessions on a tall window left ten blank lines above the pane. What the list spends
 on its own title and count is asked of its paginator rather than assumed: the first version guessed
