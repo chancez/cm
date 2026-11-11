@@ -98,7 +98,7 @@ the server never consumed.
 
 ## Retention
 
-Bounded by lines, matching how `scrollback_lines` is expressed, with a byte ceiling as a backstop. The
+Bounded by lines, matching how `scrollback.lines` is expressed, with a byte ceiling as a backstop. The
 shim deliberately knows nothing about terminals, so a line is a newline in the byte stream, and a session
 emitting very long lines would otherwise produce a far larger log than its line count suggests. Defaults
 are 10000 lines and 16 MiB. A full-screen program positions the cursor rather than writing newlines, so

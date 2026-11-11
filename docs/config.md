@@ -22,9 +22,6 @@ header precedes it, so a top-level setting written below `[overlay]` is read as 
 an unknown key, warned about and otherwise ignored, leaving the real setting at its default.
 
 ```toml
-# Scrollback retained per session, in lines. 0 means unlimited.
-scrollback_lines = 10000
-
 # Which of several attached clients sets the session's size:
 # "leader" (default), "last-attach", "first-attach", or "smallest".
 #
@@ -66,6 +63,12 @@ last = ["l"]
 
 [keys.tui]
 kill = ["x", "delete"]
+
+[scrollback]
+# Retained per session, in lines. 0 means unlimited.
+lines = 10000
+# What ctrl-] [ shows it in, fed it on stdin. $CM_PAGER overrides this.
+pager = "nvim -c 'Man!' -"
 
 # How the overlay is drawn. See the prefix_key section for the grammar.
 [overlay]
@@ -118,10 +121,12 @@ flight_recorder_window = "10s"
 
 | Key | Values | Default |
 | --- | --- | --- |
-| `scrollback_lines` | integer; `0` is unlimited | `2000` |
+| `scrollback_lines` | the older spelling of [`scrollback.lines`](#scrollback) | |
 | `resize_policy` | `leader`, `last-attach`, `first-attach`, `smallest` | `leader` |
 | `detach_key` | `ctrl-<key>`, or `none` to disable | `ctrl-\` |
 | `prefix_key` | `ctrl-<key>`, or `none` to disable the overlay | `ctrl-]` |
+| `scrollback.lines` | integer; `0` is unlimited | `2000` |
+| `scrollback.pager` | a shell command, fed the scrollback on stdin | `$PAGER`, then `less -R +G` |
 | `overlay.bar` | a style: see [overlay](#overlay) | `reverse` |
 | `overlay.body` | a style | `bright-white on color236` |
 | `overlay.selected` | a style | `bright-white on color241` |
@@ -134,8 +139,8 @@ flight_recorder_window = "10s"
 
 ### scrollback_lines
 
-How much scrollback a session retains. libghostty prunes at page granularity, so the effective
-limit is somewhat higher than the number given.
+The older spelling of `lines` in [`[scrollback]`](#scrollback), still read. When a file has both, the
+table wins, as `[keys.session]` wins over `detach_key`.
 
 ### resize_policy
 
@@ -202,7 +207,7 @@ once, so `cm attach` refuses a configuration where a key is in both lists rather
 them: whichever lost would be silently unreachable.
 
 Inside the overlay: `s` to switch and `k` to kill, both choosing from a filterable list rather than asking
-you to type a name (`ctrl-j`/`ctrl-k` or the arrows move, enter chooses); `b` to name this session; `d` to detach; `t` for the full `cm tui` picker; `:` for any cm command; `?` for the rest.
+you to type a name (`ctrl-j`/`ctrl-k` or the arrows move, enter chooses); `b` to name this session; `d` to detach; `t` for the full `cm tui` picker; `[` for the scrollback in a pager; `:` for any cm command; `?` for the rest.
 Escape steps back one level and closes the overlay from the top; ctrl-c leaves from anywhere. Pressing the prefix or the detach key a second time forwards it to the program,
 which is the only way to reach a key cm intercepts: `ctrl-\` never reached a pty from a cm client
 before this, so SIGQUIT was unreachable inside a session.
@@ -212,6 +217,23 @@ and tmux's `ctrl-b`, and the cheapest right-hand control code to take: `ctrl-o` 
 `ctrl-u`, `ctrl-p`, `ctrl-n` and `ctrl-l` are readline's, and `ctrl-]` costs only vim's ctags tag-jump,
 which an LSP's `gd` has largely replaced. `ctrl-space` has better ergonomics still and is spellable, but
 is not the default because not every terminal sends NUL for it. See [overlay.md](overlay.md).
+
+## [scrollback]
+
+### lines
+
+How much scrollback a session retains. libghostty prunes at page granularity, so the effective
+limit is somewhat higher than the number given.
+
+### pager
+
+The command `ctrl-] [` shows the session's scrollback in, as kitty's `scrollback_pager`. It runs through
+`sh -c`, so it can carry arguments and quoting, and reads the scrollback, with its colors, on stdin. A
+pager that reads keys from the terminal works: `less`, `nvim -`.
+
+Resolved as `$CM_PAGER`, then this, then `$PAGER`, then `less -R +G`. cm's own two come before `PAGER`
+so cm can have a pager without changing git's and man's. `cm config` prints the command that would run
+and which of the four it came from. See [overlay.md](overlay.md).
 
 ## [keys]
 

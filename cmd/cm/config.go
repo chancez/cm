@@ -58,6 +58,10 @@ type configJSON struct {
 	ResizePolicy    string `json:"resize_policy"`
 	DetachKey       string `json:"detach_key"`
 	PrefixKey       string `json:"prefix_key"`
+	// ScrollbackPager is the command the overlay would run, resolved, and PagerSource is which of the four
+	// places it came from.
+	ScrollbackPager string `json:"scrollback_pager"`
+	PagerSource     string `json:"scrollback_pager_source"`
 	OverlayBar      string `json:"overlay_bar"`
 	OverlayBody     string `json:"overlay_body"`
 	OverlaySelected string `json:"overlay_selected"`
@@ -171,6 +175,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		}
 	}
 
+	pager, pagerSource := pagerCommand(os.Getenv, cfg.Scrollback.Pager)
+
 	_, fileErr := os.Stat(path)
 	out := configJSON{
 		File:       path,
@@ -181,10 +187,12 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 			"runtime_dir": dirSource(cmd, "runtime-dir", cfg.RuntimeDir, origin.Runtime),
 			"state_dir":   dirSource(cmd, "state-dir", cfg.StateDir, origin.State),
 		},
-		ScrollbackLines: cfg.Scrollback(),
+		ScrollbackLines: cfg.ScrollbackLimit(),
 		ResizePolicy:    resize,
 		DetachKey:       detach,
 		PrefixKey:       prefix,
+		ScrollbackPager: pager,
+		PagerSource:     pagerSource,
 		OverlayBar:      styleOr(cfg.Overlay.Bar, client.DefaultBarStyle),
 		OverlayBody:     styleOr(cfg.Overlay.Body, client.DefaultBodyStyle),
 		OverlaySelected: styleOr(cfg.Overlay.Selected, client.DefaultSelectedStyle),
@@ -235,10 +243,11 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 
 	fmt.Fprintf(os.Stdout, "runtime_dir               %s (%s)\n", out.RuntimeDir, out.Sources["runtime_dir"])
 	fmt.Fprintf(os.Stdout, "state_dir                 %s (%s)\n", out.StateDir, out.Sources["state_dir"])
-	fmt.Fprintf(os.Stdout, "scrollback_lines          %d\n", out.ScrollbackLines)
+	fmt.Fprintf(os.Stdout, "scrollback.lines          %d\n", out.ScrollbackLines)
 	fmt.Fprintf(os.Stdout, "resize_policy             %s\n", out.ResizePolicy)
 	fmt.Fprintf(os.Stdout, "detach_key                %s\n", out.DetachKey)
 	fmt.Fprintf(os.Stdout, "prefix_key                %s\n", out.PrefixKey)
+	fmt.Fprintf(os.Stdout, "scrollback.pager          %s (%s)\n", out.ScrollbackPager, out.PagerSource)
 	fmt.Fprintf(os.Stdout, "overlay.bar               %s\n", out.OverlayBar)
 	fmt.Fprintf(os.Stdout, "overlay.body              %s\n", out.OverlayBody)
 	fmt.Fprintf(os.Stdout, "overlay.selected          %s\n", out.OverlaySelected)

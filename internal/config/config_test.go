@@ -27,8 +27,8 @@ func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil for a missing file", err)
 	}
-	if got := cfg.Scrollback(); got != DefaultScrollbackLines {
-		t.Errorf("Scrollback() = %d, want %d", got, DefaultScrollbackLines)
+	if got := cfg.ScrollbackLimit(); got != DefaultScrollbackLines {
+		t.Errorf("ScrollbackLimit() = %d, want %d", got, DefaultScrollbackLines)
 	}
 	if len(cfg.EnvPatterns()) == 0 {
 		t.Error("EnvPatterns() is empty with no config, want the built-in list")
@@ -40,8 +40,36 @@ func TestLoadScrollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := cfg.Scrollback(); got != 50000 {
-		t.Errorf("Scrollback() = %d, want 50000", got)
+	if got := cfg.ScrollbackLimit(); got != 50000 {
+		t.Errorf("ScrollbackLimit() = %d, want 50000", got)
+	}
+}
+
+// [scrollback] lines is the current spelling, and wins over scrollback_lines when a file has both.
+func TestLoadScrollbackTable(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want int
+	}{
+		{name: "the table", file: "[scrollback]\nlines = 300\n", want: 300},
+		{name: "the table wins", file: "scrollback_lines = 100\n[scrollback]\nlines = 300\n", want: 300},
+		{name: "the table without lines leaves the old spelling", file: "scrollback_lines = 100\n[scrollback]\npager = \"less\"\n", want: 100},
+		{name: "zero in the table is unlimited", file: "scrollback_lines = 100\n[scrollback]\nlines = 0\n", want: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, tc.file))
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := cfg.ScrollbackLimit(); got != tc.want {
+				t.Errorf("ScrollbackLimit() = %d, want %d", got, tc.want)
+			}
+			if got := cfg.UnknownSettings(); len(got) != 0 {
+				t.Errorf("UnknownSettings() = %q, want none", got)
+			}
+		})
 	}
 }
 
@@ -52,8 +80,8 @@ func TestLoadScrollbackZeroMeansUnlimited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got := cfg.Scrollback(); got != 0 {
-		t.Errorf("Scrollback() = %d, want 0 to mean unlimited", got)
+	if got := cfg.ScrollbackLimit(); got != 0 {
+		t.Errorf("ScrollbackLimit() = %d, want 0 to mean unlimited", got)
 	}
 }
 

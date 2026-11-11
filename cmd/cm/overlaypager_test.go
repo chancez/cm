@@ -8,24 +8,38 @@ import (
 	"testing"
 )
 
-// CM_PAGER, then PAGER, then less, and an empty value is unset, as it is for cm's other variables.
+// CM_PAGER, then the config file, then PAGER, then less, and an empty value is unset, as it is for cm's
+// other variables.
 func TestPagerCommand(t *testing.T) {
 	tests := []struct {
-		name string
-		env  map[string]string
-		want string
+		name       string
+		env        map[string]string
+		configured string
+		want       string
+		wantSource string
 	}{
-		{name: "neither set", want: defaultPager},
-		{name: "PAGER", env: map[string]string{"PAGER": "most"}, want: "most"},
-		{name: "CM_PAGER wins", env: map[string]string{"CM_PAGER": "nvim -", "PAGER": "most"}, want: "nvim -"},
-		{name: "empty CM_PAGER is unset", env: map[string]string{"CM_PAGER": "", "PAGER": "most"}, want: "most"},
-		{name: "empty PAGER is unset", env: map[string]string{"PAGER": ""}, want: defaultPager},
+		{name: "nothing set", want: defaultPager, wantSource: "default"},
+		{name: "PAGER", env: map[string]string{"PAGER": "most"}, want: "most", wantSource: "$PAGER"},
+		{
+			name: "the config file beats PAGER", env: map[string]string{"PAGER": "most"},
+			configured: "nvim -", want: "nvim -", wantSource: "config file",
+		},
+		{
+			name: "CM_PAGER beats the config file", env: map[string]string{"CM_PAGER": "bat", "PAGER": "most"},
+			configured: "nvim -", want: "bat", wantSource: "$CM_PAGER",
+		},
+		{
+			name: "empty CM_PAGER is unset", env: map[string]string{"CM_PAGER": "", "PAGER": "most"},
+			want: "most", wantSource: "$PAGER",
+		},
+		{name: "empty PAGER is unset", env: map[string]string{"PAGER": ""}, want: defaultPager, wantSource: "default"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := func(k string) string { return tc.env[k] }
-			if got := pagerCommand(getenv); got != tc.want {
-				t.Errorf("pagerCommand() = %q, want %q", got, tc.want)
+			got, source := pagerCommand(getenv, tc.configured)
+			if got != tc.want || source != tc.wantSource {
+				t.Errorf("pagerCommand() = (%q, %q), want (%q, %q)", got, source, tc.want, tc.wantSource)
 			}
 		})
 	}
@@ -58,7 +72,7 @@ func TestOverlayPagerFeedsStdin(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "paged")
 	t.Setenv("CM_PAGER", "cat > '"+out+"'")
 
-	if err := overlayPager()(context.Background(), []byte("line one\nline two\n")); err != nil {
+	if err := overlayPager("")(context.Background(), []byte("line one\nline two\n")); err != nil {
 		t.Fatalf("overlayPager() error = %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -70,10 +84,28 @@ func TestOverlayPagerFeedsStdin(t *testing.T) {
 	}
 }
 
+// The configured command is the one run when CM_PAGER is unset.
+func TestOverlayPagerRunsTheConfiguredCommand(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "paged")
+	t.Setenv("CM_PAGER", "")
+	t.Setenv("PAGER", "false")
+
+	if err := overlayPager("cat > '"+out+"'")(context.Background(), []byte("configured\n")); err != nil {
+		t.Fatalf("overlayPager() error = %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != "configured\n" {
+		t.Errorf("pager read %q, want the content", got)
+	}
+}
+
 // A pager that fails is an error, so the client can log it rather than repaint over the reason.
 func TestOverlayPagerReportsFailure(t *testing.T) {
 	t.Setenv("CM_PAGER", "exit 3")
-	if err := overlayPager()(context.Background(), nil); err == nil {
+	if err := overlayPager("")(context.Background(), nil); err == nil {
 		t.Error("overlayPager() error = nil, want the pager's exit status")
 	}
 }

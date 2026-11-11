@@ -840,7 +840,7 @@ func persistPolicy(cfg *config.Config) (*server.PersistPolicy, error) {
 // Always returns a factory: cgo is required, so the emulator is always present. The manager still accepts a
 // nil one, which is what its own tests use.
 func terminalFactory(cfg *config.Config) server.NewTerminalFunc {
-	scrollback := cfg.Scrollback()
+	scrollback := cfg.ScrollbackLimit()
 	return func(rows, cols uint16) (server.Terminal, error) {
 		return vt.NewSessionTerminal(rows, cols, scrollback)
 	}

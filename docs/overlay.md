@@ -27,7 +27,7 @@ ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
 ctrl-] t      the full picker: cm tui, with its filter and preview pane
               ctrl-] there comes back, so the round trip is one key each way
-ctrl-] [      the scrollback in a pager: CM_PAGER, then PAGER, then less
+ctrl-] [      the scrollback in a pager: see [scrollback] pager in config.md
 ctrl-] :      any cm command, for the long tail
 ctrl-] ?      help
 escape        back one level; from the top, out of the overlay
@@ -69,8 +69,8 @@ the parent reads after the child has exited has no such window.
 cm draws no scrollback mode of its own, so search, selection and copying are whatever the user's pager does.
 The key is tmux's copy mode.
 
-The command is `CM_PAGER`, then `PAGER`, then `less -R +G`, run through `sh -c` as git runs `PAGER`, with
-the text on stdin. So `CM_PAGER='nvim -'` works the way kitty users configure nvim. `+G` opens at the end,
+The command is `CM_PAGER`, then `pager` in the config file's `[scrollback]`, then `PAGER`, then `less -R +G`, run
+through `sh -c` as git runs `PAGER`, with the text on stdin. So `CM_PAGER='nvim -'` works the way kitty users configure nvim. `+G` opens at the end,
 where the session was. `LESS=R` is added when `LESS` is unset, as git does, so `PAGER=less` shows colors
 rather than escape codes.
 

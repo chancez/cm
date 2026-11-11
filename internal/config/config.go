@@ -43,10 +43,12 @@ type Config struct {
 	RuntimeDir string `toml:"runtime_dir"`
 	StateDir   string `toml:"state_dir"`
 
-	// ScrollbackLines bounds retained scrollback per session. Zero means unlimited.
-	//
-	// libghostty prunes at page granularity, so the effective limit is somewhat higher.
+	// ScrollbackLines is the older spelling of Scrollback.Lines, which wins when both are set, as
+	// [keys.session] wins over detach_key. Still read, since files written before the table have it.
 	ScrollbackLines *int `toml:"scrollback_lines"`
+
+	// Scrollback is the [scrollback] table. See ScrollbackConfig.
+	Scrollback ScrollbackConfig `toml:"scrollback"`
 
 	// ResizePolicy decides which of several attached clients sets the session's size:
 	// "leader", "last-attach", "first-attach", or "smallest".
@@ -196,6 +198,18 @@ func (k *KeyList) UnmarshalTOML(v any) error {
 	default:
 		return fmt.Errorf("a key setting must be a string or a list of strings, got %T", v)
 	}
+}
+
+// ScrollbackConfig is how much history a session keeps and what shows it.
+type ScrollbackConfig struct {
+	// Lines bounds retained scrollback per session. Zero means unlimited, so nil is what means unset.
+	//
+	// libghostty prunes at page granularity, so the effective limit is somewhat higher.
+	Lines *int `toml:"lines"`
+	// Pager is the shell command the overlay shows the scrollback in, fed it on stdin, as kitty's
+	// scrollback_pager is. Empty means PAGER, then less. CM_PAGER overrides it, as a CM_ variable overrides
+	// the file everywhere else.
+	Pager string `toml:"pager"`
 }
 
 type OverlayConfig struct {
@@ -464,12 +478,16 @@ func DefaultPath() (string, error) {
 	return filepath.Join(dir, paths.Name, paths.Name+".toml"), nil
 }
 
-// Scrollback returns the configured scrollback limit, or the default.
-func (c *Config) Scrollback() int {
-	if c.ScrollbackLines == nil {
-		return DefaultScrollbackLines
+// ScrollbackLimit returns the configured scrollback limit, or the default. The table's spelling wins over
+// the older top-level one.
+func (c *Config) ScrollbackLimit() int {
+	switch {
+	case c.Scrollback.Lines != nil:
+		return *c.Scrollback.Lines
+	case c.ScrollbackLines != nil:
+		return *c.ScrollbackLines
 	}
-	return *c.ScrollbackLines
+	return DefaultScrollbackLines
 }
 
 // EnvPatterns returns the effective list of environment variable patterns.
