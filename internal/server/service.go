@@ -219,6 +219,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// client sends neither field, and the zero values report as unknown.
 	sess.noteClientIdentity(tok, open.ClientVersion, open.ClientPid,
 		capability.Parse(open.GetClientCapabilities()))
+	sess.noteClientConfig(tok, open.GetClientConfig())
 	if open.ReadOnly {
 		// Recorded before anything is pumped. A follower cannot answer a terminal query, since its
 		// input is dropped, and counting one as an answerer makes the emulator stay silent and the

@@ -275,3 +275,45 @@ func TestDoctorReportsMissingShellIntegration(t *testing.T) {
 		t.Errorf("doctor = %+v, want nothing once the session reports its own state", after.Findings)
 	}
 }
+
+// A server and a client that read another config file from the shell running doctor are named, across
+// real processes: the path travels on Open and on the Doctor request.
+//
+// The incident: kitty launched from the Dock starts `cm attach` with no XDG_CONFIG_HOME, so its clients
+// read no file while `cm config` in a shell reported the right one. Simulated with CM_CONFIG, which is the
+// same divergence by a different route. The control comes first: from the same environment, nothing.
+func TestDoctorReportsAProcessReadingAnotherConfig(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.mustRun("run", "--session", "work", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	e.waitFor("the session to be running", 15*time.Second, func() bool {
+		s, ok := e.session("work")
+		return ok && s.State == "running"
+	})
+	e.attachInBackground(t, "work")
+
+	same, _ := e.doctor()
+	if found := same.ofKind("config-mismatch"); len(found) != 0 {
+		t.Fatalf("doctor from the same environment = %+v, want no config-mismatch", found)
+	}
+
+	e.writeConfig("")
+	got, _ := e.doctor()
+	found := got.ofKind("config-mismatch")
+	if len(found) != 2 {
+		t.Fatalf("doctor = %+v, want config-mismatch for the server and the client (kinds %v)",
+			found, got.kinds())
+	}
+	if found[0].Session != "" || !strings.HasPrefix(found[0].Detail, "the server reads ") {
+		t.Errorf("first finding = %+v, want the server's", found[0])
+	}
+	if found[1].Session != "work" || !strings.HasPrefix(found[1].Detail, "client pid ") {
+		t.Errorf("second finding = %+v, want the client attached to work", found[1])
+	}
+	for _, f := range found {
+		if !strings.Contains(f.Detail, "this shell reads "+e.config) {
+			t.Errorf("detail = %q, want it to name the shell's file %s", f.Detail, e.config)
+		}
+	}
+}

@@ -85,6 +85,8 @@ type Manager struct {
 	// at each use so a test can set up a mismatch by construction, instead of through an environment
 	// variable and a subprocess. Empty means paths.Version, which is what the real server leaves it as.
 	version string
+	// configPath is the config file this server resolved. See SetConfigPath.
+	configPath string
 
 	mu sync.Mutex
 	// reportedUnreachable records that this server has already logged being unreachable, so the periodic
@@ -226,6 +228,10 @@ func (m *Manager) SetServerSocketInode(ino uint64) { m.socketInode = ino }
 // a manual procedure rather than a test, and a package-level variable would make the tests order-dependent.
 // A field on the Manager is neither.
 func (m *Manager) SetVersion(v string) { m.version = v }
+
+// SetConfigPath records the config file this server resolved, for `cm doctor` to compare against the
+// caller's. Empty, the default, skips the comparison.
+func (m *Manager) SetConfigPath(path string) { m.configPath = path }
 
 // Version reports the build this server identifies itself as.
 //

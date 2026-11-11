@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -34,7 +35,64 @@ const (
 	// FindingCapabilitySkew is a client and server that disagree about what one of them can do. Names the
 	// feature rather than the build, which is what version-skew cannot do.
 	FindingCapabilitySkew = "capability-skew"
+	// FindingConfigMismatch is the server or an attached client reading a different config file from the
+	// shell running `cm doctor`.
+	FindingConfigMismatch = "config-mismatch"
 )
+
+// checkConfigMismatch reports the server and every attached client whose config file differs from the
+// caller's.
+//
+// Each process resolves the path from its own environment, and XDG_CONFIG_HOME usually comes from a shell's
+// rc file, so a process a GUI app starts directly can resolve another one. kitty launched from the Dock ran
+// `cm attach` that way: its clients read no file and took the default keys, log_level and pager, while
+// `cm config` in a shell reported the right file, so nothing looked wrong from the one place anyone checks.
+// A server autostarted by such a client is worse, since [persist] lives in the same file.
+//
+// Compared against the caller because that is the file the user is looking at. Skipped for a caller and a
+// client that did not say, which an older build cannot.
+func (m *Manager) checkConfigMismatch(clientConfig string) []Finding {
+	if clientConfig == "" {
+		return nil
+	}
+	describe := func(path string) string {
+		if _, err := os.Stat(path); err != nil {
+			return path + ", which does not exist"
+		}
+		return path
+	}
+	const remedy = "; a process started without the shell's environment, such as by a GUI app, " +
+		"resolves its own path, so set CM_CONFIG or XDG_CONFIG_HOME where it is launched"
+
+	var findings []Finding
+	if m.configPath != "" && m.configPath != clientConfig {
+		findings = append(findings, Finding{
+			Kind:   FindingConfigMismatch,
+			Detail: fmt.Sprintf("the server reads %s; this shell reads %s%s", describe(m.configPath), clientConfig, remedy),
+		})
+	}
+
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		sessions = append(sessions, sess)
+	}
+	m.mu.Unlock()
+	for _, sess := range sessions {
+		for _, c := range sess.AttachedClients() {
+			if c.ConfigPath == "" || c.ConfigPath == clientConfig {
+				continue
+			}
+			findings = append(findings, Finding{
+				Kind:    FindingConfigMismatch,
+				Session: sess.Label(),
+				Detail: fmt.Sprintf("client pid %d reads %s; this shell reads %s%s",
+					c.PID, describe(c.ConfigPath), clientConfig, remedy),
+			})
+		}
+	}
+	return findings
+}
 
 // checkCapabilitySkew reports what a client and server disagree about being able to do.
 //

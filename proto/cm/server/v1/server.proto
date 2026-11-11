@@ -380,6 +380,10 @@ message DoctorRequest {
   // Reported, never acted on. The server branches on no client capability, and if it ever needs to, the
   // token for that gets added with the branch.
   repeated string client_capabilities = 3;
+
+  // The config file the calling client resolved, so the server can report a process that reads another.
+  // Empty from a client that predates this field, and the check is skipped.
+  string client_config = 4;
 }
 
 message DoctorResponse {
@@ -604,6 +608,13 @@ message Open {
   // detached 40x150 session resized it to the 24x80 the command sent and signalled the shell, which
   // redrew for a window that never existed. False from an older client, which sizes as it always did.
   bool no_attach = 26;
+
+  // The config file this client resolved, whether or not it exists, for `cm doctor` to compare. Empty from
+  // a client that predates the field, which the check skips rather than reports.
+  //
+  // Added because a client kitty starts from the Dock has no XDG_CONFIG_HOME, so it resolved a different
+  // path from a shell and read no file, while `cm config` in the shell reported the right one.
+  string client_config = 27;
 }
 
 // IfRunning is what an Open carrying a command does when its session is already running.

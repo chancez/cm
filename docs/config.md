@@ -11,7 +11,8 @@ macOS). On macOS, `~/.config/cm/cm.toml` is read when the platform directory has
 The `~/.config` fallback exists because `XDG_CONFIG_HOME` usually comes from a shell's rc file, and a
 process a GUI app starts directly never sees it. kitty launched from the Dock runs `cm attach` that way, and
 its clients read no file at all while `cm config` in a shell reported the right one: the client's keys,
-`log_level` and `[scrollback] pager` all silently took their defaults.
+`log_level` and `[scrollback] pager` all silently took their defaults. `cm doctor` reports a server or an attached client
+reading a different file from the shell it runs in, as `config-mismatch`.
 
 An unknown key is ignored with a warning, and `cm config` lists it and exits non-zero. The split is
 deliberate. Refusing everywhere is what a misspelled setting deserves, but the server reads the same

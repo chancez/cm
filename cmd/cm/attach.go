@@ -215,6 +215,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 				OpenPicker: overlayPicker(g, dirs, pickerBackKey(prefixKeys)),
 				// And how it shows the scrollback. See pagerCommand for which command that is.
 				OpenPager: overlayPager(cfg.Scrollback.Pager),
+				// For `cm doctor`, which compares it with the shell's: a client kitty starts from the Dock
+				// has no XDG_CONFIG_HOME and can resolve another file. See checkConfigMismatch.
+				ConfigPath: cfg.Path(),
 				// Recorded so a shell already running in this session can refresh values that
 				// describe the terminal, which may have been replaced since it started.
 				ClientEnv: sessionenv.Capture(os.Environ(), cfg.EnvMatcher()),

@@ -404,6 +404,9 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		return err
 	}
 	mgr.SetLogger(logger)
+	// For `cm doctor`: a server autostarted by a client a GUI app launched can resolve another file, and
+	// [persist] lives in it. See checkConfigMismatch.
+	mgr.SetConfigPath(cfg.Path())
 	// Recorded so the server can notice that its own socket path stops referring to it, which is what
 	// happens when the runtime directory is deleted underneath it: it keeps listening on an inode nothing can
 	// name while every later command starts a second server.

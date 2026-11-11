@@ -499,6 +499,8 @@ type clientSize struct {
 	// empty value as unknown is better than inferring one.
 	version string
 	pid     int32
+	// configPath is the config file the client resolved, for `cm doctor`. Empty from an older client.
+	configPath string
 	// capabilities is what the client reported it can do, also for reporting only.
 	//
 	// The zero Set for a client that sent none, which answers capability.Unknown to everything rather
@@ -2425,6 +2427,8 @@ type AttachedClientInfo struct {
 	// Capabilities is what this client reported it can do, for reporting only. The zero Set from a client
 	// that sent none, which is unknown rather than none.
 	Capabilities capability.Set
+	// ConfigPath is the config file the client resolved, empty when it did not say.
+	ConfigPath string
 }
 
 // noteClientIdentity records what a client said about itself, for reporting only.
@@ -2447,6 +2451,19 @@ func (s *Session) noteClientIdentity(
 	// because this is the first point the pid is known and it is still ahead of sizeForAttach: doing it
 	// afterwards would size the session once on the new order and again on the restored one.
 	s.adoptOrderLocked(pid, tok)
+}
+
+// noteClientConfig records the config file a client resolved, for reporting only. Separate from
+// noteClientIdentity because nothing but `cm doctor` reads it.
+func (s *Session) noteClientConfig(tok *attachToken, path string) {
+	if tok == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cs := s.clientSizes[tok]; cs != nil {
+		cs.configPath = path
+	}
 }
 
 // rememberOrder records this client's attach order against its pid, so a reconnect keeps its place.
@@ -2544,6 +2561,7 @@ func (s *Session) AttachedClients() []AttachedClientInfo {
 			LastInputAt:  cs.lastInputAt,
 			Active:       active != nil && tok == active,
 			Capabilities: cs.capabilities,
+			ConfigPath:   cs.configPath,
 		}})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].order < entries[j].order })

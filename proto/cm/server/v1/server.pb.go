@@ -1157,8 +1157,11 @@ type DoctorRequest struct {
 	// Reported, never acted on. The server branches on no client capability, and if it ever needs to, the
 	// token for that gets added with the branch.
 	ClientCapabilities []string `protobuf:"bytes,3,rep,name=client_capabilities,json=clientCapabilities,proto3" json:"client_capabilities,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// The config file the calling client resolved, so the server can report a process that reads another.
+	// Empty from a client that predates this field, and the check is skipped.
+	ClientConfig  string `protobuf:"bytes,4,opt,name=client_config,json=clientConfig,proto3" json:"client_config,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DoctorRequest) Reset() {
@@ -1210,6 +1213,13 @@ func (x *DoctorRequest) GetClientCapabilities() []string {
 		return x.ClientCapabilities
 	}
 	return nil
+}
+
+func (x *DoctorRequest) GetClientConfig() string {
+	if x != nil {
+		return x.ClientConfig
+	}
+	return ""
 }
 
 type DoctorResponse struct {
@@ -1748,7 +1758,13 @@ type Open struct {
 	// server registered it as a sizing client like any other, so `cm attach --no-attach` on a running,
 	// detached 40x150 session resized it to the 24x80 the command sent and signalled the shell, which
 	// redrew for a window that never existed. False from an older client, which sizes as it always did.
-	NoAttach      bool `protobuf:"varint,26,opt,name=no_attach,json=noAttach,proto3" json:"no_attach,omitempty"`
+	NoAttach bool `protobuf:"varint,26,opt,name=no_attach,json=noAttach,proto3" json:"no_attach,omitempty"`
+	// The config file this client resolved, whether or not it exists, for `cm doctor` to compare. Empty from
+	// a client that predates the field, which the check skips rather than reports.
+	//
+	// Added because a client kitty starts from the Dock has no XDG_CONFIG_HOME, so it resolved a different
+	// path from a shell and read no file, while `cm config` in the shell reported the right one.
+	ClientConfig  string `protobuf:"bytes,27,opt,name=client_config,json=clientConfig,proto3" json:"client_config,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1949,6 +1965,13 @@ func (x *Open) GetNoAttach() bool {
 		return x.NoAttach
 	}
 	return false
+}
+
+func (x *Open) GetClientConfig() string {
+	if x != nil {
+		return x.ClientConfig
+	}
+	return ""
 }
 
 // TerminalGraphics reports what this client's terminal answered about drawing images, after Open.
@@ -5380,11 +5403,12 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1a.cm.server.v1.SessionStateR\x05state\x12\x1b\n" +
 	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x19\n" +
 	"\blast_seq\x18\n" +
-	" \x01(\x04R\alastSeq\"\x7f\n" +
+	" \x01(\x04R\alastSeq\"\xa4\x01\n" +
 	"\rDoctorRequest\x12\x16\n" +
 	"\x06repair\x18\x01 \x01(\bR\x06repair\x12%\n" +
 	"\x0eclient_version\x18\x02 \x01(\tR\rclientVersion\x12/\n" +
-	"\x13client_capabilities\x18\x03 \x03(\tR\x12clientCapabilities\"\xe4\x01\n" +
+	"\x13client_capabilities\x18\x03 \x03(\tR\x12clientCapabilities\x12#\n" +
+	"\rclient_config\x18\x04 \x01(\tR\fclientConfig\"\xe4\x01\n" +
 	"\x0eDoctorResponse\x121\n" +
 	"\bfindings\x18\x01 \x03(\v2\x15.cm.server.v1.FindingR\bfindings\x12\x1a\n" +
 	"\brepaired\x18\x02 \x03(\tR\brepaired\x12%\n" +
@@ -5407,7 +5431,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detach\x12M\n" +
 	"\x11terminal_graphics\x18\x05 \x01(\v2\x1e.cm.server.v1.TerminalGraphicsH\x00R\x10terminalGraphicsB\a\n" +
-	"\x05event\"\xe2\a\n" +
+	"\x05event\"\x87\b\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -5438,7 +5462,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x17terminal_kitty_graphics\x18\x18 \x01(\bR\x15terminalKittyGraphics\x126\n" +
 	"\n" +
 	"if_running\x18\x19 \x01(\x0e2\x17.cm.server.v1.IfRunningR\tifRunning\x12\x1b\n" +
-	"\tno_attach\x18\x1a \x01(\bR\bnoAttach\x1a<\n" +
+	"\tno_attach\x18\x1a \x01(\bR\bnoAttach\x12#\n" +
+	"\rclient_config\x18\x1b \x01(\tR\fclientConfig\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

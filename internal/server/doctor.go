@@ -62,7 +62,7 @@ const (
 // The client's capabilities are passed alongside its version because only the client knows either, and
 // because a version difference on its own cannot say what breaks. See checkCapabilitySkew.
 func (m *Manager) Diagnose(
-	ctx context.Context, clientVersion string, clientCaps capability.Set,
+	ctx context.Context, clientVersion string, clientCaps capability.Set, clientConfig string,
 ) ([]Finding, error) {
 	records, err := m.store.List(ctx)
 	if err != nil {
@@ -144,6 +144,7 @@ func (m *Manager) Diagnose(
 	// problem wants the whole picture, not the first item alphabetically.
 	findings = append(findings, m.checkVersionSkew(clientVersion)...)
 	findings = append(findings, m.checkCapabilitySkew(clientCaps)...)
+	findings = append(findings, m.checkConfigMismatch(clientConfig)...)
 	findings = append(findings, m.checkShimVersionSkew(shimVersions, shimCaps)...)
 	findings = append(findings, m.checkTerminal()...)
 	findings = append(findings, m.checkEmulatorSpeed()...)
@@ -250,7 +251,8 @@ func (m *Manager) Repair(ctx context.Context, findings []Finding) []string {
 func (s *Service) Doctor(
 	ctx context.Context, req *serverv1.DoctorRequest,
 ) (*serverv1.DoctorResponse, error) {
-	findings, err := s.mgr.Diagnose(ctx, req.ClientVersion, capability.Parse(req.GetClientCapabilities()))
+	findings, err := s.mgr.Diagnose(ctx, req.ClientVersion, capability.Parse(req.GetClientCapabilities()),
+		req.GetClientConfig())
 	if err != nil {
 		return nil, err
 	}

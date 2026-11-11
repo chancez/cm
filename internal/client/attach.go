@@ -88,6 +88,7 @@ func (o Options) Open(session string) *serverv1.Open {
 		// --no-attach. Every client describes itself the same way as a result.
 		ClientVersion: paths.Version(),
 		ClientPid:     int32(os.Getpid()),
+		ClientConfig:  o.ConfigPath,
 		// Beside the version because only this process knows either. Attach is the one hop a client's
 		// capabilities could not reach before: they were sent on `cm doctor` and `cm version` alone, so a
 		// server learned nothing about a client that only ever attached.
@@ -216,6 +217,10 @@ type Options struct {
 	// Set by the caller rather than read here, so the one place that consults the environment is the
 	// command layer and this package stays a library. InsideCmSession is the helper that decides it.
 	InsideSession string
+
+	// ConfigPath is the config file this client resolved, reported to the server so `cm doctor` can name a
+	// client that reads a different one from the shell running it. Empty reports nothing.
+	ConfigPath string
 
 	// Output, when set, receives the session's bytes instead of the terminal.
 	//

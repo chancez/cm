@@ -36,6 +36,9 @@ while to diagnose, because each fails silently rather than reporting an error.
   capability-skew       client and server that disagree about what one of them
                         can do, naming the feature rather than the build, and
                         saying which side is the stale one
+  config-mismatch       the server or an attached client reading a different
+                        config file from this shell, as one started by a GUI
+                        app without the shell's environment does
   server-errors         recent errors in the server and shim logs, which nothing
                         else surfaces
   log-warnings          recent warnings, which are the quieter and often more
@@ -101,7 +104,11 @@ directories the stranded server was started with.`,
 			}
 			defer conn.Close()
 
-			return runDoctor(cmd.Context(), cl, clean, asJSON)
+			cfg, err := g.config()
+			if err != nil {
+				return err
+			}
+			return runDoctor(cmd.Context(), cl, cfg.Path(), clean, asJSON)
 		},
 	}
 	f := cmd.Flags()
@@ -141,13 +148,15 @@ type findingJSON struct {
 }
 
 // runDoctor prints a diagnosis and reports failure as an exit status.
-func runDoctor(ctx context.Context, cl serverv1.ServerClient, clean, asJSON bool) error {
+func runDoctor(ctx context.Context, cl serverv1.ServerClient, configPath string, clean, asJSON bool) error {
 	resp, err := cl.Doctor(ctx, &serverv1.DoctorRequest{
 		Repair: clean,
 		// Sent rather than derived server-side, because the server cannot tell which binary connected to it.
 		ClientVersion: paths.Version(),
 		// So the server can name what differs rather than only that builds differ.
 		ClientCapabilities: capability.Client().Strings(),
+		// The file the user is looking at, so the server can name a process reading another.
+		ClientConfig: configPath,
 	})
 	if err != nil {
 		// A server too old to know this method cannot report anything, which is itself the diagnosis: it is
