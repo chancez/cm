@@ -33,6 +33,7 @@ func TestOpenOptionsFromCopiesEveryField(t *testing.T) {
 		OnRestore:     "shell",
 		Tags:          map[string]string{"role": "build"},
 		IfRunning:     serverv1.IfRunning_IF_RUNNING_ERROR,
+		InShell:       true,
 	}
 
 	got := openOptionsFrom(open)
@@ -51,6 +52,7 @@ func TestOpenOptionsFromCopiesEveryField(t *testing.T) {
 		OnRestore:     RestoreShell,
 		Tags:          map[string]string{"role": "build"},
 		IfRunning:     IfRunningError,
+		InShell:       true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("openOptionsFrom() = %+v, want %+v", got, want)

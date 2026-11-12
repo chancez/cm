@@ -174,8 +174,9 @@ func (s *Service) SetResume(ctx context.Context, req *serverv1.SetResumeRequest)
 	return &serverv1.SetResumeResponse{}, nil
 }
 
-// typedRestore is a declared resume command a revive types into the new shell.
-type typedRestore struct {
+// typedCommand is a command typed into a new session's shell once it prompts: a declared resume command a
+// revive restores, or the command of an attach asking for it to run in the shell. See OpenOptions.InShell.
+type typedCommand struct {
 	argv []string
 	// run submits the line. Without it the command sits on the prompt for the user to run, edit, or clear.
 	run bool
@@ -192,24 +193,24 @@ type typedRestore struct {
 // allowlist. Otherwise it is prefilled rather than dropped, which is what on_restore = "command" without
 // the allowlist would otherwise mean: the user asked for the command back, and the safe form of that is
 // one keypress away from it.
-func (m *Manager) restoreDeclared(argv []string, action RestoreAction, explicit bool) *typedRestore {
+func (m *Manager) restoreDeclared(argv []string, action RestoreAction, explicit bool) *typedCommand {
 	run := false
 	if action == RestoreCommand {
 		run = explicit || (m.persist.CommandIsSafeToRerun != nil && m.persist.CommandIsSafeToRerun(argv))
 	}
-	return &typedRestore{argv: slices.Clone(argv), run: run}
+	return &typedCommand{argv: slices.Clone(argv), run: run}
 }
 
-// restorePromptWait bounds how long a revive waits for the new shell to prompt before typing anyway.
+// typePromptWait bounds how long a new shell is waited for to prompt before typing anyway.
 //
 // Typing before the prompt is not lost, since the tty holds it until the line editor reads it, but an rc
 // file that reads stdin would take it. So the prompt mark is waited for when the shell sends one, and a
 // shell that sends none gets the typeahead.
-const restorePromptWait = 10 * time.Second
+const typePromptWait = 10 * time.Second
 
-// typeRestore types a declared command into a revived session's shell once it is at its first prompt.
-func (m *Manager) typeRestore(sess *Session, t typedRestore) {
-	deadline := time.NewTimer(restorePromptWait)
+// typeCommand types a command into a new session's shell once it is at its first prompt.
+func (m *Manager) typeCommand(sess *Session, t typedCommand) {
+	deadline := time.NewTimer(typePromptWait)
 	defer deadline.Stop()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
@@ -218,8 +219,8 @@ wait:
 		select {
 		case <-tick.C:
 		case <-deadline.C:
-			m.log.Info("no prompt mark from a revived shell, typing its resume command anyway",
-				"session", sess.id, "waited", restorePromptWait)
+			m.log.Info("no prompt mark from a new shell, typing its command anyway",
+				"session", sess.id, "waited", typePromptWait)
 			break wait
 		case <-sess.Done():
 			return
@@ -234,10 +235,10 @@ wait:
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := writeInputThenEnter(ctx, sess, []byte(line), enter); err != nil {
-		m.log.Warn("typing a resume command failed", "session", sess.id, "error", err)
+		m.log.Warn("typing a command into a new shell failed", "session", sess.id, "error", err)
 		return
 	}
-	m.log.Info("restored a declared resume command", "session", sess.id, "run", t.run)
+	m.log.Info("typed a command into a new shell", "session", sess.id, "run", t.run)
 }
 
 // isFish reports whether a session's shell is fish, whose quoting differs from POSIX inside single quotes.

@@ -34,6 +34,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		tagArgs      []string
 		ifRunningArg string
 		sizeArg      string
+		inShell      bool
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -59,6 +60,11 @@ A command after -- runs only when this attach creates or revives the session. If
 the session is already running, the attach fails rather than attaching and
 silently not running it; --if-running=attach attaches anyway, without running the
 command. Without a command, --if-running has no effect.
+
+--in-shell starts your shell as usual and types the command into it once it
+prompts, rather than running the command in place of the shell. The shell runs
+it as if you had typed it, so its integration reports it to cm list, and quitting
+it leaves the session at that shell's prompt rather than ending it.
 
 Detaching leaves the session running. The key is ctrl-\ by default, set by
 detach_key in the config file, and overridden for one attachment by --detach-key.
@@ -107,6 +113,12 @@ matters for another multiplexer, which sees the key first and never passes it on
 			// own terminal, so a size given here would be dropped without a word.
 			if sizeArg != "" && !noAttach {
 				return errors.New("--size only applies with --no-attach; an attach takes its terminal's size")
+			}
+			// Refused for the same reason: with no command there is nothing to type, and accepting it would
+			// say a command was going to run when none was.
+			command := argsAfterDash(cmd, args)
+			if inShell && len(command) == 0 {
+				return errors.New("--in-shell needs a command after --")
 			}
 			size, ok := callerSize(os.Stdout, os.Stderr, os.Stdin)
 			if !ok {
@@ -194,7 +206,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Session:    session,
 				ReadOnly:   readOnly,
 				Dir:        dir,
-				Command:    argsAfterDash(cmd, args),
+				Command:    command,
+				InShell:    inShell,
 				DetachKeys: detachKeys,
 				PrefixKeys: prefixKeys,
 				// What each key means inside the overlay. Problems are not fatal and are not printed here
@@ -293,6 +306,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 		"create the session and print its name without attaching")
 	f.StringVar(&sizeArg, "size", "",
 		"with --no-attach, create the session at COLSxROWS rather than this terminal's size")
+	f.BoolVar(&inShell, "in-shell", false,
+		"type the command into the new session's shell rather than running it in place of the shell")
 	f.StringVar(&ifRunningArg, "if-running", "error",
 		"what a command does if the session is already running: "+strings.Join(ifRunningNames(), " or "))
 	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,

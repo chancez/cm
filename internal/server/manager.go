@@ -916,9 +916,20 @@ type OpenOptions struct {
 	// OnRestore overrides the configured restore behavior for this session. Empty means the
 	// configured default.
 	OnRestore RestoreAction
+	// InShell runs Command by typing it into the user's shell once it prompts, rather than in place of the
+	// shell.
+	//
+	// For a window that should outlive its command, which is kitty's launch --hold. The alternative,
+	// `sh -c '"$@"; exec $SHELL -l' sh gr`, starts the program before any shell exists, so no preexec hook
+	// runs: cm never hears the command start, `cm list` shows nothing running, and `cm doctor` reported the
+	// session as having no shell integration. Typed, the shell runs it as if the user had, so its
+	// integration reports it, the title hook fires, and quitting the program leaves that same shell at a
+	// prompt. The same thing kitty's cmd_at_shell_startup does, and what a revive already does for a
+	// declared resume command.
+	InShell bool
 	// typeOnStart is a declared resume command to type into the new shell once it prompts, set when a
 	// revive restores one. See restoreDeclared.
-	typeOnStart *typedRestore
+	typeOnStart *typedCommand
 	// Tags are the caller's own labels for a newly created session. Ignored when the session
 	// already exists, since an attach is not how tags are changed.
 	Tags map[string]string
@@ -1266,6 +1277,13 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	if opts.Rows == 0 || opts.Cols == 0 {
 		opts.Rows, opts.Cols = 24, 80
 	}
+	// Taken out of Command before anything records it, so the session runs and records the user's shell. A
+	// revive then restores a shell rather than re-running the program in place of one.
+	typed := opts.typeOnStart
+	if opts.InShell && len(opts.Command) > 0 {
+		typed = &typedCommand{argv: opts.Command, run: true}
+		opts.Command = nil
+	}
 
 	socket := m.dirs.ShimSocket(opts.id)
 	if err := paths.CheckSocketPath(socket); err != nil {
@@ -1363,8 +1381,8 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		_ = m.store.Delete(ctx, opts.id)
 		return nil, err
 	}
-	if opts.typeOnStart != nil {
-		go m.typeRestore(sess, *opts.typeOnStart)
+	if typed != nil {
+		go m.typeCommand(sess, *typed)
 	}
 
 	// Record the shell's pid for reporting. Inline first, so a listing run immediately after this shows

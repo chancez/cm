@@ -127,6 +127,7 @@ func openOptionsFrom(open *serverv1.Open) OpenOptions {
 		OnRestore:     RestoreAction(open.OnRestore),
 		Tags:          open.Tags,
 		IfRunning:     ifRunningFrom(open.IfRunning),
+		InShell:       open.InShell,
 		// Carried so a reader is not given a new shell in place of the session it asked to observe.
 		ReadOnly: open.ReadOnly,
 	}

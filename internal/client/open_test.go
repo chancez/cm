@@ -29,6 +29,7 @@ func TestOptionsOpenCarriesEveryField(t *testing.T) {
 		NoRestore:     true,
 		InsideSession: "parent",
 		IfRunning:     serverv1.IfRunning_IF_RUNNING_ERROR,
+		InShell:       true,
 		ConfigPath:    "/home/u/.config/cm/cm.toml",
 	}
 
@@ -46,6 +47,7 @@ func TestOptionsOpenCarriesEveryField(t *testing.T) {
 		NoRestore:     true,
 		InsideSession: "parent",
 		IfRunning:     serverv1.IfRunning_IF_RUNNING_ERROR,
+		InShell:       true,
 		ClientConfig:  "/home/u/.config/cm/cm.toml",
 		// Not from Options: these describe the running process rather than the attachment, so they come
 		// from paths.Version and os.Getpid inside Open. Taken from the same sources here rather than
@@ -106,6 +108,7 @@ func TestOptionsOpenSetsEveryWireField(t *testing.T) {
 		NoRestore:     true,
 		InsideSession: "parent",
 		IfRunning:     serverv1.IfRunning_IF_RUNNING_ERROR,
+		InShell:       true,
 		ConfigPath:    "/home/u/.config/cm/cm.toml",
 		// Unexported because only Attach can establish it, and set here rather than skipped so the mapping
 		// stays under this guard: a terminal's answer that Open forgets to carry is an image sent to a

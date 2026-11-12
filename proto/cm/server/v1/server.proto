@@ -615,6 +615,14 @@ message Open {
   // Added because a client kitty starts from the Dock has no XDG_CONFIG_HOME, so it resolved a different
   // path from a shell and read no file, while `cm config` in the shell reported the right one.
   string client_config = 27;
+
+  // Run command by typing it into the user's shell once it prompts, rather than in place of the shell:
+  // `cm attach --in-shell`. The shell then runs it as if it had been typed, so its preexec hooks report it,
+  // and quitting it leaves that shell at a prompt. Only meaningful when creating, with a command.
+  //
+  // An older server ignores this and runs the command in place of the shell, so the session ends when the
+  // command does.
+  bool in_shell = 28;
 }
 
 // IfRunning is what an Open carrying a command does when its session is already running.
