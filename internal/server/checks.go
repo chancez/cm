@@ -409,8 +409,9 @@ func (m *Manager) checkSocketPath() []Finding {
 // it a session is permanently idle as far as cm can tell, so `cm wait --until idle` returns immediately and
 // `cm list` never shows what is running. Nothing errors; the feature just quietly does nothing.
 //
-// Reported only for sessions that have run at least one command, since a shell sitting at its first prompt
-// has had no occasion to report anything and flagging it would be noise.
+// Any OSC 133 marker clears a session, a prompt as much as a command. Keying on a reported command flagged
+// every shell that had only drawn a prompt: three of seven sessions named on a live install were fresh
+// windows nobody had typed in yet.
 func (m *Manager) checkShellIntegration() []Finding {
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
@@ -424,9 +425,9 @@ func (m *Manager) checkShellIntegration() []Finding {
 		if ended, _ := sess.Ended(); ended {
 			continue
 		}
-		// A session that has reported a command, ever, has working integration. Runs is monotonic, so this
-		// stays true after the command finishes.
-		if sess.CommandRuns() > 0 {
+		// A shell that has sent any marker, ever, has working integration, whether or not anything has been
+		// run in it yet.
+		if sess.PromptSeen() {
 			continue
 		}
 		// A report from a program takes the place of shell markers, so a session with one is not affected.
@@ -444,7 +445,7 @@ func (m *Manager) checkShellIntegration() []Finding {
 	return []Finding{{
 		Kind: FindingNoShellIntegration,
 		Detail: fmt.Sprintf(
-			"%d session(s) have never reported a command via OSC 133 (%s), so `cm list` cannot show what "+
+			"%d session(s) have never sent an OSC 133 marker (%s), so `cm list` cannot show what "+
 				"they are running and `cm wait --until idle` returns immediately; load your terminal's "+
 				"shell integration in the session's shell, or report state with `cm report`",
 			len(quiet), strings.Join(quiet, ", ")),

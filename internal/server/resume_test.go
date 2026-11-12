@@ -129,21 +129,21 @@ func TestInheritForRestoreDeclaredCommand(t *testing.T) {
 		configured RestoreAction
 		perSession RestoreAction
 		safe       bool
-		want       *typedRestore
+		want       *typedCommand
 	}{
 		{name: "shell ignores it", configured: RestoreShell},
 		{name: "none ignores it", configured: RestoreNone},
-		{name: "prefill", configured: RestorePrefill, want: &typedRestore{argv: claude}},
+		{name: "prefill", configured: RestorePrefill, want: &typedCommand{argv: claude}},
 		{name: "prefill even when allowlisted", configured: RestorePrefill, safe: true,
-			want: &typedRestore{argv: claude}},
+			want: &typedCommand{argv: claude}},
 		{name: "command without permission prefills", configured: RestoreCommand,
-			want: &typedRestore{argv: claude}},
+			want: &typedCommand{argv: claude}},
 		{name: "command allowlisted runs", configured: RestoreCommand, safe: true,
-			want: &typedRestore{argv: claude, run: true}},
+			want: &typedCommand{argv: claude, run: true}},
 		{name: "command asked for on the session runs", configured: RestoreShell, perSession: RestoreCommand,
-			want: &typedRestore{argv: claude, run: true}},
+			want: &typedCommand{argv: claude, run: true}},
 		{name: "prefill asked for on the session", configured: RestoreShell, perSession: RestorePrefill,
-			want: &typedRestore{argv: claude}},
+			want: &typedCommand{argv: claude}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestInheritForRestoreDeclaredCommand(t *testing.T) {
 // A shell's first prompt marker is enough for a revive to know its line editor is up.
 //
 // The marker changes no published state, so it never reaches noteCommand, and recording it there meant a
-// revive always waited out restorePromptWait and typed blind: 13.8s against 3.8s in the e2e test, which
+// revive always waited out typePromptWait and typed blind: 13.8s against 3.8s in the e2e test, which
 // passed either way.
 func TestALonePromptMarkerIsSeen(t *testing.T) {
 	sess := newNestedTestSession(t, &fakeTerminal{})

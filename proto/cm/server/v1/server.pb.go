@@ -1764,7 +1764,14 @@ type Open struct {
 	//
 	// Added because a client kitty starts from the Dock has no XDG_CONFIG_HOME, so it resolved a different
 	// path from a shell and read no file, while `cm config` in the shell reported the right one.
-	ClientConfig  string `protobuf:"bytes,27,opt,name=client_config,json=clientConfig,proto3" json:"client_config,omitempty"`
+	ClientConfig string `protobuf:"bytes,27,opt,name=client_config,json=clientConfig,proto3" json:"client_config,omitempty"`
+	// Run command by typing it into the user's shell once it prompts, rather than in place of the shell:
+	// `cm attach --in-shell`. The shell then runs it as if it had been typed, so its preexec hooks report it,
+	// and quitting it leaves that shell at a prompt. Only meaningful when creating, with a command.
+	//
+	// An older server ignores this and runs the command in place of the shell, so the session ends when the
+	// command does.
+	InShell       bool `protobuf:"varint,28,opt,name=in_shell,json=inShell,proto3" json:"in_shell,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1972,6 +1979,13 @@ func (x *Open) GetClientConfig() string {
 		return x.ClientConfig
 	}
 	return ""
+}
+
+func (x *Open) GetInShell() bool {
+	if x != nil {
+		return x.InShell
+	}
+	return false
 }
 
 // TerminalGraphics reports what this client's terminal answered about drawing images, after Open.
@@ -5431,7 +5445,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detach\x12M\n" +
 	"\x11terminal_graphics\x18\x05 \x01(\v2\x1e.cm.server.v1.TerminalGraphicsH\x00R\x10terminalGraphicsB\a\n" +
-	"\x05event\"\x87\b\n" +
+	"\x05event\"\xa2\b\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -5463,7 +5477,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
 	"if_running\x18\x19 \x01(\x0e2\x17.cm.server.v1.IfRunningR\tifRunning\x12\x1b\n" +
 	"\tno_attach\x18\x1a \x01(\bR\bnoAttach\x12#\n" +
-	"\rclient_config\x18\x1b \x01(\tR\fclientConfig\x1a<\n" +
+	"\rclient_config\x18\x1b \x01(\tR\fclientConfig\x12\x19\n" +
+	"\bin_shell\x18\x1c \x01(\bR\ainShell\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +

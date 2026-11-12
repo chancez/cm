@@ -80,6 +80,23 @@ client predating the flag attaches as it always did.
 It is an enum rather than a boolean because a third answer is foreseeable: replacing the running session
 with one running the command, the same idea as `cm rebind --replace`.
 
+### Running the command in the shell
+
+By default CMD runs in place of the shell, so the session ends when CMD does. `--in-shell` starts the
+shell as usual and types CMD into it at its first prompt, so quitting CMD leaves that shell at a prompt.
+This is kitty's `cmd_at_shell_startup`, and the same typing a revive does for a declared resume command
+(see [restore-command.md](restore-command.md)): it waits for the shell's OSC 133 prompt marker, or 10s
+for a shell that sends none.
+
+It is for a window that should outlive its command, kitty's `launch --hold`. The usual way to get that,
+`cm attach NAME -- sh -c '"$@"; exec "$SHELL" -l' sh gr`, starts the program before any shell exists,
+so no preexec hook runs. cm never heard the command start: `cm list` showed it running nothing, `cm wait
+--until idle` returned while it ran, and `cm doctor` reported the session as having no shell integration.
+Typed, the shell runs it as if the user had, so its integration reports it and the title hook fires.
+
+The session records the shell, not CMD, so a revive restores a shell. An older server ignores the flag
+and runs CMD in place of the shell.
+
 ## Creating without attaching
 
 `cm attach --no-attach` creates a session at a size, since no window is there to give it one:

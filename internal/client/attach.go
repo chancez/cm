@@ -81,6 +81,7 @@ func (o Options) Open(session string) *serverv1.Open {
 		OnRestore:     o.OnRestore,
 		Tags:          o.Tags,
 		IfRunning:     o.IfRunning,
+		InShell:       o.InShell,
 		NoRestore:     o.NoRestore,
 		InsideSession: o.InsideSession,
 		// Set here rather than by each caller, which is the whole point of this constructor: a field
@@ -142,6 +143,9 @@ type Options struct {
 	// attach. The zero value attaches, which is what every caller but `cm attach` wants. Applies to the
 	// first Open only; see runSession.
 	IfRunning serverv1.IfRunning
+	// InShell types Command into the user's shell once it prompts, rather than running it in place of the
+	// shell, so the session's shell outlives it.
+	InShell bool
 	// Tags label a session being created, for grouping and filtering. Ignored when attaching to a
 	// session that already exists, since an attach is not how tags are changed.
 	Tags map[string]string

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,35 +131,50 @@ func TestCheckSocketPath(t *testing.T) {
 //
 // Without those markers cm cannot tell busy from idle, so `cm wait --until idle` returns immediately and
 // `cm list` never shows what is running. Nothing errors; the feature silently does nothing.
+//
+// The lone prompt is the regression case: a fresh window nobody has typed in has sent a prompt marker and
+// no command, and was flagged as having no integration.
 func TestCheckShellIntegration(t *testing.T) {
-	mgr, st, dirs := newTestManager(t, nil)
-	ctx := context.Background()
+	tests := []struct {
+		name   string
+		output string
+		want   []Finding
+	}{
+		{
+			name: "nothing reported",
+			want: []Finding{{
+				Kind: FindingNoShellIntegration,
+				Detail: "1 session(s) have never sent an OSC 133 marker (quiet), so `cm list` cannot " +
+					"show what they are running and `cm wait --until idle` returns immediately; load your " +
+					"terminal's shell integration in the session's shell, or report state with `cm report`",
+			}},
+		},
+		{name: "a lone prompt", output: "\x1b]133;A\x07$ "},
+		{name: "a finished command", output: "\x1b]133;A\x07$ \x1b]133;C;cmdline=make\x07\x1b]133;D;0\x07"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, _ := newTestManager(t, nil)
+			sess := newNestedTestSession(t, &fakeTerminal{})
+			sess.label = "quiet"
+			mgr.mu.Lock()
+			mgr.sessions["quiet"] = sess
+			mgr.mu.Unlock()
+			// Taken back out before the manager's own cleanup closes the registry: this session was built
+			// rather than started, so it has no pump to stop and Close panics on it.
+			t.Cleanup(func() {
+				mgr.mu.Lock()
+				delete(mgr.sessions, "quiet")
+				mgr.mu.Unlock()
+			})
 
-	rec := startShimInRuntimeDir(t, dirs, "quiet", "sleep 5")
-	recordSession(t, st, rec)
-	if err := mgr.Reconcile(ctx); err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-
-	// Nothing reported yet, which is the case being looked for.
-	got := mgr.checkShellIntegration()
-	if len(got) != 1 {
-		t.Fatalf("checkShellIntegration() = %+v, want one finding", got)
-	}
-	if !strings.Contains(got[0].Detail, "quiet") {
-		t.Errorf("detail = %q, want it to name the session", got[0].Detail)
-	}
-
-	// A session that has reported a command has working integration, and stays fine after the command ends,
-	// since the count is monotonic.
-	sess, ok := mgr.Get("quiet")
-	if !ok {
-		t.Fatal("session was not adopted")
-	}
-	setBusy(sess, true, "make")
-	setBusy(sess, false, "")
-	if got := mgr.checkShellIntegration(); len(got) != 0 {
-		t.Errorf("checkShellIntegration() = %+v, want nothing once a command has been reported", got)
+			if tt.output != "" {
+				sess.processChunk([]byte(tt.output), 0)
+			}
+			if got := mgr.checkShellIntegration(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("checkShellIntegration() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -231,5 +247,54 @@ func TestCheckSessionBacklog(t *testing.T) {
 	}
 	if strings.Contains(got[0].Detail, "expiry is not configured") {
 		t.Errorf("detail = %q, want it to reflect the configured expiry", got[0].Detail)
+	}
+}
+
+// A shell's integration is remembered across a server restart, so an idle one is not reported.
+//
+// Adoption replays only the shim's retained window, and a shell idle since its last prompt has no marker
+// left in it. Two sessions on a live install, with 2 and 22 commands in their logs, were reported as having
+// no integration after a restart.
+func TestCheckShellIntegrationSurvivesARestart(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// Prints nothing, standing in for a shell whose markers have left the window.
+	rec := startShimInRuntimeDir(t, dirs, "idle", "sleep 5")
+	rec.PromptSeen = true
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if got := mgr.checkShellIntegration(); len(got) != 0 {
+		t.Errorf("checkShellIntegration() = %+v, want nothing for a shell recorded as integrated", got)
+	}
+}
+
+// A shell's first marker is written to the store, which is what the next server reads it back from.
+func TestPromptMarkerIsRecorded(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// Delayed, so the marker arrives through the pump rather than in the adoption's replay.
+	rec := startShimInRuntimeDir(t, dirs, "prompt", `sleep 0.5; printf '\033]133;A\007$ '; sleep 5`)
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := st.Get(ctx, rec.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if got.PromptSeen {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PromptSeen = false 5s after the shell sent a prompt marker, want it recorded")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

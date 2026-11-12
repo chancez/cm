@@ -210,9 +210,16 @@ type Session struct {
 	// Stored for the reason Reported is: it arrives by RPC, so the store is the only copy. It also could not
 	// be recovered from the persisted log if it did arrive in the output, since a program declares once at
 	// startup and the log has trimmed that away long before a reboot.
-	Resume    ResumeCommand
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Resume ResumeCommand
+	// PromptSeen records that the shell has sent an OSC 133 marker, so a restarted server knows it has
+	// integration loaded.
+	//
+	// The markers are in the output, but adoption replays only the shim's retained window, and a shell
+	// idle since its last prompt has none left in it. Two sessions on a live install were reported by
+	// `cm doctor` as having no integration after a server restart, with 2 and 22 commands in their logs.
+	PromptSeen bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // BackupPath names the snapshot taken before migrating a database off a given schema version.
@@ -515,5 +522,9 @@ var migrations = []string{
 	`
 	ALTER TABLE sessions ADD COLUMN resume_argv TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sessions ADD COLUMN resume_frame TEXT NOT NULL DEFAULT '';
+	`,
+	// Whether the shell has ever sent an OSC 133 marker. See Session.PromptSeen.
+	`
+	ALTER TABLE sessions ADD COLUMN prompt_seen INTEGER NOT NULL DEFAULT 0;
 	`,
 }

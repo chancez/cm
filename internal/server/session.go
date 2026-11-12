@@ -437,10 +437,13 @@ type Session struct {
 	// test, which the non-blocking send tolerates.
 	resumeChanged chan struct{}
 	// promptSeen records that the shell has sent an OSC 133 marker, so a revive knows it has started its
-	// line editor. Guarded by mu, unlike the tracker it is copied from, which only the pump touches.
+	// line editor and `cm doctor` knows the shell has integration loaded. Guarded by mu, unlike the tracker it is copied from, which only the pump touches.
 	promptSeen bool
 	// promptNoted is the pump's own copy of promptSeen, so it takes the lock once rather than per chunk.
 	promptNoted bool
+	// promptSeenChanged is signalled when promptSeen becomes true, so the manager can record it in the store
+	// off the pump. Nil in a Session literal built by a test, which the non-blocking send tolerates.
+	promptSeenChanged chan struct{}
 
 	// closed guards teardown, which both the pump ending and an explicit Close can reach.
 	closeOnce sync.Once
@@ -690,6 +693,12 @@ func withRecoveredCommands(
 		s.command = cmds.State()
 		s.baseCommand = s.command
 		s.reported = summarize(&s.records)
+		// What the pump would conclude from its first chunk, settled now so it does not wait for one: an
+		// idle shell may print nothing for hours.
+		if cmds.Seen() {
+			s.promptSeen = true
+			s.promptNoted = true
+		}
 	}
 }
 
@@ -782,6 +791,11 @@ func newSession(
 		// From the record, so a declaration survives a server restart and reaches a revived session.
 		resume:        rec.Resume,
 		resumeChanged: make(chan struct{}, 1),
+		// From the record for the same reason: an idle shell adopted by a restarted server has no marker
+		// left in the replayed window to say it has integration.
+		promptSeen:        rec.PromptSeen,
+		promptNoted:       rec.PromptSeen,
+		promptSeenChanged: make(chan struct{}, 1),
 	}
 
 	// Before the subscription, so nothing derived can land after the live stream has started.
@@ -935,6 +949,10 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 		s.mu.Lock()
 		s.promptSeen = true
 		s.mu.Unlock()
+		select {
+		case s.promptSeenChanged <- struct{}{}:
+		default:
+		}
 	}
 	if changed {
 		s.noteCommand()
