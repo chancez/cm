@@ -333,3 +333,11 @@ func (s *SessionTerminal) KittyKeyboardProtocol() bool {
 	}
 	return flags != 0
 }
+
+// ResetModes puts the model's modes back to a new terminal's. See Terminal.ResetModes.
+func (s *SessionTerminal) ResetModes() (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "resetting the terminal model's modes") }()
+	return s.term.ResetModes()
+}

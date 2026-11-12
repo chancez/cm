@@ -33,11 +33,13 @@ type fakeTerminal struct {
 	continuation    []byte
 	continuationErr error
 	closed          bool
-	rows            uint16
-	cols            uint16
-	pending         [][]byte
-	title           string
-	pwd             string
+	// modesReset counts ResetModes calls.
+	modesReset int
+	rows       uint16
+	cols       uint16
+	pending    [][]byte
+	title      string
+	pwd        string
 	// restoreRows and restoreCols are the size the model held the last time Restore was called, and
 	// restoredAt counts the calls. Together they answer "was the screen serialized at the size the
 	// client will display it at", which is the ordering a snapshot depends on.
@@ -199,6 +201,13 @@ func (f *fakeTerminal) KittyKeyboardProtocol() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.kittyKeyboard
+}
+
+func (f *fakeTerminal) ResetModes() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modesReset++
+	return nil
 }
 
 func (f *fakeTerminal) Pwd() string {

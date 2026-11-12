@@ -144,6 +144,13 @@ func seedFromPersistedLog(
 		return fmt.Errorf("replaying persisted log: %w", err)
 	}
 
+	// The program the log ends in is gone, without the teardown that would have undone its modes. Left
+	// set, nvim's kitty keyboard flags reached every client attaching, so kitty sent ctrl-c as CSI 99;5u
+	// and the new zsh read it as typing. Its alternate screen goes too. See vt.Terminal.ResetModes.
+	if err := term.ResetModes(); err != nil {
+		return fmt.Errorf("resetting modes after replay: %w", err)
+	}
+
 	// Anything the emulator generated in response is discarded. Those are answers to queries the
 	// program asked before the reboot, and that program no longer exists; delivering them to a new
 	// shell would inject stray input.

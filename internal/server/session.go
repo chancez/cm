@@ -608,6 +608,9 @@ type Terminal interface {
 	// event in that encoding is one something asked for rather than one left over from a program that
 	// has exited.
 	KittyKeyboardProtocol() bool
+	// ResetModes puts every mode back to a new terminal's, keeping the content. For a model whose
+	// program died without undoing its own, which is what a revived session's replayed log leaves.
+	ResetModes() error
 	// Plain, VT, ANSI, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)

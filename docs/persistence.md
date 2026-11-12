@@ -197,6 +197,20 @@ Query responses the emulator generates during replay are dropped. They answer qu
 asked before the reboot, and that program no longer exists, so delivering them would inject stray
 input into a new shell.
 
+The program's terminal modes are reset after the replay, for the same reason. A reboot kills it without
+its teardown, so a log ending inside nvim left the model on the alternate screen with kitty keyboard flags
+3, focus and mouse reporting on. Every client attaching was put in those modes: kitty sent ctrl-c as
+`CSI 99;5u` plus a release event, and the new zsh read both as typing. `vt.Terminal.ResetModes` sets every
+mode to a new terminal's value, empties both keyboard stacks, and resets the scroll region, pen, charset,
+modifyOtherKeys and cursor style. Defaults come from a fresh terminal rather than a list of known
+offenders, which is tmux's approach on `respawn-pane` (`screen_reinit`).
+
+The alternate screen is left, and the dead program's last screen with it. kitty's save-on-logout, iTerm2
+restoring into a new process, and tmux's respawn all do the same and show the main screen. Flattening it
+onto the main screen was considered: zellij and tmux-resurrect end up there, because they capture whichever
+screen is active rather than by choice. Rejected because a frozen editor above a prompt reads as a live
+one, and a shell left drawing on the alternate screen has no scrollback.
+
 `on_restore = "none"` runs a holding process rather than nothing, because the rest of cm assumes a
 session has a pty and a child: without one there is nothing to attach to, resize, or read from.
 

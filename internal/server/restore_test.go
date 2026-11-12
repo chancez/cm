@@ -257,3 +257,69 @@ func TestRevivedSessionServesEveryClientFromItsModel(t *testing.T) {
 		}
 	}
 }
+
+// A program the reboot killed never undid its terminal modes, and the seed must not hand them to the
+// fresh shell. Replayed as is, a log ending inside nvim put an attaching client in kitty keyboard flags 3,
+// so kitty encoded ctrl-c as CSI 99;5u with release events, zsh read the bytes as typing, and the session
+// took no keystroke it understood. Focus and mouse reports arrived as typing the same way.
+//
+// The seeded model must serialize exactly as one that only ever held the same content.
+func TestSeedFromPersistedLogResetsModesOfTheDeadProgram(t *testing.T) {
+	const shell = "$ prog\r\n"
+	// Modes that change no cell, so the clean model can be fed the content alone.
+	const inputModes = "\x1b[?1004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?2048h" +
+		"\x1b[>3u\x1b[?1h\x1b=\x1b[?25l\x1b[4h"
+	tests := []struct {
+		name  string
+		log   string
+		clean string
+	}{
+		{
+			// nvim, the case that was hit. Its screen goes with it: nothing is left running to own the
+			// alternate screen, and a shell drawing there has no scrollback.
+			name:  "alternate screen",
+			log:   shell + "\x1b[?1049h" + inputModes + "\x1b[3;20r\x1b[2J\x1b[HNVIM\x1b[1;31m",
+			clean: shell,
+		},
+		{
+			// A program drawing inline, such as claude, keeps its content and loses its modes.
+			name:  "main screen",
+			log:   shell + inputModes + "INLINE\x1b7\x1b[3;20r\x1b8\x1b[1;31m",
+			clean: shell + "INLINE",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := seedLog(t, "session.log", tt.log, seqlog.FileLimits{})
+			seeded, err := vt.NewSessionTerminal(24, 80, 0)
+			if err != nil {
+				t.Fatalf("NewSessionTerminal() error = %v", err)
+			}
+			defer seeded.Close()
+			if err := seedFromPersistedLog(wholeLog(t, path), seeded, nil, seqlog.FileLimits{}); err != nil {
+				t.Fatalf("seedFromPersistedLog() error = %v", err)
+			}
+
+			clean, err := vt.NewSessionTerminal(24, 80, 0)
+			if err != nil {
+				t.Fatalf("NewSessionTerminal() error = %v", err)
+			}
+			defer clean.Close()
+			if err := clean.Write([]byte(tt.clean)); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+
+			got, err := seeded.Restore()
+			if err != nil {
+				t.Fatalf("Restore() error = %v", err)
+			}
+			want, err := clean.Restore()
+			if err != nil {
+				t.Fatalf("Restore() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("seeded model restores as\n%q\nwant\n%q", got, want)
+			}
+		})
+	}
+}
