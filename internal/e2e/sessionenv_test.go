@@ -177,19 +177,19 @@ func TestInheritingDoesNotWriteTheClientEnvironmentToDisk(t *testing.T) {
 func TestSessionForwardsAnArbitraryClientVariable(t *testing.T) {
 	skipIfShort(t)
 
-	e := newEnvWithServerEnv(t, "SERVER_ONLY=from-server")
+	// TZ because it is on sessionenv.ServerKeep, and a name the harness's clients do not otherwise have.
+	e := newEnvWithServerEnv(t, "TZ=from-server", "SERVER_ONLY=from-server")
 	e.extraEnv = []string{"CLIENT_VAR=from-client"}
 
 	got := e.mustRun("run", "--", "/bin/sh", "-c",
-		"printf 'client=[%s] server=[%s]' \"$CLIENT_VAR\" \"$SERVER_ONLY\"")
+		"printf 'client=[%s] tz=[%s] server=[%s]' \"$CLIENT_VAR\" \"$TZ\" \"$SERVER_ONLY\"")
 
-	if !strings.Contains(got, "client=[from-client]") {
-		t.Errorf("session did not get the client's variable: %q", got)
-	}
-	// The server's own environment is still the floor for names the client lacks, so a session
-	// created by something with almost no environment still works.
-	if !strings.Contains(got, "server=[from-server]") {
-		t.Errorf("session lost the server's fallback value: %q", got)
+	// The server's allow-listed environment is still the floor for names the client lacks, so a
+	// session created by something with almost no environment still works. Nothing else of the
+	// server's is: see TestSessionDoesNotInheritTheServersEnvironment.
+	want := "client=[from-client] tz=[from-server] server=[]"
+	if !strings.Contains(got, want) {
+		t.Errorf("session environment = %q, want %q", got, want)
 	}
 }
 

@@ -83,21 +83,30 @@ close to cm's `DefaultCapture`, applied on attach. `PATH` is handled outside tha
 is not on the server's path. tmux scopes the override to unattached clients, and falls back to
 `_PATH_DEFPATH` (`/usr/bin:/bin`) when nothing supplies one.
 
-cm diverges on exactly that point, and a bug is what decided it. A cm server drops every variable the
-capture list covers, plus `CM_SESSION`, before it can spawn anything, rather than keeping its own
-`environ` as a baseline. A shim inherits the server's environment with the creating client's layered over
-it, so a name no client has is never overwritten: a server started from a shell inside an SSH session gave
-every session created afterwards `SSH_CLIENT`, `SSH_CONNECTION` and `SSH_TTY`, and prompts printed
-`user@host` in windows and splits that had never been near SSH. `SSH_AUTH_SOCK` in those same sessions was
-correct, which is the tell, because a local client has one to overwrite it with. It also survived every
-server restart, since a restart is spawned from a shell that has the values by then, and reinstalling the
-previous binary changed nothing: the running process is what carries them.
+cm diverges on exactly that point, and two bugs are what decided it. A cm server keeps an allow-list of
+its own environment, `sessionenv.ServerKeep`, and drops everything else before it can spawn anything,
+rather than keeping its own `environ` as a baseline. The list is what the server and shim read themselves
+and what a shell needs when no local client supplies it: `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`,
+`TMPDIR`, `TZ`, the locale, the XDG directories, and cm's own `CM_` variables less the ones describing a
+client or a session.
+
+A shim inherits the server's environment with the creating client's layered over it, so a name no client
+has is never overwritten. A server started from a shell inside an SSH session gave every session created
+afterwards `SSH_CLIENT`, `SSH_CONNECTION` and `SSH_TTY`, and prompts printed `user@host` in windows and
+splits that had never been near SSH. `SSH_AUTH_SOCK` in those same sessions was correct, which is the tell,
+because a local client has one to overwrite it with. A server restarted by `cm upgrade` run from a claude
+session held that session's `CLAUDECODE`, `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`, and every session
+created over the next 14 hours ran claude as the child of one that had exited, which stopped it saving
+transcripts. Both survive a server restart, since a restart is spawned from a shell that has the values by
+then, and reinstalling the previous binary changes nothing: the running process is what carries them.
+
+Dropping the capture list instead, which describes a client's terminal, fixed the first and could not have
+caught the second, and the next one will have a name on no list either. That is why the server's side is an
+allow-list while the client's side, `NoInherit`, stays a denylist: a session is meant to resemble the client
+that created it, and the server is not meant to resemble anything.
 
 Dropping them in the server rather than filtering them when spawning a shim was the choice, because it
-also covers a `cm server` started by hand and makes `ps eww` on the server honest. What makes the capture
-list the right list to use is that it already answers the same question from the other side: those are the
-variables that describe a client rather than the machine, which is why they follow a client in and why a
-long-lived process must not hold them.
+also covers a `cm server` started by hand and makes `ps eww` on the server honest.
 
 It is tempting to read the rest as tmux confirming cm's design, and worth being careful about how much it
 confirms, because the two servers are not equivalent. tmux's server is explicit and plural: it has

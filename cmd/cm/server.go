@@ -368,26 +368,27 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 		logger.Warn("could not clear the server-stopped marker", "error", err)
 	}
 
-	// A server must hold no client's values, because every shim inherits its environment and the creating
-	// client's values are layered *over* that: a name the client does not have is never overwritten, so it
-	// reaches the shell. See sessionenv.ClientValues for the incident, where a server started from a shell
-	// inside an SSH session gave every later session SSH_CLIENT and a prompt that read as a remote login.
+	// A server keeps only an allow-list of its own environment, because every shim inherits it and the
+	// creating client's values are layered *over* that: a name the client does not have is never
+	// overwritten, so it reaches the shell. See sessionenv.ServerKeep for the two incidents, an SSH login's
+	// SSH_CLIENT and a claude session's CLAUDECODE, each reaching every session created afterwards.
 	//
 	// Dropped from this process rather than filtered when spawning a shim, which covers the same leak
 	// through `cm server` started by hand, and makes `ps eww` on the server tell the truth. Nothing here
-	// wants these: the server has no terminal of its own and belongs to no session.
+	// wants the rest: the server has no terminal of its own and belongs to no session.
 	//
 	// Logged because this is invisible otherwise. Diagnosing it took reading the server's own environment
 	// out of ps, since no log line and no `cm` command reported what a session had inherited or from where.
-	if dropped := sessionenv.ClientValues(os.Environ(), cfg.EnvMatcher()); len(dropped) > 0 {
+	// Names only: the values are the started-from process's, and can be credentials.
+	if dropped := sessionenv.ServerDrops(os.Environ()); len(dropped) > 0 {
 		for _, name := range dropped {
 			if err := os.Unsetenv(name); err != nil {
 				// Worth reporting rather than ignoring: leaving one behind is the whole bug, and the
 				// server carries on either way.
-				logger.Warn("could not drop an inherited client value", "var", name, "error", err)
+				logger.Warn("could not drop an inherited variable", "var", name, "error", err)
 			}
 		}
-		logger.Info("dropped client values inherited from the process that started this server",
+		logger.Info("dropped variables inherited from the process that started this server",
 			"vars", strings.Join(dropped, " "))
 	}
 
