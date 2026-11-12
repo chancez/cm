@@ -437,7 +437,7 @@ type Session struct {
 	// test, which the non-blocking send tolerates.
 	resumeChanged chan struct{}
 	// promptSeen records that the shell has sent an OSC 133 marker, so a revive knows it has started its
-	// line editor. Guarded by mu, unlike the tracker it is copied from, which only the pump touches.
+	// line editor and `cm doctor` knows the shell has integration loaded. Guarded by mu, unlike the tracker it is copied from, which only the pump touches.
 	promptSeen bool
 	// promptNoted is the pump's own copy of promptSeen, so it takes the lock once rather than per chunk.
 	promptNoted bool
