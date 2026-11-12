@@ -19,6 +19,10 @@ import (
 // SSH, and it survived server restarts and reinstalling the previous binary, because the running process
 // is what carried it.
 //
+// The second, which the capture list could not have caught: a server restarted by `cm upgrade` from inside a
+// claude session held CLAUDECODE and CLAUDE_CODE_SESSION_ID, and claude run in any later session behaved as a
+// child of one that had exited. agentSession stands for every name nobody has listed yet.
+//
 // Three processes are needed to see it at all: the leak is between the server's environment and a shell
 // two spawns away, and a unit test on the composing function cannot show that the server contributes to
 // it. newEnvWithServerEnv gives the server values the clients do not have, which is the only way to tell
@@ -27,13 +31,15 @@ import (
 // Values are matched rather than names, and are ones that could not come from anywhere else: the test
 // machine may legitimately have SSH_AUTH_SOCK, so asserting no variable starts with SSH_ would fail for
 // a reason that is not this bug.
-func TestSessionDoesNotInheritTheServersClientValues(t *testing.T) {
+func TestSessionDoesNotInheritTheServersEnvironment(t *testing.T) {
 	skipIfShort(t)
 
 	const (
 		fakeClient = "203.0.113.9 51174 22"
 		fakeTTY    = "/dev/ttys999"
 		fakeTerm   = "ansi-from-the-server"
+		// On no list anywhere, so only an allow-list keeps it out.
+		agentSession = "agent-session-only-the-server-had"
 	)
 	e := newEnvWithServerEnv(t,
 		"SSH_CLIENT="+fakeClient,
@@ -42,6 +48,8 @@ func TestSessionDoesNotInheritTheServersClientValues(t *testing.T) {
 		// TERM as well, since it is the same leak and the one every session has: a server's TERM would
 		// otherwise decide what a shell believes its terminal is.
 		"TERM="+fakeTerm,
+		"CLAUDE_CODE_SESSION_ID="+agentSession,
+		"E2E_UNLISTED_AGENT_VAR="+agentSession,
 	)
 
 	dump := filepath.Join(e.state, "session-env")
@@ -60,7 +68,7 @@ func TestSessionDoesNotInheritTheServersClientValues(t *testing.T) {
 	})
 	body := e.readFileOrEmpty(dump)
 
-	for _, leaked := range []string{fakeClient, fakeTTY, fakeTerm} {
+	for _, leaked := range []string{fakeClient, fakeTTY, fakeTerm, agentSession} {
 		if strings.Contains(body, leaked) {
 			t.Errorf("session environment contains %q, which only the server had:\n%s", leaked, body)
 		}

@@ -246,8 +246,8 @@ bug to fix; kitty's own ssh kitten is what solves it for anyone who needs it.
 One variable goes the other way, and it is the only thing cm supplies rather than forwards: `CM_CLIENT_HOST`
 holds the name of the machine whose client created or last attached the session, and is set only when that
 machine is not the one the session is on. Without it a remote shell has no way to know it is being watched
-from somewhere else, since the server unsets `SSH_CLIENT`, `SSH_CONNECTION` and `SSH_TTY` from itself so a
-shim cannot inherit them, and the symptom is a prompt on `work` that reads exactly like a local one.
+from somewhere else, since the server keeps only an allow-list of its own environment, without `SSH_CLIENT`,
+`SSH_CONNECTION` or `SSH_TTY`, so a shim cannot inherit them, and the symptom is a prompt on `work` that reads exactly like a local one.
 
 A claim rather than an observation, which is the opposite of `SSH_CONNECTION`. sshd reports the socket it
 accepted because it cannot trust what a client says about itself; cm's client is the user's own process, so a
@@ -275,8 +275,8 @@ leave no way back to the full name.
 It is in `sessionenv.DefaultCapture`, which buys two things beyond being recorded. `cm get-env` retires it
 when the same session is attached on the host itself, through the same removal machinery that retires a dead
 `KITTY_LISTEN_ON`. And a server started from a shell inside a remote session drops it instead of handing it
-to every session created afterwards, which is the `SSH_CLIENT` incident in `sessionenv.ClientValues` with a
-different name on it.
+to every session created afterwards, even though `sessionenv.ServerKeep` keeps cm's own prefix: that is the
+`SSH_CLIENT` incident with a different name on it.
 
 `Open.inside_session` is not sent to a remote server. It names a session on the *local* one, so remotely it
 resolves to nothing or, worse, matches an unrelated session and stops it attributing its own output to

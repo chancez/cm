@@ -298,13 +298,14 @@ func TestCrossHostOmitsAnUnknownWatchingMachine(t *testing.T) {
 // The SSH_CLIENT incident with a different name on it: a server started from a shell inside a remote session
 // inherits this, every shim inherits the server's environment, and a name the creating client does not have
 // is never overwritten. Every session on that host would then claim to be watched from a machine that has
-// never seen it. Membership of DefaultCapture is what makes this true, so this is the guard on that.
-func TestClientValuesDropsTheWatchingMachine(t *testing.T) {
+// never seen it. ServerKeep matches it by cm's prefix, so membership of DefaultCapture is what drops it, and
+// this is the guard on that.
+func TestServerDropsTheWatchingMachine(t *testing.T) {
 	environ := []string{"PATH=/usr/bin", ClientHostVar + "=laptop.local"}
-	got := ClientValues(environ, NewMatcher(DefaultCapture))
+	got := ServerDrops(environ)
 	want := []string{ClientHostVar}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ClientValues() = %v, want %v", got, want)
+		t.Errorf("ServerDrops() = %v, want %v", got, want)
 	}
 }
 
@@ -403,34 +404,53 @@ func TestNoInheritDoesNotOvermatch(t *testing.T) {
 	}
 }
 
-func TestClientValues(t *testing.T) {
+func TestServerDrops(t *testing.T) {
 	environ := []string{
+		// Kept: what the server and shim read, and what a shell needs when no client supplies it.
+		"PATH=/usr/bin",
+		"HOME=/home/someone",
+		"SHELL=/bin/zsh",
+		"TMPDIR=/tmp/someone",
+		"LANG=en_US.UTF-8",
+		"LC_CTYPE=UTF-8",
+		"XDG_STATE_HOME=/home/someone/.state",
+		"CM_RUNTIME_DIR=/tmp/cmdev",
+		"CM_CONFIG=/nonexistent.toml",
+		// The incidents: a terminal, an SSH login, and a claude session that ran `cm upgrade`.
 		"TERM=xterm-kitty",
 		"KITTY_PID=123",
 		"SSH_CLIENT=192.0.2.1 51174 22",
-		// Kept: the machine's, not a client's, and a shim with no PATH cannot start a shell.
-		"PATH=/usr/bin",
-		"HOME=/home/someone",
-		// Dropped without being in the capture list, since it names one session.
-		"CM_SESSION=work",
+		"CLAUDECODE=1",
+		"CLAUDE_PID=15967",
+		"CLAUDE_CODE_SESSION_ID=912494eb-543f-4a17-8f3c-66774fae6503",
+		// A name nobody has listed anywhere, which is the point of an allow-list.
+		"SOME_AGENT_TOKEN=abc",
+		// cm's prefix is kept, except where the name describes a client or a session.
+		"CM_SESSION=@work",
+		"CM_REMOTE=ssh://work",
+		"CM_RESUME_FROM_SEQ=78714:37",
 		"malformed-no-equals",
 		"=novalue",
 		// Listed twice, which os.Environ can produce, and reported once.
 		"TERM=xterm-256color",
 	}
 
-	got := ClientValues(environ, NewMatcher([]string{"TERM", "KITTY_*", "SSH_*"}))
-	want := []string{"CM_SESSION", "KITTY_PID", "SSH_CLIENT", "TERM"}
+	got := ServerDrops(environ)
+	want := []string{
+		"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID",
+		"CM_REMOTE", "CM_RESUME_FROM_SEQ", "CM_SESSION",
+		"KITTY_PID", "SOME_AGENT_TOKEN", "SSH_CLIENT", "TERM",
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ClientValues() = %v, want %v", got, want)
+		t.Errorf("ServerDrops() = %v, want %v", got, want)
 	}
 }
 
-// Nothing to drop is the ordinary case, and it must not be reported as something to do: the server
-// logs the names it dropped, and a line listing none would be noise on every start.
-func TestClientValuesEmptyWhenNothingMatches(t *testing.T) {
-	got := ClientValues([]string{"PATH=/usr/bin", "HOME=/home/someone"}, NewMatcher([]string{"TERM"}))
+// Nothing to drop must not be reported as something to do: the server logs the names it dropped, and a
+// line listing none would be noise on every start.
+func TestServerDropsEmptyWhenEverythingIsKept(t *testing.T) {
+	got := ServerDrops([]string{"PATH=/usr/bin", "HOME=/home/someone"})
 	if len(got) != 0 {
-		t.Errorf("ClientValues() = %v, want nothing", got)
+		t.Errorf("ServerDrops() = %v, want nothing", got)
 	}
 }

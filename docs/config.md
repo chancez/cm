@@ -452,7 +452,9 @@ Controls which environment variables follow a client into a session.
 These configure the list captured on **every attach** and served by `cm get-env` to a shell that is
 already running. They do not affect what a new session's shell is born with: that is the environment
 of the client that created it, less the dynamic linker variables (`LD_PRELOAD`, `LD_AUDIT`,
-`LD_LIBRARY_PATH`, and the `DYLD_*` family), and it is not configurable.
+`LD_LIBRARY_PATH`, and the `DYLD_*` family), and it is not configurable. A name the client does not have
+comes from the server, which keeps only `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `TMPDIR`, `TZ`, the
+locale, the XDG directories and cm's own variables from whatever started it.
 
 Two consequences worth stating. A client's secrets reach the sessions it creates, exactly as they
 reach a terminal split started from the same shell; nothing is filtered by name. But nothing

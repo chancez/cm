@@ -14,6 +14,7 @@ package sessionenv
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -68,9 +69,9 @@ var DefaultCapture = []string{
 	// later attached on the host itself is no longer being watched from anywhere else, and Compute emits
 	// a removal for a captured name a client does not have, so `cm get-env` retires it.
 	//
-	// And ClientValues reads this list, so a server started from a shell inside a remote session drops it
-	// instead of handing it to every session created afterwards. That is the SSH_CLIENT incident this
-	// function's own comment records, with a different name on it.
+	// And ServerDrops reads this list, so a server started from a shell inside a remote session drops it
+	// even though ServerKeep matches cm's prefix. Otherwise every session created afterwards would claim
+	// to be watched from another machine.
 	ClientHostVar,
 }
 
@@ -79,7 +80,7 @@ var DefaultCapture = []string{
 //
 // It exists because a shell on another host has no way to know it is being watched from somewhere else, and
 // a prompt is the main thing that wants to know: CrossHostVars sends only the terminal and the locale, and a
-// server unsets SSH_CLIENT, SSH_CONNECTION and SSH_TTY from itself so a shim cannot inherit them. The
+// server keeps none of SSH_CLIENT, SSH_CONNECTION and SSH_TTY, so a shim cannot inherit them. The
 // symptom was `cm attach --remote ssh://work` giving a prompt indistinguishable from a local one.
 //
 // Set only when a session is reached across machines, so presence alone is the signal and a prompt needs no
@@ -288,26 +289,62 @@ func Capture(environ []string, m *Matcher) map[string]string {
 	return out
 }
 
-// ClientValues returns the names in environ that describe a client rather than the machine.
+// ServerKeep lists the variables a server keeps from the process that started it. Everything else is
+// dropped.
 //
-// For stripping them from a process that outlives any one client, which means the server. The capture
-// list already decides which variables belong to a client and its terminal, so this reuses it rather
-// than keeping a second list that could disagree with it. CM_SESSION is added on top, because it names
-// one session, which is client state by definition.
+// An allow-list, because a server outlives the process that started it and every shim inherits what it
+// holds. A shim layers the creating client's values *over* the server's, so a name the client does not
+// have is never overwritten and reaches the shell. A server is started by whatever ran the first cm
+// command after a boot, a `cm upgrade`, or a restart, and that process has no reason to resemble a fresh
+// login.
 //
-// The incident: a server started from a shell inside an SSH session held SSH_CLIENT, SSH_CONNECTION and
-// SSH_TTY. Every shim inherits the server's environment and has the creating client's values layered
-// *over* it, so a name the client does not have is never overwritten and survives into the shell. Every
-// session created afterwards looked like an SSH login, and prompts printed user@host, including in
-// splits of sessions that had never been near SSH. SSH_AUTH_SOCK in the same session was correct, which
-// is the tell: the client had one to overwrite it with, and no local client has an SSH_CLIENT.
+// Not a denylist, because the next leak never has a name on one. A server started from a shell inside an
+// SSH session held SSH_CLIENT, SSH_CONNECTION and SSH_TTY, and every session created afterwards looked
+// like an SSH login. Dropping DefaultCapture fixed that one; then a server restarted by `cm upgrade` from
+// a claude session held CLAUDECODE, CLAUDE_PID and CLAUDE_CODE_SESSION_ID, none of them terminal state,
+// and every session created over the next 14 hours ran claude as a child of an agent that had exited.
+// Claude stopped saving transcripts in them. Both survive a server restart, since a restart is spawned
+// from a shell that has the values by then.
 //
-// It also survived every server restart, because a restart is spawned from a shell that has the values
-// by then, and reinstalling the previous binary changed nothing, since the running process is what
-// carries them.
+// What is kept is what the server and shim read themselves, and what a shell needs when no client is on
+// the same machine to supply it: a session created over --remote gets only CrossHostVars, so the rest of
+// its environment is this list. PATH because a shim runs ps and pgrep. HOME, TMPDIR and the XDG
+// directories because they locate cm's config, state and runtime directory. SHELL because it is the
+// default command.
+//
+// A trailing "*" matches by prefix.
+var ServerKeep = []string{
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"SHELL",
+	"PATH",
+	"TMPDIR",
+	"TZ",
+	"LANG",
+	"LC_*",
+	"XDG_CONFIG_HOME",
+	"XDG_CONFIG_DIRS",
+	"XDG_DATA_HOME",
+	"XDG_DATA_DIRS",
+	"XDG_STATE_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_RUNTIME_DIR",
+	// cm's own: the runtime, state and config overrides, and the test hooks an instrumented build reads.
+	// The ones describing a client or a session are removed below, since a prefix cannot exclude them.
+	paths.Env("*"),
+}
+
+// ServerDrops returns the names in environ a server must not hold. See ServerKeep.
+//
+// cm's variables that describe one client rather than the machine are dropped even though ServerKeep
+// matches them by prefix: CM_SESSION names a session, and the cm names in DefaultCapture and NoInherit
+// are already marked as belonging to a client.
 //
 // Names are returned sorted and deduplicated, so a caller can log them and a test can assert on them.
-func ClientValues(environ []string, m *Matcher) []string {
+func ServerDrops(environ []string) []string {
+	keep := NewMatcher(ServerKeep)
+	client := NewMatcher(append(slices.Clone(DefaultCapture), NoInherit...))
 	seen := make(map[string]struct{}, len(environ))
 	var names []string
 	for _, kv := range environ {
@@ -315,7 +352,7 @@ func ClientValues(environ []string, m *Matcher) []string {
 		if !ok || k == "" {
 			continue
 		}
-		if !m.Match(k) && k != paths.SessionEnv() {
+		if keep.Match(k) && !client.Match(k) && k != paths.SessionEnv() {
 			continue
 		}
 		if _, dup := seen[k]; dup {
