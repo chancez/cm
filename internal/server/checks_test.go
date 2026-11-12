@@ -249,3 +249,52 @@ func TestCheckSessionBacklog(t *testing.T) {
 		t.Errorf("detail = %q, want it to reflect the configured expiry", got[0].Detail)
 	}
 }
+
+// A shell's integration is remembered across a server restart, so an idle one is not reported.
+//
+// Adoption replays only the shim's retained window, and a shell idle since its last prompt has no marker
+// left in it. Two sessions on a live install, with 2 and 22 commands in their logs, were reported as having
+// no integration after a restart.
+func TestCheckShellIntegrationSurvivesARestart(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// Prints nothing, standing in for a shell whose markers have left the window.
+	rec := startShimInRuntimeDir(t, dirs, "idle", "sleep 5")
+	rec.PromptSeen = true
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if got := mgr.checkShellIntegration(); len(got) != 0 {
+		t.Errorf("checkShellIntegration() = %+v, want nothing for a shell recorded as integrated", got)
+	}
+}
+
+// A shell's first marker is written to the store, which is what the next server reads it back from.
+func TestPromptMarkerIsRecorded(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	// Delayed, so the marker arrives through the pump rather than in the adoption's replay.
+	rec := startShimInRuntimeDir(t, dirs, "prompt", `sleep 0.5; printf '\033]133;A\007$ '; sleep 5`)
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err := st.Get(ctx, rec.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if got.PromptSeen {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PromptSeen = false 5s after the shell sent a prompt marker, want it recorded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

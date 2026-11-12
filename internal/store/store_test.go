@@ -46,6 +46,7 @@ func sampleSession(id string) Session {
 		Cols:       120,
 		Env:        map[string]string{"KITTY_LISTEN_ON": "unix:/tmp/kitty-1", "TERM": "xterm-kitty"},
 		Tags:       map[string]string{"project": "cm", "role": "reviewer", "review": ""},
+		PromptSeen: true,
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
 	}
 }
@@ -730,5 +731,31 @@ func TestApplyRoundTripsAResumeCommand(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Resume, ResumeCommand{}) {
 		t.Errorf("Resume = %+v, want the zero value", got.Resume)
+	}
+}
+
+// A shell's first OSC 133 marker is recorded, so a restarted server does not report the session to `cm
+// doctor` as having no integration.
+func TestApplyRecordsPromptSeen(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rec := sampleSession("prompt")
+	rec.PromptSeen = false
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := s.Apply(ctx, "prompt", Update{PromptSeen: new(true)}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	got, err := s.Get(ctx, "prompt")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := rec
+	want.PromptSeen = true
+	want.UpdatedAt = got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Get() = %+v\nwant %+v", got, want)
 	}
 }

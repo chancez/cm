@@ -14,7 +14,7 @@ import (
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
-	reported_at, resume_argv, resume_frame`
+	reported_at, resume_argv, resume_frame, prompt_seen`
 
 // Create inserts a session record.
 //
@@ -32,7 +32,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
@@ -40,6 +40,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
+		sess.PromptSeen,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -132,6 +133,9 @@ type Update struct {
 	// Resume replaces the declared resume command. A non-nil pointer to the zero value clears it, which is
 	// what the program exiting does.
 	Resume *ResumeCommand
+	// PromptSeen records that the shell has sent an OSC 133 marker. Only ever set to true: a shell does
+	// not unload its integration.
+	PromptSeen *bool
 }
 
 // ResumeCommand is what a program declared it should be restarted with.
@@ -228,6 +232,9 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 		// frame would be dropped when the wrong program exits.
 		add("resume_argv", encodeArgv(u.Resume.Argv))
 		add("resume_frame", u.Resume.Frame)
+	}
+	if u.PromptSeen != nil {
+		add("prompt_seen", *u.PromptSeen)
 	}
 	if len(sets) == 0 {
 		return nil
@@ -331,6 +338,7 @@ func scanSession(sc scanner) (Session, error) {
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
+		&sess.PromptSeen,
 	)
 	if err != nil {
 		return Session{}, err

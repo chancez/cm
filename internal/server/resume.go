@@ -122,6 +122,31 @@ func (m *Manager) persistResume(sess *Session) {
 	}
 }
 
+// persistPromptSeen records the shell's first OSC 133 marker in the store, once.
+//
+// The store is what a restarted server reads it back from. The markers themselves are in the output, but
+// adoption replays only the shim's retained window, and an idle shell has none left in it, so without this
+// `cm doctor` reported every long-idle shell as having no integration after a server restart. stored is
+// what the record already says, which spares the write for a session adopted with it set.
+func (m *Manager) persistPromptSeen(sess *Session, stored bool) {
+	if stored {
+		return
+	}
+	// Checked first, since a session adopted with markers in its replay is already past the signal.
+	if !sess.PromptSeen() {
+		select {
+		case <-sess.promptSeenChanged:
+		case <-sess.Done():
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.store.Apply(ctx, sess.id, store.Update{PromptSeen: new(true)}); err != nil {
+		m.log.Warn("recording shell integration failed", "session", sess.id, "error", err)
+	}
+}
+
 // SetResume records or clears the command a program in a session should be restarted with.
 //
 // Only for a running session: a declaration describes the program running now, so there is nothing to

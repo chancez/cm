@@ -489,6 +489,7 @@ func (m *Manager) adopt(
 	// new window see current values rather than whatever was true at creation.
 	go m.persistMetadata(sess)
 	go m.persistResume(sess)
+	go m.persistPromptSeen(sess, rec.PromptSeen)
 
 	go m.watch(sess)
 	return sess, nil
