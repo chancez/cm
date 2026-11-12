@@ -129,8 +129,8 @@ Records also go on their own, on the schedule `expire_after` and `forget_unpersi
 ## JSON output
 
 `list`, `info`, `kill`, `forget`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
-`doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`, and
-`clients current` accept
+`doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
+`clients current`, `clients upgrade`, and `clients restart` accept
 `--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.

@@ -55,6 +55,7 @@ rather than reporting an error.`,
 		newClientsListCommand(g),
 		newClientsCurrentCommand(g),
 		newClientsUpgradeCommand(g),
+		newClientsRestartCommand(g),
 	)
 	return cmd
 }
@@ -106,80 +107,22 @@ running shims span, and the only way to change that is to end a session and star
 new one, which is a trade rather than a repair.
 
 Clients already running the server's build are skipped, so this is safe to run
-twice. --force asks them anyway, which is how to restart clients after a config
-change rather than a new build.
+twice. --force asks them anyway, which is what 'cm clients restart' does for a
+config change rather than a new build.
 
 A session with nothing attached is not an error. It reports 0 clients, because
 there is nothing to upgrade, which is what makes this safe to call over a whole
 server without checking first.`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if all || len(tagArgs) > 0 {
-				if len(args) > 0 {
-					return errors.New("--all and --tag take no session names")
-				}
-			}
-			return nil
-		},
+		Args:              noNamesWithSelectors(&all, &tagArgs),
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if all && len(tagArgs) > 0 {
-				// Refused rather than resolved, matching kill and detach: --all means every session and
-				// --tag means a subset, so one of the two was a mistake.
-				return errors.New("--all and --tag cannot be combined; --all is already every session")
-			}
-			// --current and --all are not refused together, unlike --all with --tag, and the difference is
-			// that these two narrow on different axes: --all chooses sessions, --current chooses which
-			// client within each. "the window I am using in every session" is a coherent request, and it is
-			// what a post-install hook wants when several sessions are open in several windows.
-			if err := validateSelectors(tagArgs); err != nil {
-				return err
-			}
-
-			// The calling session is the default target, like `cm detach`. A bare `cm clients upgrade` from
-			// inside a session upgrades that session's client, which is the shape a keybinding wants.
-			if len(args) == 0 && !all && len(tagArgs) == 0 {
-				name, err := sessionTarget(args, "upgrade the client of")
-				if err != nil {
-					return err
-				}
-				args = []string{name}
-			}
-			for _, name := range args {
-				if err := paths.ValidateSessionRef(name); err != nil {
-					return err
-				}
-			}
-
-			// Deliberately not ensureServer, matching detach: upgrading a client implies clients exist,
-			// and starting a server here would create one that has never heard of the session and then
-			// report it as having nothing attached.
-			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
-				names := args
-				if len(tagArgs) > 0 {
-					// A selector matching nothing is an error, unlike --all on an empty server: it is
-					// usually a typo, and exiting 0 would let a script report success having done nothing.
-					resolved, err := resolveSelector(ctx, cl, tagArgs)
-					if err != nil {
-						return err
-					}
-					names = resolved
-					if len(names) == 0 {
-						return fmt.Errorf("no sessions match %s", describeSelectors(tagArgs))
-					}
-				}
-				// --all sends no names at all, unlike detach, which enumerates them client-side. The server
-				// already treats an empty list as every session for this RPC, and enumerating here would
-				// race a session created between the list and the request: it would be missed, leaving one
-				// window on the old build after a command that said it upgraded everything.
-				resp, err := cl.UpgradeClients(ctx, &serverv1.UpgradeClientsRequest{
-					Sessions:   names,
-					Force:      force,
-					ActiveOnly: current,
-				})
-				if err != nil {
-					return err
-				}
-				return reportUpgrade(os.Stdout, resp, asJSON, current)
+			return runClientsReexec(cmd.Context(), g, args, clientsReexec{
+				all:     all,
+				force:   force,
+				current: current,
+				tagArgs: tagArgs,
+				asJSON:  asJSON,
+				verb:    "upgrade",
 			})
 		},
 	}
@@ -193,6 +136,137 @@ server without checking first.`,
 		"upgrade the clients of sessions with this tag, as key or key=value (repeatable)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
+}
+
+func newClientsRestartCommand(g *globals) *cobra.Command {
+	var (
+		asJSON  bool
+		all     bool
+		current bool
+		tagArgs []string
+	)
+	cmd := &cobra.Command{
+		Use:   "restart [session]...",
+		Short: "Restart attached clients, keeping sessions on screen",
+		Long: `Ask attached clients to re-exec and reattach, whatever build they are running.
+
+A client reads its config when it starts, so a change to [keys], log_level or
+[scrollback] reaches a window only once its client restarts. This is that restart,
+by the same mechanism as 'cm clients upgrade': the client re-execs the binary on
+disk and resumes where it stopped, so the window shows the same screen a moment
+later. It is 'cm clients upgrade --force', named for why it is run.
+
+  cm clients restart           # every client of the session I am in
+  cm clients restart --current # only the window I am typing in
+  cm clients restart work      # a specific session
+  cm clients restart --all     # every client the server has
+
+A session with nothing attached reports 0 clients rather than failing.`,
+		Args:              noNamesWithSelectors(&all, &tagArgs),
+		ValidArgsFunction: completeSessionNames(g),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runClientsReexec(cmd.Context(), g, args, clientsReexec{
+				all:     all,
+				force:   true,
+				current: current,
+				tagArgs: tagArgs,
+				asJSON:  asJSON,
+				verb:    "restart",
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&all, "all", false, "restart the clients of every session")
+	f.BoolVar(&current, "current", false,
+		"restart only the client being used, rather than every client of the session")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"restart the clients of sessions with this tag, as key or key=value (repeatable)")
+	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
+	return cmd
+}
+
+// noNamesWithSelectors refuses session names alongside --all or --tag, which already choose the sessions.
+func noNamesWithSelectors(all *bool, tagArgs *[]string) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if (*all || len(*tagArgs) > 0) && len(args) > 0 {
+			return errors.New("--all and --tag take no session names")
+		}
+		return nil
+	}
+}
+
+// clientsReexec is what `cm clients upgrade` and `cm clients restart` ask for. Both are one RPC: a
+// restart is an upgrade that skips no client for already running the server's build.
+type clientsReexec struct {
+	all     bool
+	force   bool
+	current bool
+	tagArgs []string
+	asJSON  bool
+	// verb names the action in the error a bare command gets outside a session.
+	verb string
+}
+
+func runClientsReexec(ctx context.Context, g *globals, args []string, o clientsReexec) error {
+	if o.all && len(o.tagArgs) > 0 {
+		// Refused rather than resolved, matching kill and detach: --all means every session and
+		// --tag means a subset, so one of the two was a mistake.
+		return errors.New("--all and --tag cannot be combined; --all is already every session")
+	}
+	// --current and --all are not refused together, unlike --all with --tag, and the difference is
+	// that these two narrow on different axes: --all chooses sessions, --current chooses which
+	// client within each. "the window I am using in every session" is a coherent request, and it is
+	// what a post-install hook wants when several sessions are open in several windows.
+	if err := validateSelectors(o.tagArgs); err != nil {
+		return err
+	}
+
+	// The calling session is the default target, like `cm detach`. A bare `cm clients upgrade` from
+	// inside a session upgrades that session's client, which is the shape a keybinding wants.
+	if len(args) == 0 && !o.all && len(o.tagArgs) == 0 {
+		name, err := sessionTarget(args, o.verb+" the client of")
+		if err != nil {
+			return err
+		}
+		args = []string{name}
+	}
+	for _, name := range args {
+		if err := paths.ValidateSessionRef(name); err != nil {
+			return err
+		}
+	}
+
+	// Deliberately not ensureServer, matching detach: upgrading a client implies clients exist,
+	// and starting a server here would create one that has never heard of the session and then
+	// report it as having nothing attached.
+	return withServer(ctx, g, func(ctx context.Context, cl serverv1.ServerClient) error {
+		names := args
+		if len(o.tagArgs) > 0 {
+			// A selector matching nothing is an error, unlike --all on an empty server: it is
+			// usually a typo, and exiting 0 would let a script report success having done nothing.
+			resolved, err := resolveSelector(ctx, cl, o.tagArgs)
+			if err != nil {
+				return err
+			}
+			names = resolved
+			if len(names) == 0 {
+				return fmt.Errorf("no sessions match %s", describeSelectors(o.tagArgs))
+			}
+		}
+		// --all sends no names at all, unlike detach, which enumerates them client-side. The server
+		// already treats an empty list as every session for this RPC, and enumerating here would
+		// race a session created between the list and the request: it would be missed, leaving one
+		// window on the old build after a command that said it upgraded everything.
+		resp, err := cl.UpgradeClients(ctx, &serverv1.UpgradeClientsRequest{
+			Sessions:   names,
+			Force:      o.force,
+			ActiveOnly: o.current,
+		})
+		if err != nil {
+			return err
+		}
+		return reportUpgrade(os.Stdout, resp, o.asJSON, o.current)
+	})
 }
 
 // upgradeJSON is one session's result, for --json.

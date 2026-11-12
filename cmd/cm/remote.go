@@ -453,6 +453,7 @@ var remoteCapable = map[string]bool{
 	"clients current": true,
 	"clients list":    true,
 	"clients upgrade": true,
+	"clients restart": true,
 	// Reports that describe a server, which is the one on the far end when there is one. Both dial without
 	// starting anything, so neither brings a remote server into being in order to describe it.
 	"status":  true,

@@ -127,6 +127,9 @@ A client re-execs itself and resumes where it stopped, so a window shows the sam
 moment later rather than repainting. Clients already on the server's build are skipped, so
 running it twice does nothing.
 
+`cm clients restart --all` does the same without skipping any, which is how a config change
+reaches windows that are already open.
+
 Shims are the exception and stay where they are. A shim holds the pty, so replacing one ends the
 shell in it, and only a new session gets a new shim. `cm doctor` reports how many builds the
 running shims span; on a machine with a session per window that is routinely several, and the
