@@ -151,6 +151,23 @@ and a different session is under it: a kill that re-read the selection at `y` wo
 **The cursor tracks a session, not a row.** Restoring by index moves the selection whenever anything
 older ends, which under a one second poll means it walks away while being aimed at.
 
+**A row shows the program's title, unless it only names the directory.** A title is how a running program
+says what it is doing, and none of it is in the command line: on a real server the commands read `claude
+--resume 98c5c1d5-...` and `gr` where the titles read `Release notes for 10.0.1.0` and `gr #5
+pr/chancez/serviceaccount_service`. Of 60 sessions on that server, 35 had a title the rule below keeps,
+and 22 of those reported no command, so their rows said nothing past the directory. The title takes the
+command's place rather than sitting beside it, since a shell that titles itself from the command line
+would print it twice; a reported detail still shows. Not gated on `busy`, which an adopted session reports
+false while its program runs. It comes before the directory: after it, the title was off the right edge,
+since the fixed columns take 45 and a worktree path there ran to 67 more.
+
+A shell at its prompt titles itself with its directory, which the row already shows, so a title whose
+first word spells the directory is left out: the path, the path under `~`, or either with components cut
+to a prefix as fish prompts do (`~/p/c/.w/tui (pr/chancez/tui)` for `~/projects/cm/.worktrees/tui`).
+On the same server this hid 24 titles, every one of them a prompt's. Comparing a prefix rather than the
+prompt's exact rule is what makes it work across prompts; the cost is that a program titling itself with
+a path that happens to abbreviate its own directory is hidden too.
+
 **The pane's own reads stop when it closes**, so the default picker costs what it did before it existed.
 
 **Filter state is checked before the bindings.** The actions are single letters and the filter is a text

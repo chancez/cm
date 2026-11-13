@@ -82,18 +82,76 @@ func (i item) state() string {
 // detail is what the session is doing, in words the session supplied.
 //
 // The reported detail first, because a program that bothered to say "needs approval" is answering the
-// question the list is being read to answer. Then the running command.
-//
-// The title is deliberately not a third fallback here. A shell with nothing running sets its title from
-// its own prompt, which is usually the directory again: the first version of this row printed
-// "~/projects/cm/.worktrees/tui  ~/p/c/.w/tui (pr/chancez/tui)", the same path twice in two spellings.
-// See delegate.Render for the one place a title is worth showing.
-func (i item) detail() string {
+// question the list is being read to answer. Then the running command, unless the row already shows the
+// program's title: a title is the program's own description of the work, "Release notes for 10.0.1.0"
+// where the command is "claude --resume 98c5c1d5-...", and a shell that titles itself from the command
+// line would print the same words twice.
+func (i item) detail(titled bool) string {
 	s := i.session
 	if s.ReportedDetail != "" {
 		return s.ReportedDetail
 	}
+	if titled {
+		return ""
+	}
 	return s.Command
+}
+
+// title is what the program in the session set as its title, or empty when it only repeats the directory.
+//
+// Shown because it is how a running program says what it is doing, and none of it is in the command
+// line: claude titles a window with its task, gr with the PR number and branch, nvim with the file. Not
+// gated on Busy, because a server that adopted a session reports it idle with no command until something
+// runs, and the title is the one of the three that adoption keeps.
+//
+// A shell at its prompt titles itself with the directory, which where already shows: the first version of
+// this row printed "~/projects/cm/.worktrees/tui  ~/p/c/.w/tui (pr/chancez/tui)", the same path twice in
+// two spellings. titleNamesDir recognises those spellings.
+func (i item) title() string {
+	s := i.session
+	if titleNamesDir(s.Title, s.Cwd) {
+		return ""
+	}
+	return s.Title
+}
+
+// titleNamesDir reports whether title begins with a spelling of dir: the path itself, the path under
+// "~", or either with each component shortened to a prefix the way fish and many zsh prompts do.
+//
+// Only the first word is compared, since prompts follow the path with a branch or a host. A "~" path is
+// matched against dir's trailing components rather than against this machine's home, so the check holds
+// for a shell that reported a directory on another host, whose home is not known here.
+func titleNamesDir(title, dir string) bool {
+	words := strings.Fields(title)
+	if len(words) == 0 || dir == "" {
+		return false
+	}
+	parts := strings.Split(strings.TrimSuffix(words[0], "/"), "/")
+	var dirParts []string
+	if trimmed := strings.Trim(dir, "/"); trimmed != "" {
+		dirParts = strings.Split(trimmed, "/")
+	}
+	switch parts[0] {
+	case "~":
+		parts = parts[1:]
+		if len(parts) > len(dirParts) {
+			return false
+		}
+		dirParts = dirParts[len(dirParts)-len(parts):]
+	case "":
+		parts = parts[1:]
+		if len(parts) != len(dirParts) {
+			return false
+		}
+	default:
+		return false
+	}
+	for n, part := range parts {
+		if part == "" || !strings.HasPrefix(dirParts[n], part) {
+			return false
+		}
+	}
+	return true
 }
 
 // where is the session's directory, abbreviated the way a prompt does.
@@ -210,21 +268,7 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, listItem list.Ite
 		ageWidth, age(time.Unix(s.CreatedAtUnix, 0), d.now),
 	)
 
-	// The directory and the detail share what is left, because which of them matters depends on the
-	// session: a shell sitting somewhere is identified by where it is, and a session running something
-	// is identified by what. Neither is worth a fixed column that is usually empty.
-	rest := it.where(d.home)
-	if rest == "" {
-		// No local directory to show, which means the shell reported one on another host. Its title is
-		// then the only thing left that says anything about where it is.
-		rest = s.Title
-	}
-	if detail := it.detail(); detail != "" {
-		if rest != "" {
-			rest += "  "
-		}
-		rest += detail
-	}
+	rest := d.tail(it)
 
 	line := head + rest
 	if width := m.Width(); width > 0 {
@@ -242,6 +286,32 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, listItem list.Ite
 	// Only the tail is faint. Dimming the whole row would dim the name and the state, which are the
 	// two things the list exists to show.
 	fmt.Fprint(w, head+faintStyle.Render(rest))
+}
+
+// tail is the row after its fixed columns: the title, the directory and the detail.
+//
+// They share what is left, because which of them matters depends on the session: a shell sitting
+// somewhere is identified by where it is, and a session running something is identified by what. None is
+// worth a fixed column that is usually empty.
+//
+// The title first. After the directory it was cut off the right edge: the fixed columns take 45, and a
+// worktree path such as ~/projects/work/hubble-timescape/.worktrees/gitattributes_generated is 67 more.
+// A shell at its prompt has no title here, so its row still starts with the directory.
+func (d delegate) tail(it item) string {
+	where, title := it.where(d.home), it.title()
+	if where == "" {
+		// No local directory to show, which means the shell reported one on another host. Its title is
+		// then the only thing left that says anything about where it is, so it takes the directory's
+		// place even when it only names that directory.
+		where, title = it.session.Title, ""
+	}
+	var parts []string
+	for _, part := range []string{title, where, it.detail(title != "")} {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "  ")
 }
 
 // truncate shortens s to at most width cells, marking that it was cut.

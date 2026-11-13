@@ -73,6 +73,85 @@ func TestARowElidesWholeNames(t *testing.T) {
 	}
 }
 
+// A row shows the title a program set, and leaves out a title that only names the directory.
+//
+// The title is how a running program says what it is doing: claude titles its window with the task and
+// gr with the PR, where the command reads "claude --resume <uuid>" and the list showed nothing better. A
+// shell at its prompt titles itself with the directory the row already shows, in whatever spelling its
+// prompt uses, and printing that is the same path twice.
+func TestARowShowsTheProgramTitle(t *testing.T) {
+	const home = "/home/u"
+	cases := []struct {
+		name    string
+		session *serverv1.Session
+		want    string
+	}{{
+		name: "a program's title replaces its command",
+		session: &serverv1.Session{
+			Cwd: "/home/u/docs", CwdIsLocal: true, Busy: true,
+			Command: "claude --resume 98c5c1d5", Title: "Release notes for 10.0.1.0",
+		},
+		want: "Release notes for 10.0.1.0  ~/docs",
+	}, {
+		name: "an adopted session reports no command, and its title still shows",
+		session: &serverv1.Session{
+			Cwd: "/home/u/p/gr", CwdIsLocal: true, Title: "gr #5 pr/chancez/popup",
+		},
+		want: "gr #5 pr/chancez/popup  ~/p/gr",
+	}, {
+		name: "a reported detail still shows beside the title",
+		session: &serverv1.Session{
+			Cwd: "/home/u/docs", CwdIsLocal: true, Command: "claude",
+			Title: "Release notes", ReportedDetail: "needs approval",
+		},
+		want: "Release notes  ~/docs  needs approval",
+	}, {
+		name: "a prompt's shortened directory is left out",
+		session: &serverv1.Session{
+			Cwd: "/home/u/projects/cm/.worktrees/tui", CwdIsLocal: true,
+			Title: "~/p/c/.w/tui (pr/chancez/tui)",
+		},
+		want: "~/projects/cm/.worktrees/tui",
+	}, {
+		name: "a prompt's absolute directory is left out",
+		session: &serverv1.Session{
+			Cwd: "/srv/app", CwdIsLocal: true, Command: "make", Busy: true, Title: "/srv/app",
+		},
+		want: "/srv/app  make",
+	}, {
+		name:    "home itself is left out",
+		session: &serverv1.Session{Cwd: "/home/u", CwdIsLocal: true, Title: "~"},
+		want:    "~",
+	}, {
+		name: "another directory is not this one",
+		session: &serverv1.Session{
+			Cwd: "/home/u/docs", CwdIsLocal: true, Title: "~/dotfiles (master)",
+		},
+		want: "~/dotfiles (master)  ~/docs",
+	}, {
+		name:    "a deeper directory is not this one",
+		session: &serverv1.Session{Cwd: "/srv", CwdIsLocal: true, Title: "/srv/app"},
+		want:    "/srv/app  /srv",
+	}, {
+		name: "a remote shell's title takes the directory's place",
+		session: &serverv1.Session{
+			Cwd: "/home/r/app", CwdIsLocal: false, Command: "make", Title: "~/app (main)",
+		},
+		want: "~/app (main)  make",
+	}, {
+		name:    "no title leaves the command",
+		session: &serverv1.Session{Cwd: "/home/u/docs", CwdIsLocal: true, Command: "make test"},
+		want:    "~/docs  make test",
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (delegate{home: home}).tail(item{session: tc.session}); got != tc.want {
+				t.Errorf("tail = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAStartingFilterShowsWhatMatchReturns is the contract between `cm search` and `cm search --tui`: the
 // command prints Match, the picker opens on its own filter, and the two must be the same sessions in the
 // same order.
