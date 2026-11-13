@@ -40,9 +40,9 @@ mise run build        # -> bin/cm, building libghostty-vt first if needed
 ```
 
 The first build compiles libghostty-vt into `third_party/libghostty-vt/<ref>/`, which takes about a
-minute; later builds reuse it, and a branch on another pin builds its own once. libghostty-vt has no
-tagged release, so the ref is a pinned commit, and it must match the Go binding's: see
-`docs/libghostty.md`.
+minute; later builds reuse it, git worktrees share the main checkout's, and a branch on another pin
+builds its own once. libghostty-vt has no tagged release, so the ref is a pinned commit, and it must
+match the Go binding's: see `docs/libghostty.md`.
 
 Pass `-Doptimize=ReleaseSafe` if you build it by hand. Zig defaults to Debug, which turns on
 per-page integrity verification in ghostty, and that is not a tuning knob: a reverse index with the

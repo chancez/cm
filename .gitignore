@@ -13,10 +13,10 @@
 
 # Without the trailing slash, so a symlink is ignored too.
 #
-# A git worktree has no third_party of its own, since libghostty-vt is built rather than committed, and
-# linking to the main checkout shares its builds. Builds are per pin, so a worktree on another pin adds
-# its own beside them rather than replacing anyone's. With
-# `/third_party/` that symlink is not ignored and gets committed by an `add -A`.
+# libghostty-vt is built rather than committed. A git worktree builds into the main checkout's third_party
+# (THIRD_PARTY_DIR in mise.toml), so it needs none of its own, but worktrees made before that symlinked
+# theirs to the main checkout, and with `/third_party/` that symlink is not ignored and gets committed by
+# an `add -A`.
 /third_party
 mise.local.toml
 

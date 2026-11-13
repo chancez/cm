@@ -47,10 +47,17 @@ commit when it has not been built yet and returns in about 0.1s when it has. A f
 a minute with a warm zig cache.
 
 Each pin builds into its own directory, `third_party/libghostty-vt/<ref>/`, and `PKG_CONFIG_PATH` in
-`mise.toml` points the binding there. A branch on another pin, or a worktree sharing `third_party`
-through a symlink, therefore uses its own build rather than rebuilding the one every other checkout
-links, and switching back costs nothing. The pkg-config files record their prefix, so a build has to
-stay where it was made.
+`mise.toml` points the binding there. A branch on another pin therefore uses its own build rather than
+rebuilding the one every other checkout links, and switching back costs nothing. The pkg-config files
+record their prefix, so a build has to stay where it was made.
+
+`third_party` is the main checkout's, from every git worktree of it: `THIRD_PARTY_DIR` in `mise.toml`
+asks `git worktree list` for the main checkout, and falls back to the current one outside git. A worktree
+with its own used to compile libghostty again, about a minute, for a library identical to one beside it.
+Sharing it means two worktrees can start the same pin's build at once, and each would delete the other's
+half-built tree, so `scripts/libghostty.sh` holds `<prefix>.lock` while it builds and reads the stamp
+again once it has it. Measured with a stub zig: two concurrent runs built twice without the lock and once
+with it.
 
 `GHOSTTY_DIR`, `third_party/ghostty`, is only a git repository to fetch into. The build runs from an
 exported copy of the pinned commit, so a real ghostty checkout there keeps its working tree, and a

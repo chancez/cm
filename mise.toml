@@ -25,12 +25,19 @@ zig = "0.17.0"
 # then died on the next line. Dockerfile.test already carried the full SHA with a comment naming the
 # abbreviation here as the reason, so the workaround outlived the bug by being in the wrong file.
 GHOSTTY_REF = "5813c9461d5af78b6307a1254d00b1bc190eaccd"
+# The main checkout's third_party, from every worktree of it, so a pin built once is linked by all of them.
+# A worktree with its own third_party compiled libghostty again, about a minute, for a library identical to
+# one already sitting beside it. `git worktree list` names the main checkout first; outside a git checkout,
+# a source tarball, it falls back to this one.
+#
+# Not CM_THIRD_PARTY: every cm flag binds a CM_<FLAG> variable, and a new CM_ name can be parsed as one.
+THIRD_PARTY_DIR = '''{{ exec(command="m=$(git -C '" ~ config_root ~ "' worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p'); echo \"${m:-" ~ config_root ~ "}/third_party\"") }}'''
 # A git repository the build fetches into. Only its objects are used: the build runs from an exported copy
 # of GHOSTTY_REF, so a checkout here can be a real one with work in it.
-GHOSTTY_DIR = "{{config_root}}/third_party/ghostty"
-# One directory per pin, so a branch on another pin, or a worktree sharing third_party, uses its own build
-# rather than rebuilding the one every other checkout links. Switching back costs nothing.
-GHOSTTY_PREFIX = "{{config_root}}/third_party/libghostty-vt/{{env.GHOSTTY_REF}}"
+GHOSTTY_DIR = "{{env.THIRD_PARTY_DIR}}/ghostty"
+# One directory per pin, so a branch on another pin uses its own build rather than rebuilding the one every
+# other checkout links. Switching back costs nothing.
+GHOSTTY_PREFIX = "{{env.THIRD_PARTY_DIR}}/libghostty-vt/{{env.GHOSTTY_REF}}"
 # Where go.mitchellh.com/libghostty finds the library. The binding links through pkg-config, static by
 # default, and the .pc files record the prefix they were built for, so a build has to stay where it was made.
 PKG_CONFIG_PATH = "{{env.GHOSTTY_PREFIX}}/lib/pkgconfig"
