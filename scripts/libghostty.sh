@@ -1,6 +1,10 @@
 #!/bin/sh
 # Build libghostty-vt at GHOSTTY_REF into GHOSTTY_PREFIX, unless that prefix already holds this build.
 #
+# With --key, build nothing and print what names this build: a checksum of the commit and the flags below.
+# mise.toml puts it in the prefix, so a branch that changes a flag gets a directory of its own rather than
+# rebuilding over the one every worktree on that commit links. Only GHOSTTY_REF is needed for it.
+#
 # The one place the build is written down. mise's libghostty task, Dockerfile.test, and both workflows run
 # this rather than their own copy: they used to each carry one, the copies drifted, and the task's copy had
 # no coverage anywhere, which is how it shipped broken twice.
@@ -16,9 +20,8 @@
 #   ZIG              optional, the zig to run. Defaults to the one on PATH.
 set -eu
 
+mode="${1:-}"
 : "${GHOSTTY_REF:?GHOSTTY_REF is not set}"
-: "${GHOSTTY_PREFIX:?GHOSTTY_PREFIX is not set}"
-: "${GHOSTTY_DIR:?GHOSTTY_DIR is not set}"
 zig="${ZIG:-zig}"
 target="${GHOSTTY_TARGET:-}"
 
@@ -55,8 +58,16 @@ short_ref="$(printf '%s' "$GHOSTTY_REF" | cut -c1-12)"
 
 # What a finished build was made from. Written last, so a build that failed partway is rebuilt rather than
 # mistaken for complete, and compared whole, so changing a flag above rebuilds too.
-stamp="$GHOSTTY_PREFIX/.cm-build"
 want="ref=$GHOSTTY_REF flags=$* version-build=$short_ref"
+if [ "$mode" = --key ]; then
+  # cksum because it is POSIX, where sha256sum and shasum each exist on only one of Linux and macOS. It
+  # tells a handful of flag sets apart; nothing here trusts it further than that.
+  printf '%s' "$want" | cksum | cut -d' ' -f1
+  exit 0
+fi
+: "${GHOSTTY_PREFIX:?GHOSTTY_PREFIX is not set}"
+: "${GHOSTTY_DIR:?GHOSTTY_DIR is not set}"
+stamp="$GHOSTTY_PREFIX/.cm-build"
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
   exit 0
 fi

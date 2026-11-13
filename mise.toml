@@ -35,9 +35,10 @@ THIRD_PARTY_DIR = '''{{ exec(command="m=$(git -C '" ~ config_root ~ "' worktree 
 # A git repository the build fetches into. Only its objects are used: the build runs from an exported copy
 # of GHOSTTY_REF, so a checkout here can be a real one with work in it.
 GHOSTTY_DIR = "{{env.THIRD_PARTY_DIR}}/ghostty"
-# One directory per pin, so a branch on another pin uses its own build rather than rebuilding the one every
-# other checkout links. Switching back costs nothing.
-GHOSTTY_PREFIX = "{{env.THIRD_PARTY_DIR}}/libghostty-vt/{{env.GHOSTTY_REF}}"
+# One directory per pin and set of build flags, so a branch on another pin, or one changing a flag in
+# scripts/libghostty.sh, uses its own build rather than rebuilding the one every other checkout links.
+# Switching back costs nothing. The key comes from the script because that is where the flags are written.
+GHOSTTY_PREFIX = '''{{env.THIRD_PARTY_DIR}}/libghostty-vt/{{env.GHOSTTY_REF}}-{{ exec(command="GHOSTTY_REF=" ~ env.GHOSTTY_REF ~ " sh '" ~ config_root ~ "/scripts/libghostty.sh' --key") }}'''
 # Where go.mitchellh.com/libghostty finds the library. The binding links through pkg-config, static by
 # default, and the .pc files record the prefix they were built for, so a build has to stay where it was made.
 PKG_CONFIG_PATH = "{{env.GHOSTTY_PREFIX}}/lib/pkgconfig"

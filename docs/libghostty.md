@@ -46,10 +46,17 @@ version's `CMakeLists.txt`, and build. The build fetches and compiles the new pi
 commit when it has not been built yet and returns in about 0.1s when it has. A first build takes about
 a minute with a warm zig cache.
 
-Each pin builds into its own directory, `third_party/libghostty-vt/<ref>/`, and `PKG_CONFIG_PATH` in
-`mise.toml` points the binding there. A branch on another pin therefore uses its own build rather than
-rebuilding the one every other checkout links, and switching back costs nothing. The pkg-config files
-record their prefix, so a build has to stay where it was made.
+Each pin and set of build flags builds into its own directory, `third_party/libghostty-vt/<ref>-<key>/`,
+and `PKG_CONFIG_PATH` in `mise.toml` points the binding there. The key is a `cksum` of the commit and the
+flags, printed by `scripts/libghostty.sh --key` so the flags stay written down in one place. A branch on
+another pin, or one changing a flag, therefore uses its own build rather than rebuilding the one every
+other checkout links, and switching back costs nothing. Before the key, two worktrees on one commit with
+different flags would each find the other's stamp, rebuild over it, and break a link running against it.
+The pkg-config files record their prefix, so a build has to stay where it was made.
+
+The key is evaluated when mise loads the environment, and the script is not a file mise watches, so a
+shell where `mise activate` set `PKG_CONFIG_PATH` may keep the old directory after a flag changes until
+mise reloads. `mise run` starts a new mise, which evaluates it again; a bare `go build` may not.
 
 `third_party` is the main checkout's, from every git worktree of it: `THIRD_PARTY_DIR` in `mise.toml`
 asks `git worktree list` for the main checkout, and falls back to the current one outside git. A worktree
