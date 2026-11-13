@@ -361,3 +361,10 @@ Three places, by kind:
   process's reported command line for good, so `ps` shows it and anything recording a live command line
   replays it later. The resume position was a flag; it is `CM_RESUME_FROM_SEQ` now. See
   `docs/architecture.md` on handing a position to a replacement.
+- **On macOS a process stays in the coalition of the app that started it, whatever `Setsid` does**, and
+  Force Quit on that app's "Running in Background" Dock icon kills the whole coalition. A server started from
+  Terminal.app at 09:56 still had Terminal's coalition six hours and two upgrades later, because each new
+  server was started from inside a session, and one Force Quit in the Dock ended 27 sessions. The shims
+  logged nothing but `shim exiting ... shell_exited=false`. The Dock's own log names every pid it kills:
+  `log show --info --debug --predicate 'process == "Dock"'`. The server is now started through a launchd
+  job, which gets a coalition of its own. See `docs/architecture.md` on where a server is started from.

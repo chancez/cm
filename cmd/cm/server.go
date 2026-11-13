@@ -53,6 +53,7 @@ for development.`,
 	cmd.AddCommand(newServerStopCommand(g))
 	cmd.AddCommand(newServerRestartCommand(g))
 	cmd.AddCommand(newServerProxyCommand(g))
+	cmd.AddCommand(newServerSpawnCommand(g))
 	return cmd
 }
 
@@ -614,11 +615,47 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 		return fmt.Errorf("resolving own path to start a server: %w", err)
 	}
 
-	cmd := exec.Command(exe,
-		"--runtime-dir", dirs.Runtime,
-		"--state-dir", dirs.State,
-		"server",
-	)
+	// How the process comes into being is per platform: see startServer. What the caller sees is the
+	// same either way, a socket that starts answering.
+	done, err := startServer(exe, dirs)
+	if err != nil {
+		return err
+	}
+	defer done()
+
+	began := time.Now()
+	notice := &startNotice{w: os.Stderr, began: began}
+	deadline := began.Add(serverStartTimeout)
+	for {
+		if conn, err := net.Dial("unix", dirs.ServerSocket()); err == nil {
+			conn.Close()
+			notice.ready(time.Now())
+			return nil
+		}
+		now := time.Now()
+		if now.After(deadline) {
+			return serverStartError(dirs)
+		}
+		notice.waiting(now)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// serverArgs is the argv after the executable for a server against dirs, with sub naming the command.
+func serverArgs(dirs paths.Dirs, sub ...string) []string {
+	return append([]string{"--runtime-dir", dirs.Runtime, "--state-dir", dirs.State}, sub...)
+}
+
+// spawnServer starts a server as a detached child of this process and returns without waiting for it.
+//
+// env is the server's environment, or nil for this process's own.
+func spawnServer(exe string, dirs paths.Dirs, env []string) error {
+	cmd := exec.Command(exe, serverArgs(dirs, "server")...)
+	cmd.Env = env
 	cmd.SysProcAttr = newDetachedSysProcAttr()
 	// Detach stdio: inheriting the client's terminal would tie the server's lifetime to a
 	// window, and its output would scribble over the session.
@@ -643,27 +680,7 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 	}
 	// Release rather than wait: the server outlives this command by design.
 	go func() { _ = cmd.Wait() }()
-
-	began := time.Now()
-	notice := &startNotice{w: os.Stderr, began: began}
-	deadline := began.Add(serverStartTimeout)
-	for {
-		if conn, err := net.Dial("unix", dirs.ServerSocket()); err == nil {
-			conn.Close()
-			notice.ready(time.Now())
-			return nil
-		}
-		now := time.Now()
-		if now.After(deadline) {
-			return serverStartError(dirs)
-		}
-		notice.waiting(now)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	return nil
 }
 
 // serverStartQuiet is how long a start is given before it is mentioned at all.

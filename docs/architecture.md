@@ -1171,6 +1171,64 @@ and it cannot work: `cm doctor` connects to a server, which starts one, so runni
 the condition's cure and report nothing. That is deliberate for other reasons, and it makes this state
 observable only from inside a client, which is where it is now handled.
 
+## Where a server is started from, on macOS
+
+On macOS a client starts the server through a one-shot launchd job, not as its own child. The job runs `cm
+server spawn`, which starts the server in a session of its own and exits, and the client removes the job once
+the server answers. Linux starts it directly, as before.
+
+The reason is the coalition, which macOS assigns at spawn and which `Setsid` does not change. LaunchServices
+counts every process in an app's coalition as that app's. If the app quits while any of them are still
+running, macOS 27 shows its Dock icon as "Running in Background", and Force Quit or "Stop Running in
+Background" on that icon kills every process in the coalition. A server started from a terminal's shell was in
+that terminal's coalition. So was every shim and shell it spawned, and so was every later server started by a
+command run inside one of those sessions, which is what an upgrade from inside cm is.
+
+That is how 27 sessions died at once on 2026-11-12. Terminal.app was open from 09:55:40 to 09:56:50, and a
+server started from it at 09:56:42. Two upgrades later its successor and every session it had created were
+still in Terminal's coalition, 14404. At 16:14:45 the Dock force-quit Terminal's leftover icon, and its log
+shows `_LSForceQuitApplication ... coalition=14404` followed by `killing coalition pid` for 80 pids, the
+server and each dead shim among them. The shims logged only `shim exiting ... shell_exited=false`, since the
+signal reached their ordinary shutdown path. The 21 older sessions that survived were in a different
+coalition, 1049. Seven sessions created after 15:27 were in 14404 as well and survived because they were not
+in the Dock's list of 80; why they were left out is not known.
+
+Measured before choosing this:
+
+- A launchd job gets a coalition of its own. A setsid child of the job keeps both its life and that coalition
+  when the job is removed, including when it is removed while its first process is still running.
+- `responsibility_spawnattrs_setdisclaim` does not change the coalition, so it is not an alternative.
+- `ProcessType` is inherited by every descendant, including after the job is gone. Every shell descends from
+  this job, so it is `Interactive`: scheduling priority 31, the same as a process under a terminal, against 20
+  for launchd's default and 4 for `Background`.
+- A start costs about 65ms more: `cm list` starting a server took 62 to 66ms directly and 115 to 194ms through
+  launchd, median 131ms.
+
+A launchd job starts with launchd's environment and resource limits, not its submitter's, and everything under
+the server inherits what the server has. So the client hands both over in a file in the runtime directory,
+written with mode 0600 and removed by `cm server spawn` once read, the same way a client hands the server the
+environment for a shell it asks for.
+
+- **Environment.** Not in the plist, because XML 1.0 has no spelling for most control characters and an
+  exported escape sequence is ordinary. Measured against a direct start, the server's environment is identical
+  apart from the kernel's own entries that hash the binary.
+- **Limits.** `cm server spawn` sets them before starting the server. Without that, `ulimit -n` in a session
+  read 256, launchd's soft default for maxfiles, against 1048576 when the same client started the server
+  directly. A build or a language server fails at 256 with "too many open files" and nothing about why.
+
+One difference from a direct start remains. Go raises its soft open-files limit at startup and restores the
+original only in children it starts, without exposing the original, so a client can report only the raised
+value. Sessions start with that: 138240 here, where a direct start passed on the 1048576 the client's own
+parent had. A limit `cm server spawn` cannot set as given, such as a hard limit above launchd's, is clamped to
+what it can set.
+
+One job per start rather than one per installation, so two clients starting a server at once cannot remove
+each other's job. When launchd refuses the job, for instance when the user has no gui domain, the client
+starts the server directly as before. Refusing to start one would take every window with it.
+
+This protects servers started from now on. A session that is already running stays in whatever coalition its
+server was started in, and only recreating it moves it.
+
 ## Terminal queries: cm answers, or asks one client and relays
 
 A program in a session can ask the terminal questions: what are you (`CSI c`), where is the cursor

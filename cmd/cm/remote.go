@@ -405,6 +405,8 @@ var machineLocal = map[string]bool{
 	// The far end of somebody else's remote connection. Pointing it at a third machine would be a chain
 	// nothing asks for and nothing tests.
 	"server proxy": true,
+	// Starts this machine's server from a launchd job, never typed.
+	"server spawn": true,
 	// Holds a pty for a session on this machine, spawned by a server, never typed.
 	"shim": true,
 	// Moves this machine's running server and clients onto the build installed here.
