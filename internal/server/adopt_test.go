@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -241,4 +242,51 @@ func shimNextSeq(t *testing.T, socket string) seq.Shim {
 		t.Fatalf("State() error = %v", err)
 	}
 	return seq.Shim(st.NextSeq)
+}
+
+// An adopted session's title must survive a server restart even when the OSC 2 that set it is older than
+// what the shim retains.
+//
+// nvim sets its title once at startup. A server restarted hours later replays only the retained window,
+// finds no title, and the session had none: a client attaching was sent no title in either its metadata or
+// its restored screen, so kitty kept the client's argv[0], "cm-attach", while `cm list` printed the stored
+// title from the record and looked right.
+func TestAdoptedSessionKeepsTheRecordedTitle(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelTitle string
+		want       Metadata
+	}{
+		{
+			name: "replay found no title",
+			want: Metadata{Title: "nvim ~/.dotfiles"},
+		},
+		{
+			name:       "replay found a newer title",
+			modelTitle: "vim ~/.dotfiles",
+			want:       Metadata{Title: "vim ~/.dotfiles"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := startShimFor(t, shimConfigFor("title", "sleep 30"))
+			rec.Title = "nvim ~/.dotfiles"
+			sess, err := newSession(rec, &fakeTerminal{title: tt.modelTitle}, 0, 0)
+			if err != nil {
+				t.Fatalf("newSession() error = %v", err)
+			}
+			defer sess.Close()
+
+			sub := sess.subscribeMetadata()
+			defer sess.unsubscribeMetadata(sub)
+			select {
+			case got := <-sub.ch:
+				if !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("first metadata = %+v, want %+v", got, tt.want)
+				}
+			default:
+				t.Fatalf("a new subscriber was sent no metadata, want %+v", tt.want)
+			}
+		})
+	}
 }

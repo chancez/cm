@@ -727,6 +727,26 @@ func dialShim(socket string) (transport.Conn, shimv1.ShimClient, error) {
 // are applied before the pump starts, which is why they are constructor arguments rather than setters:
 // a session whose pump is already running is being fed the live stream, and writing derived state into
 // it from another goroutine would race the writer that owns it.
+// initialTitle decides the title a session starts with, and the model baseline a change is measured from.
+//
+// The model's own title when the replay found one, and otherwise the record's. A program sets its title
+// once and may never set it again, so after a server restart the OSC 2 can lie further back than the shim
+// retains, and the model rebuilt from that window has none. The record still has it, because
+// persistMetadata wrote it. Without this the session had no live title, so neither the attach's metadata
+// nor the restored screen carried one, and kitty showed the client's argv[0], "cm-attach", over a
+// long-running nvim while `cm list` printed the stored title and looked right.
+//
+// The baseline stays the model's, so the program's next real title change is still seen as one.
+func initialTitle(rec store.Session, term Terminal) (title, baseTitle string) {
+	if term != nil {
+		baseTitle = term.Title()
+	}
+	if baseTitle != "" {
+		return baseTitle, baseTitle
+	}
+	return rec.Title, baseTitle
+}
+
 func newSession(
 	rec store.Session, term Terminal, fromSeq seq.Shim, clientSeq seq.Log, opts ...sessionOpt,
 ) (*Session, error) {
@@ -797,6 +817,7 @@ func newSession(
 		promptNoted:       rec.PromptSeen,
 		promptSeenChanged: make(chan struct{}, 1),
 	}
+	s.title, s.baseTitle = initialTitle(rec, term)
 
 	// Before the subscription, so nothing derived can land after the live stream has started.
 	for _, opt := range opts {
