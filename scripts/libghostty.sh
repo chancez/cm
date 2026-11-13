@@ -61,6 +61,33 @@ if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
   exit 0
 fi
 
+# Every worktree builds into the main checkout's prefix, so two can get here for one pin at once, and each
+# would delete the other's half-built tree below. A directory because mkdir is atomic and macOS ships no
+# flock. The stamp is read again once the lock is held: whoever waited usually finds the build done.
+lock="$GHOSTTY_PREFIX.lock"
+mkdir -p "$(dirname "$GHOSTTY_PREFIX")"
+waited=
+until mkdir "$lock" 2>/dev/null; do
+  # A holder killed outright never runs its trap, so the directory outlives it. Its pid says so.
+  holder="$(cat "$lock/pid" 2>/dev/null || true)"
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    rm -rf "$lock"
+    continue
+  fi
+  if [ -z "$waited" ]; then
+    echo "waiting for another build of libghostty-vt $GHOSTTY_REF (pid ${holder:-unknown})" >&2
+    waited=1
+  fi
+  sleep 1
+done
+printf '%s\n' "$$" >"$lock/pid"
+trap 'rm -rf "$lock"' EXIT
+# sh skips the EXIT trap on a signal unless the signal exits, so ctrl-c would otherwise leave the lock.
+trap 'exit 130' INT TERM HUP
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
+  exit 0
+fi
+
 if ! git -C "$GHOSTTY_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   mkdir -p "$(dirname "$GHOSTTY_DIR")"
   git clone --filter=blob:none --no-checkout https://github.com/ghostty-org/ghostty.git "$GHOSTTY_DIR"
@@ -76,7 +103,7 @@ if ! git -C "$GHOSTTY_DIR" cat-file -e "$GHOSTTY_REF^{commit}" 2>/dev/null; then
 fi
 
 src="$(mktemp -d "${TMPDIR:-/tmp}/libghostty.XXXXXX")"
-trap 'rm -rf "$src"' EXIT
+trap 'rm -rf "$src" "$lock"' EXIT
 git -C "$GHOSTTY_DIR" archive "$GHOSTTY_REF" | tar -x -C "$src"
 
 # -Dlib-version-string replaces the whole version, so the base comes from the line ghostty declares it on.
