@@ -108,6 +108,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		// Which build the session's own shim runs, the other half of what attached_clients answers for
 		// clients. A shim outlives the build that started it, so this can be many releases behind.
 		"shim_build",
+		// A kept session's own retention, which is what says a suspended session will still be there.
+		"expire_after",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -713,6 +715,41 @@ func TestPrintSessionInfoReportsLocation(t *testing.T) {
 	}
 	if got, want := buf.String(), "kitten ssh white > nvim notes.md\n"; got != want {
 		t.Errorf("--field location = %q, want %q", got, want)
+	}
+}
+
+// A kept session's retention reaches both the JSON and --field, and a session without one says nothing.
+//
+// The whole value for the JSON, so the field cannot land in the wrong slot, and the bare line for --field,
+// which is what a suspend script reads: "never" for one it suspended, an empty line for one that merely
+// ended or has been revived since.
+func TestSessionReportsItsExpiry(t *testing.T) {
+	wire := sampleWireSession("work")
+	wire.State = serverv1.SessionState_SESSION_STATE_EXITED
+	wire.Exited = true
+	wire.ExpireAfter = "never"
+
+	got := toSessionJSON(wire)
+	want := toSessionJSON(sampleWireSession("work"))
+	want.State = "exited"
+	want.ExpireAfter = "never"
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
+	}
+
+	for _, tc := range []struct{ expiry, want string }{
+		{"never", "never\n"},
+		{"720h0m0s", "720h0m0s\n"},
+		{"", "\n"},
+	} {
+		wire.ExpireAfter = tc.expiry
+		var buf bytes.Buffer
+		if err := printSessionInfo(&buf, wire, "expire_after"); err != nil {
+			t.Fatalf("printSessionInfo() error = %v", err)
+		}
+		if buf.String() != tc.want {
+			t.Errorf("--field expire_after with %q = %q, want %q", tc.expiry, buf.String(), tc.want)
+		}
 	}
 }
 

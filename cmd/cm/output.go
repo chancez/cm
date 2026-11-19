@@ -151,6 +151,10 @@ type sessionJSON struct {
 	// reply artifact through that gap meant identifying builds from process inspection, which is what this
 	// removes.
 	ShimBuild string `json:"shim_build"`
+	// ExpireAfter is the session's own retention once it has ended, from `cm kill --keep --expire-after`: a
+	// Go duration, or "never". Empty when it follows the configured schedule, which includes every session
+	// revived since, so a script suspending sessions can tell one it suspended from one that merely ended.
+	ExpireAfter string `json:"expire_after"`
 }
 
 // locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
@@ -266,6 +270,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		Hosting:             hosting,
 		AnnouncedClients:    s.AnnouncedClients,
 		ShimBuild:           s.ShimBuild,
+		ExpireAfter:         s.ExpireAfter,
 		Location:            location,
 		Resume:              resume,
 		AttachedClients:     clients,
@@ -844,6 +849,8 @@ func sessionFields(s *serverv1.Session) []struct {
 		// Shown as unknown rather than blank: empty here means the server has not asked or the shim cannot
 		// say, and a blank column reads as "same as the server", which is the mistake this exists to stop.
 		{"shim_build", orUnknown(j.ShimBuild)},
+		// Bare, and empty for a session on the configured schedule, which is the common case.
+		{"expire_after", j.ExpireAfter},
 	}
 }
 

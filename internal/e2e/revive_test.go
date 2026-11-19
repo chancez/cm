@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -46,4 +47,54 @@ func TestRevivedSessionShowsEachRunOnce(t *testing.T) {
 	}
 
 	e.mustRun("kill", "revive")
+}
+
+// A session suspended with `cm kill --keep --expire-after never` reports the retention, and reviving it
+// clears it.
+//
+// End to end because the revive is the half no unit test reaches: it replaces the record inside
+// Manager.create, which needs a real shim, and a revive that carried the retention over would leave every
+// session ever suspended immune to expiry for good. Both readings a suspend script uses are asserted, the
+// bare --field and the JSON key.
+func TestSuspendedSessionsRetentionLastsUntilRevived(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	expiry := func() (field, fromJSON string) {
+		t.Helper()
+		var info map[string]any
+		if err := json.Unmarshal([]byte(e.mustRun("info", "suspend", "--json")), &info); err != nil {
+			t.Fatalf("info --json is not JSON: %v", err)
+		}
+		got, ok := info["expire_after"].(string)
+		if !ok {
+			t.Fatalf("info --json expire_after = %#v, want a string", info["expire_after"])
+		}
+		return e.mustRun("info", "suspend", "--field", "expire_after"), got
+	}
+
+	e.mustRun("attach", "--no-attach", "--persist", "suspend", "--", "/bin/sh", "-c", "exec sleep 30")
+	if field, fromJSON := expiry(); field != "\n" || fromJSON != "" {
+		t.Errorf("before the kill, expire_after = %q / %q, want empty", field, fromJSON)
+	}
+
+	e.mustRun("kill", "suspend", "--keep", "--expire-after", "never")
+	e.waitFor("the session to have ended", 15*time.Second, func() bool {
+		s, ok := e.session("suspend")
+		return ok && s.State == "exited"
+	})
+	if field, fromJSON := expiry(); field != "never\n" || fromJSON != "never" {
+		t.Errorf("suspended, expire_after = %q / %q, want never", field, fromJSON)
+	}
+
+	e.mustRun("attach", "--no-attach", "suspend", "--", "/bin/sh", "-c", "exec sleep 30")
+	e.waitFor("the session to be running again", 15*time.Second, func() bool {
+		s, ok := e.session("suspend")
+		return ok && s.State == "running"
+	})
+	if field, fromJSON := expiry(); field != "\n" || fromJSON != "" {
+		t.Errorf("revived, expire_after = %q / %q, want empty", field, fromJSON)
+	}
+
+	e.mustRun("kill", "suspend")
 }
