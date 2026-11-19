@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -81,6 +82,76 @@ func TestKillWithKeepSurvivesTheForgetExitedRule(t *testing.T) {
 
 	if got := waitForEndedRecord(t, st, "nolog"); got.State != store.StateExited {
 		t.Errorf("State = %q, want %q", got.State, store.StateExited)
+	}
+}
+
+// `cm kill --keep --expire-after` records the retention with the session, and leaves the rest of the record
+// as a plain --keep would.
+//
+// Asserted against the record as it stood before the kill, with only what the shell's end changes copied
+// across, so a retention written by replacing the row rather than one column shows as the difference.
+func TestKillWithKeepRecordsItsRetention(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	rec := startShimInRuntimeDir(t, dirs, "suspend", "sleep 30")
+	rec.LogPath = dirs.SessionLog("suspend")
+	rec.PersistRequested = true
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if _, live := mgr.Get("suspend"); !live {
+		t.Fatal("session was not adopted, so the live path is not under test")
+	}
+	before, err := st.Get(ctx, "suspend")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if _, err := mgr.Kill(ctx, "suspend", KillOptions{Keep: true, ExpireAfter: store.ExpireNever}); err != nil {
+		t.Fatalf("Kill() error = %v", err)
+	}
+
+	got := waitForEndedRecord(t, st, "suspend")
+	want := before
+	want.State = store.StateExited
+	want.ExpireAfter = store.ExpireNever
+	want.ExitCode, want.LastSeq, want.ClientSeq, want.UpdatedAt = got.ExitCode, got.LastSeq, got.ClientSeq, got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("record after the kill = %+v\nwant %+v", got, want)
+	}
+}
+
+// A retention reaches a session whose shell had already ended, which is the one kill --keep otherwise does
+// nothing to.
+//
+// A suspend does not know whether the program it is suspending already exited, and dropping the retention
+// there would leave that session on the week's schedule it asked to be taken off.
+func TestKillWithKeepRecordsARetentionOnAnEndedSession(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	rec := store.Session{
+		ID:               "ended",
+		ShimSocket:       dirs.ShimSocket("ended"),
+		State:            store.StateExited,
+		PersistRequested: true,
+	}
+	recordSession(t, st, rec)
+
+	if _, err := mgr.Kill(ctx, "ended", KillOptions{Keep: true, ExpireAfter: store.Expiry(720 * time.Hour)}); err != nil {
+		t.Fatalf("Kill() error = %v", err)
+	}
+	got, err := st.Get(ctx, "ended")
+	if err != nil {
+		t.Fatalf("Get() error = %v, want the record kept", err)
+	}
+	want := rec
+	want.ExpireAfter = store.Expiry(720 * time.Hour)
+	want.CreatedAt, want.UpdatedAt = got.CreatedAt, got.UpdatedAt
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("record after the kill = %+v\nwant %+v", got, want)
 	}
 }
 

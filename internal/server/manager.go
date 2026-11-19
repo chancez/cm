@@ -1193,6 +1193,10 @@ func (m *Manager) createWithID(ctx context.Context, opts OpenOptions) (*Session,
 // Deliberately does not override what the caller asked for: an explicit directory or command on the
 // new attach wins, because the user asking for something specific outranks what a previous
 // incarnation happened to be doing.
+//
+// A kept session's own retention, Session.ExpireAfter, is deliberately not carried over. It described the
+// ended session, kept so it could be revived, and this is the revive: a session that ends again later
+// follows the configured schedule unless it is kept with a retention of its own again.
 func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOptions {
 	// Tags first, and deliberately not gated on persistence below. The record is about to be deleted
 	// whether or not it had a log, so a session whose shell exited and is attached to again would
@@ -1777,6 +1781,10 @@ type KillOptions struct {
 	// session listed as ended rather than gone. See KillRequest.keep for why the default is the
 	// opposite.
 	Keep bool
+	// ExpireAfter is the kept session's own retention, replacing the configured schedule for its record
+	// once it has ended. Zero leaves the schedule in charge. Only meaningful with Keep, and the service
+	// refuses it without, since a record that is forgotten now has nothing left to expire.
+	ExpireAfter store.Expiry
 }
 
 // Kill terminates a session, and forgets it unless asked to keep it.
@@ -1799,7 +1807,8 @@ func (m *Manager) Kill(
 	// nor who sent it, so after losing real work there was nothing to read. The shim logs its side too;
 	// this is the side that knows a *request* arrived and what asked for it.
 	m.log.Info("killing session",
-		"session", id, "force", force, "signal", sig, "keep", opts.Keep, "live", live)
+		"session", id, "force", force, "signal", sig, "keep", opts.Keep,
+		"expire_after", opts.ExpireAfter.String(), "live", live)
 
 	if live {
 		// Set before the shell is stopped, because watch() runs as soon as it dies and would otherwise
@@ -1843,8 +1852,8 @@ func (m *Manager) Kill(
 		}
 		if opts.Keep {
 			// watch() records the state and the exit code, the same as for a shell that exited on its own,
-			// so there is nothing to write here.
-			return surviving, nil
+			// so the retention is all there is to write here.
+			return surviving, m.keepFor(ctx, id, opts.ExpireAfter)
 		}
 		return surviving, m.forget(ctx, id, sess.record.LogPath)
 	}
@@ -1883,7 +1892,11 @@ func (m *Manager) Kill(
 				// recorded from what is known: the shim answered and was asked to stop, and nothing will
 				// ever learn its exit status. That is what dead means, as opposed to exited.
 				state := store.StateDead
-				if err := m.store.Apply(ctx, id, store.Update{State: &state}); err != nil {
+				update := store.Update{State: &state}
+				if opts.ExpireAfter != 0 {
+					update.ExpireAfter = &opts.ExpireAfter
+				}
+				if err := m.store.Apply(ctx, id, update); err != nil {
 					return surviving, fmt.Errorf("recording %s as stopped: %w", id, err)
 				}
 				return surviving, nil
@@ -1899,12 +1912,26 @@ func (m *Manager) Kill(
 		return nil, fmt.Errorf("shim for %s is unreachable; use --force to forget it", id)
 	}
 	if opts.Keep {
-		// Nothing was stopped and nothing is being dropped, so the request is satisfied by doing nothing.
-		// Reachable only for a session already recorded as ended, since force and keep cannot be combined
-		// and the branch above refuses a running one.
-		return nil, nil
+		// Nothing was stopped and nothing is being dropped, so the request is satisfied by recording the
+		// retention, if one was asked for. Reachable only for a session already recorded as ended, since
+		// force and keep cannot be combined and the branch above refuses a running one. A suspend reaches
+		// it for a session whose shell had already exited, and dropping the retention there would leave
+		// that session on the week's schedule it asked to be taken off.
+		return nil, m.keepFor(ctx, id, opts.ExpireAfter)
 	}
 	return nil, m.forget(ctx, id, rec.LogPath)
+}
+
+// keepFor records a kept session's own retention. Zero writes nothing, leaving whatever the record already
+// says: a second `cm kill --keep` without a retention is not a request to clear one.
+func (m *Manager) keepFor(ctx context.Context, id string, e store.Expiry) error {
+	if e == 0 {
+		return nil
+	}
+	if err := m.store.Apply(ctx, id, store.Update{ExpireAfter: &e}); err != nil {
+		return fmt.Errorf("recording how long to keep %s: %w", id, err)
+	}
+	return nil
 }
 
 // Forget drops the record, the names and the saved output of a session that has already ended.
@@ -1953,6 +1980,9 @@ func (m *Manager) Forget(ctx context.Context, id string) error {
 // Only sessions that are not running are considered, and liveness is not re-probed here: a session
 // recorded as dead has already been probed by Reconcile, and probing again would let a slow shim be
 // deleted for being busy.
+//
+// A record carrying a retention of its own, from `cm kill --keep --expire-after`, is measured against that
+// instead of either configured interval, and one kept for never is skipped outright.
 func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, error) {
 	if m.persist == nil || m.persist.ExpireAfter <= 0 {
 		return 0, nil
@@ -1990,6 +2020,15 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 		if !rec.PersistRequested {
 			limit = unpersistedCutoff
 		}
+		// A session's own retention outranks both, in either direction, since it is what `cm kill --keep
+		// --expire-after` asked for this session in particular. Never is how a suspended session survives
+		// past the week: only `cm forget` or `cm kill` removes it.
+		switch {
+		case rec.ExpireAfter.Never():
+			continue
+		case rec.ExpireAfter > 0:
+			limit = now.Add(-time.Duration(rec.ExpireAfter))
+		}
 		if rec.UpdatedAt.After(limit) {
 			continue
 		}
@@ -1998,7 +2037,8 @@ func (m *Manager) ExpireDeadSessions(ctx context.Context, now time.Time) (int, e
 			return removed, fmt.Errorf("expiring session %s: %w", rec.ID, err)
 		}
 		removed++
-		m.log.Info("expired dead session", "session", rec.ID, "age", now.Sub(rec.UpdatedAt))
+		m.log.Info("expired dead session", "session", rec.ID, "age", now.Sub(rec.UpdatedAt),
+			"expire_after", rec.ExpireAfter.String())
 	}
 	return removed, nil
 }

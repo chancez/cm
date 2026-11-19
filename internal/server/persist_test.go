@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -871,5 +872,76 @@ func TestExpireUnsetForgetIntervalFallsBackToExpireAfter(t *testing.T) {
 	}
 	if _, err := st.Get(ctx, "ran"); err != nil {
 		t.Errorf("the session was expired with no forget interval set: %v", err)
+	}
+}
+
+// A session kept with a retention of its own is expired on that, in both directions, and one kept for never
+// is not expired at all.
+//
+// The regression is a session suspended with `cm kill --keep --expire-after never` disappearing a week later
+// with its saved output and its resume command, which is the schedule an ended session otherwise follows.
+// Every override here is chosen so the configured schedule would give the opposite answer: the never and
+// 720h records are long past both intervals, and the 30m one is inside expire_after, so a sweep that ignored
+// the column removes exactly the records this keeps and keeps the one it removes.
+//
+// The surviving set is asserted whole, so an override leaking onto a neighbouring record shows as well.
+func TestExpireHonorsASessionsOwnRetention(t *testing.T) {
+	mgr, st, _ := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.ExpireAfter = time.Hour
+	policy.ForgetUnpersistedAfter = time.Minute
+	mgr.SetPersistPolicy(policy)
+	ctx := context.Background()
+	now := time.Now()
+
+	for _, tc := range []struct {
+		id        string
+		persisted bool
+		expiry    store.Expiry
+		age       time.Duration
+	}{
+		// Suspended long ago, both kinds: never outranks expire_after and forget_unpersisted_after alike.
+		{"never", true, store.ExpireNever, 10000 * time.Hour},
+		{"nevernolog", false, store.ExpireNever, 10000 * time.Hour},
+		// Longer than the schedule and not yet due, so kept where the schedule would remove it.
+		{"month", true, store.Expiry(720 * time.Hour), 2 * time.Hour},
+		{"monthnolog", false, store.Expiry(720 * time.Hour), 2 * time.Hour},
+		// Shorter than the schedule and due, so removed where the schedule would keep it.
+		{"short", true, store.Expiry(30 * time.Minute), 45 * time.Minute},
+		// No retention of its own, past expire_after: the control, removed on the schedule.
+		{"scheduled", true, 0, 2 * time.Hour},
+	} {
+		if err := st.Create(ctx, store.Session{
+			ID:               tc.id,
+			State:            store.StateExited,
+			PersistRequested: tc.persisted,
+			ExpireAfter:      tc.expiry,
+		}); err != nil {
+			t.Fatalf("Create(%s) error = %v", tc.id, err)
+		}
+		ageRecord(t, st, tc.id, now.Add(-tc.age))
+	}
+
+	removed, err := mgr.ExpireDeadSessions(ctx, now)
+	if err != nil {
+		t.Fatalf("ExpireDeadSessions() error = %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("removed %d sessions, want 2", removed)
+	}
+
+	records, err := st.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	var kept []string
+	for _, rec := range records {
+		kept = append(kept, rec.ID+"="+rec.ExpireAfter.String())
+	}
+	// Sorted, since the records were created within the same few milliseconds and List orders by creation.
+	slices.Sort(kept)
+	want := []string{"month=720h0m0s", "monthnolog=720h0m0s", "never=never", "nevernolog=never"}
+	if !slices.Equal(kept, want) {
+		t.Errorf("kept %q, want %q", kept, want)
 	}
 }
