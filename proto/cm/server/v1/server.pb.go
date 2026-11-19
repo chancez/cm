@@ -3887,7 +3887,11 @@ type Session struct {
 	AttachedClients []*AttachedClient `protobuf:"bytes,21,rep,name=attached_clients,json=attachedClients,proto3" json:"attached_clients,omitempty"`
 	// resume_argv is the command a program in the session declared it should be resumed with, empty when
 	// none is. From the record for a dead session, which is what a revive would run.
-	ResumeArgv    []string `protobuf:"bytes,30,rep,name=resume_argv,json=resumeArgv,proto3" json:"resume_argv,omitempty"`
+	ResumeArgv []string `protobuf:"bytes,30,rep,name=resume_argv,json=resumeArgv,proto3" json:"resume_argv,omitempty"`
+	// expire_after is the session's own retention once it has ended, from `cm kill --keep --expire-after`:
+	// a Go duration, or "never". Empty when the session follows the configured schedule, which is every
+	// session that was not kept with one, and every session revived since.
+	ExpireAfter   string `protobuf:"bytes,31,opt,name=expire_after,json=expireAfter,proto3" json:"expire_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4132,6 +4136,13 @@ func (x *Session) GetResumeArgv() []string {
 	return nil
 }
 
+func (x *Session) GetExpireAfter() string {
+	if x != nil {
+		return x.ExpireAfter
+	}
+	return ""
+}
+
 // LocationFrame is one command a session is inside.
 type LocationFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -4234,9 +4245,21 @@ type KillRequest struct {
 	// it did, for whom deleting the scrollback along with the shell is the opposite of the point.
 	//
 	// The record then follows the same path as a shell that exited on its own, so it is listed as exited
-	// and expires on the usual schedule. Cannot be combined with force, whose second half is "forget it
-	// even if the shim cannot be reached".
-	Keep          bool `protobuf:"varint,4,opt,name=keep,proto3" json:"keep,omitempty"`
+	// and expires on the usual schedule, unless expire_after gives it one of its own. Cannot be combined
+	// with force, whose second half is "forget it even if the shim cannot be reached".
+	Keep bool `protobuf:"varint,4,opt,name=keep,proto3" json:"keep,omitempty"`
+	// How long a kept session's record and saved output last once it has ended, replacing the configured
+	// expire_after, or forget_unpersisted_after for a session that saved nothing. A positive Go duration, or
+	// "never" to keep it until `cm forget` or `cm kill` removes it. Empty follows the schedule.
+	//
+	// For a session ended so that it can be revived later, which is what kspaces' suspend does: on the
+	// schedule, one suspended for longer than a week lost its record, its scrollback and its declared resume
+	// command. Stored with the record, so it survives a server restart, and not carried into a revive.
+	//
+	// Refused without keep, since a forgotten record has nothing left to expire. An older server ignores the
+	// field and keeps the session on the schedule, which the client checks for through the
+	// kill.expire-after capability rather than finding out a week later.
+	ExpireAfter   string `protobuf:"bytes,5,opt,name=expire_after,json=expireAfter,proto3" json:"expire_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4297,6 +4320,13 @@ func (x *KillRequest) GetKeep() bool {
 		return x.Keep
 	}
 	return false
+}
+
+func (x *KillRequest) GetExpireAfter() string {
+	if x != nil {
+		return x.ExpireAfter
+	}
+	return ""
 }
 
 type KillResponse struct {
@@ -5605,7 +5635,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\x81\t\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xa4\t\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5640,7 +5670,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"shim_build\x18\x1b \x01(\tR\tshimBuild\x12G\n" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x12\x1f\n" +
 	"\vresume_argv\x18\x1e \x03(\tR\n" +
-	"resumeArgv\x1a7\n" +
+	"resumeArgv\x12!\n" +
+	"\fexpire_after\x18\x1f \x01(\tR\vexpireAfter\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +
@@ -5648,12 +5679,13 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\rLocationFrame\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04argv\x18\x02 \x01(\tR\x04argv\x12\x18\n" +
-	"\asession\x18\x03 \x01(\tR\asession\"k\n" +
+	"\asession\x18\x03 \x01(\tR\asession\"\x8e\x01\n" +
 	"\vKillRequest\x12\x1a\n" +
 	"\bsessions\x18\x01 \x03(\tR\bsessions\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\x12\x16\n" +
 	"\x06signal\x18\x03 \x01(\x05R\x06signal\x12\x12\n" +
-	"\x04keep\x18\x04 \x01(\bR\x04keep\"\xc9\x03\n" +
+	"\x04keep\x18\x04 \x01(\bR\x04keep\x12!\n" +
+	"\fexpire_after\x18\x05 \x01(\tR\vexpireAfter\"\xc9\x03\n" +
 	"\fKillResponse\x12\x16\n" +
 	"\x06killed\x18\x01 \x03(\tR\x06killed\x12>\n" +
 	"\x06errors\x18\x02 \x03(\v2&.cm.server.v1.KillResponse.ErrorsEntryR\x06errors\x12G\n" +

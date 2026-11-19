@@ -8,7 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -20,6 +22,7 @@ func newKillCommand(g *globals) *cobra.Command {
 		all     bool
 		tagArgs []string
 		sigSpec string
+		expire  string
 	)
 	cmd := &cobra.Command{
 		Use:   "kill <session>...",
@@ -57,6 +60,17 @@ The session's shell stops, and the session is then listed as exited and expires
 on the usual schedule, exactly like a shell that exited on its own. It cannot be
 combined with --force, whose second half is the opposite.
 
+--expire-after gives a kept session a retention of its own, replacing
+expire_after (or forget_unpersisted_after for a session that saved nothing): a Go
+duration, or never to keep it until cm forget or cm kill removes it. To keep a
+session restorable indefinitely, which is how kspaces suspends one:
+
+  cm kill work --keep --expire-after never
+  cm attach work    # later: revives it, replaying its saved output
+
+The retention is stored with the record, so it survives a server restart, and
+reviving the session clears it. It needs --keep.
+
 --all kills every session the server knows, which is what a test harness or a
 teardown script wants: killing by name means enumerating them first, and a
 missed one leaves a shell and its pty behind.
@@ -85,6 +99,18 @@ selector matching nothing is an error rather than a silent success.`,
 				// reached" and keep says not to forget it, so one of the two was a mistake.
 				return errors.New("--force and --keep cannot be combined; --force forgets the session")
 			}
+			var expiry store.Expiry
+			if cmd.Flags().Changed("expire-after") {
+				if !keep {
+					// Refused rather than ignored: without --keep the record is forgotten now, so there is
+					// nothing left for a retention to apply to, and one of the two flags was a mistake.
+					return errors.New("--expire-after needs --keep; without it the session is forgotten now")
+				}
+				var err error
+				if expiry, err = store.ParseExpiry(expire); err != nil {
+					return fmt.Errorf("--expire-after: %w", err)
+				}
+			}
 			if all && len(tagArgs) > 0 {
 				// Refused rather than resolved. --all means every session and --tag means a subset, so
 				// one of the two was a mistake and guessing which would kill either too much or too
@@ -107,6 +133,15 @@ selector matching nothing is an error rather than a silent success.`,
 				}
 			}
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
+				if expiry != 0 {
+					// Before anything is killed. An older server reads the field as absent and keeps the
+					// session on the configured schedule while reporting success, so the failure would
+					// otherwise arrive a week later as a session that is simply gone.
+					if err := requireServerCapability(serverCapabilities(ctx, cl), capability.KillExpireAfter,
+						"keep a session for a retention of its own"); err != nil {
+						return err
+					}
+				}
 				names := args
 				switch {
 				case all:
@@ -138,10 +173,11 @@ selector matching nothing is an error rather than a silent success.`,
 					}
 				}
 				resp, err := cl.Kill(ctx, &serverv1.KillRequest{
-					Sessions: names,
-					Force:    force,
-					Signal:   sig,
-					Keep:     keep,
+					Sessions:    names,
+					Force:       force,
+					Signal:      sig,
+					Keep:        keep,
+					ExpireAfter: expiry.String(),
 				})
 				if err != nil {
 					return err
@@ -155,6 +191,8 @@ selector matching nothing is an error rather than a silent success.`,
 		"end the session with SIGKILL, and forget it even if its shim cannot be reached")
 	f.BoolVar(&keep, "keep", false,
 		"stop the shell but keep the session's record, names and saved output")
+	f.StringVar(&expire, "expire-after", "",
+		"with --keep, how long the ended session is kept: a Go duration, or never (default: the configured expire_after)")
 	f.StringVar(&sigSpec, "signal", "",
 		"signal to end the session with, by name or number (default hup, or kill with --force)")
 	f.BoolVar(&all, "all", false, "kill every session")

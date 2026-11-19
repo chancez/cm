@@ -1221,6 +1221,11 @@ message Session {
   // resume_argv is the command a program in the session declared it should be resumed with, empty when
   // none is. From the record for a dead session, which is what a revive would run.
   repeated string resume_argv = 30;
+
+  // expire_after is the session's own retention once it has ended, from `cm kill --keep --expire-after`:
+  // a Go duration, or "never". Empty when the session follows the configured schedule, which is every
+  // session that was not kept with one, and every session revived since.
+  string expire_after = 31;
 }
 
 // LocationFrame is one command a session is inside.
@@ -1270,9 +1275,21 @@ message KillRequest {
   // it did, for whom deleting the scrollback along with the shell is the opposite of the point.
   //
   // The record then follows the same path as a shell that exited on its own, so it is listed as exited
-  // and expires on the usual schedule. Cannot be combined with force, whose second half is "forget it
-  // even if the shim cannot be reached".
+  // and expires on the usual schedule, unless expire_after gives it one of its own. Cannot be combined
+  // with force, whose second half is "forget it even if the shim cannot be reached".
   bool keep = 4;
+  // How long a kept session's record and saved output last once it has ended, replacing the configured
+  // expire_after, or forget_unpersisted_after for a session that saved nothing. A positive Go duration, or
+  // "never" to keep it until `cm forget` or `cm kill` removes it. Empty follows the schedule.
+  //
+  // For a session ended so that it can be revived later, which is what kspaces' suspend does: on the
+  // schedule, one suspended for longer than a week lost its record, its scrollback and its declared resume
+  // command. Stored with the record, so it survives a server restart, and not carried into a revive.
+  //
+  // Refused without keep, since a forgotten record has nothing left to expire. An older server ignores the
+  // field and keeps the session on the schedule, which the client checks for through the
+  // kill.expire-after capability rather than finding out a week later.
+  string expire_after = 5;
 }
 
 message KillResponse {

@@ -28,6 +28,33 @@ func TestKillCommandRejectsForceWithKeep(t *testing.T) {
 	}
 }
 
+// --expire-after is refused without --keep, and with a value that is not a positive duration or never, before
+// any request goes out.
+//
+// Without --keep the record is forgotten at once, so a retention has nothing to apply to; reaching the server
+// would kill the session and silently drop the half of the request that said to keep it.
+func TestKillCommandValidatesExpireAfter(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--expire-after", "never", "work"}, "--expire-after needs --keep; without it the session is forgotten now"},
+		{[]string{"--force", "--expire-after", "never", "work"}, "--expire-after needs --keep; without it the session is forgotten now"},
+		{[]string{"--keep", "--expire-after", "0s", "work"}, `--expire-after: expiry must be positive or never, got "0s"`},
+		{[]string{"--keep", "--expire-after", "forever", "work"}, `--expire-after: expiry "forever": want a Go duration such as 720h, or never`},
+		{[]string{"--keep", "--expire-after", "", "work"}, `--expire-after: expiry "": want a Go duration such as 720h, or never`},
+	} {
+		cmd := newKillCommand(&globals{})
+		cmd.SetArgs(tc.args)
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetErr(new(bytes.Buffer))
+
+		if err := cmd.Execute(); err == nil || err.Error() != tc.want {
+			t.Errorf("Execute(%q) error = %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
 // A partly successful forget prints what went and fails, so a script sees both.
 //
 // The whole output is asserted rather than a substring: what a caller reads is every line together, and a

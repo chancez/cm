@@ -83,6 +83,14 @@ const (
 	// The same hang as WaitReportedState, for the two states that arrived with OSC 7501: an older server
 	// reads the state as one it does not know and never considers the wait satisfied.
 	WaitProgramStatus Name = "wait.program-status"
+
+	// KillExpireAfter means the server honors KillRequest.expire_after, giving a kept session its own
+	// retention.
+	//
+	// Without it the failure is silent and a week late: an older server reads the field as absent, keeps
+	// the session on the configured schedule, and reports success. A session suspended to be revived later
+	// then loses its record, its saved output and its resume command when expire_after passes.
+	KillExpireAfter Name = "kill.expire-after"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -258,6 +266,7 @@ func Server() Set {
 		WaitReportedState,
 		WaitMatch,
 		WaitProgramStatus,
+		KillExpireAfter,
 	)
 }
 

@@ -1018,6 +1018,9 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// The record's, which is what a revive of a dead session would run. A live session's is
 			// fresher and replaces it below.
 			ResumeArgv: rec.Resume.Argv,
+			// The record's, since nothing else holds one: only a kill that keeps the session writes it, and
+			// a revive does not carry it over.
+			ExpireAfter: rec.ExpireAfter.String(),
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.ID); live {
@@ -1161,13 +1164,28 @@ func sessionState(st store.State) serverv1.SessionState {
 }
 
 func (s *Service) Kill(ctx context.Context, req *serverv1.KillRequest) (*serverv1.KillResponse, error) {
+	// Checked for the whole request rather than per session, since the retention is the same for every
+	// session named and a malformed one is wrong for all of them.
+	var expiry store.Expiry
+	if req.ExpireAfter != "" {
+		if !req.Keep {
+			// A session that is forgotten now has no record left to expire, so a retention without keep
+			// was a mistake about which of the two was meant.
+			return nil, errors.New("expire_after needs keep: a killed session is forgotten at once")
+		}
+		var err error
+		if expiry, err = store.ParseExpiry(req.ExpireAfter); err != nil {
+			return nil, err
+		}
+	}
 	resp := &serverv1.KillResponse{Errors: make(map[string]string)}
 	for _, ref := range req.Sessions {
 		name := ref
 		outcome, err := s.killRef(ctx, ref, KillOptions{
-			Force:  req.Force,
-			Signal: req.Signal,
-			Keep:   req.Keep,
+			Force:       req.Force,
+			Signal:      req.Signal,
+			Keep:        req.Keep,
+			ExpireAfter: expiry,
 		})
 		if err == nil && outcome.unboundFrom != "" {
 			// The name was a borrower, so it let go and the session runs on. Reported apart from

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/store"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // `cm kill --keep` stops the shell and leaves everything there is to look at afterwards.
@@ -152,6 +153,36 @@ func TestKillWithKeepRecordsARetentionOnAnEndedSession(t *testing.T) {
 	want.CreatedAt, want.UpdatedAt = got.CreatedAt, got.UpdatedAt
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("record after the kill = %+v\nwant %+v", got, want)
+	}
+}
+
+// The service refuses a retention without keep, or one it cannot read, for the whole request and before
+// anything is killed.
+//
+// The client checks both too, but the server is what a remote or a script talking to the socket reaches, and
+// killing the sessions while dropping the retention would forget exactly what was asked to be kept.
+func TestServiceKillValidatesExpireAfter(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	svc := NewService(mgr)
+	ctx := context.Background()
+	recordSession(t, st, store.Session{ID: "ended", ShimSocket: dirs.ShimSocket("ended"), State: store.StateExited})
+
+	for _, tc := range []struct {
+		req  *serverv1.KillRequest
+		want string
+	}{
+		{&serverv1.KillRequest{Sessions: []string{"ended"}, ExpireAfter: "never"},
+			"expire_after needs keep: a killed session is forgotten at once"},
+		{&serverv1.KillRequest{Sessions: []string{"ended"}, Keep: true, ExpireAfter: "0s"},
+			`expiry must be positive or never, got "0s"`},
+	} {
+		resp, err := svc.Kill(ctx, tc.req)
+		if resp != nil || err == nil || err.Error() != tc.want {
+			t.Errorf("Kill(%v) = %v, %v; want nil, %q", tc.req, resp, err, tc.want)
+		}
+	}
+	if _, err := st.Get(ctx, "ended"); err != nil {
+		t.Errorf("Get() error = %v, want the session left alone by a refused request", err)
 	}
 }
 
