@@ -152,6 +152,31 @@ for week-old records would leave every finished command listed until the next ti
 Expiry is necessary rather than tidy: without it both the session list and the disk grow forever
 across reboots, and the session counter is already past 260 on the machine this is built for.
 
+### A session's own retention
+
+`cm kill NAME --keep --expire-after DURATION` replaces both intervals for one kept session, with a Go
+duration or `never`. It exists for suspending: kspaces stops a session's programs with `cm kill --keep` and
+revives it later with `cm attach`, and on the schedule a session suspended for longer than `expire_after`
+lost its record, its saved output and its declared resume command. `never` keeps it until `cm forget` or
+`cm kill` removes it:
+
+```sh
+cm kill work --keep --expire-after never   # keep it restorable indefinitely
+cm attach work                             # revives it, and clears the retention
+```
+
+The retention lives in the session's row (`expire_after`, nanoseconds, `-1` for never), so it survives a
+server restart or upgrade, and it is measured from the same `updated_at` as the schedule. A revive
+recreates the record without it, so a revived session that ends later follows the schedule again unless it
+is kept with a retention of its own again. `cm info` shows it as `expire_after`, empty when unset.
+
+An older server reads the field as absent and would keep the session on the schedule while reporting
+success, so the client checks the `kill.expire-after` capability first and refuses when the server
+conclusively lacks it.
+
+Rejected: a config-level pattern (`persist.keep_forever = ["kspaces-*"]`). Whether a session should outlive
+the schedule is decided at the moment it is suspended, by the tool suspending it, not by its name.
+
 ## How it fits together
 
 The shim mirrors pty output to a file (`internal/seqlog/file.go`). The file records the sequence

@@ -141,7 +141,11 @@ so treating unreachable as dead would forget a live shell that was merely slow. 
 running is marked dead by the next server start, and can be forgotten after that.
 
 Records also go on their own, on the schedule `expire_after` and `forget_unpersisted_after` set. See
-[persistence.md](persistence.md).
+[persistence.md](persistence.md). `cm kill --keep --expire-after DURATION` gives one kept session its own
+retention instead, a Go duration or `never`; `cm kill NAME --keep --expire-after never` keeps a session
+restorable indefinitely, which is how kspaces suspends one. `cm info` reports it as `expire_after`, empty
+for a session on the schedule. `--expire-after` needs `--keep`, and is refused against a server that
+reports capabilities without `kill.expire-after` rather than being silently ignored.
 
 ## JSON output
 
