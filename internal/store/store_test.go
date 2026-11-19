@@ -47,7 +47,9 @@ func sampleSession(id string) Session {
 		Env:        map[string]string{"KITTY_LISTEN_ON": "unix:/tmp/kitty-1", "TERM": "xterm-kitty"},
 		Tags:       map[string]string{"project": "cm", "role": "reviewer", "review": ""},
 		PromptSeen: true,
-		CreatedAt:  time.UnixMilli(1_700_000_000_000),
+		// Not a whole number of milliseconds, unlike the timestamps, so a column that rounded would show.
+		ExpireAfter: Expiry(720*time.Hour + time.Microsecond),
+		CreatedAt:   time.UnixMilli(1_700_000_000_000),
 	}
 }
 
@@ -757,5 +759,69 @@ func TestApplyRecordsPromptSeen(t *testing.T) {
 	want.UpdatedAt = got.UpdatedAt
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Get() = %+v\nwant %+v", got, want)
+	}
+}
+
+// A session's own retention reads back exactly, never included, and clearing it returns the record to the
+// configured schedule.
+//
+// The whole record each time, since the column sits beside prompt_seen and a scan that shifted by one would
+// read one into the other.
+func TestApplyRoundTripsAnExpiry(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rec := sampleSession("kept")
+	rec.ExpireAfter = 0
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, e := range []Expiry{ExpireNever, Expiry(90 * time.Minute), 0} {
+		if err := s.Apply(ctx, "kept", Update{ExpireAfter: new(e)}); err != nil {
+			t.Fatalf("Apply(%v) error = %v", e, err)
+		}
+		got, err := s.Get(ctx, "kept")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		want := rec
+		want.ExpireAfter = e
+		want.UpdatedAt = got.UpdatedAt
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("after Apply(%q), Get() = %+v\nwant %+v", e, got, want)
+		}
+	}
+}
+
+// An expiry is a positive duration or never, and renders back the way it was read.
+//
+// Zero is refused for the reason expire_after refuses it: it would delete a record the moment its session
+// ended, which nobody means by writing it.
+func TestParseExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    Expiry
+		wantStr string
+	}{
+		{"never", ExpireNever, "never"},
+		{"720h", Expiry(720 * time.Hour), "720h0m0s"},
+		{"90m", Expiry(90 * time.Minute), "1h30m0s"},
+	} {
+		got, err := ParseExpiry(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("ParseExpiry(%q) = (%v, %v), want (%v, nil)", tc.in, int64(got), err, int64(tc.want))
+		}
+		if got.String() != tc.wantStr {
+			t.Errorf("ParseExpiry(%q).String() = %q, want %q", tc.in, got.String(), tc.wantStr)
+		}
+	}
+	for _, in := range []string{"", "0s", "-1h", "forever", "Never"} {
+		if got, err := ParseExpiry(in); err == nil {
+			t.Errorf("ParseExpiry(%q) = %v, nil error, want a rejection", in, int64(got))
+		}
+	}
+	// The zero value is "none set", which is what `cm info` prints for a session following the schedule.
+	if got := Expiry(0).String(); got != "" {
+		t.Errorf("Expiry(0).String() = %q, want empty", got)
 	}
 }

@@ -218,8 +218,12 @@ type Session struct {
 	// idle since its last prompt has none left in it. Two sessions on a live install were reported by
 	// `cm doctor` as having no integration after a server restart, with 2 and 22 commands in their logs.
 	PromptSeen bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// ExpireAfter is this session's own retention once it has ended, overriding the configured schedule.
+	// Zero follows the schedule. Set by `cm kill --keep --expire-after`, and not carried into a revive, so a
+	// revived session that ends later follows the schedule again. See Expiry.
+	ExpireAfter Expiry
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // BackupPath names the snapshot taken before migrating a database off a given schema version.
@@ -526,5 +530,13 @@ var migrations = []string{
 	// Whether the shell has ever sent an OSC 133 marker. See Session.PromptSeen.
 	`
 	ALTER TABLE sessions ADD COLUMN prompt_seen INTEGER NOT NULL DEFAULT 0;
+	`,
+	// A session's own retention once it has ended, overriding expire_after. See Session.ExpireAfter.
+	//
+	// Nanoseconds, so a time.Duration round-trips exactly, with 0 meaning the configured schedule and -1
+	// meaning never. An integer rather than the duration string a user typed, so expiry compares a number
+	// rather than parsing every row on every sweep.
+	`
+	ALTER TABLE sessions ADD COLUMN expire_after INTEGER NOT NULL DEFAULT 0;
 	`,
 }

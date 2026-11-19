@@ -14,7 +14,7 @@ import (
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
-	reported_at, resume_argv, resume_frame, prompt_seen`
+	reported_at, resume_argv, resume_frame, prompt_seen, expire_after`
 
 // Create inserts a session record.
 //
@@ -32,7 +32,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
@@ -40,7 +40,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
-		sess.PromptSeen,
+		sess.PromptSeen, int64(sess.ExpireAfter),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -136,6 +136,56 @@ type Update struct {
 	// PromptSeen records that the shell has sent an OSC 133 marker. Only ever set to true: a shell does
 	// not unload its integration.
 	PromptSeen *bool
+	// ExpireAfter replaces the session's own retention. A non-nil pointer to zero clears it, returning the
+	// session to the configured schedule.
+	ExpireAfter *Expiry
+}
+
+// Expiry is how long a session's record is kept once it has ended, when the session has a retention of its
+// own rather than the configured schedule.
+//
+// The zero value is that schedule: expire_after for a session that asked to persist, and
+// forget_unpersisted_after for one that did not. ExpireNever keeps the record until `cm forget` or `cm
+// kill` removes it. Exists for a session ended so that it can be revived later, which is what kspaces'
+// suspend does with `cm kill --keep`: on the schedule, a session suspended for longer than a week lost its
+// record, its saved output and its declared resume command.
+type Expiry time.Duration
+
+// ExpireNever keeps an ended session's record until something removes it deliberately. Any negative value
+// reads as never, so no stored value can expire a record sooner than asked.
+const ExpireNever Expiry = -1
+
+// ParseExpiry reads an expiry as a user writes one: a positive Go duration, or "never".
+//
+// Zero and negative durations are refused for the reason the configured expire_after refuses them: zero
+// would delete the record the moment the session ended, which nobody means by writing it.
+func ParseExpiry(s string) (Expiry, error) {
+	if s == "never" {
+		return ExpireNever, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("expiry %q: want a Go duration such as 720h, or never", s)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("expiry must be positive or never, got %q", s)
+	}
+	return Expiry(d), nil
+}
+
+// Never reports whether the record is kept until it is removed deliberately.
+func (e Expiry) Never() bool { return e < 0 }
+
+// String renders an expiry the way ParseExpiry reads one, and the zero value as empty, since that means no
+// retention of its own was set.
+func (e Expiry) String() string {
+	switch {
+	case e == 0:
+		return ""
+	case e.Never():
+		return "never"
+	}
+	return time.Duration(e).String()
 }
 
 // ResumeCommand is what a program declared it should be restarted with.
@@ -236,6 +286,9 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	if u.PromptSeen != nil {
 		add("prompt_seen", *u.PromptSeen)
 	}
+	if u.ExpireAfter != nil {
+		add("expire_after", int64(*u.ExpireAfter))
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -320,17 +373,18 @@ type scanner interface {
 
 func scanSession(sc scanner) (Session, error) {
 	var (
-		sess       Session
-		lastSeq    int64
-		clientSeq  int64
-		state      string
-		created    int64
-		updated    int64
-		envJSON    string
-		requested  bool
-		tagsJSON   string
-		reportedAt int64
-		resumeArgv string
+		sess        Session
+		lastSeq     int64
+		clientSeq   int64
+		state       string
+		created     int64
+		updated     int64
+		envJSON     string
+		requested   bool
+		tagsJSON    string
+		reportedAt  int64
+		resumeArgv  string
+		expireAfter int64
 	)
 	err := sc.Scan(
 		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
@@ -338,7 +392,7 @@ func scanSession(sc scanner) (Session, error) {
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
-		&sess.PromptSeen,
+		&sess.PromptSeen, &expireAfter,
 	)
 	if err != nil {
 		return Session{}, err
@@ -358,6 +412,7 @@ func scanSession(sc scanner) (Session, error) {
 	sess.ClientSeq = seq.Log(clientSeq)
 	sess.State = State(state)
 	sess.PersistRequested = requested
+	sess.ExpireAfter = Expiry(expireAfter)
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return sess, nil
