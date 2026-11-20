@@ -36,8 +36,9 @@ type sessionJSON struct {
 	ID string `json:"id"`
 	// Names is every name bound to this session, oldest first, and empty for one nothing names.
 	Names []string `json:"names"`
-	// State is "running", "exited", or "dead". Prefer it over exit_code alone: a dead session's
-	// outcome is unknown rather than zero.
+	// State is "running", "exited", "dead", or "shelved". Prefer it over exit_code alone: a dead
+	// session's outcome is unknown rather than zero, and a shelved one was ended on purpose by `cm
+	// shelve` to be restored later.
 	State string `json:"state"`
 	// ShellPID is 0 once the shell has exited.
 	ShellPID int32 `json:"shell_pid"`
@@ -414,6 +415,8 @@ func stateName(s *serverv1.Session) string {
 		return "exited"
 	case serverv1.SessionState_SESSION_STATE_DEAD:
 		return "dead"
+	case serverv1.SessionState_SESSION_STATE_SHELVED:
+		return "shelved"
 	}
 	if s.Exited {
 		return "exited"

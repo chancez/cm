@@ -89,6 +89,15 @@ the window, or the process being killed all leave the shell running. Ending one 
 Attaching from inside a session creates a nested session rather than hijacking the window you
 ran it from.
 
+Shelving ends a persisted session's programs but keeps everything needed to bring it back as it
+was: its names, tags, saved output and the resume command a program declared with `cm restore-with`.
+It is not ctrl-z (SIGTSTP): the processes end, and restoring starts them again from what was kept.
+
+```sh
+cm shelve work               # listed as shelved; kept until restored or removed
+cm attach work                  # restore it and attach
+```
+
 Detaching is `ctrl-\` by default. Set `detach_key` in the config file to change it, or
 `--detach-key` for one attachment, which is what you want when something outside cm already
 claims the key.
@@ -145,7 +154,7 @@ cm tag build project=cm                            # or afterwards
 cm ls --tag project=cm                             # repeating --tag narrows
 ```
 
-`--tag` then selects on `list`, `info`, `read`, `history`, `wait`, `signal`, and `kill`, so a
+`--tag` then selects on `list`, `info`, `read`, `history`, `wait`, `signal`, `kill`, and `shelve`, so a
 group created together can be driven as one:
 
 ```sh

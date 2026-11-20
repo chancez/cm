@@ -136,6 +136,12 @@ it.
 A dead session with a saved log stays listed, marked restorable, so it can be found and revived.
 It is removed after `expire_after`, defaulting to a week.
 
+A shelved session is the deliberate form of that: `cm shelve` ended it so it could be restored as it
+was, and it is listed as `shelved` rather than `exited` or `dead`. It does not expire unless
+`--expire-after` gave it a retention, and `cm forget --ended` leaves it. Those are the only differences: an
+attach revives it as it revives any other ended session. Shelve is not SIGTSTP. See
+[cli.md](cli.md#shelving-a-session).
+
 A session that ended *without* saving a log is a different case, and gets `forget_unpersisted_after`,
 defaulting to five minutes. Nothing about such a session can be recovered: with no log path,
 `cm history` can only report that its output is gone. The only reason to keep the record at all is

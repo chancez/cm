@@ -12,6 +12,7 @@ type ServerService interface {
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
+	Shelve(context.Context, *ShelveRequest) (*ShelveResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -76,6 +77,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 					return nil, err
 				}
 				return svc.Forget(ctx, &req)
+			},
+			"Shelve": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ShelveRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Shelve(ctx, &req)
 			},
 			"Send": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req SendRequest
@@ -214,6 +222,7 @@ type ServerClient interface {
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
+	Shelve(context.Context, *ShelveRequest) (*ShelveResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -296,6 +305,14 @@ func (c *serverClient) Kill(ctx context.Context, req *KillRequest) (*KillRespons
 func (c *serverClient) Forget(ctx context.Context, req *ForgetRequest) (*ForgetResponse, error) {
 	var resp ForgetResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Forget", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Shelve(ctx context.Context, req *ShelveRequest) (*ShelveResponse, error) {
+	var resp ShelveResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Shelve", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

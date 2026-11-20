@@ -31,6 +31,13 @@ service Server {
   // the verb's job is to end one.
   rpc Forget(ForgetRequest) returns (ForgetResponse);
 
+  // Shelve ends sessions deliberately, keeping everything needed to bring each back as it was.
+  //
+  // Not SIGTSTP, which is what "suspend" means in a shell: nothing is stopped to be continued. The
+  // processes end, and the record, names, tags, saved output and declared resume command are kept for an
+  // attach to start them again. Needs the shelve capability.
+  rpc Shelve(ShelveRequest) returns (ShelveResponse);
+
   // Send writes bytes to a session's shell without attaching to it.
   rpc Send(SendRequest) returns (SendResponse);
 
@@ -1057,6 +1064,11 @@ enum SessionState {
   // The shim could not be reached. Distinct from exited because the outcome is unknown rather
   // than observed, so exit_code means nothing.
   SESSION_STATE_DEAD = 3;
+  // The session was ended deliberately by `cm shelve`, keeping what it needs to come back as it was:
+  // its record, names, tags, saved output and declared resume command. Ended like exited and dead, so
+  // exited is set too, and an older client that does not know this value shows it as exited. Not
+  // SIGTSTP: nothing is stopped, the processes are gone, and an attach starts them again.
+  SESSION_STATE_SHELVED = 4;
 }
 
 message Session {
@@ -1347,6 +1359,23 @@ message ForgetResponse {
   // Sessions that could not be forgotten, keyed by name. Shaped like KillResponse.errors, and the
   // expected entry is a session that is still running.
   map<string, string> errors = 2;
+}
+
+message ShelveRequest {
+  repeated string sessions = 1;
+  // How long the shelved record lasts, as KillRequest.expire_after reads it: a positive Go duration or
+  // "never". Empty is never, since a shelved session is kept until it is restored or removed.
+  string expire_after = 2;
+}
+
+message ShelveResponse {
+  // Sessions now shelved, by the reference the caller gave.
+  repeated string shelved = 1;
+  // Sessions that already were, reported apart so a caller can tell nothing happened.
+  repeated string already_shelved = 2;
+  // Sessions that could not be shelved, keyed by reference: one that saved no output, or one whose
+  // processes survived SIGKILL.
+  map<string, string> errors = 3;
 }
 
 message SwitchRequest {

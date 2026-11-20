@@ -799,6 +799,12 @@ func (m *Manager) watch(sess *Session) {
 		state = store.StateDead
 		code = 0
 	}
+	// Ended by `cm shelve`, which writes the same state and code once the shell has gone. Both writers
+	// say the same thing, so neither order can leave the record saying exited or dead. The code is zeroed
+	// because it is the hangup's, which describes nothing about the session. See Manager.Shelve.
+	if sess.shelving.Load() {
+		state, code = store.StateShelved, 0
+	}
 
 	// An interactive session whose shell exited is finished business, so its record goes now rather than
 	// waiting out the forget interval.

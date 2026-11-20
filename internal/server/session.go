@@ -467,6 +467,10 @@ type Session struct {
 	// Set by Kill before the shell is stopped, since watch() runs the moment it dies and the frame closes
 	// before that, and cleared again if the kill fails with the shell still running.
 	keepRecord atomic.Bool
+	// shelving records that `cm shelve` is ending the session, so watch() records it as shelved
+	// rather than exited or dead. Without it the two writes race, and whichever landed second decided what
+	// the session was. Set before the kill, alongside keepRecord, and cleared if the kill fails.
+	shelving atomic.Bool
 
 	// clients counts attached clients for reporting.
 	clients atomic.Int64

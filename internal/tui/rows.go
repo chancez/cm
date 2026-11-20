@@ -66,6 +66,10 @@ func (i item) state() string {
 		// Not "exited": the shim could not be reached, so the outcome is unknown rather than
 		// observed, and ExitCode means nothing.
 		return "dead"
+	case s.State == serverv1.SessionState_SESSION_STATE_SHELVED:
+		// Before the exited case, which the exited flag would otherwise take: a shelved session is
+		// ended on purpose and comes back as it was, which is what the row has to say.
+		return "shelved"
 	case s.State == serverv1.SessionState_SESSION_STATE_EXITED || s.Exited:
 		return fmt.Sprintf("exited(%d)", s.ExitCode)
 	case s.ReportedState != "":

@@ -703,14 +703,15 @@ func (s *Session) SignalAndCheck(sig syscall.Signal, grace time.Duration) (pgid 
 	time.Sleep(grace)
 
 	for _, pid := range members {
-		if processLives(pid) {
+		if ProcessLives(pid) {
 			surviving = append(surviving, pid)
 		}
 	}
 	return pgid, surviving, nil
 }
 
-// processLives reports whether a pid is a process still running, rather than merely a pid that exists.
+// ProcessLives reports whether a pid is a process still running, rather than merely a pid that exists.
+// Exported for the server, which confirms a shelved session's shell has gone before recording it so.
 //
 // The distinction is the whole point. Signal 0 asks whether a pid exists without delivering anything, and a
 // zombie exists: it has died but its parent has not reaped it yet, so the entry stays until wait() collects
@@ -726,7 +727,7 @@ func (s *Session) SignalAndCheck(sig syscall.Signal, grace time.Duration) (pgid 
 // Reading /proc where it exists, since it answers directly with no subprocess, and asking ps elsewhere.
 // A pid whose state cannot be determined either way counts as living, so an unparseable answer loses the
 // zombie refinement rather than suppressing a real leak warning.
-func processLives(pid int) bool {
+func ProcessLives(pid int) bool {
 	if syscall.Kill(pid, 0) != nil {
 		return false
 	}

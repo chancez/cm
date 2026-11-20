@@ -203,7 +203,7 @@ Three parts, each useful without the others. The declared part and the policy ar
 `on_restore = "command"` and `safe_commands` never saw the program running in it. The shell integration
 reports what is running as command frames, and the line of the session's outermost open frame is now kept
 with the record as `typed_command`: set when that frame opens, dropped when it closes at a prompt, so a
-program the user quit is not brought back, and frozen while `cm kill --keep` ends the
+program the user quit is not brought back, and frozen while `cm kill --keep` or `cm shelve` ends the
 session, as the declaration is. It also keeps a wrapper's argv out of it: tmux-resurrect restores rbenv's
 expanded `ruby` path because `ps` is all it has. `cm info --json` shows it as `typed_command`, beside the live
 `command`.
@@ -242,7 +242,7 @@ program's frame then, not the program quitting: zsh prints `zsh: hangup` and dra
 and the declaration went with that frame 36ms after a `cm kill NAME --keep --expire-after never`, so a
 suspended session revived into a bare shell. A clear or a new declaration from the dying program is
 ignored too, since an exit hook can send either. A plain `cm kill` forgets the session anyway, and a kill
-that fails with the shell still running unfreezes it.
+that fails with the shell still running unfreezes it. `cm shelve` freezes it the same way.
 
 The declaration is written to the store when it arrives. It cannot be recovered from the persisted log the
 way an OSC 7501 report is, because a declaration made at a program's startup has been trimmed out of the

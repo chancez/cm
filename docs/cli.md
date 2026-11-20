@@ -147,9 +147,44 @@ restorable indefinitely, which is how kspaces suspends one. `cm info` reports it
 for a session on the schedule. `--expire-after` needs `--keep`, and is refused against a server that
 reports capabilities without `kill.expire-after` rather than being silently ignored.
 
+## Shelving a session
+
+```sh
+cm shelve NAME... [--tag K[=V]]... [--expire-after DURATION|never] [--json]
+```
+
+`cm shelve` ends a session's programs and keeps everything needed to bring it back as it was: the
+record, names, tags, saved output and declared resume command. The session is listed with the state
+`shelved`, beside `running`, `exited` and `dead`. It is not SIGTSTP, which is what "suspend" means in a
+shell: nothing is stopped to be continued. The shell is sent SIGHUP as `cm kill --keep` sends it, the
+declaration is frozen as it was when the shelving began, and the server waits up to 3s for the shell and
+anything else the hangup reached to exit, then SIGKILLs what is left. The wait is why a shelved session
+is never recorded as `dead`: the shim stops serving shortly after it answers a Shutdown whether or not the
+shell has exited, so zsh under `cm kill --keep` was recorded as dead with no status.
+
+| Session | `cm shelve` |
+| --- | --- |
+| running, saving output | ended, then shelved |
+| exited or dead, saved output | shelved as it stands, keeping its declaration |
+| already shelved | reported as `NAME is already shelved`, nothing changes |
+| saved no output | refused: a restore would come back to an empty screen |
+
+A shelved session does not expire. `--expire-after` gives it a retention counted from the shelving,
+the same per-session retention as `cm kill --keep --expire-after`, and `cm info` reports it as
+`expire_after`, `never` by default. `cm kill` and `cm forget` remove one at once; `cm forget --ended` leaves
+it, since that clears what was left behind and this was kept on purpose.
+
+`cm attach` on a shelved session brings it back and attaches, and `--no-attach` brings it back without
+attaching: it revives as any ended session that saved output does, and the retention is cleared. The states
+differ only in how the session got there, its label, its retention, and `cm forget --ended` leaving a
+shelved one alone.
+
+`cm shelve` is refused against a server that reports capabilities without `shelve`, naming the
+restart that fixes it.
+
 ## JSON output
 
-`list`, `info`, `kill`, `forget`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
+`list`, `info`, `kill`, `forget`, `shelve`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
 `clients current`, `clients upgrade`, and `clients restart` accept
 `--json`.

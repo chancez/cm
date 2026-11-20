@@ -280,6 +280,9 @@ func TestStateName(t *testing.T) {
 		{"running", serverv1.SessionState_SESSION_STATE_RUNNING, false, "running"},
 		{"exited", serverv1.SessionState_SESSION_STATE_EXITED, true, "exited"},
 		{"dead", serverv1.SessionState_SESSION_STATE_DEAD, true, "dead"},
+		// The exited flag is set for a shelved session too, so an older client says exited; this one
+		// must say what it is.
+		{"shelved", serverv1.SessionState_SESSION_STATE_SHELVED, true, "shelved"},
 		// A server predating the enum sends only the boolean, and a newer client must still report
 		// something truthful rather than "unspecified".
 		{"legacy running", serverv1.SessionState_SESSION_STATE_UNSPECIFIED, false, "running"},

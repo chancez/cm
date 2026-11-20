@@ -135,6 +135,13 @@ const (
 	// distinct from exited because the outcome is unknown rather than observed, and a
 	// future version may be able to resurrect these from the output log.
 	StateDead State = "dead"
+	// StateShelved means `cm shelve` ended the session deliberately so it can be restored as it was:
+	// the record, names, tags, saved output and declared resume command are kept, and it does not expire
+	// unless it was given a retention. Ended, like exited and dead, but chosen rather than observed.
+	//
+	// No migration: the column is text, and a build that predates this reads an unknown state as an
+	// ended session, which revives it the way a reboot would.
+	StateShelved State = "shelved"
 )
 
 // Session is a persisted session record.

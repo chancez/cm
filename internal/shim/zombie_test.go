@@ -12,8 +12,8 @@ import (
 //
 // The two ends of the range, so the interesting case below is not the only coverage.
 func TestProcessLivesOnRunningAndGoneProcesses(t *testing.T) {
-	if !processLives(os.Getpid()) {
-		t.Error("processLives(self) = false, want true for a process that is plainly running")
+	if !ProcessLives(os.Getpid()) {
+		t.Error("ProcessLives(self) = false, want true for a process that is plainly running")
 	}
 
 	cmd := exec.Command("/bin/sh", "-c", "exit 0")
@@ -25,8 +25,8 @@ func TestProcessLivesOnRunningAndGoneProcesses(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("waiting for it: %v", err)
 	}
-	if processLives(pid) {
-		t.Errorf("processLives(%d) = true after the process exited and was reaped, want false", pid)
+	if ProcessLives(pid) {
+		t.Errorf("ProcessLives(%d) = true after the process exited and was reaped, want false", pid)
 	}
 }
 
@@ -53,12 +53,12 @@ func TestProcessLivesTreatsAZombieAsGone(t *testing.T) {
 		if syscall.Kill(pid, 0) != nil {
 			t.Skip("the process was reaped before it could be observed as a zombie")
 		}
-		if !processLives(pid) {
+		if !ProcessLives(pid) {
 			// A pid that exists but does not live: exactly the state being tested.
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("processLives(%d) still true after 5s, want false once it became a zombie; "+
+			t.Fatalf("ProcessLives(%d) still true after 5s, want false once it became a zombie; "+
 				"a SIGKILLed process would be reported as having survived SIGKILL", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -73,7 +73,7 @@ func TestProcessLivesTreatsAZombieAsGone(t *testing.T) {
 // The end-to-end shape of the same bug at the unit level, without a server or a pty: what the leak check
 // reports is what the warning prints, so a false survivor here is a false warning to the user.
 // Through SignalAndCheck rather than by reimplementing its loop. An earlier version of this test called
-// processLives directly, which meant it passed with the fix mutated back out: it was testing the helper it
+// ProcessLives directly, which meant it passed with the fix mutated back out: it was testing the helper it
 // had been told to use rather than what the shim actually does.
 //
 // It only stands guard on Linux. Verified by mutation: with the zombie-blind check restored this fails there

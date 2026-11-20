@@ -45,7 +45,8 @@ reason this exists at all:
 
 Spelled differently from 'kill --all' because it means something narrower, every
 *ended* session rather than every session. A running session is not touched or
-reported, so this is safe to run against a server holding live work.`,
+reported, so this is safe to run against a server holding live work. Nor is a
+shelved one, which was ended on purpose to be restored; forget it by name.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if ended {
 				if len(args) > 0 {

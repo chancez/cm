@@ -1044,6 +1044,11 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 					item.ExitCode = 0
 					item.State = serverv1.SessionState_SESSION_STATE_DEAD
 				}
+				if sess.shelving.Load() {
+					// Ended by `cm shelve`, whose record write may not have landed yet.
+					item.ExitCode = 0
+					item.State = serverv1.SessionState_SESSION_STATE_SHELVED
+				}
 			}
 
 			// Only from a live session, like busy below and for the same reason: this describes two
@@ -1161,6 +1166,8 @@ func sessionState(st store.State) serverv1.SessionState {
 		return serverv1.SessionState_SESSION_STATE_EXITED
 	case store.StateDead:
 		return serverv1.SessionState_SESSION_STATE_DEAD
+	case store.StateShelved:
+		return serverv1.SessionState_SESSION_STATE_SHELVED
 	default:
 		return serverv1.SessionState_SESSION_STATE_UNSPECIFIED
 	}
@@ -1238,7 +1245,9 @@ func (s *Service) Forget(
 		}
 		refs = nil
 		for _, rec := range listed {
-			if rec.State == store.StateRunning {
+			// Shelved sessions too: --ended clears what was left behind, and a shelved session was
+			// kept on purpose. Forgetting one by name still works.
+			if rec.State == store.StateRunning || rec.State == store.StateShelved {
 				continue
 			}
 			// By ID, so the request cannot be diverted by a name that moves between the list and the call.

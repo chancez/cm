@@ -55,6 +55,26 @@ func TestARowNamesASessionWithNoBindings(t *testing.T) {
 	}
 }
 
+// Each ended state reads as itself, and a shelved session is not shown as exited.
+//
+// The server sets the exited flag on a shelved session as well, for older clients, so a row that checked
+// the flag before the state would call a session ended on purpose to be restored later "exited(0)".
+func TestARowSaysWhichWayASessionEnded(t *testing.T) {
+	var got []string
+	for _, state := range []serverv1.SessionState{
+		serverv1.SessionState_SESSION_STATE_EXITED,
+		serverv1.SessionState_SESSION_STATE_DEAD,
+		serverv1.SessionState_SESSION_STATE_SHELVED,
+	} {
+		s := sessionNamed("a7k2m9x4", "work")
+		s.State, s.Exited, s.ExitCode = state, true, 3
+		got = append(got, item{session: s}.state())
+	}
+	if want := []string{"exited(3)", "dead", "shelved"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("state() = %q, want %q", got, want)
+	}
+}
+
 // The name cell drops whole names when a set does not fit, never part of one.
 //
 // A reader is expected to type what the cell shows, so "kitty.325,refac" would be a name that resolves to
