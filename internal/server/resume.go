@@ -310,12 +310,58 @@ func (s *Service) SetResume(ctx context.Context, req *serverv1.SetResumeRequest)
 	return &serverv1.SetResumeResponse{}, nil
 }
 
-// typedCommand is a command typed into a new session's shell once it prompts: a declared resume command a
-// revive restores, or the command of an attach asking for it to run in the shell. See OpenOptions.InShell.
+// typedCommand is a command typed into a new session's shell once it prompts: what a revive brings back, or
+// the command of an attach asking for it to run in the shell. See OpenOptions.InShell.
 type typedCommand struct {
 	argv []string
+	// line is typed verbatim instead of argv, for a typed command, which is a line the shell reported rather
+	// than an argv and is typed back for the same shell to parse again.
+	line string
 	// run submits the line. Without it the command sits on the prompt for the user to run, edit, or clear.
 	run bool
+	// declared says this is the session's declared resume command, which the new record carries forward
+	// bound to the next frame. Nothing else is carried: a typed or recorded command is recorded again by the
+	// frame its typed line opens.
+	declared bool
+}
+
+// restoreWhatRan decides what a revive brings back when the caller named no command, in order:
+//
+//  1. the declared resume command, from `cm restore-with`, since the program said how to bring itself back;
+//     an empty declaration from `restore-with --clear` stops here with nothing;
+//  2. else the typed command, the line the shell was running, in a session that runs a shell of its own;
+//  3. else the spawn argv, when it is a program rather than just a shell;
+//  4. else a shell, which is what a revive starts anyway.
+//
+// The policy for each is the one a recorded command always had: under on_restore = "command" it runs when
+// the session asked for command or the program is in safe_commands, and is prefilled otherwise; "prefill"
+// prefills; "shell" brings nothing back. Prefilled rather than dropped, because the user asked for the
+// command back and the safe form of that is one keypress away from it.
+func (m *Manager) restoreWhatRan(opts OpenOptions, rec store.Session, action RestoreAction) OpenOptions {
+	if action != RestorePrefill && action != RestoreCommand {
+		return opts
+	}
+	explicit := opts.OnRestore == RestoreCommand
+	switch {
+	case len(rec.Resume.Argv) > 0:
+		opts.typeOnStart = m.restoreDeclared(rec.Resume.Argv, action, explicit)
+	case rec.Resume.Frame != "" && rec.Resume.Frame != resumeNextFrame:
+		// Cleared in a frame that was still open, which says nothing is to come back for it.
+	case rec.Typed.Line != "" && runsAShell(rec.Command):
+		// A session that is a program, like an ssh, comes back as that program rather than as a line its far
+		// side ran. Such a session records no typed command now, but a record kept before that rule has one.
+		opts.typeOnStart = m.restoreTyped(rec.Typed.Line, action, explicit)
+	case len(rec.Command) > 0 && !isJustAShell(rec.Command):
+		argv := slices.Clone(rec.Command)
+		// Exec'd in place when it runs, as a recorded command always was, rather than typed: it is what the
+		// session was, not something its shell ran.
+		if action == RestoreCommand && (explicit || m.safeToRerun(argv)) {
+			opts.Command = argv
+		} else {
+			opts.typeOnStart = &typedCommand{argv: argv}
+		}
+	}
+	return opts
 }
 
 // restoreDeclared decides how a revive restores a declared command.
@@ -323,18 +369,145 @@ type typedCommand struct {
 // Typed into a shell rather than exec'd as the session's command, as kitty does for cmd_at_shell_startup:
 // quitting a resumed program should leave the window at a prompt rather than close it. Typing also means
 // the shell's preexec hook opens a frame for it, which is what the carried declaration binds to.
-//
-// Running it is the one outcome that executes something the user did not type just now, so it takes what
-// re-running the recorded command takes: asking for it on this session, or the program being on the
-// allowlist. Otherwise it is prefilled rather than dropped, which is what on_restore = "command" without
-// the allowlist would otherwise mean: the user asked for the command back, and the safe form of that is
-// one keypress away from it.
 func (m *Manager) restoreDeclared(argv []string, action RestoreAction, explicit bool) *typedCommand {
-	run := false
-	if action == RestoreCommand {
-		run = explicit || (m.persist.CommandIsSafeToRerun != nil && m.persist.CommandIsSafeToRerun(argv))
+	run := action == RestoreCommand && (explicit || m.safeToRerun(argv))
+	return &typedCommand{argv: slices.Clone(argv), run: run, declared: true}
+}
+
+// restoreTyped decides how a revive restores a typed command, typed back verbatim like a declared one.
+//
+// It runs only when it is a plain program invocation, whatever the allowlist or the session's own
+// --on-restore says, since the line goes to a shell that runs all of it: with `sleep` allowlisted, `sleep 1;
+// rm -rf x` would otherwise run in full. Anything else is prefilled, one keypress away. safe_commands is
+// matched against the program word as the shell would read it, quotes removed. A line at the length the
+// shells and the parser truncate to is never run either, since its end may have been cut off.
+func (m *Manager) restoreTyped(line string, action RestoreAction, explicit bool) *typedCommand {
+	argv, plain := plainInvocation(line)
+	run := action == RestoreCommand && plain && (explicit || m.safeToRerun(argv)) &&
+		len(line) < osc.MaxFrameArgv
+	return &typedCommand{line: line, run: run}
+}
+
+// plainInvocation splits a typed line into its words when it is nothing but a program and its arguments,
+// reporting false for anything a shell would read as more than that.
+//
+// Words are separated by spaces and tabs, and may be quoted with '...' or "...". Refused, so the line is only
+// ever prefilled:
+//
+//   - operators and grouping: ; | & < > ( ) { }, which covers &&, ||, >> and here-documents;
+//   - expansions: $ and `, outside quotes or inside double quotes;
+//   - globs and their zsh relatives: * ? [ outside quotes, and # ^ which zsh's extended globbing reads as
+//     patterns;
+//   - history: ! anywhere outside single quotes, and a leading ^, which is bash and zsh quick substitution;
+//   - a backslash outside single quotes, which covers a continuation, and a newline anywhere;
+//   - a ~ that is not a lone word or the start of ~/, so ~user and zsh's a~b exclusion are refused;
+//   - a word starting with =, which zsh expands to a command's path;
+//   - a first word that assigns, VAR=value;
+//   - an unbalanced quote, and an empty line.
+//
+// What it cannot see is what a word means to the shell: an alias or a function named like an allowlisted
+// program runs as itself. The allowlist was never more than a convenience for that reason.
+func plainInvocation(line string) ([]string, bool) {
+	if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimLeft(line, " \t"), "^") {
+		return nil, false
 	}
-	return &typedCommand{argv: slices.Clone(argv), run: run}
+	var (
+		words    []string
+		word     strings.Builder
+		inWord   bool
+		wordRaw  strings.Builder // the word as typed, quotes included, for the checks on its start
+		quote    rune
+		finished = func() bool {
+			raw := wordRaw.String()
+			if strings.HasPrefix(raw, "=") ||
+				(strings.HasPrefix(raw, "~") && raw != "~" && !strings.HasPrefix(raw, "~/")) {
+				return false
+			}
+			if len(words) == 0 && isAssignment(raw) {
+				return false
+			}
+			words = append(words, word.String())
+			word.Reset()
+			wordRaw.Reset()
+			inWord = false
+			return true
+		}
+	)
+	for _, r := range line {
+		if r == '\n' || r == '\r' {
+			return nil, false
+		}
+		switch quote {
+		case '\'':
+			wordRaw.WriteRune(r)
+			if r == '\'' {
+				quote = 0
+			} else {
+				word.WriteRune(r)
+			}
+			continue
+		case '"':
+			wordRaw.WriteRune(r)
+			switch r {
+			case '"':
+				quote = 0
+			case '$', '`', '\\', '!':
+				return nil, false
+			default:
+				word.WriteRune(r)
+			}
+			continue
+		}
+		switch r {
+		case ' ', '\t':
+			if inWord && !finished() {
+				return nil, false
+			}
+			continue
+		case '\'', '"':
+			quote = r
+			inWord = true
+			wordRaw.WriteRune(r)
+			continue
+		case ';', '|', '&', '<', '>', '(', ')', '{', '}', '$', '`', '*', '?', '[', '!', '\\', '#', '^':
+			return nil, false
+		case '~':
+			if inWord && wordRaw.Len() > 0 {
+				// Inside a word, which zsh's extended globbing reads as an exclusion.
+				return nil, false
+			}
+		}
+		inWord = true
+		word.WriteRune(r)
+		wordRaw.WriteRune(r)
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	if inWord && !finished() {
+		return nil, false
+	}
+	return words, len(words) > 0
+}
+
+// isAssignment reports whether a word as typed is VAR=value, which a shell reads as setting a variable for the
+// command that follows rather than as a program.
+func isAssignment(raw string) bool {
+	name, _, found := strings.Cut(raw, "=")
+	if !found || name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r != '_' && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && (i == 0 || !(r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// safeToRerun asks the configured allowlist about a command.
+func (m *Manager) safeToRerun(argv []string) bool {
+	return m.persist.CommandIsSafeToRerun != nil && m.persist.CommandIsSafeToRerun(argv)
 }
 
 // typePromptWait bounds how long a new shell is waited for to prompt before typing anyway.
@@ -363,7 +536,10 @@ wait:
 		}
 	}
 
-	line := shquote.Join(t.argv, isFish(sess.record.Command))
+	line := t.line
+	if line == "" {
+		line = shquote.Join(t.argv, isFish(sess.record.Command))
+	}
 	var enter []byte
 	if t.run {
 		enter = []byte("\r")

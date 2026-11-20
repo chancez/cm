@@ -21,6 +21,15 @@ Attaching does. Nothing happens at boot.
 applies the configured restore behavior. A session that is never reopened stays dormant and costs
 nothing.
 
+There is one revive path, whatever ended the session: it exited, it died with a reboot or a crash, or
+`cm shelve` ended it. `cm attach` brings it back in its recorded directory, unless `--dir`
+names another, with the saved output replayed and the restore behavior below deciding what runs. A
+command after `--` on the attach is ignored, with a notice on stderr. A terminal restoring a window it had
+opened with `cm attach NAME -- ARGV` replays that argv, so letting it win meant the window reran its
+original program after a reboot and buried the resume command its program had declared, while the same
+session shelved came back with it. The states now differ only in how the session got there, its label,
+and its retention.
+
 This matches how the terminal integration already works: kitty's session file replays one
 `cm attach <name>` per window, so restore is already driven by the terminal opening rather than by
 cm. A global restore at boot would additionally spawn a shell for every session that ever existed,
@@ -60,20 +69,27 @@ that costs, and the two ways out, are in [ideas.md](ideas.md).
 
 ## What happens on restore
 
-Three behaviors, chosen by config with a per-session override:
+Four behaviors, chosen by config with a per-session override:
 
 - `shell` (default) starts a fresh shell in the recorded directory. Safe, and right for per-window
   sessions.
 - `none` leaves the restored content as read-only history and starts nothing until asked. Nothing is
   re-executed.
-- `prefill` types the command a program declared with `cm restore-with` onto a fresh shell's prompt,
-  unrun.
-- `command` runs the declared command, or re-runs the recorded command verbatim when none was declared.
+- `prefill` types the command onto a fresh shell's prompt, unrun.
+- `command` runs the command when the session asked for it or its program is in `safe_commands`, and
+  prefills it otherwise.
+
+The command is, in order: the one a program declared with `cm restore-with`; else the typed command, the
+line the shell's outermost command frame was running when the session ended, which cm keeps with the
+record as `typed_command`; else the spawn argv, kept as an argv list so a quoted argument comes back as one,
+when it is a program rather than just a shell; else nothing. A `restore-with --clear` in a frame still open
+means nothing comes back for it, not even the typed command.
 
 A declared command is how a program whose state is not in its argv comes back as itself: `claude` re-run
-is a new conversation, `claude --resume <id>` is the old one. It is typed into the shell once the shell
-prompts, never exec'd as the session's command, so quitting it leaves a prompt. See
-[restore-command.md](restore-command.md).
+is a new conversation, `claude --resume <id>` is the old one. A typed command is how everything else does:
+`sleep 999`, a `watch`, a `gr` typed at a prompt. Both are typed into the shell once the shell prompts, never
+exec'd as the session's command, so quitting them leaves a prompt; a spawn argv that runs is exec'd in place,
+as it always was. See [restore-command.md](restore-command.md).
 
 ### The allowlist is a convenience, not a safety boundary
 
@@ -82,8 +98,25 @@ the **program name only**, so `nvim` in the list also matches `nvim -c ':!rm -rf
 acceptable on a personal machine but must not be mistaken for a guarantee: the per-session override
 is the actual control, and the default remains `shell`.
 
-Because the command is re-run *verbatim*, a session whose program cannot resume from scratch should
-be left off the list. `gemini` restarted fresh loses its conversation, so it restores a shell
+A typed command goes to a shell, which runs all of it, so the allowlist alone would let `sleep` in the list
+run `sleep 1; rm -rf /tmp/x`. A typed line therefore runs only when it is a plain program invocation, a
+program word and argument words, whatever the allowlist or the session's `--on-restore=command` says;
+anything else is prefilled at most. Words may be quoted with `'...'` or `"..."`, and the program word is
+matched against the list with its quotes removed. Not plain, and so never run:
+
+- operators and grouping: `;` `|` `&` `<` `>` `(` `)` `{` `}`, which covers `&&`, `||`, `>>` and here-documents;
+- expansions: `$` and a backtick, outside quotes or inside double quotes, which covers `$(...)`;
+- globs: `*` `?` `[` outside quotes, and `#` and `^`, which zsh's extended globbing reads as patterns;
+- history: `!` outside single quotes, and a line starting with `^`, which is quick substitution;
+- a backslash outside single quotes, which covers a continuation, and a newline;
+- a `~` that is not a word on its own or the start of `~/`, so `~user` and zsh's `a~b` exclusion;
+- a word starting with `=`, which zsh expands to a command's path;
+- a first word that assigns, `VAR=value`;
+- an unbalanced quote, an empty line, and a line at the 256-character cut.
+
+What it cannot see is what a word means to the shell: an alias or function with an allowlisted program's
+name runs as itself. The spawn argv is exec'd rather than given to a shell, so none of this applies to it. Because the command is re-run
+*verbatim*, a session whose program cannot resume from scratch should be left off the list. `gemini` restarted fresh loses its conversation, so it restores a shell
 instead, which is the honest outcome.
 
 ## Where the log is written
@@ -138,9 +171,9 @@ It is removed after `expire_after`, defaulting to a week.
 
 A shelved session is the deliberate form of that: `cm shelve` ended it so it could be restored as it
 was, and it is listed as `shelved` rather than `exited` or `dead`. It does not expire unless
-`--expire-after` gave it a retention, and `cm forget --ended` leaves it. Those are the only differences: an
-attach revives it as it revives any other ended session. Shelve is not SIGTSTP. See
-[cli.md](cli.md#shelving-a-session).
+`--expire-after` gave it a retention, and `cm forget --ended` leaves it. Those are the only differences: it
+revives on the same path as any other ended session, under "What triggers a restore". Shelve is not
+SIGTSTP. See [cli.md](cli.md#shelving-a-session).
 
 A session that ended *without* saving a log is a different case, and gets `forget_unpersisted_after`,
 defaulting to five minutes. Nothing about such a session can be recovered: with no log path,

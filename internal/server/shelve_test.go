@@ -265,3 +265,85 @@ func TestExpireKeepsAShelvedSessionUnlessItWasGivenARetention(t *testing.T) {
 		t.Errorf("kept %q, want %q", kept, want)
 	}
 }
+
+// Every ended session that saved output comes back the same way, whatever ended it: an attach's command and
+// the client's implicit directory are ignored, an explicit directory is kept, and the declared resume command,
+// else the recorded command, is what on_restore brings back. A run, and a session that saved nothing, keep
+// the caller's command and directory.
+//
+// The whole options each time, since what a revive starts is all of them: the command, the directory, the
+// typed resume command, the log to restore from. The exited and dead rows are the reboot and crash paths,
+// which used to run the attach's command in the client's directory and so buried the declared one.
+func TestRestoreOptionsBringEveryEndedSessionBackAsItWas(t *testing.T) {
+	mgr, _, dirs := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.OnRestore = RestoreCommand
+	policy.CommandIsSafeToRerun = func([]string) bool { return true }
+	mgr.SetPersistPolicy(policy)
+
+	claude := []string{"claude", "--resume", "abc"}
+	rec := store.Session{
+		ID:      "agent",
+		LogPath: dirs.SessionLogDir("agent"),
+		Cwd:     "/srv/project",
+		Command: []string{"htop", "-d", "5"},
+		Resume:  store.ResumeCommand{Argv: claude, Frame: "old-1"},
+		Tags:    map[string]string{"kind": "agent"},
+	}
+	asked := OpenOptions{
+		Ref: "agent", Rows: 40, Cols: 120, Command: []string{"/bin/sh"}, InShell: true, Dir: "/home/me",
+		name: "agent",
+	}
+	restored := OpenOptions{
+		Ref: "agent", Rows: 40, Cols: 120, Persist: true, Tags: rec.Tags, restoreFrom: rec.LogPath,
+		name: "agent", Dir: rec.Cwd, typeOnStart: &typedCommand{argv: claude, run: true, declared: true},
+	}
+
+	type row struct {
+		name string
+		rec  func(store.Session) store.Session
+		opts OpenOptions
+		want OpenOptions
+	}
+	var tests []row
+	for _, state := range []store.State{store.StateShelved, store.StateExited, store.StateDead} {
+		tests = append(tests, row{
+			string(state) + " ignores the command and the client's directory",
+			func(r store.Session) store.Session { r.State = state; return r }, asked, restored,
+		})
+	}
+	tests = append(tests, []row{
+		{"an explicit directory is kept",
+			func(r store.Session) store.Session { r.State = store.StateDead; return r },
+			func() OpenOptions { o := asked; o.Dir, o.DirExplicit = "/elsewhere", true; return o }(),
+			func() OpenOptions { w := restored; w.Dir, w.DirExplicit = "/elsewhere", true; return w }()},
+		{"with nothing declared the recorded command comes back",
+			func(r store.Session) store.Session {
+				r.State, r.Resume = store.StateExited, store.ResumeCommand{}
+				return r
+			}, asked,
+			func() OpenOptions {
+				w := restored
+				w.Command, w.typeOnStart = []string{"htop", "-d", "5"}, nil
+				return w
+			}()},
+		{"a run keeps its own command and directory",
+			func(r store.Session) store.Session { r.State = store.StateExited; return r },
+			func() OpenOptions { o := asked; o.CaptureOutput = true; return o }(),
+			func() OpenOptions {
+				w := restored
+				w.Command, w.InShell, w.Dir, w.CaptureOutput, w.typeOnStart = asked.Command, true, asked.Dir, true, nil
+				return w
+			}()},
+		{"a session that saved nothing starts afresh as asked",
+			func(r store.Session) store.Session { r.State, r.LogPath = store.StateExited, ""; return r }, asked,
+			func() OpenOptions { w := asked; w.Tags = rec.Tags; return w }()},
+	}...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mgr.restoreOptions(tt.opts, tt.rec(rec)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("restoreOptions() = %+v\nwant %+v", got, tt.want)
+			}
+		})
+	}
+}

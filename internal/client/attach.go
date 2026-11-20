@@ -75,6 +75,7 @@ func (o Options) Open(session string) *serverv1.Open {
 		ReadOnly:      o.ReadOnly,
 		Command:       o.Command,
 		Cwd:           o.Dir,
+		CwdExplicit:   o.DirExplicit,
 		Env:           o.Env,
 		ClientEnv:     o.ClientEnv,
 		Persist:       o.Persist,
@@ -130,6 +131,9 @@ type Options struct {
 	Command []string
 	// Dir is the working directory when creating.
 	Dir string
+	// DirExplicit says Dir was asked for rather than filled in from this process's working directory. A
+	// revive of an ended session honors only an explicit one. See Open.cwd_explicit.
+	DirExplicit bool
 	// Env holds extra KEY=VALUE entries when creating.
 	Env []string
 	// ClientEnv holds terminal-related variables from this client's environment, recorded by the

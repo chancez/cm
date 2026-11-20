@@ -1,9 +1,13 @@
 package server
 
 import (
+	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/store"
 )
 
@@ -158,17 +162,17 @@ func TestInheritForRestoreDeclaredCommand(t *testing.T) {
 	}{
 		{name: "shell ignores it", configured: RestoreShell},
 		{name: "none ignores it", configured: RestoreNone},
-		{name: "prefill", configured: RestorePrefill, want: &typedCommand{argv: claude}},
+		{name: "prefill", configured: RestorePrefill, want: &typedCommand{argv: claude, declared: true}},
 		{name: "prefill even when allowlisted", configured: RestorePrefill, safe: true,
-			want: &typedCommand{argv: claude}},
+			want: &typedCommand{argv: claude, declared: true}},
 		{name: "command without permission prefills", configured: RestoreCommand,
-			want: &typedCommand{argv: claude}},
+			want: &typedCommand{argv: claude, declared: true}},
 		{name: "command allowlisted runs", configured: RestoreCommand, safe: true,
-			want: &typedCommand{argv: claude, run: true}},
+			want: &typedCommand{argv: claude, run: true, declared: true}},
 		{name: "command asked for on the session runs", configured: RestoreShell, perSession: RestoreCommand,
-			want: &typedCommand{argv: claude, run: true}},
+			want: &typedCommand{argv: claude, run: true, declared: true}},
 		{name: "prefill asked for on the session", configured: RestoreShell, perSession: RestorePrefill,
-			want: &typedCommand{argv: claude}},
+			want: &typedCommand{argv: claude, declared: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -338,5 +342,169 @@ func TestAClearedDeclarationIsBoundToItsFrame(t *testing.T) {
 	sess.processChunk(frame("sh-1", "", true), 0)
 	if got := sess.Resume(); !reflect.DeepEqual(got, store.ResumeCommand{}) {
 		t.Errorf("Resume() after the cleared frame returned = %+v, want the zero value", got)
+	}
+}
+
+// What a revive brings back when nothing was asked for, in order: the declared resume command, else the typed
+// command, else a spawn argv that is a program, else a shell; and the policy each gets.
+//
+// The whole of what the revive starts is compared each time, the typed line and the exec'd command together,
+// since the two failures here are bringing back the wrong one and bringing back two. The rows that matter most
+// are the precedence rows: a declaration or a clear beats a typed command, and a typed command beats the
+// spawn argv.
+func TestInheritForRestorePrecedence(t *testing.T) {
+	claude := store.ResumeCommand{Argv: []string{"claude", "--resume", "abc"}, Frame: "sh-1"}
+	cleared := store.ResumeCommand{Frame: "sh-1"}
+	typed := store.TypedCommand{Line: "sleep 999", Frame: "sh-1"}
+	htop := []string{"htop", "-d", "5"}
+	long := strings.Repeat("x", osc.MaxFrameArgv)
+
+	type restored struct {
+		Command     []string
+		TypeOnStart *typedCommand
+	}
+	tests := []struct {
+		name    string
+		mode    RestoreAction
+		safe    []string
+		resume  store.ResumeCommand
+		typed   store.TypedCommand
+		command []string
+		want    restored
+	}{
+		{name: "declared beats typed", mode: RestoreCommand, safe: []string{"sleep"}, resume: claude, typed: typed,
+			want: restored{TypeOnStart: &typedCommand{argv: claude.Argv, declared: true}}},
+		{name: "a clear beats typed", mode: RestoreCommand, safe: []string{"sleep"}, resume: cleared, typed: typed,
+			command: htop},
+		{name: "typed allowlisted runs", mode: RestoreCommand, safe: []string{"sleep"}, typed: typed,
+			command: []string{"/bin/zsh", "-l"},
+			want:    restored{TypeOnStart: &typedCommand{line: "sleep 999", run: true}}},
+		{name: "a session that is a program comes back as it, not as a typed line", mode: RestoreCommand,
+			safe: []string{"sleep", "htop"}, typed: typed, command: htop, want: restored{Command: htop}},
+		{name: "typed not allowlisted is prefilled", mode: RestoreCommand, typed: typed,
+			want: restored{TypeOnStart: &typedCommand{line: "sleep 999"}}},
+		{name: "typed under prefill is prefilled", mode: RestorePrefill, safe: []string{"sleep"}, typed: typed,
+			want: restored{TypeOnStart: &typedCommand{line: "sleep 999"}}},
+		{name: "typed under shell is ignored", mode: RestoreShell, safe: []string{"sleep"}, typed: typed},
+		{name: "a typed line that may be cut off is only prefilled", mode: RestoreCommand, safe: []string{"x"},
+			typed: store.TypedCommand{Line: long, Frame: "sh-1"},
+			want:  restored{TypeOnStart: &typedCommand{line: long}}},
+		{name: "spawn argv allowlisted runs in place", mode: RestoreCommand, safe: []string{"htop"}, command: htop,
+			want: restored{Command: htop}},
+		{name: "spawn argv not allowlisted is prefilled", mode: RestoreCommand, command: htop,
+			want: restored{TypeOnStart: &typedCommand{argv: htop}}},
+		{name: "a spawn argv that is just a shell brings nothing back", mode: RestoreCommand,
+			safe: []string{"zsh"}, command: []string{"/bin/zsh", "-l"}},
+		{name: "kitty's shell launcher brings nothing back", mode: RestoreCommand, safe: []string{"kitten"},
+			command: []string{"kitten", "run-shell", "--shell", "zsh", "--cwd=/tmp"}},
+		{name: "kitty's shell launcher brings back its typed command", mode: RestoreCommand,
+			safe: []string{"sleep"}, typed: typed, command: []string{"kitten", "run-shell", "--shell", "zsh"},
+			want: restored{TypeOnStart: &typedCommand{line: "sleep 999", run: true}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, dirs := newTestManager(t, nil)
+			policy := testPolicy()
+			policy.OnRestore = tt.mode
+			policy.CommandIsSafeToRerun = func(argv []string) bool {
+				return len(argv) > 0 && slices.Contains(tt.safe, filepath.Base(argv[0]))
+			}
+			mgr.SetPersistPolicy(policy)
+
+			rec := store.Session{
+				ID: "revived", LogPath: dirs.SessionLog("revived"),
+				Resume: tt.resume, Typed: tt.typed, Command: tt.command,
+			}
+			got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
+			if r := (restored{Command: got.Command, TypeOnStart: got.typeOnStart}); !reflect.DeepEqual(r, tt.want) {
+				t.Errorf("restored %+v (typeOnStart %+v), want %+v (typeOnStart %+v)",
+					r, r.TypeOnStart, tt.want, tt.want.TypeOnStart)
+			}
+		})
+	}
+}
+
+// A typed line runs on a revive only when it is a plain program invocation; anything a shell would read as
+// more is prefilled, under on_restore = "command" with the program allowlisted.
+//
+// Each row is the whole outcome, the line typed back and whether it is submitted. The run rows matter as
+// much as the refusals: a rule that refused everything would pass every prefill row.
+func TestATypedLineRunsOnlyWhenPlain(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	policy := testPolicy()
+	policy.OnRestore = RestoreCommand
+	policy.CommandIsSafeToRerun = func(argv []string) bool {
+		return len(argv) > 0 && slices.Contains([]string{"sleep", "gr", "nvim", "ls", "echo", "env"},
+			filepath.Base(argv[0]))
+	}
+	mgr.SetPersistPolicy(policy)
+
+	for _, tc := range []struct {
+		line string
+		run  bool
+	}{
+		// Plain: a program word and argument words, quoted or not, with ~/ leading a word.
+		{"sleep 999", true},
+		{"gr --watch", true},
+		{"nvim 'my notes.md' \"other file\"", true},
+		{"'gr' --watch", true},
+		{"ls ~/src ~", true},
+		{"env A=b nvim", true},
+		{"echo a=b c,d e.f@g:h%i+j", true},
+		{"  sleep\t999  ", true},
+		// Not on the allowlist, which is the old rule and still applies.
+		{"htop", false},
+		// Operators and grouping.
+		{"sleep 1; echo x", false},
+		{"sleep 1 | cat", false},
+		{"sleep 1 & echo x", false},
+		{"sleep 1 && echo x", false},
+		{"sleep 1 || echo x", false},
+		{"echo x > f", false},
+		{"echo x >> f", false},
+		{"nvim < f", false},
+		{"cat <<EOF", false},
+		{"(sleep 1)", false},
+		{"{ sleep 1; }", false},
+		// Expansions, including inside double quotes.
+		{"echo $HOME", false},
+		{"echo \"$HOME\"", false},
+		{"echo $(id)", false},
+		{"echo `id`", false},
+		// Globs and zsh's extended ones.
+		{"ls *.go", false},
+		{"ls a?", false},
+		{"ls [ab]", false},
+		{"ls a#b", false},
+		{"ls a~b", false},
+		// History.
+		{"echo !!", false},
+		{"echo \"hi!\"", false},
+		{"^foo^bar", false},
+		// Continuations and newlines.
+		{"sleep \\\n1", false},
+		{"sleep 1\necho x", false},
+		{"sleep 1 \\", false},
+		// Assignments, ~user and equals expansion.
+		{"FOO=bar sleep 1", false},
+		{"ls ~root", false},
+		{"ls =sleep", false},
+		// Unbalanced quotes, and nothing at all.
+		{"echo 'unterminated", false},
+		{"echo \"unterminated", false},
+		{"", false},
+		// Quoted, the same characters are plain words.
+		{"echo 'a; b | c $d *'", true},
+	} {
+		got := mgr.restoreTyped(tc.line, RestoreCommand, false)
+		if want := (&typedCommand{line: tc.line, run: tc.run}); !reflect.DeepEqual(got, want) {
+			t.Errorf("restoreTyped(%q) = %+v, want %+v", tc.line, got, want)
+		}
+	}
+
+	// And a session that asked for --on-restore=command does not get past it either.
+	line := "sleep 1; echo x"
+	if got, want := mgr.restoreTyped(line, RestoreCommand, true), (&typedCommand{line: line}); !reflect.DeepEqual(got, want) {
+		t.Errorf("restoreTyped(%q) with the session asking for command = %+v, want %+v", line, got, want)
 	}
 }

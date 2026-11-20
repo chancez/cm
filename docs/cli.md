@@ -55,9 +55,10 @@ teardown script should treat them apart: the session named there is still runnin
 
 ## Attaching with a command
 
-`cm attach NAME -- CMD` runs CMD only when the attach creates the session or revives one whose shell
-has ended. When the session is already running there is nothing to run it in, and what happens is
-`--if-running`:
+`cm attach NAME -- CMD` runs CMD only when the attach creates the session, which includes starting afresh
+under the name of an ended session that saved no output. An ended session that saved output comes back as
+it was instead, on the one revive path below, so CMD is ignored with a notice on stderr. When the session is
+already running there is nothing to run it in, and what happens is `--if-running`:
 
 | `--if-running` | Session running, command given |
 | --- | --- |
@@ -174,13 +175,28 @@ the same per-session retention as `cm kill --keep --expire-after`, and `cm info`
 `expire_after`, `never` by default. `cm kill` and `cm forget` remove one at once; `cm forget --ended` leaves
 it, since that clears what was left behind and this was kept on purpose.
 
-`cm attach` on a shelved session brings it back and attaches, and `--no-attach` brings it back without
-attaching: it revives as any ended session that saved output does, and the retention is cleared. The states
-differ only in how the session got there, its label, its retention, and `cm forget --ended` leaving a
-shelved one alone.
+`cm attach` on an ended session that saved output brings it back and attaches, and `--no-attach` brings it
+back without attaching. There is one revive: an exited session, one dead after a reboot or a crash, and a
+shelved one all come back the same way. A shell starts in the recorded directory, the saved output is
+replayed, and the declared resume command, else the typed command, else a spawn argv that is a program, is
+handled by `on_restore` with its usual permissions. The retention is cleared. A command after `--` is
+ignored and the client's own directory is not used, but `--dir` is: `Open.cwd_explicit` says it was asked
+for, because every client fills the directory in. The states differ only in how the session got there, its
+label, its retention, and `cm forget --ended` leaving a shelved one alone.
+
+The revive path used to run an attach's command for an exited or dead session, in the client's directory,
+and that is what kept a reboot from bringing a session back the way shelving did: a terminal restoring a
+window that it had opened with `cm attach NAME -- ARGV` replays that argv, so the window reran its original
+program and the resume command it had declared was never used.
+
+`cm run` keeps its own command rather than reviving this way. `cm run --session NAME -- CMD` on an ended
+NAME reuses it in place, same ID and names, its saved output replayed ahead of CMD's, with CMD as the
+session's command; the run prints both and exits with CMD's status. The server tells a run by
+`capture_output`, which only `cm run` sets, so the rule holds for any client.
 
 `cm shelve` is refused against a server that reports capabilities without `shelve`, naming the
-restart that fixes it.
+restart that fixes it. `cm attach` needs no check: a server that predates this reports no session as
+restorable, and the client prints the notice only for one it does.
 
 ## JSON output
 

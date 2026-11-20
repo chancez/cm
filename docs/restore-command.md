@@ -197,7 +197,7 @@ nesting without either layer knowing what the other runs.
 
 ## How cm implements it
 
-Three parts, each useful without the others. The declared part and the policy are built.
+Three parts, each useful without the others, and all three are built.
 
 **Inferred: the typed command.** A session's spawn argv is, for a `kitty.*` session, the shell, so
 `on_restore = "command"` and `safe_commands` never saw the program running in it. The shell integration
@@ -219,7 +219,13 @@ is what brings it back.
 
 What a shell reports is a line, not an argv: zsh's preexec is passed the line as typed, bash reads it back
 from `history 1` (so a shell with history off reports nothing), and fish passes the command line, each
-escaped for the wire and cut at 256 characters. cm does not turn it into an argv.
+escaped for the wire and cut at 256 characters. cm does not turn it into an argv. A revive types it back
+verbatim into the session's new shell, which parses it as the same shell parsed it the first time, so
+quoting, pipes, variables and aliases come back exactly as typed, in every shell the integration supports;
+nothing is re-quoted, which is why fish's quoting differences do not apply to it. It runs only when it is
+a plain program invocation, a program word and argument words, with the program word matched against
+`safe_commands`; a shell expression, or a line at the 256-character cut, is only ever prefilled. The rule
+is in [persistence.md](persistence.md#the-allowlist-is-a-convenience-not-a-safety-boundary).
 
 **Declared: the sequence and `cm restore-with`.** Two channels, the same split as OSC 7501 and `cm report`:
 
@@ -244,21 +250,38 @@ suspended session revived into a bare shell. A clear or a new declaration from t
 ignored too, since an exit hook can send either. A plain `cm kill` forgets the session anyway, and a kill
 that fails with the shell still running unfreezes it. `cm shelve` freezes it the same way.
 
+Every revive of an ended session that saved output uses the declaration, however the session ended:
+exited, dead after a reboot or a crash, or shelved. An attach's command after `--` is ignored, with a
+notice on stderr, since the session already says how it comes back, and a terminal restoring a window it
+had opened with `cm attach NAME -- ARGV` replays that argv. When the attach's command used to win on the
+reboot path, that replay reran the window's original program and the declaration was never used. `cm run
+--session` is the one caller whose command still wins.
+
 The declaration is written to the store when it arrives. It cannot be recovered from the persisted log the
 way an OSC 7501 report is, because a declaration made at a program's startup has been trimmed out of the
 16 MiB log long before the reboot, and replaying one would apply a record whose token is dead.
 
 **Policy: `on_restore`.** Gains `prefill`:
 
-- `shell` starts a shell and ignores the declaration.
+- `shell` starts a shell and brings nothing back.
 - `none` shows the restored content and runs nothing.
 - `prefill` types the command onto the new shell's prompt, unrun.
 - `command` types the command and submits it, so exiting it leaves the prompt.
 
-`command` runs a declared command only with the same permission it takes to re-run a recorded one: the
-session asked with `--on-restore=command`, or `safe_commands` matches the program name. Without either it
-prefills, which keeps the command one keypress away rather than dropping it. `prefill` never runs, whatever
-the allowlist says, so it is the mode to choose for seeing what would be resumed before it is.
+What "the command" is, in order:
+
+1. the declared resume command, from the sequence or `cm restore-with`; a `restore-with --clear` in a frame
+   still open stops here with nothing, so a cleared frame's typed command is not used either;
+2. else the typed command;
+3. else the spawn argv, when it is a program rather than just a shell like `zsh -l`;
+4. else nothing, and the revive is a shell.
+
+`command` runs it only with the permission it always took to re-run a recorded command: the session asked
+with `--on-restore=command`, or `safe_commands` matches the program name. Without either it prefills, which
+keeps the command one keypress away rather than dropping it. `prefill` never runs, whatever the allowlist
+says, so it is the mode to choose for seeing what would be resumed before it is. A declared or typed
+command is typed into the new shell; a spawn argv that runs is exec'd in place of it, as a recorded command
+always was, and one that is prefilled is typed.
 
 The command is typed once the new shell sends its first OSC 133 prompt mark, and after 10 seconds without
 one it is typed anyway: the tty holds it until the line editor reads it, so a shell with no prompt marks
@@ -270,8 +293,9 @@ command's. So quitting the resumed program ends it whether or not the program de
 prefilled line the user replaces with something else hands the declaration to that instead, which ends
 with it.
 
-Not yet built: the inferred part above, and fish's quoting is chosen from the server's `SHELL` when the
-session runs the default shell, since the server does not otherwise know which shell the shim started.
+Quoting a declared command or a prefilled spawn argv for fish is chosen from the spawn argv, or from the
+server's `SHELL` when the session runs the default shell, since the server does not otherwise know which
+shell the shim started. A typed command needs no quoting.
 
 ## Examples
 
@@ -292,7 +316,8 @@ Not agents:
   reattaches to the remote session instead of opening a fresh remote shell.
 - **A database REPL**: a psql wrapper declares the connection it actually made.
 - **Watchers**: `watch kubectl get pods`, `journalctl -fu svc`, `npm run dev` need no declaration; the
-  typed command is the right one, and the inferred part restores it.
+  typed command is the right one, and the inferred part restores it, run if the program is in
+  `safe_commands`.
 - **Never re-run**: a `terraform apply` wrapper runs `cm restore-with --clear`, so its frame restores a
   shell even under a broad allowlist.
 

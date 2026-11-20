@@ -183,11 +183,11 @@ func TestFrameArgvIsSanitized(t *testing.T) {
 
 func TestFrameArgvIsBounded(t *testing.T) {
 	var tr ReportTracker
-	tr.Feed(FrameSequence("a1", strings.Repeat("x", maxFrameArgv*3), false))
+	tr.Feed(FrameSequence("a1", strings.Repeat("x", MaxFrameArgv*3), false))
 
 	got := tr.TakeFrames()
-	if len(got) != 1 || len(got[0].Argv) != maxFrameArgv {
-		t.Errorf("argv length = %d, want %d", len(got[0].Argv), maxFrameArgv)
+	if len(got) != 1 || len(got[0].Argv) != MaxFrameArgv {
+		t.Errorf("argv length = %d, want %d", len(got[0].Argv), MaxFrameArgv)
 	}
 }
 

@@ -81,6 +81,53 @@ func TestShelveListsTheSessionAsShelved(t *testing.T) {
 	e.mustRun("kill", "plain")
 }
 
+// An attach naming a command restores a shelved session as it was: the declared resume command runs, not the
+// one given, in the recorded directory rather than the client's, and the client says on stderr that it
+// ignored the command.
+//
+// --no-attach, which is a restore, so the run is deterministic; the server path is the one an interactive
+// attach takes, through the same Open.
+func TestAttachWithACommandRestoresAShelvedSessionAsItWas(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	project := filepath.Join(e.state, "recorded-dir")
+	startDeclared(e, "agent", project)
+	e.mustRun("shelve", "agent", "--expire-after", "720h")
+
+	r := e.run("attach", "--no-attach", "agent", "--", "/bin/sh", "-c", "echo WRONG-COMMAND; exec sleep 30")
+	if r.code != 0 {
+		t.Fatalf("attach exited %d: %s", r.code, r.stderr)
+	}
+	if want := "cm: agent is shelved and comes back as it was; ignoring the command after --\n"; r.stderr != want {
+		t.Errorf("attach stderr = %q, want %q", r.stderr, want)
+	}
+	history := e.waitForHistory("agent", "RESUMED-recorded-dir")
+	if strings.Contains(history, "WRONG-COMMAND") {
+		t.Errorf("the attach's own command ran; history:\n%s", history)
+	}
+	if info := infoJSON(e, "agent"); info["state"] != "running" || info["expire_after"] != "" {
+		t.Errorf("after the restore, state %v and expire_after %v; want running and empty",
+			info["state"], info["expire_after"])
+	}
+	e.mustRun("kill", "agent")
+}
+
+// An explicit --dir is a request rather than the client's default, so a restore honors it.
+func TestRestoringWithAnExplicitDirStartsThere(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	startDeclared(e, "agent", filepath.Join(e.state, "recorded-dir"))
+	e.mustRun("shelve", "agent")
+
+	elsewhere := filepath.Join(e.state, "elsewhere-dir")
+	if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun("attach", "--no-attach", "--dir", elsewhere, "agent")
+	e.waitForHistory("agent", "RESUMED-elsewhere-dir")
+	e.mustRun("kill", "agent")
+}
+
 // infoJSON is `cm info NAME --json` decoded.
 func infoJSON(e *env, name string) map[string]any {
 	e.t.Helper()

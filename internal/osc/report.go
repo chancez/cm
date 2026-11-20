@@ -89,12 +89,12 @@ type Frame struct {
 	Ended bool
 }
 
-// maxFrameArgv bounds how much of a command line is kept.
+// MaxFrameArgv bounds how much of a command line is kept.
 //
 // Long enough for an ssh invocation with options, which is what this exists to record, and short enough
 // that a session cannot be made to hold a screenful per command. The shells truncate as well; this is the
 // bound that does not depend on them getting it right.
-const maxFrameArgv = 256
+const MaxFrameArgv = 256
 
 // maxPendingNesting bounds how many announcements one drain can carry.
 //
@@ -389,8 +389,8 @@ func parseFrame(params []byte) (Frame, bool) {
 
 // sanitizeArgv makes a reported command line safe to carry and bounded in size.
 func sanitizeArgv(argv string) string {
-	if len(argv) > maxFrameArgv {
-		argv = argv[:maxFrameArgv]
+	if len(argv) > MaxFrameArgv {
+		argv = argv[:MaxFrameArgv]
 	}
 	return strings.Map(func(r rune) rune {
 		if r == '\t' {

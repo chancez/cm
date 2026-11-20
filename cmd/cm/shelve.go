@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -170,4 +171,49 @@ func reportOutcomes(w io.Writer, o outcomes, asJSON bool) error {
 		}
 	}
 	return reportedErrors(errs, asJSON)
+}
+
+// noticeIgnoredCommand says on w that an attach's command will be ignored, when the session it names has
+// ended with saved output to come back to.
+//
+// The server decides, in prepareRestore; this asks the same question beforehand so the notice can be printed
+// while stderr is still a line of its own, before the attach takes over the terminal. Silent on any failure
+// to ask, since the attach that follows reports a server it cannot reach better than a notice could.
+func noticeIgnoredCommand(ctx context.Context, g *globals, w io.Writer, ref string) {
+	conn, cl, err := g.connect(ctx)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	resp, err := cl.List(ctx, &serverv1.ListRequest{})
+	if err != nil {
+		return
+	}
+	if msg := ignoredCommandNotice(resp.Sessions, ref); msg != "" {
+		fmt.Fprintln(w, msg)
+	}
+}
+
+// ignoredCommandNotice is the notice for an attach with a command to ref, or empty when ref names no
+// session that a revive brings back as it was.
+//
+// Restorable is the server's word for that, and an older server sends false, which is right: it ran an
+// attach's command on a revive.
+func ignoredCommandNotice(sessions []*serverv1.Session, ref string) string {
+	s := sessionNamed(sessions, ref)
+	if s == nil || !s.Restorable {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s is %s and comes back as it was; ignoring the command after --",
+		paths.Name, ref, stateName(s))
+}
+
+// sessionNamed finds the session ref names, by any of its names or by "@id", or nil.
+func sessionNamed(sessions []*serverv1.Session, ref string) *serverv1.Session {
+	for _, s := range sessions {
+		if s.Name == ref || paths.FormatSessionID(s.Id) == ref || slices.Contains(s.Names, ref) {
+			return s
+		}
+	}
+	return nil
 }

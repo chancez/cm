@@ -1778,7 +1778,14 @@ type Open struct {
 	//
 	// An older server ignores this and runs the command in place of the shell, so the session ends when the
 	// command does.
-	InShell       bool `protobuf:"varint,28,opt,name=in_shell,json=inShell,proto3" json:"in_shell,omitempty"`
+	InShell bool `protobuf:"varint,28,opt,name=in_shell,json=inShell,proto3" json:"in_shell,omitempty"`
+	// cwd was asked for with --dir, rather than filled in from the client's own working directory.
+	//
+	// Read only when this Open revives an ended session that saved output, which comes back in its recorded
+	// directory unless the caller named another. Every client fills cwd in, so without this the server could
+	// not tell a request from a default. False from an older client, whose --dir is then not honored on a
+	// revive.
+	CwdExplicit   bool `protobuf:"varint,29,opt,name=cwd_explicit,json=cwdExplicit,proto3" json:"cwd_explicit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1991,6 +1998,13 @@ func (x *Open) GetClientConfig() string {
 func (x *Open) GetInShell() bool {
 	if x != nil {
 		return x.InShell
+	}
+	return false
+}
+
+func (x *Open) GetCwdExplicit() bool {
+	if x != nil {
+		return x.CwdExplicit
 	}
 	return false
 }
@@ -3899,6 +3913,12 @@ type Session struct {
 	// a Go duration, or "never". Empty when the session follows the configured schedule, which is every
 	// session that was not kept with one, and every session revived since.
 	ExpireAfter string `protobuf:"bytes,31,opt,name=expire_after,json=expireAfter,proto3" json:"expire_after,omitempty"`
+	// restorable says the session has ended and saved output for a revive to come back to, so an attach
+	// brings it back as it was: its declared resume command or recorded command under on_restore, in its
+	// recorded directory, ignoring an attach's command. False for a running session, and for one that saved
+	// nothing, which an attach starts afresh. False from an older server, which ran an attach's command on a
+	// revive, so a client reading it to decide whether a command will be ignored is right either way.
+	Restorable bool `protobuf:"varint,32,opt,name=restorable,proto3" json:"restorable,omitempty"`
 	// typed_command is the command line this session's shell started and has not returned from, as a revive
 	// would bring it back when nothing was declared: from the shell's outermost command frame, kept with the
 	// record so it survives the session ending, a server restart and a reboot. Distinct from command, which is
@@ -4153,6 +4173,13 @@ func (x *Session) GetExpireAfter() string {
 		return x.ExpireAfter
 	}
 	return ""
+}
+
+func (x *Session) GetRestorable() bool {
+	if x != nil {
+		return x.Restorable
+	}
+	return false
 }
 
 func (x *Session) GetTypedCommand() string {
@@ -5612,7 +5639,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06resize\x18\x03 \x01(\v2\x14.cm.server.v1.ResizeH\x00R\x06resize\x12.\n" +
 	"\x06detach\x18\x04 \x01(\v2\x14.cm.server.v1.DetachH\x00R\x06detach\x12M\n" +
 	"\x11terminal_graphics\x18\x05 \x01(\v2\x1e.cm.server.v1.TerminalGraphicsH\x00R\x10terminalGraphicsB\a\n" +
-	"\x05event\"\xa2\b\n" +
+	"\x05event\"\xc5\b\n" +
 	"\x04Open\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
@@ -5645,7 +5672,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"if_running\x18\x19 \x01(\x0e2\x17.cm.server.v1.IfRunningR\tifRunning\x12\x1b\n" +
 	"\tno_attach\x18\x1a \x01(\bR\bnoAttach\x12#\n" +
 	"\rclient_config\x18\x1b \x01(\tR\fclientConfig\x12\x19\n" +
-	"\bin_shell\x18\x1c \x01(\bR\ainShell\x1a<\n" +
+	"\bin_shell\x18\x1c \x01(\bR\ainShell\x12!\n" +
+	"\fcwd_explicit\x18\x1d \x01(\bR\vcwdExplicit\x1a<\n" +
 	"\x0eClientEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a7\n" +
@@ -5772,7 +5800,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc9\t\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xe9\t\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5808,7 +5836,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x12\x1f\n" +
 	"\vresume_argv\x18\x1e \x03(\tR\n" +
 	"resumeArgv\x12!\n" +
-	"\fexpire_after\x18\x1f \x01(\tR\vexpireAfter\x12#\n" +
+	"\fexpire_after\x18\x1f \x01(\tR\vexpireAfter\x12\x1e\n" +
+	"\n" +
+	"restorable\x18  \x01(\bR\n" +
+	"restorable\x12#\n" +
 	"\rtyped_command\x18! \x01(\tR\ftypedCommand\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

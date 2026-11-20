@@ -56,10 +56,18 @@ makes an ordinary shell session with ordinary persistence.
 It is created at this terminal's size, or at --size COLSxROWS, or at 24x80 when
 there is no terminal; a running session keeps its own size.
 
-A command after -- runs only when this attach creates or revives the session. If
-the session is already running, the attach fails rather than attaching and
-silently not running it; --if-running=attach attaches anyway, without running the
-command. Without a command, --if-running has no effect.
+A command after -- runs only when this attach creates the session, which includes
+starting afresh under the name of an ended session that saved no output. If the
+session is already running, the attach fails rather than attaching and silently
+not running it; --if-running=attach attaches anyway, without running the command.
+Without a command, --if-running has no effect.
+
+An ended session that saved its output comes back as it was, however it ended:
+exited, dead after a reboot or crash, or shelved. --no-attach brings it back
+without attaching. A command after -- is ignored, with a notice on stderr: what
+on_restore brings back is the session's declared resume command, else the command
+its shell was running when it ended, else the program it was started with. It
+starts in its recorded directory unless --dir names another.
 
 --in-shell starts your shell as usual and types the command into it once it
 prompts, rather than running the command in place of the shell. The shell runs
@@ -139,6 +147,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 			}
 			// Where a created session starts: the caller's cwd here, nothing for a remote, whose paths are
 			// not this machine's. See globals.sessionDir, which run shares so the two cannot diverge again.
+			// Whether it was asked for is recorded first, since a restore honors only a directory that was.
+			dirExplicit := dir != ""
 			dir = g.sessionDir(dir)
 			cfg, err := g.config()
 			if err != nil {
@@ -203,13 +213,14 @@ matters for another multiplexer, which sees the key first and never passes it on
 					_, err := os.Stat(dirs.ServerStopped())
 					return err == nil
 				},
-				Session:    session,
-				ReadOnly:   readOnly,
-				Dir:        dir,
-				Command:    command,
-				InShell:    inShell,
-				DetachKeys: detachKeys,
-				PrefixKeys: prefixKeys,
+				Session:     session,
+				ReadOnly:    readOnly,
+				Dir:         dir,
+				DirExplicit: dirExplicit,
+				Command:     command,
+				InShell:     inShell,
+				DetachKeys:  detachKeys,
+				PrefixKeys:  prefixKeys,
 				// What each key means inside the overlay. Problems are not fatal and are not printed here
 				// either: a client is what holds someone's terminal, and `cm keys` is the command that
 				// reports them. See keymap.Problem.
@@ -264,7 +275,15 @@ matters for another multiplexer, which sees the key first and never passes it on
 			}
 			opts.Log = logger
 
-			// Checked before anything that assumes a terminal, since this path has none.
+			// Said before the attach takes over the terminal, which is the last point stderr is a line of
+			// its own. The server is what ignores the command; this only says so, since otherwise the
+			// window comes back running something other than what was typed with no word as to why.
+			// Not for a replacement client from an upgrade, which re-runs the original argv into a session
+			// that is already running.
+			if session != "" && len(command) > 0 && resumeFrom == nil {
+				noticeIgnoredCommand(cmd.Context(), g, os.Stderr, session)
+			}
+
 			if noAttach {
 				return createWithoutAttaching(cmd.Context(), dirs, opts, size)
 			}

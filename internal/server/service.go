@@ -120,6 +120,7 @@ func openOptionsFrom(open *serverv1.Open) OpenOptions {
 		YPixel:        uint16(open.YPixel),
 		Command:       open.Command,
 		Dir:           open.Cwd,
+		DirExplicit:   open.CwdExplicit,
 		Env:           open.Env,
 		ClientEnv:     open.ClientEnv,
 		Persist:       open.Persist,
@@ -1021,6 +1022,8 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// The record's, since nothing else holds one: only a kill that keeps the session writes it, and
 			// a revive does not carry it over.
 			ExpireAfter: rec.ExpireAfter.String(),
+			// From the record, like the retention: whether a revive has saved output to come back to.
+			Restorable: restorable(s.mgr.persist, rec),
 			// The record's, which is what a revive reads; a live session's is fresher and replaces it below.
 			TypedCommand: rec.Typed.Line,
 		}

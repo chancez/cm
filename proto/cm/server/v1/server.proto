@@ -630,6 +630,14 @@ message Open {
   // An older server ignores this and runs the command in place of the shell, so the session ends when the
   // command does.
   bool in_shell = 28;
+
+  // cwd was asked for with --dir, rather than filled in from the client's own working directory.
+  //
+  // Read only when this Open revives an ended session that saved output, which comes back in its recorded
+  // directory unless the caller named another. Every client fills cwd in, so without this the server could
+  // not tell a request from a default. False from an older client, whose --dir is then not honored on a
+  // revive.
+  bool cwd_explicit = 29;
 }
 
 // IfRunning is what an Open carrying a command does when its session is already running.
@@ -1238,6 +1246,13 @@ message Session {
   // a Go duration, or "never". Empty when the session follows the configured schedule, which is every
   // session that was not kept with one, and every session revived since.
   string expire_after = 31;
+
+  // restorable says the session has ended and saved output for a revive to come back to, so an attach
+  // brings it back as it was: its declared resume command or recorded command under on_restore, in its
+  // recorded directory, ignoring an attach's command. False for a running session, and for one that saved
+  // nothing, which an attach starts afresh. False from an older server, which ran an attach's command on a
+  // revive, so a client reading it to decide whether a command will be ignored is right either way.
+  bool restorable = 32;
 
   // typed_command is the command line this session's shell started and has not returned from, as a revive
   // would bring it back when nothing was declared: from the shell's outermost command frame, kept with the

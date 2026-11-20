@@ -160,6 +160,58 @@ func waitGone(ctx context.Context, pids []int, bound time.Duration) ([]int, erro
 	}
 }
 
+// restoreOptions decides what a revive of an ended session starts, from what the caller asked and what the
+// record kept.
+//
+// One set of rules for every ended session that saved output, however it ended: exited, dead after a reboot
+// or a crash, or shelved. Each goes through prepareRestore, so the record decides how it comes back rather
+// than whatever the attach that reached it happened to carry. Two cases keep the older rules, where the
+// caller's command and directory win: a session with nothing saved, which is a fresh start under an old name
+// rather than a revive, and `cm run`, whose command is the point. See Manager.revives.
+func (m *Manager) restoreOptions(opts OpenOptions, rec store.Session) OpenOptions {
+	if m.revives(opts, rec) {
+		opts = m.prepareRestore(opts, rec)
+	}
+	return m.inheritForRestore(opts, rec)
+}
+
+// revives reports whether an Open that reaches this ended record brings it back as it was.
+//
+// It does when the record saved output to bring back, which is what inheritForRestore restores from, and the
+// Open is not a run. A run is recognized by CaptureOutput, which only `cm run` sets; it revives the session
+// in place with its own command as the session's command, as it always has, since a run must never drop its
+// command.
+func (m *Manager) revives(opts OpenOptions, rec store.Session) bool {
+	return !opts.CaptureOutput && restorable(m.persist, rec)
+}
+
+// restorable reports whether an ended record has saved output for a revive to come back to.
+func restorable(policy *PersistPolicy, rec store.Session) bool {
+	return rec.State != store.StateRunning && rec.LogPath != "" && policy != nil
+}
+
+// prepareRestore strips from an Open what an ended session's record overrides.
+//
+// The command after `--` goes, and --in-shell with it: the session already says how it comes back, as its
+// declared resume command or its recorded command under on_restore, and an attach that names a command is
+// usually a terminal's saved window replaying the argv it was first opened with. That replay is what made a
+// reboot differ from shelving: the window restored after a reboot reran its original argv and buried the
+// declared resume command, while a shelved session came back with it. The client's own working directory
+// goes too, so the recorded one is used; a directory the caller named with --dir is kept, since that is a
+// request rather than a default.
+func (m *Manager) prepareRestore(opts OpenOptions, rec store.Session) OpenOptions {
+	if len(opts.Command) > 0 {
+		m.log.Info("ignoring an attach's command for a session that comes back as it was",
+			"session", rec.ID, "state", rec.State, "command", opts.Command)
+	}
+	opts.Command = nil
+	opts.InShell = false
+	if !opts.DirExplicit {
+		opts.Dir = ""
+	}
+	return opts
+}
+
 // Shelve ends sessions deliberately so they can be restored as they were. See Manager.Shelve.
 func (s *Service) Shelve(
 	ctx context.Context, req *serverv1.ShelveRequest,

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -124,5 +125,39 @@ func TestShelveValidatesExpireAfter(t *testing.T) {
 		if err := cmd.Execute(); err == nil || err.Error() != tc.want {
 			t.Errorf("Execute(%q) error = %v, want %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// The attach notice names any ended session that comes back as it was, by any of its references and with its
+// state, and says nothing for one that saved nothing, a running one, or a name nothing holds.
+func TestIgnoredCommandNotice(t *testing.T) {
+	sessions := []*serverv1.Session{
+		{Name: "work", Id: "a7k2m9x4", Names: []string{"work", "agent"},
+			State: serverv1.SessionState_SESSION_STATE_SHELVED, Exited: true, Restorable: true},
+		{Name: "crashed", Id: "c7k2m9x4", Names: []string{"crashed"},
+			State: serverv1.SessionState_SESSION_STATE_DEAD, Exited: true, Restorable: true},
+		{Name: "done", Id: "d7k2m9x4", Names: []string{"done"},
+			State: serverv1.SessionState_SESSION_STATE_EXITED, Exited: true, Restorable: true},
+		{Name: "plain", Id: "e7k2m9x4", Names: []string{"plain"},
+			State: serverv1.SessionState_SESSION_STATE_EXITED, Exited: true},
+		{Name: "live", Id: "f7k2m9x4", Names: []string{"live"},
+			State: serverv1.SessionState_SESSION_STATE_RUNNING},
+	}
+	var got []string
+	for _, ref := range []string{"work", "agent", "@a7k2m9x4", "crashed", "done", "plain", "live", "missing"} {
+		got = append(got, ignoredCommandNotice(sessions, ref))
+	}
+	want := []string{
+		"cm: work is shelved and comes back as it was; ignoring the command after --",
+		"cm: agent is shelved and comes back as it was; ignoring the command after --",
+		"cm: @a7k2m9x4 is shelved and comes back as it was; ignoring the command after --",
+		"cm: crashed is dead and comes back as it was; ignoring the command after --",
+		"cm: done is exited and comes back as it was; ignoring the command after --",
+		"",
+		"",
+		"",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("notices = %q\nwant %q", got, want)
 	}
 }

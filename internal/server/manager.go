@@ -906,6 +906,10 @@ type OpenOptions struct {
 	Command []string
 	// Dir is the working directory for a new session.
 	Dir string
+	// DirExplicit says Dir was asked for, with --dir, rather than filled in from the client's own working
+	// directory. Only a revive reads it: an ended session that saved output comes back where it was unless
+	// the caller named somewhere else. See prepareRestore.
+	DirExplicit bool
 	// Env holds extra KEY=VALUE entries for a new session.
 	Env []string
 	// Persist requests that this session's content survive a reboot, regardless of whether its
@@ -1139,7 +1143,7 @@ func (m *Manager) openExisting(
 	// exists for: a terminal emulator restoring a saved window attaches by name and must get a working
 	// session whether or not the previous one is still alive. What it must not do is pretend nothing was
 	// there.
-	opts = m.inheritForRestore(opts, rec)
+	opts = m.restoreOptions(opts, rec)
 	m.log.Info("replacing an ended session with a new shell",
 		"session", rec.ID, "name", opts.name, "previous_state", rec.State,
 		"previous_exit_code", rec.ExitCode, "previous_shell_pid", rec.ShellPID,
@@ -1244,26 +1248,8 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 		action = RestoreShell
 	}
 
-	// A declared resume command takes precedence over the recorded one: the program said how to bring it
-	// back, and the recorded command is the shell the window was started with. See restoreDeclared.
-	if (action == RestorePrefill || action == RestoreCommand) && len(opts.Command) == 0 &&
-		len(rec.Resume.Argv) > 0 {
-		opts.typeOnStart = m.restoreDeclared(rec.Resume.Argv, action, opts.OnRestore == RestoreCommand)
-		return opts
-	}
-
-	// Re-running the recorded command is the one behavior that executes something the user did not
-	// type just now, so it happens only when asked for explicitly or when the program is on the
-	// allowlist.
-	if action == RestoreCommand && len(opts.Command) == 0 && len(rec.Command) > 0 {
-		argv := slices.Clone(rec.Command)
-		allowed := opts.OnRestore == RestoreCommand
-		if !allowed && m.persist.CommandIsSafeToRerun != nil {
-			allowed = m.persist.CommandIsSafeToRerun(argv)
-		}
-		if allowed {
-			opts.Command = argv
-		}
+	if len(opts.Command) == 0 && action != RestoreNone {
+		opts = m.restoreWhatRan(opts, rec, action)
 	}
 	if action == RestoreNone {
 		// Nothing is started. The client still gets the replayed screen, so the session reads as
@@ -1348,7 +1334,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	}
 	// Carried into the new incarnation, bound to whichever frame opens next: the typed command's. See
 	// resumeNextFrame.
-	if opts.typeOnStart != nil {
+	if opts.typeOnStart != nil && opts.typeOnStart.declared {
 		rec.Resume = store.ResumeCommand{Argv: opts.typeOnStart.argv, Frame: resumeNextFrame}
 	}
 	// Record before spawning so a shim can never exist without a row describing it. A row
