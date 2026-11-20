@@ -227,8 +227,12 @@ type Session struct {
 	// Zero follows the schedule. Set by `cm kill --keep --expire-after`, and not carried into a revive, so a
 	// revived session that ends later follows the schedule again. See Expiry.
 	ExpireAfter Expiry
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Typed is the command line the session's shell last started and has not yet returned from, bound to the
+	// command frame it opened, so a revive can bring back what was running when nothing was declared. See
+	// TypedCommand.
+	Typed     TypedCommand
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // BackupPath names the snapshot taken before migrating a database off a given schema version.
@@ -553,5 +557,12 @@ var migrations = []string{
 	// is for, reads a new row as it always read one.
 	`
 	ALTER TABLE sessions ADD COLUMN command_argv TEXT NOT NULL DEFAULT '';
+	`,
+	// The command the session's shell is running, from its command frames, so a revive can bring it back.
+	// See Session.Typed. Two columns for the reason resume_argv and resume_frame are two: the line ends with
+	// the frame it was typed in.
+	`
+	ALTER TABLE sessions ADD COLUMN typed_command TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN typed_frame TEXT NOT NULL DEFAULT '';
 	`,
 }

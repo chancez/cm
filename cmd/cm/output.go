@@ -155,6 +155,10 @@ type sessionJSON struct {
 	// Go duration, or "never". Empty when it follows the configured schedule, which includes every session
 	// revived since, so a script suspending sessions can tell one it suspended from one that merely ended.
 	ExpireAfter string `json:"expire_after"`
+	// TypedCommand is the command line the session's shell started and has not returned from, kept with the
+	// record so a revive can bring it back. Not Command, which is what is running right now: the two differ
+	// for a session that has ended, whose Command is empty while this says what a revive would type.
+	TypedCommand string `json:"typed_command"`
 }
 
 // locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
@@ -271,6 +275,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		AnnouncedClients:    s.AnnouncedClients,
 		ShimBuild:           s.ShimBuild,
 		ExpireAfter:         s.ExpireAfter,
+		TypedCommand:        s.TypedCommand,
 		Location:            location,
 		Resume:              resume,
 		AttachedClients:     clients,
@@ -851,6 +856,7 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"shim_build", orUnknown(j.ShimBuild)},
 		// Bare, and empty for a session on the configured schedule, which is the common case.
 		{"expire_after", j.ExpireAfter},
+		{"typed_command", j.TypedCommand},
 	}
 }
 

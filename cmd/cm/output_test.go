@@ -110,6 +110,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		"shim_build",
 		// A kept session's own retention, which is what says a suspended session will still be there.
 		"expire_after",
+		// What a revive would type back, distinct from command, which is what runs now.
+		"typed_command",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {

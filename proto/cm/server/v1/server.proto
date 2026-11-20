@@ -1226,6 +1226,12 @@ message Session {
   // a Go duration, or "never". Empty when the session follows the configured schedule, which is every
   // session that was not kept with one, and every session revived since.
   string expire_after = 31;
+
+  // typed_command is the command line this session's shell started and has not returned from, as a revive
+  // would bring it back when nothing was declared: from the shell's outermost command frame, kept with the
+  // record so it survives the session ending, a server restart and a reboot. Distinct from command, which is
+  // what is running right now and is not kept. Empty at a prompt, and for a shell without cm's integration.
+  string typed_command = 33;
 }
 
 // LocationFrame is one command a session is inside.

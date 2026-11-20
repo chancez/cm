@@ -50,6 +50,7 @@ func sampleSession(id string) Session {
 		PromptSeen: true,
 		// Not a whole number of milliseconds, unlike the timestamps, so a column that rounded would show.
 		ExpireAfter: Expiry(720*time.Hour + time.Microsecond),
+		Typed:       TypedCommand{Line: `nvim "my notes.md" | tee log`, Frame: "salt-3"},
 		CreatedAt:   time.UnixMilli(1_700_000_000_000),
 	}
 }
@@ -889,5 +890,33 @@ func TestUpgradeReadsAnOldJoinedCommand(t *testing.T) {
 	}
 	if want := "kitten ssh -t host a b"; joined != want {
 		t.Errorf("joined command = %q, want %q", joined, want)
+	}
+}
+
+// A typed command reads back as it was written, and clearing it takes the frame with it, as the resume
+// columns do.
+func TestApplyRoundTripsATypedCommand(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rec := sampleSession("typed")
+	rec.Typed = TypedCommand{}
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, typed := range []TypedCommand{{Line: "sleep 999", Frame: "salt-1"}, {}} {
+		if err := s.Apply(ctx, "typed", Update{Typed: new(typed)}); err != nil {
+			t.Fatalf("Apply(%+v) error = %v", typed, err)
+		}
+		got, err := s.Get(ctx, "typed")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		want := rec
+		want.Typed = typed
+		want.UpdatedAt = got.UpdatedAt
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("after Apply(%+v), Get() = %+v\nwant %+v", typed, got, want)
+		}
 	}
 }

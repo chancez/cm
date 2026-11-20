@@ -3891,7 +3891,12 @@ type Session struct {
 	// expire_after is the session's own retention once it has ended, from `cm kill --keep --expire-after`:
 	// a Go duration, or "never". Empty when the session follows the configured schedule, which is every
 	// session that was not kept with one, and every session revived since.
-	ExpireAfter   string `protobuf:"bytes,31,opt,name=expire_after,json=expireAfter,proto3" json:"expire_after,omitempty"`
+	ExpireAfter string `protobuf:"bytes,31,opt,name=expire_after,json=expireAfter,proto3" json:"expire_after,omitempty"`
+	// typed_command is the command line this session's shell started and has not returned from, as a revive
+	// would bring it back when nothing was declared: from the shell's outermost command frame, kept with the
+	// record so it survives the session ending, a server restart and a reboot. Distinct from command, which is
+	// what is running right now and is not kept. Empty at a prompt, and for a shell without cm's integration.
+	TypedCommand  string `protobuf:"bytes,33,opt,name=typed_command,json=typedCommand,proto3" json:"typed_command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4139,6 +4144,13 @@ func (x *Session) GetResumeArgv() []string {
 func (x *Session) GetExpireAfter() string {
 	if x != nil {
 		return x.ExpireAfter
+	}
+	return ""
+}
+
+func (x *Session) GetTypedCommand() string {
+	if x != nil {
+		return x.TypedCommand
 	}
 	return ""
 }
@@ -5635,7 +5647,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xa4\t\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xc9\t\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5671,7 +5683,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x10attached_clients\x18\x15 \x03(\v2\x1c.cm.server.v1.AttachedClientR\x0fattachedClients\x12\x1f\n" +
 	"\vresume_argv\x18\x1e \x03(\tR\n" +
 	"resumeArgv\x12!\n" +
-	"\fexpire_after\x18\x1f \x01(\tR\vexpireAfter\x1a7\n" +
+	"\fexpire_after\x18\x1f \x01(\tR\vexpireAfter\x12#\n" +
+	"\rtyped_command\x18! \x01(\tR\ftypedCommand\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +

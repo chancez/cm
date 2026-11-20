@@ -211,3 +211,132 @@ func TestALonePromptMarkerIsSeen(t *testing.T) {
 		t.Error("PromptSeen() = false after a prompt marker")
 	}
 }
+
+// The typed command is the line the session's own shell started, and ends with its frame.
+//
+// Whole values at each step: the line, the frame it is bound to, and nothing after the program returns,
+// which is what keeps a program the user quit from coming back on the next revive.
+func TestATypedCommandLastsAsLongAsItsFrame(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("sh-1", "sleep 999", false), 0)
+	if got, want := sess.Typed(), (store.TypedCommand{Line: "sleep 999", Frame: "sh-1"}); got != want {
+		t.Fatalf("Typed() = %+v, want %+v", got, want)
+	}
+	sess.processChunk(frame("sh-1", "", true), 0)
+	if got := sess.Typed(); got != (store.TypedCommand{}) {
+		t.Errorf("Typed() after the command returned = %+v, want the zero value", got)
+	}
+}
+
+// Only the outermost frame is the session's own. One above it is written by a shell further in, the far side
+// of an ssh or a nested `cm attach`, and typed back into this session's new shell it would run that program
+// here; the outermost one is the ssh or the attach itself, which typed back reconnects.
+func TestATypedCommandIsTheOutermostFrame(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+	want := store.TypedCommand{Line: "cm attach child", Frame: "p-1"}
+
+	sess.processChunk(frame("p-1", "cm attach child", false), 0)
+	sess.beginHosting("child")
+	sess.processChunk(frame("c-1", "vim notes.md", false), 0)
+	if got := sess.Typed(); got != want {
+		t.Errorf("Typed() with a nested session's command open = %+v, want the parent's own, %+v", got, want)
+	}
+	sess.processChunk(frame("c-1", "", true), 0)
+	if got := sess.Typed(); got != want {
+		t.Errorf("Typed() after the nested command returned = %+v, want %+v", got, want)
+	}
+	sess.endHosting("child")
+	sess.processChunk(frame("p-1", "", true), 0)
+	if got := sess.Typed(); got != (store.TypedCommand{}) {
+		t.Errorf("Typed() after the attach returned = %+v, want the zero value", got)
+	}
+}
+
+// Only a session whose own program is a shell records a typed command. One spawned as a program, like
+// `kitten ssh host`, has no shell of its own, so its outermost frame is written by the remote shell, and a
+// remote `vim` recorded here would come back as a local one; it records nothing, and its spawn argv is what
+// comes back.
+//
+// The frames are written straight into the session, as a remote shell's would arrive through the pty. The
+// whole list is compared, so the shell rows guard against a rule that refused everything.
+func TestOnlyAShellSessionRecordsATypedCommand(t *testing.T) {
+	vim := store.TypedCommand{Line: "vim notes.md", Frame: "r-1"}
+	var got, want []store.TypedCommand
+	for _, tc := range []struct {
+		command []string
+		want    store.TypedCommand
+	}{
+		{nil, vim},
+		{[]string{"/bin/zsh", "-l"}, vim},
+		{[]string{"kitten", "ssh", "host"}, store.TypedCommand{}},
+		{[]string{"/bin/sh", "-c", "exec ssh host"}, store.TypedCommand{}},
+		// kitty's shell launcher, as a launch wrapper spawns a shell window.
+		{[]string{"/Applications/kitty.app/Contents/MacOS/kitten", "run-shell", "--shell", "/opt/homebrew/bin/zsh",
+			"--shell-integration", "disabled", "--cwd=/tmp"}, vim},
+		{[]string{"kitten", "run-shell", "--shell=zsh", "nvim"}, store.TypedCommand{}},
+	} {
+		sess := newNestedTestSession(t, &fakeTerminal{})
+		sess.record.Command = tc.command
+		sess.processChunk(frame("r-1", "vim notes.md", false), 0)
+		got = append(got, sess.Typed())
+		want = append(want, tc.want)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Typed() by spawn argv = %+v\nwant %+v", got, want)
+	}
+}
+
+// kitty's shell launcher is a shell when nothing but its own options follow it, and a program once a command
+// does, as is anything that only looks like it.
+func TestIsJustAShellReadsKittysShellLauncher(t *testing.T) {
+	kitten := "/Applications/kitty.app/Contents/MacOS/kitten"
+	var got []bool
+	for _, argv := range [][]string{
+		{kitten, "run-shell"},
+		{kitten, "run-shell", "--shell", "/opt/homebrew/bin/zsh", "--shell-integration", "disabled", "--cwd=/tmp"},
+		{"kitten", "run-shell", "--env", "A=b", "--env=C", "--inject-self-onto-path=never", "--"},
+		{kitten, "run-shell", "--shell=zsh", "nvim", "notes.md"},
+		{kitten, "run-shell", "--", "nvim"},
+		{kitten, "run-shell", "--shell"},
+		{kitten, "run-shell", "--hold"},
+		{kitten, "ssh", "host"},
+		{"run-shell", "kitten"},
+	} {
+		got = append(got, isJustAShell(argv))
+	}
+	if want := []bool{true, true, true, false, false, false, false, false, false}; !reflect.DeepEqual(got, want) {
+		t.Errorf("isJustAShell = %v, want %v", got, want)
+	}
+}
+
+// A kill that keeps the session freezes the typed command, as it freezes the declaration: the hangup closes
+// the frame, and that close must not erase what the revive brings back.
+func TestAKillThatKeepsTheSessionKeepsItsTypedCommand(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+	want := store.TypedCommand{Line: "sleep 999", Frame: "sh-1"}
+
+	sess.processChunk(frame("sh-1", "sleep 999", false), 0)
+	sess.keepRecord.Store(true)
+	sess.processChunk(frame("sh-1", "", true), 0)
+	if got := sess.Typed(); got != want {
+		t.Errorf("Typed() after the frame closed under a keeping kill = %+v, want %+v", got, want)
+	}
+}
+
+// `restore-with --clear` leaves an empty declaration bound to the frame it was run in, so a revive brings
+// nothing back for that frame, not even the typed command; and it ends with that frame like a declaration.
+func TestAClearedDeclarationIsBoundToItsFrame(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("sh-1", "terraform apply", false), 0)
+	sess.SetResume([]string{"terraform", "plan"})
+	sess.ClearResume()
+	if got, want := sess.Resume(), (store.ResumeCommand{Frame: "sh-1"}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resume() after a clear = %+v, want %+v", got, want)
+	}
+	sess.processChunk(frame("sh-1", "", true), 0)
+	if got := sess.Resume(); !reflect.DeepEqual(got, store.ResumeCommand{}) {
+		t.Errorf("Resume() after the cleared frame returned = %+v, want the zero value", got)
+	}
+}

@@ -199,12 +199,27 @@ nesting without either layer knowing what the other runs.
 
 Three parts, each useful without the others. The declared part and the policy are built.
 
-**Inferred: the typed command.** A session's recorded command today is its spawn argv, which for a
-`kitty.*` session is the shell, so `on_restore = "command"` and `safe_commands` never see the program
-running in it. The shell integration already reports what is running as command frames, kept in memory
-only. Writing the innermost frame's argv to the session row when a frame opens or closes gives restore the
-typed command, which also keeps a wrapper's argv out of it: tmux-resurrect restores rbenv's expanded
-`ruby` path because `ps` is all it has.
+**Inferred: the typed command.** A session's spawn argv is, for a `kitty.*` session, the shell, so
+`on_restore = "command"` and `safe_commands` never saw the program running in it. The shell integration
+reports what is running as command frames, and the line of the session's outermost open frame is now kept
+with the record as `typed_command`: set when that frame opens, dropped when it closes at a prompt, so a
+program the user quit is not brought back, and frozen while `cm kill --keep` ends the
+session, as the declaration is. It also keeps a wrapper's argv out of it: tmux-resurrect restores rbenv's
+expanded `ruby` path because `ps` is all it has. `cm info --json` shows it as `typed_command`, beside the live
+`command`.
+
+The outermost frame rather than the innermost, which is where a declaration binds. A frame above the
+outermost is written by a shell further in, through this pty: the far side of an ssh, a nested `cm attach`,
+or a subshell. Its line typed back into this session's new shell after a reboot would run the remote or
+nested program here, while the outermost frame is the ssh or the attach itself, which typed back
+reconnects. A declaration has no such problem, since only a program on this machine can reach this server
+to declare one. For the same reason it is kept only for a session whose own program is a shell: one spawned
+as `kitten ssh host` has no shell here, so even its outermost frame is the remote shell's, and its spawn argv
+is what brings it back.
+
+What a shell reports is a line, not an argv: zsh's preexec is passed the line as typed, bash reads it back
+from `history 1` (so a shell with history off reports nothing), and fish passes the command line, each
+escaped for the wire and cut at 256 characters. cm does not turn it into an argv.
 
 **Declared: the sequence and `cm restore-with`.** Two channels, the same split as OSC 7501 and `cm report`:
 

@@ -14,7 +14,8 @@ import (
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
-	reported_at, resume_argv, resume_frame, prompt_seen, expire_after, command_argv`
+	reported_at, resume_argv, resume_frame, prompt_seen, expire_after, command_argv,
+	typed_command, typed_frame`
 
 // Create inserts a session record.
 //
@@ -32,7 +33,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, strings.Join(sess.Command, " "),
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
@@ -41,6 +42,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
 		sess.PromptSeen, int64(sess.ExpireAfter), encodeArgv(sess.Command),
+		sess.Typed.Line, sess.Typed.Frame,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -139,6 +141,22 @@ type Update struct {
 	// ExpireAfter replaces the session's own retention. A non-nil pointer to zero clears it, returning the
 	// session to the configured schedule.
 	ExpireAfter *Expiry
+	// Typed replaces the typed command. A non-nil pointer to the zero value clears it, which is what its
+	// frame closing does.
+	Typed *TypedCommand
+}
+
+// TypedCommand is the command line a session's shell started and has not returned from, as the shell
+// reported it in a command frame.
+//
+// A line rather than an argv, since that is what a shell reports: zsh's preexec gets the line as typed,
+// bash reads it from history, fish from the command line, each truncated to 256 characters. A revive types it
+// back verbatim into the same kind of shell, which parses it as it parsed it the first time, so quoting,
+// pipes and aliases survive without cm parsing any of them. Frame is the command frame it opened, so it ends
+// with that frame: a program the user quit is not brought back.
+type TypedCommand struct {
+	Line  string
+	Frame string
 }
 
 // Expiry is how long a session's record is kept once it has ended, when the session has a retention of its
@@ -289,6 +307,11 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	if u.ExpireAfter != nil {
 		add("expire_after", int64(*u.ExpireAfter))
 	}
+	if u.Typed != nil {
+		// Together, for the reason the resume columns are.
+		add("typed_command", u.Typed.Line)
+		add("typed_frame", u.Typed.Frame)
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -394,7 +417,7 @@ func scanSession(sc scanner) (Session, error) {
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
-		&sess.PromptSeen, &expireAfter, &commandArgv,
+		&sess.PromptSeen, &expireAfter, &commandArgv, &sess.Typed.Line, &sess.Typed.Frame,
 	)
 	if err != nil {
 		return Session{}, err

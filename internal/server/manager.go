@@ -488,7 +488,7 @@ func (m *Manager) adopt(
 	// Persist what the shell reports about itself, so `list` and a terminal emulator opening a
 	// new window see current values rather than whatever was true at creation.
 	go m.persistMetadata(sess)
-	go m.persistResume(sess)
+	go m.persistRestore(sess)
 	go m.persistPromptSeen(sess, rec.PromptSeen)
 
 	go m.watch(sess)

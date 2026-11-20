@@ -12,6 +12,7 @@ import (
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/shquote"
 	"github.com/chancez/cm/internal/store"
 )
@@ -34,7 +35,7 @@ const resumeNextFrame = "next"
 // without cm's integration, the declaration is unbound and lasts until it is replaced or cleared.
 //
 // Ignored once `cm kill --keep` is ending the session, like every other change: what revives is the
-// declaration in force when the kill arrived. See dropResumeLocked.
+// declaration in force when the kill arrived. See dropFramedLocked.
 func (s *Session) SetResume(argv []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,18 +47,31 @@ func (s *Session) SetResume(argv []string) {
 		frame = s.frames[n-1].id
 	}
 	s.resume = store.ResumeCommand{Argv: slices.Clone(argv), Frame: frame}
-	s.signalResumeLocked()
+	s.signalRestoreLocked()
 }
 
-// ClearResume withdraws the declaration.
+// ClearResume withdraws the declaration, and says nothing is to be brought back for the frame open now.
+//
+// Recorded as an empty declaration bound to the innermost frame rather than as no declaration, because the
+// typed command would otherwise fill the gap: `cm restore-with --clear` from a `terraform apply` wrapper means
+// a revive must not type `terraform apply` back either. It ends with its frame like a declaration, so a
+// command run after the program returns is restorable again. With no frame open there is nothing to bind it
+// to, and nothing typed either, so it is simply no declaration.
 func (s *Session) ClearResume() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.resume.Argv) == 0 || s.keepRecord.Load() {
+	if s.keepRecord.Load() {
 		return
 	}
-	s.resume = store.ResumeCommand{}
-	s.signalResumeLocked()
+	cleared := store.ResumeCommand{}
+	if n := len(s.frames); n > 0 {
+		cleared.Frame = s.frames[n-1].id
+	}
+	if len(s.resume.Argv) == 0 && s.resume.Frame == cleared.Frame {
+		return
+	}
+	s.resume = cleared
+	s.signalRestoreLocked()
 }
 
 // Resume returns the current declaration.
@@ -67,70 +81,176 @@ func (s *Session) Resume() store.ResumeCommand {
 	return store.ResumeCommand{Argv: slices.Clone(s.resume.Argv), Frame: s.resume.Frame}
 }
 
+// Typed returns the command line the session's shell is running, as a revive would bring it back.
+func (s *Session) Typed() store.TypedCommand {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.typed
+}
+
 // bindResumeLocked binds a declaration waiting for the next frame to the one just opened.
 func (s *Session) bindResumeLocked(frame string) {
 	if s.resume.Frame != resumeNextFrame || len(s.resume.Argv) == 0 {
 		return
 	}
 	s.resume.Frame = frame
-	s.signalResumeLocked()
+	s.signalRestoreLocked()
 }
 
-// dropResumeLocked withdraws the declaration if its frame is among those closed: the program that made it
-// has exited back to a shell, and a declaration that outlived it would resurrect something deliberately
+// noteTypedLocked records the command a frame just opened for, when it is the session's own.
+//
+// Only the outermost frame, which is the one this session's own shell opened. A frame above it comes from a
+// shell further in, written through this pty: the far side of an ssh, a nested `cm attach`, or a subshell. Its
+// command belongs to that shell, and typed back into this session's new shell after a reboot it would run
+// the remote or nested program here. The outermost frame is the ssh or the `cm attach` itself, which typed
+// back reconnects, and that is the right answer for both.
+//
+// And only in a session whose own program is a shell. One spawned as `kitten ssh host` has no shell here, so
+// even its outermost frame is written by the remote shell, when that has cm's integration: a remote `vim`
+// recorded as its typed command would be typed into a local shell on a revive and run here, in place of the
+// ssh. What brings such a session back is its spawn argv. See runsAShell.
+//
+// Bound to the frame, and dropped with it by dropFramedLocked, which is the same rule a declaration follows,
+// and frozen the same way while a kill that keeps the session is ending it.
+func (s *Session) noteTypedLocked(f osc.Frame, outermost bool) {
+	if !outermost || !runsAShell(s.record.Command) || s.keepRecord.Load() {
+		return
+	}
+	s.typed = store.TypedCommand{Line: f.Argv, Frame: f.ID}
+	s.signalRestoreLocked()
+}
+
+// runsAShell reports whether a session spawned with this argv runs a shell of its own: the default shell,
+// which an empty argv starts, or an argv that is just a shell. Only such a session's frames are its own.
+func runsAShell(command []string) bool {
+	return len(command) == 0 || isJustAShell(command)
+}
+
+// shells are the programs a spawn argv can name and still be just a shell.
+var shells = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true, "ksh": true, "mksh": true,
+	"tcsh": true, "csh": true, "nu": true,
+}
+
+// isJustAShell reports whether a spawn argv starts nothing but an interactive shell, like `zsh -l` or `bash
+// -i`, which a revive starts anyway. One running a script with -c, or a file, is a program, as is anything
+// that is not a shell. kitty's shell launcher counts as a shell: see isKittyShellLauncher.
+func isJustAShell(argv []string) bool {
+	if isKittyShellLauncher(argv) {
+		return true
+	}
+	name := filepath.Base(argv[0])
+	if !shells[name] && name != filepath.Base(os.Getenv("SHELL")) {
+		return false
+	}
+	for _, arg := range argv[1:] {
+		if !strings.HasPrefix(arg, "-") || arg == "-c" {
+			return false
+		}
+	}
+	return true
+}
+
+// kittyRunShellValued are the options of `kitten run-shell` that take a value, as `--opt value` or
+// `--opt=value`, from its --help in kitty 0.51.
+var kittyRunShellValued = map[string]bool{
+	"--shell-integration": true, "--shell": true, "--env": true, "--cwd": true, "--inject-self-onto-path": true,
+}
+
+// isKittyShellLauncher reports whether argv is `kitten run-shell` with nothing but its own options, which is
+// kitty's launcher for the user's shell: `kitten run-shell --shell zsh --shell-integration disabled
+// --cwd=DIR` starts zsh and nothing else.
+//
+// A session spawned that way is a shell window. Read as a program, its typed `vim` was never recorded, and a
+// revive prefilled the launcher's own argv at the new shell's prompt. An argument that is not one of its
+// options is the command run-shell runs before the shell, which makes it a program like any other, and so
+// does an option it does not have, since that is not a command line this rule can read.
+func isKittyShellLauncher(argv []string) bool {
+	if len(argv) < 2 || filepath.Base(argv[0]) != "kitten" || argv[1] != "run-shell" {
+		return false
+	}
+	for i := 2; i < len(argv); i++ {
+		arg := argv[i]
+		name, _, hasValue := strings.Cut(arg, "=")
+		switch {
+		case arg == "--":
+			return i == len(argv)-1
+		case !kittyRunShellValued[name]:
+			return false
+		case !hasValue:
+			// The value is the next argument; one missing it leaves run-shell refusing to start.
+			i++
+			if i == len(argv) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// dropFramedLocked withdraws the declaration and the typed command if their frame is among those closed:
+// the program has exited back to a shell, and either one outliving it would resurrect something deliberately
 // quit. zellij's set-resurrect-command has exactly that flaw, lasting until the pane closes.
 //
 // Not while `cm kill --keep` is ending the session. The program did not quit, it was stopped so it could be
 // revived, and the hangup is what closes its frame: zsh prints "zsh: hangup" and draws a prompt on the way
 // out, so a suspended session lost its declaration 36ms after the kill arrived and revived into a bare
 // shell. ClearResume is frozen the same way, since a program's exit hook can withdraw it as it dies.
-func (s *Session) dropResumeLocked(closed map[string]bool) {
-	if s.resume.Frame == "" || s.resume.Frame == resumeNextFrame || !closed[s.resume.Frame] {
+func (s *Session) dropFramedLocked(closed map[string]bool) {
+	resume := s.resume.Frame != "" && s.resume.Frame != resumeNextFrame && closed[s.resume.Frame]
+	typed := s.typed.Frame != "" && closed[s.typed.Frame]
+	if !resume && !typed {
 		return
 	}
 	if s.keepRecord.Load() {
-		s.log.Info("kept a resume command whose command ended with a kill that keeps the session",
-			"session", s.label, "frame", s.resume.Frame)
+		s.log.Info("kept what a revive brings back, whose command ended with a kill that keeps the session",
+			"session", s.label, "resume_frame", s.resume.Frame, "typed_frame", s.typed.Frame)
 		return
 	}
-	s.log.Info("dropped a resume command with the command it was declared in",
-		"session", s.label, "frame", s.resume.Frame)
-	s.resume = store.ResumeCommand{}
-	s.signalResumeLocked()
+	if resume {
+		s.log.Info("dropped a resume command with the command it was declared in",
+			"session", s.label, "frame", s.resume.Frame)
+		s.resume = store.ResumeCommand{}
+	}
+	if typed {
+		s.typed = store.TypedCommand{}
+	}
+	s.signalRestoreLocked()
 }
 
-func (s *Session) signalResumeLocked() {
+func (s *Session) signalRestoreLocked() {
 	select {
-	case s.resumeChanged <- struct{}{}:
+	case s.restoreChanged <- struct{}{}:
 	default:
 	}
 }
 
-// persistResume writes a session's declaration to the store whenever it changes, until the session ends.
+// persistRestore writes what a revive of this session would bring back, its declaration and its typed command,
+// to the store whenever either changes, until the session ends.
 //
-// The store is the only copy: a declaration arrives by RPC and is in no output stream. Written off the pump,
-// since a frame closing is output and a store write on the pump would stall it.
-func (m *Manager) persistResume(sess *Session) {
+// The store is the only copy of the declaration, which arrives by RPC and is in no output stream; the typed
+// command is in the output, but a server restart replays only the shim's retained window, which has long lost
+// the frame of a program started hours ago. Written off the pump, since a frame is output and a store write
+// on the pump would stall it, and coalesced: the writer reads both values when it runs.
+func (m *Manager) persistRestore(sess *Session) {
+	write := func() {
+		r, typed := sess.Resume(), sess.Typed()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.store.Apply(ctx, sess.id, store.Update{Resume: &r, Typed: &typed}); err != nil {
+			m.log.Warn("recording what a revive brings back failed", "session", sess.id, "error", err)
+		}
+	}
 	for {
 		select {
-		case <-sess.resumeChanged:
-			r := sess.Resume()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := m.store.Apply(ctx, sess.id, store.Update{Resume: &r}); err != nil {
-				m.log.Warn("recording a resume command failed", "session", sess.id, "error", err)
-			}
-			cancel()
+		case <-sess.restoreChanged:
+			write()
 		case <-sess.Done():
 			// One last look, so a change signalled as the session ended is not lost to the select picking
 			// this case first.
 			select {
-			case <-sess.resumeChanged:
-				r := sess.Resume()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if err := m.store.Apply(ctx, sess.id, store.Update{Resume: &r}); err != nil {
-					m.log.Warn("recording a resume command failed", "session", sess.id, "error", err)
-				}
-				cancel()
+			case <-sess.restoreChanged:
+				write()
 			default:
 			}
 			return
