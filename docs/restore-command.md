@@ -255,7 +255,8 @@ exited, dead after a reboot or a crash, or shelved. An attach's command after `-
 notice on stderr, since the session already says how it comes back, and a terminal restoring a window it
 had opened with `cm attach NAME -- ARGV` replays that argv. When the attach's command used to win on the
 reboot path, that replay reran the window's original program and the declaration was never used. `cm run
---session` is the one caller whose command still wins.
+--session` is the one caller whose command still wins on an exited or dead session, and it refuses a
+shelved one rather than drop its command.
 
 The declaration is written to the store when it arrives. It cannot be recovered from the persisted log the
 way an OSC 7501 report is, because a declaration made at a program's startup has been trimmed out of the

@@ -160,6 +160,31 @@ func waitGone(ctx context.Context, pids []int, bound time.Duration) ([]int, erro
 	}
 }
 
+// ShelvedSessionError refuses to run a command in a shelved session.
+type ShelvedSessionError struct {
+	// Ref is the reference the caller gave, so the message names what they typed.
+	Ref string
+}
+
+func (e *ShelvedSessionError) Error() string {
+	return fmt.Sprintf("%[2]s is shelved; %[1]s restore %[2]s or %[1]s attach %[2]s brings it back, "+
+		"%[1]s forget %[2]s discards it", paths.Name, e.Ref)
+}
+
+// refuseShelved refuses an Open that would restore a shelved session to run a command it expects to run.
+//
+// That is `cm run --session X`, recognized by CaptureOutput, which only run sets: its command is the whole
+// point, and a restore drops it, so before this the run restored the session and then waited on the restored shell as
+// though it were the command, which never ran. An attach's command is different, a window replaying the argv
+// it was opened with, and a restore ignores it with a notice instead. Refused before anything is changed, so the
+// session stays shelved with its record as it was.
+func refuseShelved(opts OpenOptions, rec store.Session) error {
+	if rec.State != store.StateShelved || !opts.CaptureOutput {
+		return nil
+	}
+	return &ShelvedSessionError{Ref: opts.Ref}
+}
+
 // restoreOptions decides what a revive of an ended session starts, from what the caller asked and what the
 // record kept.
 //
@@ -180,7 +205,7 @@ func (m *Manager) restoreOptions(opts OpenOptions, rec store.Session) OpenOption
 // It does when the record saved output to bring back, which is what inheritForRestore restores from, and the
 // Open is not a run. A run is recognized by CaptureOutput, which only `cm run` sets; it revives the session
 // in place with its own command as the session's command, as it always has, since a run must never drop its
-// command.
+// command. A shelved session refuses a run instead: see refuseShelved.
 func (m *Manager) revives(opts OpenOptions, rec store.Session) bool {
 	return !opts.CaptureOutput && restorable(m.persist, rec)
 }

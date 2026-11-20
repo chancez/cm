@@ -301,6 +301,12 @@ func ignoredCommandNotice(sessions []*serverv1.Session, ref string) string {
 		paths.Name, ref, stateName(s))
 }
 
+// namesShelved reports whether ref, a name or an "@id", names a shelved session among these.
+func namesShelved(sessions []*serverv1.Session, ref string) bool {
+	s := sessionNamed(sessions, ref)
+	return s != nil && s.State == serverv1.SessionState_SESSION_STATE_SHELVED
+}
+
 // sessionNamed finds the session ref names, by any of its names or by "@id", or nil.
 func sessionNamed(sessions []*serverv1.Session, ref string) *serverv1.Session {
 	for _, s := range sessions {

@@ -193,10 +193,14 @@ and that is what kept a reboot from bringing a session back the way shelving did
 window that it had opened with `cm attach NAME -- ARGV` replays that argv, so the window reran its original
 program and the resume command it had declared was never used.
 
-`cm run` keeps its own command rather than reviving this way. `cm run --session NAME -- CMD` on an ended
-NAME reuses it in place, same ID and names, its saved output replayed ahead of CMD's, with CMD as the
-session's command; the run prints both and exits with CMD's status. The server tells a run by
-`capture_output`, which only `cm run` sets, so the rule holds for any client.
+`cm run` keeps its own command rather than reviving this way. `cm run --session NAME -- CMD` on an exited or
+dead NAME reuses it in place,
+same ID and names, its saved output replayed ahead of CMD's, with CMD as the session's command; the run
+prints both and exits with CMD's status. A run must never drop its command, so on a shelved session,
+which would come back as its declared program, it is refused instead, with `NAME is shelved; cm restore NAME
+or cm attach NAME brings it back, cm forget NAME discards it`, and nothing changes. The server tells a run
+by `capture_output`, which only `cm run` sets, so the rule holds for any client, and `cm run` asks first
+only so the message is not wrapped in the transport's error text.
 
 Both commands are refused against a server that reports capabilities without `shelve`, naming the
 restart that fixes it. `cm attach` needs no check: a server that predates this reports no session as

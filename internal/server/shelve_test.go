@@ -347,3 +347,51 @@ func TestRestoreOptionsBringEveryEndedSessionBackAsItWas(t *testing.T) {
 		})
 	}
 }
+
+// `cm run --session X` refuses a shelved X and changes nothing, while an attach with a command still restores
+// it.
+//
+// run's Open is told apart by CaptureOutput. The whole record is compared before and after, since a refusal
+// that had already started the revive would have deleted and recreated it, and the shim binary is a path
+// that does not exist, so anything that got as far as spawning shows as a missing record rather than as a
+// session quietly running.
+func TestRunRefusesAShelvedSession(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	mgr.SetPersistPolicy(testPolicy())
+	mgr.selfExe = "/nonexistent/cm"
+	ctx := context.Background()
+
+	for _, id := range []string{"agent", "other"} {
+		recordSession(t, st, store.Session{
+			ID: id, ShimSocket: dirs.ShimSocket(id), LogPath: dirs.SessionLog(id), State: store.StateExited,
+			Cwd: "/tmp", Resume: store.ResumeCommand{Argv: []string{"claude", "--resume", "abc"}},
+		})
+		if _, err := mgr.Shelve(ctx, id, 0); err != nil {
+			t.Fatalf("Shelve(%s) error = %v", id, err)
+		}
+	}
+	before, _ := st.Get(ctx, "agent")
+
+	_, _, err := mgr.Open(ctx, OpenOptions{
+		Ref: "agent", Command: []string{"make"}, CaptureOutput: true, Rows: 24, Cols: 80,
+	})
+	var refused *ShelvedSessionError
+	if !errors.As(err, &refused) || !reflect.DeepEqual(*refused, ShelvedSessionError{Ref: "agent"}) {
+		t.Fatalf("Open() from run error = %v, want a ShelvedSessionError for agent", err)
+	}
+	if want := "agent is shelved; cm restore agent or cm attach agent brings it back, cm forget agent discards it"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	if after, err := st.Get(ctx, "agent"); err != nil || !reflect.DeepEqual(after, before) {
+		t.Errorf("record after the refused run = %+v, %v\nwant it unchanged, %+v", after, err, before)
+	}
+
+	// The control: the same command from an attach goes on to restore the session, which here gets as far as
+	// replacing the record and failing to spawn the bogus shim binary.
+	if _, _, err := mgr.Open(ctx, OpenOptions{Ref: "other", Command: []string{"make"}, Rows: 24, Cols: 80}); errors.As(err, &refused) || err == nil {
+		t.Fatalf("Open() from attach error = %v, want the restore attempted", err)
+	}
+	if _, err := st.Get(ctx, "other"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Get(other) error = %v, want the record replaced by the attempted restore", err)
+	}
+}

@@ -174,3 +174,24 @@ func infoJSON(e *env, name string) map[string]any {
 	}
 	return info
 }
+
+// `cm run --session X` against a shelved X fails with one line naming X and the ways out, and leaves it
+// shelved with its declaration, rather than restoring it and dropping the command.
+func TestRunRefusesAShelvedSession(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	startDeclared(e, "agent", filepath.Join(e.state, "recorded-dir"))
+	e.mustRun("shelve", "agent")
+	before := infoJSON(e, "agent")
+
+	r := e.run("run", "--session", "agent", "--", "echo", "RAN-ANYWAY")
+	want := "cm: agent is shelved; cm restore agent or cm attach agent brings it back, cm forget agent discards it\n"
+	if r.code == 0 || r.stderr != want || strings.Contains(r.stdout, "RAN-ANYWAY") {
+		t.Errorf("cm run on a shelved session = exit %d, stdout %q, stderr %q; want a failure with %q",
+			r.code, r.stdout, r.stderr, want)
+	}
+	if after := infoJSON(e, "agent"); !reflect.DeepEqual(after, before) {
+		t.Errorf("cm info after the refused run = %v\nwant it unchanged, %v", after, before)
+	}
+	e.mustRun("kill", "agent")
+}

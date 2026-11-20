@@ -1134,6 +1134,9 @@ func (m *Manager) openExisting(
 			LastSeq:  seq.Shim(rec.LastSeq),
 		}
 	}
+	if err := refuseShelved(opts, rec); err != nil {
+		return nil, false, err
+	}
 
 	// Nothing to attach to, so a new shell starts under this ID with the old one's content replayed.
 	//

@@ -13,6 +13,7 @@ import (
 
 	"github.com/chancez/cm/internal/client"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/server"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -55,6 +56,10 @@ immediately and leaves the session running, printing the session name instead.
 creates it, later calls send the command to the shell already running there. That
 keeps a directory or an activated environment between runs, and costs one pty rather
 than one per command.
+
+A shelved session (see 'cm shelve') is refused rather than restored, since a
+restore would bring back its own declared program and drop this command: 'cm restore'
+or 'cm attach' brings it back, and 'cm forget' discards it.
 
 Reuse changes how the command is interpreted, which is worth knowing. Creating a
 session runs the arguments as an argv, untouched. Reusing one sends them to a shell,
@@ -107,6 +112,14 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			}
 
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
+				// The server refuses this too, for any client; asked here first only so the message arrives
+				// as itself rather than inside the transport's "rpc error: code = Unknown desc =" wrapper.
+				if session != "" {
+					if listed, err := cl.List(ctx, &serverv1.ListRequest{}); err == nil &&
+						namesShelved(listed.Sessions, session) {
+						return &server.ShelvedSessionError{Ref: session}
+					}
+				}
 				id, created, err := startRun(ctx, cl, runOptions{
 					session: session,
 					dir:     dir,
