@@ -222,6 +222,13 @@ frame closing at the next prompt removes it. That is the protocol's OSC 133;A ru
 since a frame closes for the command that opened it rather than for whichever prompt comes next, and stays
 open while the command is a stopped job: a claude suspended with ctrl-z keeps its declaration.
 
+`cm kill --keep` freezes the declaration as it stood when the kill arrived. The hangup is what closes the
+program's frame then, not the program quitting: zsh prints `zsh: hangup` and draws a prompt before it dies,
+and the declaration went with that frame 36ms after a `cm kill NAME --keep --expire-after never`, so a
+suspended session revived into a bare shell. A clear or a new declaration from the dying program is
+ignored too, since an exit hook can send either. A plain `cm kill` forgets the session anyway, and a kill
+that fails with the shell still running unfreezes it.
+
 The declaration is written to the store when it arrives. It cannot be recovered from the persisted log the
 way an OSC 7501 report is, because a declaration made at a program's startup has been trimmed out of the
 16 MiB log long before the reboot, and replaying one would apply a record whose token is dead.

@@ -32,9 +32,15 @@ const resumeNextFrame = "next"
 // Innermost because the declaring process is the program running there: a hook run by claude is claude's
 // child, and claude is the command the shell's frame was opened for. With no frame open, which is a shell
 // without cm's integration, the declaration is unbound and lasts until it is replaced or cleared.
+//
+// Ignored once `cm kill --keep` is ending the session, like every other change: what revives is the
+// declaration in force when the kill arrived. See dropResumeLocked.
 func (s *Session) SetResume(argv []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.keepRecord.Load() {
+		return
+	}
 	frame := ""
 	if n := len(s.frames); n > 0 {
 		frame = s.frames[n-1].id
@@ -47,7 +53,7 @@ func (s *Session) SetResume(argv []string) {
 func (s *Session) ClearResume() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.resume.Argv) == 0 {
+	if len(s.resume.Argv) == 0 || s.keepRecord.Load() {
 		return
 	}
 	s.resume = store.ResumeCommand{}
@@ -73,8 +79,18 @@ func (s *Session) bindResumeLocked(frame string) {
 // dropResumeLocked withdraws the declaration if its frame is among those closed: the program that made it
 // has exited back to a shell, and a declaration that outlived it would resurrect something deliberately
 // quit. zellij's set-resurrect-command has exactly that flaw, lasting until the pane closes.
+//
+// Not while `cm kill --keep` is ending the session. The program did not quit, it was stopped so it could be
+// revived, and the hangup is what closes its frame: zsh prints "zsh: hangup" and draws a prompt on the way
+// out, so a suspended session lost its declaration 36ms after the kill arrived and revived into a bare
+// shell. ClearResume is frozen the same way, since a program's exit hook can withdraw it as it dies.
 func (s *Session) dropResumeLocked(closed map[string]bool) {
 	if s.resume.Frame == "" || s.resume.Frame == resumeNextFrame || !closed[s.resume.Frame] {
+		return
+	}
+	if s.keepRecord.Load() {
+		s.log.Info("kept a resume command whose command ended with a kill that keeps the session",
+			"session", s.label, "frame", s.resume.Frame)
 		return
 	}
 	s.log.Info("dropped a resume command with the command it was declared in",

@@ -457,9 +457,11 @@ type Session struct {
 	// pump ending is not mistaken for the session ending.
 	releasing atomic.Bool
 	// keepRecord records that a kill asked for the session's record to survive it, so watch() reports
-	// the outcome instead of forgetting an interactive session that ended.
+	// the outcome instead of forgetting an interactive session that ended, and the declared resume
+	// command stays what it was when the kill arrived rather than going with the frame the hangup closes.
 	//
-	// Set by Kill before the shell is stopped, since watch() runs the moment it dies.
+	// Set by Kill before the shell is stopped, since watch() runs the moment it dies and the frame closes
+	// before that, and cleared again if the kill fails with the shell still running.
 	keepRecord atomic.Bool
 
 	// clients counts attached clients for reporting.

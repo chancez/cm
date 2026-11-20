@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/osc"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -186,6 +189,73 @@ func TestServiceKillValidatesExpireAfter(t *testing.T) {
 	}
 }
 
+// A program's declared resume command survives the kill that suspends it, even though the hangup closes its
+// frame on the way out.
+//
+// The regression: zsh answers SIGHUP by printing "zsh: hangup" and drawing a prompt before it dies, so the
+// frame the declaration was bound to closed 36ms after `cm kill --keep` arrived and the declaration went
+// with it, and the suspended session revived into a bare shell. The shell here does the same thing on
+// purpose: it traps the hangup and writes the frame close before exiting, which is the ordering a unit test
+// of the frame stack alone cannot show, since it is the real shim's kill that has to set it off.
+//
+// Both the session's own copy and the record are checked: the record is what a revive reads, and it is
+// written from the session's copy as it changes.
+func TestKillWithKeepKeepsTheResumeCommandTheHangupWouldDrop(t *testing.T) {
+	mgr, st, dirs := newTestManager(t, nil)
+	ctx := context.Background()
+
+	dir := shortTempDir(t)
+	open, closeFrame := filepath.Join(dir, "open"), filepath.Join(dir, "close")
+	if err := os.WriteFile(open, osc.FrameSequence("sh-1", "claude", false), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(closeFrame, osc.FrameSequence("sh-1", "", true), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The trap goes in before the frame opens, since the frame opening is what the test waits for before
+	// killing, and the shell then waits in a builtin rather than on a child. `sleep 30 & wait` let the
+	// hangup kill the sleep and wait return normally, so the shell exited 0 without running the trap 11
+	// runs in 150 and the frame never closed; this shape closed it in 200 of 200.
+	script := fmt.Sprintf("c=$(cat %s); trap 'printf %%s \"$c\"; exit 77' HUP; cat %s; while :; do read -r _; done",
+		closeFrame, open)
+	want := store.ResumeCommand{Argv: []string{"claude", "--resume", "abc"}, Frame: "sh-1"}
+
+	rec := startShimInRuntimeDir(t, dirs, "agent", script)
+	rec.LogPath = dirs.SessionLog("agent")
+	rec.PersistRequested = true
+	recordSession(t, st, rec)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	sess, live := mgr.Get("agent")
+	if !live {
+		t.Fatal("session was not adopted, so the live path is not under test")
+	}
+	pollUntil(t, "the program's frame to open", func() bool { return len(sess.Location()) == 1 })
+	sess.SetResume([]string{"claude", "--resume", "abc"})
+	pollUntil(t, "the declaration to be recorded", func() bool {
+		got, err := st.Get(ctx, "agent")
+		return err == nil && reflect.DeepEqual(got.Resume, want)
+	})
+
+	if _, err := mgr.Kill(ctx, "agent", KillOptions{Keep: true, ExpireAfter: store.ExpireNever}); err != nil {
+		t.Fatalf("Kill() error = %v", err)
+	}
+	<-sess.Done()
+	got := waitForEndedRecord(t, st, "agent")
+	// The case under test happened: the trap ran, and its close was read.
+	if loc := sess.Location(); len(loc) != 0 || got.ExitCode != 77 {
+		t.Fatalf("Location() = %+v, exit code %d; want the hangup's trap to have closed the frame and exited 77",
+			loc, got.ExitCode)
+	}
+	if r := sess.Resume(); !reflect.DeepEqual(r, want) {
+		t.Errorf("Resume() after the kill = %+v, want %+v", r, want)
+	}
+	if !reflect.DeepEqual(got.Resume, want) {
+		t.Errorf("recorded Resume after the kill = %+v, want %+v", got.Resume, want)
+	}
+}
+
 // waitForEndedRecord polls for the state watch() writes once the shell is gone.
 //
 // Polled rather than assumed: Kill returns when the shim's connection closes, and the record is written by
@@ -203,6 +273,18 @@ func waitForEndedRecord(t *testing.T, st *store.Store, id string) store.Session 
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("record still %q after 10s, want an ended state", rec.State)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// pollUntil waits up to 10s for a condition the session's goroutines bring about.
+func pollUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after 10s waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

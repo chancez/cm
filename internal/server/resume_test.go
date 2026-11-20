@@ -117,6 +117,31 @@ func TestAResumeCommandWithNoFrameIsUnbound(t *testing.T) {
 	}
 }
 
+// A session being ended by `cm kill --keep` keeps the declaration it had when the kill arrived.
+//
+// The hangup is what closes the program's frame: zsh prints "zsh: hangup" and draws a prompt before it dies,
+// so without this a suspended session withdrew its own declaration 36ms after the kill and revived into a
+// bare shell. A clear or a new declaration from the dying program is held off the same way, since an exit
+// hook can send either.
+func TestAKillThatKeepsTheSessionKeepsItsResumeCommand(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+
+	sess.processChunk(frame("sh-1", "claude", false), 0)
+	sess.SetResume([]string{"claude", "--resume", "abc"})
+	want := store.ResumeCommand{Argv: []string{"claude", "--resume", "abc"}, Frame: "sh-1"}
+
+	sess.keepRecord.Store(true)
+	sess.processChunk(frame("sh-1", "", true), 0)
+	if got := sess.Resume(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Resume() after the frame closed under a keeping kill = %+v, want %+v", got, want)
+	}
+	sess.ClearResume()
+	sess.SetResume([]string{"claude"})
+	if got := sess.Resume(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Resume() after a clear and a redeclare under a keeping kill = %+v, want %+v", got, want)
+	}
+}
+
 // How a revive restores a declared command, for each mode and both ways of being allowed to run it.
 //
 // The rows that matter most are the refusals: on_restore = "command" without the allowlist or a per-session

@@ -1813,7 +1813,9 @@ func (m *Manager) Kill(
 	if live {
 		// Set before the shell is stopped, because watch() runs as soon as it dies and would otherwise
 		// forget the record for being an interactive session that ended -- the rule that keeps a closed
-		// window from leaving a row behind, and exactly the wrong one here.
+		// window from leaving a row behind, and exactly the wrong one here. The same flag holds the
+		// declared resume command still, since the hangup closes the program's frame before the shell
+		// dies, and that close would otherwise withdraw it.
 		if opts.Keep {
 			sess.keepRecord.Store(true)
 		}
@@ -1839,6 +1841,9 @@ func (m *Manager) Kill(
 			// enough to fail a run in three. The resize path above already checks both for the same reason.
 			ended, _ := sess.Ended()
 			if !ended && !isSessionOver(err) && !isTransportClosed(err) && !isProcessGone(err) {
+				// The shell is still running, so it is not being ended and nothing about it is frozen: a
+				// program that later quits on its own withdraws its declaration as usual.
+				sess.keepRecord.Store(false)
 				return nil, fmt.Errorf("stopping %s: %w", id, err)
 			}
 		}
