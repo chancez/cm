@@ -170,8 +170,13 @@ type Session struct {
 	State     State
 	// ExitCode is meaningful only when State is StateExited.
 	ExitCode int
-	// Command is the argv the session runs, stored for display.
-	Command string
+	// Command is the argv the session was spawned with, empty for the user's default shell. A revive that
+	// re-runs it runs exactly this, so an argument with a space in it is still one argument.
+	//
+	// A list rather than the joined string it used to be, which a revive split again on whitespace:
+	// `kitten ssh -t host 'a b'` came back as five arguments. See the migration that added command_argv for
+	// how a row written before it is read.
+	Command []string
 	Cwd     string
 	Title   string
 	Rows    int
@@ -538,5 +543,15 @@ var migrations = []string{
 	// rather than parsing every row on every sweep.
 	`
 	ALTER TABLE sessions ADD COLUMN expire_after INTEGER NOT NULL DEFAULT 0;
+	`,
+	// The spawn argv as a JSON array, so a revive re-runs it argument for argument. See Session.Command.
+	//
+	// Added beside the joined command column rather than replacing it. Rows written before this have only
+	// the joined string, and are read as that string split on whitespace, which is exactly what a revive
+	// did with them before: a single-element list would instead exec a program named "nvim notes.md". The
+	// joined column is still written, so a build that predates this, which is what a pre-migration snapshot
+	// is for, reads a new row as it always read one.
+	`
+	ALTER TABLE sessions ADD COLUMN command_argv TEXT NOT NULL DEFAULT '';
 	`,
 }

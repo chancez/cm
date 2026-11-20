@@ -39,7 +39,8 @@ func sampleSession(id string) Session {
 		LastSeq:    9000,
 		State:      StateRunning,
 		ExitCode:   0,
-		Command:    "/bin/zsh",
+		// An argument with a space, which the joined column could not hold as one.
+		Command:    []string{"kitten", "ssh", "-t", "host", "a b"},
 		Cwd:        "/home/user/projects",
 		Title:      "zsh",
 		Rows:       40,
@@ -823,5 +824,70 @@ func TestParseExpiry(t *testing.T) {
 	// The zero value is "none set", which is what `cm info` prints for a session following the schedule.
 	if got := Expiry(0).String(); got != "" {
 		t.Errorf("Expiry(0).String() = %q, want empty", got)
+	}
+}
+
+// A row written before command_argv existed reads its joined command split on whitespace, which is what a
+// revive did with it then, and a row written now reads its argv back argument for argument.
+//
+// Built at the schema just before the migration, with the joined column set the way a build of that schema
+// wrote it, then opened normally so the migration runs against it.
+func TestUpgradeReadsAnOldJoinedCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cm.db")
+	ctx := context.Background()
+
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	prior := migrations[:indexOfMigration(t, "ADD COLUMN command_argv")]
+	for i, m := range prior {
+		if _, err := old.ExecContext(ctx, m); err != nil {
+			t.Fatalf("applying migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := old.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", len(prior))); err != nil {
+		t.Fatalf("recording the prior schema version: %v", err)
+	}
+	if _, err := old.ExecContext(ctx, `
+		INSERT INTO sessions (id, shim_socket, log_path, state, command, created_at, updated_at)
+		VALUES ('old', '/run/cm/shim-old.sock', '', 'exited', 'nvim  notes.md', 1700000000000, 1700000000000)`,
+	); err != nil {
+		t.Fatalf("inserting a row under the prior schema: %v", err)
+	}
+	old.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer s.Close()
+	got, err := s.Get(ctx, "old")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := Session{
+		ID:         "old",
+		ShimSocket: "/run/cm/shim-old.sock",
+		State:      StateExited,
+		Command:    []string{"nvim", "notes.md"},
+		CreatedAt:  time.UnixMilli(1_700_000_000_000),
+		UpdatedAt:  time.UnixMilli(1_700_000_000_000),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("an old row after the upgrade = %+v\nwant %+v", got, want)
+	}
+
+	// And the joined column is still written, for a build that predates command_argv to read.
+	rec := sampleSession("new")
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	var joined string
+	if err := s.db.QueryRowContext(ctx, `SELECT command FROM sessions WHERE id = 'new'`).Scan(&joined); err != nil {
+		t.Fatalf("reading the joined column: %v", err)
+	}
+	if want := "kitten ssh -t host a b"; joined != want {
+		t.Errorf("joined command = %q, want %q", joined, want)
 	}
 }

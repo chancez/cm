@@ -9,8 +9,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -1249,8 +1249,8 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 	// Re-running the recorded command is the one behavior that executes something the user did not
 	// type just now, so it happens only when asked for explicitly or when the program is on the
 	// allowlist.
-	if action == RestoreCommand && len(opts.Command) == 0 && rec.Command != "" {
-		argv := strings.Fields(rec.Command)
+	if action == RestoreCommand && len(opts.Command) == 0 && len(rec.Command) > 0 {
+		argv := slices.Clone(rec.Command)
 		allowed := opts.OnRestore == RestoreCommand
 		if !allowed && m.persist.CommandIsSafeToRerun != nil {
 			allowed = m.persist.CommandIsSafeToRerun(argv)
@@ -1331,7 +1331,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		ShimSocket: socket,
 		LogPath:    logPath,
 		State:      store.StateRunning,
-		Command:    strings.Join(opts.Command, " "),
+		Command:    slices.Clone(opts.Command),
 		Cwd:        opts.Dir,
 		Rows:       int(opts.Rows),
 		Cols:       int(opts.Cols),

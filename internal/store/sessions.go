@@ -14,7 +14,7 @@ import (
 const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq,
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
-	reported_at, resume_argv, resume_frame, prompt_seen, expire_after`
+	reported_at, resume_argv, resume_frame, prompt_seen, expire_after, command_argv`
 
 // Create inserts a session record.
 //
@@ -32,15 +32,15 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
-		int64(sess.LastSeq), string(sess.State), sess.ExitCode, sess.Command,
+		int64(sess.LastSeq), string(sess.State), sess.ExitCode, strings.Join(sess.Command, " "),
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
 		sess.CreatedAt.UnixMilli(), sess.UpdatedAt.UnixMilli(), encodeStringMap(sess.Env),
 		sess.PersistRequested, encodeStringMap(sess.Tags), int64(sess.ClientSeq),
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
-		sess.PromptSeen, int64(sess.ExpireAfter),
+		sess.PromptSeen, int64(sess.ExpireAfter), encodeArgv(sess.Command),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -385,14 +385,16 @@ func scanSession(sc scanner) (Session, error) {
 		reportedAt  int64
 		resumeArgv  string
 		expireAfter int64
+		command     string
+		commandArgv string
 	)
 	err := sc.Scan(
 		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
-		&lastSeq, &state, &sess.ExitCode, &sess.Command, &sess.Cwd, &sess.Title,
+		&lastSeq, &state, &sess.ExitCode, &command, &sess.Cwd, &sess.Title,
 		&sess.Rows, &sess.Cols, &created, &updated, &envJSON, &requested,
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
-		&sess.PromptSeen, &expireAfter,
+		&sess.PromptSeen, &expireAfter, &commandArgv,
 	)
 	if err != nil {
 		return Session{}, err
@@ -413,6 +415,12 @@ func scanSession(sc scanner) (Session, error) {
 	sess.State = State(state)
 	sess.PersistRequested = requested
 	sess.ExpireAfter = Expiry(expireAfter)
+	// A row from before command_argv has only the joined string, split as a revive always split it. See
+	// the migration.
+	sess.Command = decodeArgv(commandArgv)
+	if sess.Command == nil && command != "" {
+		sess.Command = strings.Fields(command)
+	}
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return sess, nil

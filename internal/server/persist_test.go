@@ -53,7 +53,7 @@ func TestInheritForRestoreCarriesDirectory(t *testing.T) {
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved/directory",
-		Command: "/bin/zsh",
+		Command: []string{"/bin/zsh"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
@@ -78,7 +78,7 @@ func TestInheritForRestoreDoesNotOverrideCaller(t *testing.T) {
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved/directory",
-		Command: "/bin/zsh",
+		Command: []string{"/bin/zsh"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{
@@ -104,7 +104,7 @@ func TestInheritForRestoreDoesNotRerunByDefault(t *testing.T) {
 	rec := store.Session{
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
-		Command: "make install",
+		Command: []string{"make", "install"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
@@ -124,7 +124,7 @@ func TestInheritForRestoreHonorsExplicitCommandRequest(t *testing.T) {
 	rec := store.Session{
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
-		Command: "make watch",
+		Command: []string{"make", "watch"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{
@@ -169,7 +169,7 @@ func TestInheritForRestoreAllowlist(t *testing.T) {
 			rec := store.Session{
 				ID:      "revived",
 				LogPath: dirs.SessionLog("revived"),
-				Command: tt.command,
+				Command: strings.Fields(tt.command),
 			}
 			got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
 			rerun := len(got.Command) > 0 && got.Command[0] != holdCommand
@@ -191,7 +191,7 @@ func TestInheritForRestoreNoneRunsAHold(t *testing.T) {
 	rec := store.Session{
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
-		Command: "make install",
+		Command: []string{"make", "install"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)
@@ -209,7 +209,7 @@ func TestInheritForRestoreDisabledWhenNoPolicy(t *testing.T) {
 		ID:      "revived",
 		LogPath: dirs.SessionLog("revived"),
 		Cwd:     "/saved",
-		Command: "nvim x",
+		Command: []string{"nvim", "x"},
 	}
 
 	got := mgr.inheritForRestore(OpenOptions{Ref: "revived"}, rec)

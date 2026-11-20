@@ -261,12 +261,11 @@ wait:
 //
 // From the recorded command, or the server's SHELL when the session runs the default: the shim starts the
 // default shell from the environment it inherits from the server.
-func isFish(command string) bool {
-	sh := command
-	if sh == "" {
-		sh = os.Getenv("SHELL")
+func isFish(command []string) bool {
+	if len(command) > 0 {
+		return filepath.Base(command[0]) == "fish"
 	}
-	if f := strings.Fields(sh); len(f) > 0 {
+	if f := strings.Fields(os.Getenv("SHELL")); len(f) > 0 {
 		return filepath.Base(f[0]) == "fish"
 	}
 	return false

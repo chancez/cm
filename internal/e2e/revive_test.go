@@ -98,3 +98,29 @@ func TestSuspendedSessionsRetentionLastsUntilRevived(t *testing.T) {
 
 	e.mustRun("kill", "suspend")
 }
+
+// A revive re-runs the spawn argv argument for argument, so an argument with a space in it is still one.
+//
+// The record used to hold the argv joined with spaces and a revive split it again on whitespace, so the
+// quoted argument below came back as two and the script printed only its first half.
+func TestReviveRerunsTheSpawnArgvExactly(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.writeConfig("[persist]\nenabled = true\non_restore = \"command\"\nsafe_commands = [\"sh\"]\n")
+	e.restartServer()
+	e.mustRun("attach", "--no-attach", "--persist", "quoted", "--",
+		"/bin/sh", "-c", `echo "ARG=[$1]"; exec sleep 300`, "sh", "a b")
+	e.waitForHistory("quoted", "ARG=[a b]")
+	e.mustRun("kill", "quoted", "--keep")
+	e.waitFor("the session to have ended", 15*time.Second, func() bool {
+		s, ok := e.session("quoted")
+		return ok && s.State == "exited"
+	})
+
+	e.mustRun("attach", "--no-attach", "quoted")
+	history := e.waitForHistory("quoted", "ARG=[a b]\nARG=[a b]")
+	if strings.Contains(history, "ARG=[a]") {
+		t.Errorf("the quoted argument was split on the revive; history:\n%s", history)
+	}
+	e.mustRun("kill", "quoted")
+}
