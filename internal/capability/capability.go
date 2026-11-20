@@ -92,11 +92,12 @@ const (
 	// then loses its record, its saved output and its resume command when expire_after passes.
 	KillExpireAfter Name = "kill.expire-after"
 
-	// Shelve means the server implements the Shelve RPC and the shelved state.
+	// Shelve means the server implements the Shelve and Restore RPCs, the shelved state, and
+	// Open.cwd_explicit for a restore.
 	//
-	// Checked before `cm shelve` sends anything. An older server answers the RPC with an Unimplemented
-	// error whose text names a method rather than the cause, and the remedy, restarting the server onto the
-	// binary already installed, appears nowhere in it.
+	// Checked before `cm shelve` and `cm restore` send anything. An older server answers the RPCs with
+	// an Unimplemented error whose text names a method rather than the cause, and the remedy, restarting
+	// the server onto the binary already installed, appears nowhere in it.
 	Shelve Name = "shelve"
 )
 

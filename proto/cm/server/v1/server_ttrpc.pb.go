@@ -13,6 +13,7 @@ type ServerService interface {
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
 	Shelve(context.Context, *ShelveRequest) (*ShelveResponse, error)
+	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -84,6 +85,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 					return nil, err
 				}
 				return svc.Shelve(ctx, &req)
+			},
+			"Restore": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req RestoreRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Restore(ctx, &req)
 			},
 			"Send": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req SendRequest
@@ -223,6 +231,7 @@ type ServerClient interface {
 	Kill(context.Context, *KillRequest) (*KillResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
 	Shelve(context.Context, *ShelveRequest) (*ShelveResponse, error)
+	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
@@ -313,6 +322,14 @@ func (c *serverClient) Forget(ctx context.Context, req *ForgetRequest) (*ForgetR
 func (c *serverClient) Shelve(ctx context.Context, req *ShelveRequest) (*ShelveResponse, error) {
 	var resp ShelveResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Shelve", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Restore(ctx context.Context, req *RestoreRequest) (*RestoreResponse, error) {
+	var resp RestoreResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Restore", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

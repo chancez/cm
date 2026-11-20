@@ -18,7 +18,7 @@ import (
 // olderServer is a server whose build predates shelving: it reports capabilities, none of them shelve.
 //
 // The embedded interface is nil, so any RPC it does not override panics. That is the assertion that nothing
-// reached Shelve: an older server answers it with Unimplemented, whose message names a method
+// reached Shelve or Restore: an older server answers those with Unimplemented, whose message names a method
 // rather than the restart that fixes it.
 type olderServer struct {
 	serverv1.ServerService
@@ -79,12 +79,12 @@ func serveOlderServer(t *testing.T) {
 	})
 }
 
-// `cm shelve` refuses a server that reports capabilities without shelve, naming the restart that fixes
-// it, before sending it anything.
+// `cm shelve` and `cm restore` refuse a server that reports capabilities without shelve, naming the
+// restart that fixes it, before sending it anything.
 //
 // The whole error is compared, since the remedy in it is the point: the binary on disk is already new, and
 // the server is the process still running the old one.
-func TestShelveRefusesAServerWithoutTheCapability(t *testing.T) {
+func TestShelveAndRestoreRefuseAServerWithoutTheCapability(t *testing.T) {
 	serveOlderServer(t)
 
 	for _, tc := range []struct {
@@ -92,9 +92,13 @@ func TestShelveRefusesAServerWithoutTheCapability(t *testing.T) {
 		what string
 	}{
 		{"shelve", "shelve a session"},
+		{"restore", "restore a session"},
 	} {
 		g := &globals{}
 		c := newShelveCommand(g)
+		if tc.cmd == "restore" {
+			c = newRestoreCommand(g)
+		}
 		c.SetArgs([]string{"work"})
 		c.SetOut(new(bytes.Buffer))
 		c.SetErr(new(bytes.Buffer))

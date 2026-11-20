@@ -64,10 +64,10 @@ Without a command, --if-running has no effect.
 
 An ended session that saved its output comes back as it was, however it ended:
 exited, dead after a reboot or crash, or shelved. --no-attach brings it back
-without attaching. A command after -- is ignored, with a notice on stderr: what
-on_restore brings back is the session's declared resume command, else the command
-its shell was running when it ended, else the program it was started with. It
-starts in its recorded directory unless --dir names another.
+without attaching, as 'cm restore' does. A command after -- is ignored, with a
+notice on stderr: what on_restore brings back is the session's declared resume
+command, else the command its shell was running when it ended, else the program it
+was started with. It starts in its recorded directory unless --dir names another.
 
 --in-shell starts your shell as usual and types the command into it once it
 prompts, rather than running the command in place of the shell. The shell runs

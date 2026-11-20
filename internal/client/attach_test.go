@@ -158,6 +158,11 @@ func (s *stubService) Shelve(
 ) (*serverv1.ShelveResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Restore(
+	context.Context, *serverv1.RestoreRequest,
+) (*serverv1.RestoreResponse, error) {
+	panic("unused")
+}
 
 var _ serverv1.ServerService = (*stubService)(nil)
 

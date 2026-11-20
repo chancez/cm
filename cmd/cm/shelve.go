@@ -31,13 +31,13 @@ Its record, names, tags, saved output and the resume command a program declared
 with 'cm restore-with' are all kept, and the session is listed as shelved:
 
   cm shelve work
-  cm attach work           # restores it and attaches
+  cm restore work          # or 'cm attach work', which restores it and attaches
 
 This is not SIGTSTP, which is what "suspend" means in a shell (ctrl-z): nothing
 is stopped to be continued. The shell and its programs are ended with SIGHUP,
-waited for, and killed if they outlive the wait. Restoring starts a new shell
-with the saved output replayed, and the declared resume command is handled by
-on_restore as on any revive.
+waited for, and killed if they outlive the wait. Restoring starts a new shell in
+the recorded directory with the saved output replayed, and the declared resume
+command is handled by on_restore as on any revive.
 
 Only a session that saves its output can be shelved, since that is what a
 restore comes back to: one started with --persist or matching persist.sessions. A
@@ -99,8 +99,101 @@ nothing is an error.`,
 	return cmd
 }
 
-// validateRefs checks the session references and selectors a shelve was given, before anything reaches a
-// server.
+func newRestoreCommand(g *globals) *cobra.Command {
+	var (
+		sizeArg   string
+		onRestore string
+		asJSON    bool
+		tagArgs   []string
+	)
+	cmd := &cobra.Command{
+		Use:   "restore <session>...",
+		Short: "Start ended sessions again without attaching",
+		Long: `Start an ended session again, without attaching to it.
+
+Any session that saved its output can be restored, however it ended: shelved by
+'cm shelve', exited, or dead after a reboot or a crash. All three come back the
+same way: a new shell in the recorded directory, the saved output replayed, and
+the resume command its program declared, else the command its shell was running
+when it ended (cm info --field typed_command), else the program it was started
+with, handled by on_restore, the same as any revive. command runs it when the session asked with
+--on-restore=command or the program is in safe_commands, and prefills it
+otherwise; prefill types it unrun; shell and none ignore it. --on-restore chooses
+for this restore.
+
+The session is created at this terminal's size, or at --size COLSxROWS, or at
+24x80 when there is no terminal. Its retention, if it had one, is cleared, so
+when it ends again it follows the configured schedule.
+
+'cm attach' on an ended session brings it back the same way and attaches. A
+running session is reported and left alone. A session that saved no output is
+refused, since there is nothing to restore it to.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(tagArgs) > 0 {
+				if len(args) > 0 {
+					return errors.New("--tag takes no session names")
+				}
+				return nil
+			}
+			return cobra.MinimumNArgs(1)(cmd, args)
+		},
+		ValidArgsFunction: completeRestorableSessionNames(g),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateRefs(args, tagArgs); err != nil {
+				return err
+			}
+			size, ok := callerSize(os.Stdout, os.Stderr, os.Stdin)
+			if !ok {
+				size = conventionalSize
+			}
+			if sizeArg != "" {
+				var err error
+				if size, err = parseSize(sizeArg); err != nil {
+					return err
+				}
+			}
+			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
+				if err := requireServerCapability(serverCapabilities(ctx, cl), capability.Shelve,
+					"restore a session"); err != nil {
+					return err
+				}
+				names, err := selectedSessions(ctx, cl, args, tagArgs)
+				if err != nil {
+					return err
+				}
+				resp, err := cl.Restore(ctx, &serverv1.RestoreRequest{
+					Sessions: names,
+					Rows:     uint32(size.rows),
+					Cols:     uint32(size.cols),
+					// What run sends for a session it creates, chosen by the machine the session runs on,
+					// so a remote restore does not carry this machine's environment across. See
+					// globals.sessionEnvFor.
+					Env:       g.sessionEnvFor(os.Environ(), nil),
+					OnRestore: onRestore,
+				})
+				if err != nil {
+					return err
+				}
+				return reportOutcomes(os.Stdout, outcomes{
+					done: resp.Restored, doneKey: "restored", doneWord: "restored",
+					noop: resp.AlreadyRunning, noopKey: "already_running", noopWord: "already running",
+					errors: resp.Errors,
+				}, asJSON)
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&sizeArg, "size", "", "start the session at COLSxROWS rather than this terminal's size")
+	f.StringVar(&onRestore, "on-restore", "",
+		"what to do with the declared resume command for this restore: shell, none, prefill, or command")
+	f.StringArrayVar(&tagArgs, "tag", nil,
+		"restore the sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
+	return cmd
+}
+
+// validateRefs checks the session references and selectors a shelve or restore was given, before anything
+// reaches a server.
 func validateRefs(args, tagArgs []string) error {
 	if err := validateSelectors(tagArgs); err != nil {
 		return err
@@ -113,7 +206,7 @@ func validateRefs(args, tagArgs []string) error {
 	return nil
 }
 
-// selectedSessions resolves what a shelve acts on: the names given, or what a selector matches.
+// selectedSessions resolves what a shelve or restore acts on: the names given, or what a selector matches.
 //
 // A selector matching nothing is an error, as it is for kill, since it is usually a typo and exiting 0 would
 // let a script report success having done nothing.
@@ -131,7 +224,7 @@ func selectedSessions(ctx context.Context, cl serverv1.ServerClient, args, tagAr
 	return names, nil
 }
 
-// outcomes is what a shelve reports: what it did, what needed nothing, and what failed, with the
+// outcomes is what a shelve or restore reports: what it did, what needed nothing, and what failed, with the
 // JSON key and the text wording for each of the first two.
 type outcomes struct {
 	done     []string
@@ -143,7 +236,7 @@ type outcomes struct {
 	errors   map[string]string
 }
 
-// reportOutcomes prints what a shelve did, and fails if any session failed.
+// reportOutcomes prints what a shelve or restore did, and fails if any session failed.
 //
 // Text is one line per session, the ones acted on first. JSON is an object with every list spelled out, empty
 // rather than null, so a script can iterate each unconditionally, the shape kill and forget print.

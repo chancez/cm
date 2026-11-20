@@ -76,6 +76,14 @@ func completeEndedSessionNames(
 	})
 }
 
+// completeRestorableSessionNames offers only the sessions a restore can bring back, for `cm restore`, which refuses
+// the rest for the reason completeEndedSessionNames gives.
+func completeRestorableSessionNames(
+	g *globals,
+) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return completeSessionsMatching(g, func(s *serverv1.Session) bool { return s.Restorable })
+}
+
 // completeSessionsMatching offers the session names a predicate accepts, or all of them when it is nil.
 func completeSessionsMatching(
 	g *globals, want func(*serverv1.Session) bool,

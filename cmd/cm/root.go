@@ -139,6 +139,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newKillCommand(g),
 		newForgetCommand(g),
 		newShelveCommand(g),
+		newRestoreCommand(g),
 		newServerCommand(g),
 		newSendCommand(g),
 		newRunCommand(g),

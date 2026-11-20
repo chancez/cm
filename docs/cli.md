@@ -148,10 +148,11 @@ restorable indefinitely, which is how kspaces suspends one. `cm info` reports it
 for a session on the schedule. `--expire-after` needs `--keep`, and is refused against a server that
 reports capabilities without `kill.expire-after` rather than being silently ignored.
 
-## Shelving a session
+## Shelving a session, and restoring it
 
 ```sh
 cm shelve NAME... [--tag K[=V]]... [--expire-after DURATION|never] [--json]
+cm restore NAME... [--tag K[=V]]... [--size COLSxROWS] [--on-restore MODE] [--json]
 ```
 
 `cm shelve` ends a session's programs and keeps everything needed to bring it back as it was: the
@@ -175,15 +176,17 @@ the same per-session retention as `cm kill --keep --expire-after`, and `cm info`
 `expire_after`, `never` by default. `cm kill` and `cm forget` remove one at once; `cm forget --ended` leaves
 it, since that clears what was left behind and this was kept on purpose.
 
-`cm attach` on an ended session that saved output brings it back and attaches, and `--no-attach` brings it
-back without attaching. There is one revive: an exited session, one dead after a reboot or a crash, and a
-shelved one all come back the same way. A shell starts in the recorded directory, the saved output is
-replayed, and the declared resume command, else the typed command, else a spawn argv that is a program, is
-handled by `on_restore` with its usual permissions: the attach's `--on-restore`, else the one the session
-was created with, which its record keeps as `on_restore`, else the config's. The retention is cleared. A command after `--` is
-ignored and the client's own directory is not used, but `--dir` is: `Open.cwd_explicit` says it was asked
-for, because every client fills the directory in. The states differ only in how the session got there, its
-label, its retention, and `cm forget --ended` leaving a shelved one alone.
+`cm restore` starts an ended session that saved output again without attaching, which is the same revive an
+attach performs, and there is one: an exited session, one dead after a reboot or a crash, and a shelved
+one all come back the same way. A shell starts in the recorded directory, the saved output is replayed,
+and the declared resume command, else the typed command, else a spawn argv that is a program, is
+handled by `on_restore` with its usual permissions: the restore's or attach's `--on-restore`, else the one the
+session was created with, which its record keeps as `on_restore`, else the config's. The retention is cleared. A running session is reported as `NAME is already running`, and one
+that saved no output is refused. `cm attach` on an ended session brings it back and attaches, and
+`--no-attach` is a restore. Either way a command after `--` is ignored and the client's own directory is not
+used, but `--dir` is: `Open.cwd_explicit` says it was asked for, because every client fills the directory
+in. The states differ only in how the session got there, its label, its retention, and `cm forget --ended`
+leaving a shelved one alone.
 
 The revive path used to run an attach's command for an exited or dead session, in the client's directory,
 and that is what kept a reboot from bringing a session back the way shelving did: a terminal restoring a
@@ -195,13 +198,13 @@ NAME reuses it in place, same ID and names, its saved output replayed ahead of C
 session's command; the run prints both and exits with CMD's status. The server tells a run by
 `capture_output`, which only `cm run` sets, so the rule holds for any client.
 
-`cm shelve` is refused against a server that reports capabilities without `shelve`, naming the
+Both commands are refused against a server that reports capabilities without `shelve`, naming the
 restart that fixes it. `cm attach` needs no check: a server that predates this reports no session as
 restorable, and the client prints the notice only for one it does.
 
 ## JSON output
 
-`list`, `info`, `kill`, `forget`, `shelve`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
+`list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
 `clients current`, `clients upgrade`, and `clients restart` accept
 `--json`.

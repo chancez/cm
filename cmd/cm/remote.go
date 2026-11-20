@@ -435,6 +435,7 @@ var remoteCapable = map[string]bool{
 	"kill":         true,
 	"forget":       true,
 	"shelve":       true,
+	"restore":      true,
 	"run":          true,
 	"history":      true,
 	"wait":         true,

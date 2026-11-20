@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // shelveEnv is a server that persists, runs a declared resume command on a revive when the program is sh,
@@ -14,7 +15,7 @@ import (
 // held for the 10s a revive otherwise waits.
 //
 // The prompt's HOME is passed to every client through the environment as well as to the first attach, since
-// a restore carries the restoring client's environment.
+// a restore carries the restoring client's environment and `cm restore` has no --env.
 func shelveEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
@@ -126,6 +127,42 @@ func TestRestoringWithAnExplicitDirStartsThere(t *testing.T) {
 	e.mustRun("attach", "--no-attach", "--dir", elsewhere, "agent")
 	e.waitForHistory("agent", "RESUMED-elsewhere-dir")
 	e.mustRun("kill", "agent")
+}
+
+// `cm restore` starts a shelved session without attaching, reports a running one as nothing to do, and
+// refuses one that saved no output.
+func TestRestoreStartsAShelvedSessionWithoutAttaching(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	project := filepath.Join(e.state, "recorded-dir")
+	startDeclared(e, "agent", project)
+	e.mustRun("shelve", "agent")
+
+	if got := e.mustRun("restore", "agent"); got != "restored agent\n" {
+		t.Errorf("cm restore printed %q, want %q", got, "restored agent\n")
+	}
+	e.waitForHistory("agent", "RESUMED-recorded-dir")
+	if s, _ := e.session("agent"); s.State != "running" || s.Clients != 0 {
+		t.Errorf("after cm restore, state %q with %d clients; want running with none", s.State, s.Clients)
+	}
+	if got := e.mustRun("restore", "agent"); got != "agent is already running\n" {
+		t.Errorf("second cm restore printed %q, want %q", got, "agent is already running\n")
+	}
+
+	e.mustRun("kill", "agent")
+
+	// Nothing saved, so nothing to restore it to.
+	e.mustRun("attach", "--no-attach", "plain")
+	e.mustRun("kill", "plain", "--keep")
+	e.waitFor("the session to have ended", 15*time.Second, func() bool {
+		s, ok := e.session("plain")
+		return ok && s.State != "running"
+	})
+	r := e.run("restore", "plain")
+	if r.code == 0 || !strings.Contains(r.stderr, "plain: saved no output, so there is nothing to restore it to") {
+		t.Errorf("cm restore of an unpersisted session = exit %d, stderr %q; want a refusal", r.code, r.stderr)
+	}
+	e.mustRun("kill", "plain")
 }
 
 // infoJSON is `cm info NAME --json` decoded.

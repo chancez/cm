@@ -271,6 +271,9 @@ func (c *fakeClient) Shelve(
 ) (*serverv1.ShelveResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Restore(context.Context, *serverv1.RestoreRequest) (*serverv1.RestoreResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Detach(
 	context.Context, *serverv1.DetachRequest,
 ) (*serverv1.DetachResponse, error) {

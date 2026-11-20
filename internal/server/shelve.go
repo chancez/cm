@@ -212,6 +212,48 @@ func (m *Manager) prepareRestore(opts OpenOptions, rec store.Session) OpenOption
 	return opts
 }
 
+// RestoreOutcome is what restoring one session did.
+type RestoreOutcome int
+
+const (
+	// Restored means an ended session was started again.
+	Restored RestoreOutcome = iota + 1
+	// AlreadyRunning means the session was running, so there was nothing to restore.
+	AlreadyRunning
+)
+
+// Restore starts an ended session again without attaching to it: shelved, exited, or dead after a reboot.
+//
+// The same revive an attach performs, through Open, so the two cannot differ: a shell in the recorded
+// directory, the saved output replayed, and the declared resume command or the recorded command handled by
+// on_restore. A session that saved no output is refused, since a restore would come back to an empty screen and
+// a fresh shell, which is a new session wearing an old name.
+func (m *Manager) Restore(ctx context.Context, opts OpenOptions) (*Session, RestoreOutcome, error) {
+	id, err := m.Resolve(ctx, opts.Ref)
+	if err != nil {
+		return nil, 0, err
+	}
+	if sess, live := m.Get(id); live {
+		return sess, AlreadyRunning, nil
+	}
+	rec, err := m.store.Get(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	if rec.State == store.StateRunning {
+		return nil, AlreadyRunning, nil
+	}
+	if !restorable(m.persist, rec) {
+		return nil, 0, fmt.Errorf("%w; only a session that persists, with --persist or by persist.sessions, "+
+			"can be restored", ErrNothingSaved)
+	}
+	sess, _, err := m.Open(ctx, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	return sess, Restored, nil
+}
+
 // Shelve ends sessions deliberately so they can be restored as they were. See Manager.Shelve.
 func (s *Service) Shelve(
 	ctx context.Context, req *serverv1.ShelveRequest,
@@ -239,6 +281,32 @@ func (s *Service) Shelve(
 			resp.AlreadyShelved = append(resp.AlreadyShelved, ref)
 		default:
 			resp.Shelved = append(resp.Shelved, ref)
+		}
+	}
+	if len(resp.Errors) == 0 {
+		resp.Errors = nil
+	}
+	return resp, nil
+}
+
+// Restore starts shelved sessions again without attaching to them. See Manager.Restore.
+func (s *Service) Restore(ctx context.Context, req *serverv1.RestoreRequest) (*serverv1.RestoreResponse, error) {
+	resp := &serverv1.RestoreResponse{Errors: make(map[string]string)}
+	for _, ref := range req.Sessions {
+		_, outcome, err := s.mgr.Restore(ctx, OpenOptions{
+			Ref:       ref,
+			Rows:      uint16(req.Rows),
+			Cols:      uint16(req.Cols),
+			Env:       req.Env,
+			OnRestore: RestoreAction(req.OnRestore),
+		})
+		switch {
+		case err != nil:
+			resp.Errors[ref] = trimNamePrefix(err.Error(), ref)
+		case outcome == AlreadyRunning:
+			resp.AlreadyRunning = append(resp.AlreadyRunning, ref)
+		default:
+			resp.Restored = append(resp.Restored, ref)
 		}
 	}
 	if len(resp.Errors) == 0 {

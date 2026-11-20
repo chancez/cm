@@ -90,6 +90,27 @@ func TestAttachWithACommandRevivesAnEndedSessionAsItWas(t *testing.T) {
 	}
 }
 
+// `cm restore` brings back exited and dead sessions the way it brings back a shelved one.
+func TestRestoreRevivesExitedAndDeadSessions(t *testing.T) {
+	skipIfShort(t)
+	for _, state := range []string{"exited", "dead"} {
+		t.Run(state, func(t *testing.T) {
+			e := shelveEnv(t)
+			startDeclared(e, "agent", filepath.Join(e.state, "recorded-dir"))
+			endSession(e, "agent", state)
+
+			if got := e.mustRun("restore", "agent"); got != "restored agent\n" {
+				t.Errorf("cm restore printed %q, want %q", got, "restored agent\n")
+			}
+			e.waitForHistory("agent", "RESUMED-recorded-dir")
+			if s, _ := e.session("agent"); s.State != "running" || s.Clients != 0 {
+				t.Errorf("after cm restore, state %q with %d clients; want running with none", s.State, s.Clients)
+			}
+			e.mustRun("kill", "agent")
+		})
+	}
+}
+
 // `cm run --session X` on an exited X keeps doing what it did before revives were unified: it reuses X in
 // place, same ID, with the run's command as the session's command, prints X's saved output followed by the
 // command's, and exits with the command's status. The declared resume command is not used, since a run must

@@ -95,7 +95,8 @@ It is not ctrl-z (SIGTSTP): the processes end, and restoring starts them again f
 
 ```sh
 cm shelve work               # listed as shelved; kept until restored or removed
-cm attach work                  # restore it and attach
+cm restore work                    # start it again without attaching
+cm attach work                  # or restore it and attach
 ```
 
 Detaching is `ctrl-\` by default. Set `detach_key` in the config file to change it, or
@@ -154,7 +155,7 @@ cm tag build project=cm                            # or afterwards
 cm ls --tag project=cm                             # repeating --tag narrows
 ```
 
-`--tag` then selects on `list`, `info`, `read`, `history`, `wait`, `signal`, `kill`, and `shelve`, so a
+`--tag` then selects on `list`, `info`, `read`, `history`, `wait`, `signal`, `kill`, `shelve`, and `restore`, so a
 group created together can be driven as one:
 
 ```sh

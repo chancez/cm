@@ -34,9 +34,13 @@ service Server {
   // Shelve ends sessions deliberately, keeping everything needed to bring each back as it was.
   //
   // Not SIGTSTP, which is what "suspend" means in a shell: nothing is stopped to be continued. The
-  // processes end, and the record, names, tags, saved output and declared resume command are kept for an
-  // attach to start them again. Needs the shelve capability.
+  // processes end, and the record, names, tags, saved output and declared resume command are kept for
+  // Restore or an attach to start them again. Needs the shelve capability.
   rpc Shelve(ShelveRequest) returns (ShelveResponse);
+
+  // Restore starts ended sessions that saved output again without attaching to them, the same revive an attach
+  // performs, whether they were shelved, exited, or died with a reboot. Needs the shelve capability.
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
 
   // Send writes bytes to a session's shell without attaching to it.
   rpc Send(SendRequest) returns (SendResponse);
@@ -1075,7 +1079,7 @@ enum SessionState {
   // The session was ended deliberately by `cm shelve`, keeping what it needs to come back as it was:
   // its record, names, tags, saved output and declared resume command. Ended like exited and dead, so
   // exited is set too, and an older client that does not know this value shows it as exited. Not
-  // SIGTSTP: nothing is stopped, the processes are gone, and an attach starts them again.
+  // SIGTSTP: nothing is stopped, the processes are gone, and `cm restore` or an attach starts them again.
   SESSION_STATE_SHELVED = 4;
 }
 
@@ -1247,9 +1251,9 @@ message Session {
   // session that was not kept with one, and every session revived since.
   string expire_after = 31;
 
-  // restorable says the session has ended and saved output for a revive to come back to, so an attach
-  // brings it back as it was: its declared resume command or recorded command under on_restore, in its
-  // recorded directory, ignoring an attach's command. False for a running session, and for one that saved
+  // restorable says the session has ended and saved output for a revive to come back to, so an attach or
+  // `cm restore` brings it back as it was: its declared resume command or recorded command under on_restore, in
+  // its recorded directory, ignoring an attach's command. False for a running session, and for one that saved
   // nothing, which an attach starts afresh. False from an older server, which ran an attach's command on a
   // revive, so a client reading it to decide whether a command will be ignored is right either way.
   bool restorable = 32;
@@ -1395,6 +1399,28 @@ message ShelveResponse {
   repeated string already_shelved = 2;
   // Sessions that could not be shelved, keyed by reference: one that saved no output, or one whose
   // processes survived SIGKILL.
+  map<string, string> errors = 3;
+}
+
+message RestoreRequest {
+  repeated string sessions = 1;
+  // The size a restored session starts at, as Open's rows and cols size a session an Open creates.
+  uint32 rows = 2;
+  uint32 cols = 3;
+  // As Open's env, for the restored shell's environment. No client_env: nothing is attached whose terminal it
+  // would describe.
+  repeated string env = 4;
+  // As Open's on_restore: what to do with a declared resume command for this restore.
+  string on_restore = 5;
+}
+
+message RestoreResponse {
+  // Sessions started again, by the reference the caller gave.
+  repeated string restored = 1;
+  // Sessions that were running, so nothing was restored.
+  repeated string already_running = 2;
+  // Sessions that could not be restored, keyed by reference: one that saved no output, so there is nothing to
+  // restore it to.
   map<string, string> errors = 3;
 }
 

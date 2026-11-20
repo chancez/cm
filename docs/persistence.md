@@ -22,7 +22,7 @@ applies the configured restore behavior. A session that is never reopened stays 
 nothing.
 
 There is one revive path, whatever ended the session: it exited, it died with a reboot or a crash, or
-`cm shelve` ended it. `cm attach` brings it back in its recorded directory, unless `--dir`
+`cm shelve` ended it. `cm attach` or `cm restore` brings it back in its recorded directory, unless `--dir`
 names another, with the saved output replayed and the restore behavior below deciding what runs. A
 command after `--` on the attach is ignored, with a notice on stderr. A terminal restoring a window it had
 opened with `cm attach NAME -- ARGV` replays that argv, so letting it win meant the window reran its
@@ -184,7 +184,7 @@ A shelved session is the deliberate form of that: `cm shelve` ended it so it cou
 was, and it is listed as `shelved` rather than `exited` or `dead`. It does not expire unless
 `--expire-after` gave it a retention, and `cm forget --ended` leaves it. Those are the only differences: it
 revives on the same path as any other ended session, under "What triggers a restore". Shelve is not
-SIGTSTP. See [cli.md](cli.md#shelving-a-session).
+SIGTSTP. See [cli.md](cli.md#shelving-a-session-and-restoring-it).
 
 A session that ended *without* saving a log is a different case, and gets `forget_unpersisted_after`,
 defaulting to five minutes. Nothing about such a session can be recovered: with no log path,
