@@ -289,6 +289,12 @@ one it is typed anyway: the tty holds it until the line editor reads it, so a sh
 still gets it, and only an rc file that reads stdin could take it first. Waiting for the mark is not
 cosmetic. Measured in the e2e test, a revive that missed the mark took 13.8s against 3.8s.
 
+Not typed at all, though, once a command frame has opened in the new shell: something is then in the
+foreground, and the line would be its input. A revived window whose shell sent no prompt mark had its user
+start nvim within the 10 seconds, and the restore command, typed into nvim, began with `/` and opened a
+search. The declaration carried for the command is withdrawn with it, since it bound to that program's
+frame instead. A shell without cm's integration reports no frames, so it is still typed into.
+
 The declaration carried into the revived session binds to the next frame to open, which is the typed
 command's. So quitting the resumed program ends it whether or not the program declares again, and a
 prefilled line the user replaces with something else hands the declaration to that instead, which ends

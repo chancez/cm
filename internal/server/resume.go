@@ -572,7 +572,8 @@ func (m *Manager) safeToRerun(argv []string) bool {
 //
 // Typing before the prompt is not lost, since the tty holds it until the line editor reads it, but an rc
 // file that reads stdin would take it. So the prompt mark is waited for when the shell sends one, and a
-// shell that sends none gets the typeahead.
+// shell that sends none gets the typeahead, unless a command has started in it by then: see
+// startedOnItsOwn.
 const typePromptWait = 10 * time.Second
 
 // typeCommand types a command into a new session's shell once it is at its first prompt.
@@ -593,6 +594,11 @@ wait:
 			return
 		}
 	}
+	if running, ok := sess.startedOnItsOwn(t); ok {
+		m.log.Info("a command started in a new shell before its restore command was typed, not typing it",
+			"session", sess.id, "running", running, "prompt_seen", sess.PromptSeen())
+		return
+	}
 
 	line := t.line
 	if line == "" {
@@ -609,6 +615,40 @@ wait:
 		return
 	}
 	m.log.Info("typed a command into a new shell", "session", sess.id, "run", t.run)
+}
+
+// startedOnItsOwn reports whether a command frame is open in a new session's shell before its restore command
+// has been typed, and withdraws what the session was carrying for that command.
+//
+// Something is then in the foreground, and the typed line would be its input rather than the shell's. A shell
+// that never sent a prompt mark was typed into after 10s regardless, and a revived window whose user had
+// started nvim in the meantime got the restore command typed into nvim, which read the leading / as a search.
+// A frame is the integration's word that a command is running, so a shell without cm's integration is still
+// typed into as before.
+//
+// The declaration and the on_restore grant carried for the typed command bind to the next frame to open,
+// which was this command's instead, so they are withdrawn with it: the program that is running did not
+// declare them.
+func (s *Session) startedOnItsOwn(t typedCommand) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.frames) == 0 {
+		return "", false
+	}
+	running := s.frames[0].argv
+	changed := false
+	if t.declared && slices.Equal(s.resume.Argv, t.argv) {
+		s.resume = store.ResumeCommand{}
+		changed = true
+	}
+	if t.granted && s.onRestoreFrame != "" {
+		s.onRestoreFrame = ""
+		changed = true
+	}
+	if changed {
+		s.signalRestoreLocked()
+	}
+	return running, true
 }
 
 // isFish reports whether a session's shell is fish, whose quoting differs from POSIX inside single quotes.

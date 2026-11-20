@@ -649,3 +649,28 @@ func TestATypedLineRunsOnlyWhenPlain(t *testing.T) {
 		t.Errorf("restoreTyped(%q) with the session asking for command = %+v, want %+v", line, got, want)
 	}
 }
+
+// A command frame open in a new shell before its restore command is typed means something is in the
+// foreground, so nothing is typed, and the declaration and grant carried for the typed command, which bound
+// to that frame instead, are withdrawn. Without a frame the command is typed as before.
+func TestARestoreCommandIsNotTypedIntoAProgramThatStartedFirst(t *testing.T) {
+	claude := []string{"claude", "--resume", "abc"}
+	carried := typedCommand{argv: claude, run: true, declared: true, granted: true}
+
+	idle := newNestedTestSession(t, &fakeTerminal{})
+	idle.resume = store.ResumeCommand{Argv: claude, Frame: resumeNextFrame}
+	if running, ok := idle.startedOnItsOwn(carried); ok {
+		t.Errorf("startedOnItsOwn() with no frame open = %q, true; want false", running)
+	}
+
+	busy := newNestedTestSession(t, &fakeTerminal{})
+	busy.resume = store.ResumeCommand{Argv: claude, Frame: resumeNextFrame}
+	busy.onRestoreFrame = resumeNextFrame
+	busy.processChunk(frame("sh-1", "nvim notes.md", false), 0)
+	running, ok := busy.startedOnItsOwn(carried)
+	got := []any{running, ok, busy.Resume(), busy.OnRestoreFrame()}
+	want := []any{"nvim notes.md", true, store.ResumeCommand{}, ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("startedOnItsOwn() with nvim running: running, ok, resume, grant = %+v\nwant %+v", got, want)
+	}
+}

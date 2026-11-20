@@ -212,3 +212,54 @@ func TestAKittyShellLauncherSessionIsAShell(t *testing.T) {
 	}
 	e.mustRun("kill", "work")
 }
+
+// A revived shell that sends no prompt mark is typed into after 10s anyway, but not once a command has
+// started in it: the line would go to that program instead. The user's nvim, started in a revived window
+// before the deadline, got the restore command typed into it and read the leading / as a search.
+//
+// The shell has cm's integration, so it reports frames, and a prompt with no OSC 133;A, as a setup whose
+// prompt marks did not load has. The declared command prints RESUMED- and the sum, so its line on the screen
+// is told apart from its output; neither may appear.
+func TestTheRestoreCommandIsNotTypedIntoAProgramStartedFirst(t *testing.T) {
+	skipIfShort(t)
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+	e := newEnv(t)
+	e.writeConfig("[persist]\nenabled = true\non_restore = \"command\"\nsafe_commands = [\"sh\"]\n")
+	home := filepath.Join(e.state, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc := "eval \"$(" + e.bin + " shell-init zsh)\"\nPROMPT='%% '\n"
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.extraEnv = append(e.extraEnv, "HOME="+home, "SHELL="+zsh, "ZDOTDIR="+home)
+	e.restartServer()
+
+	startTyped(e, "work", "true")
+	e.mustRun("restore-with", "work", "--", "sh", "-c", "echo RESUMED-$((40+2))")
+	e.mustRun("shelve", "work")
+
+	e.mustRun("attach", "--no-attach", "work")
+	e.mustRun("send", "work", "sleep 999", "--enter")
+	e.waitFor("the user's own command to be running", 15*time.Second, func() bool {
+		s, ok := e.session("work")
+		return ok && len(s.Location) == 1 && s.Location[0].Argv == "sleep 999"
+	})
+	e.waitFor("the server to give up waiting for a prompt mark", 15*time.Second, func() bool {
+		log, _ := os.ReadFile(e.serverLogPath())
+		return strings.Contains(string(log), "no prompt mark from a new shell")
+	})
+	// Past the point where the line would have been typed, so a typed one has been echoed.
+	time.Sleep(time.Second)
+	if history := e.run("history", "work").stdout; strings.Contains(history, "RESUMED-") {
+		t.Errorf("the restore command was typed into the running program; history:\n%s", history)
+	}
+	if got := e.mustRun("info", "work", "--field", "resume"); got != "\n" {
+		t.Errorf("resume after the skip = %q, want it withdrawn", got)
+	}
+	e.mustRun("kill", "work")
+}

@@ -87,7 +87,7 @@ By default CMD runs in place of the shell, so the session ends when CMD does. `-
 shell as usual and types CMD into it at its first prompt, so quitting CMD leaves that shell at a prompt.
 This is kitty's `cmd_at_shell_startup`, and the same typing a revive does for a declared resume command
 (see [restore-command.md](restore-command.md)): it waits for the shell's OSC 133 prompt marker, or 10s
-for a shell that sends none.
+for a shell that sends none, and types nothing if a command has started in the shell by then.
 
 It is for a window that should outlive its command, kitty's `launch --hold`. The usual way to get that,
 `cm attach NAME -- sh -c '"$@"; exec "$SHELL" -l' sh gr`, starts the program before any shell exists,
