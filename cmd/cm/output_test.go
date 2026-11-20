@@ -112,6 +112,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		"expire_after",
 		// What a revive would type back, distinct from command, which is what runs now.
 		"typed_command",
+		// The session's own restore behavior, kept with its record.
+		"on_restore",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {

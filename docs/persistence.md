@@ -69,7 +69,18 @@ that costs, and the two ways out, are in [ideas.md](ideas.md).
 
 ## What happens on restore
 
-Four behaviors, chosen by config with a per-session override:
+Four behaviors, chosen by config with a per-session override. The override is `--on-restore` on the attach
+that creates a session, and it is kept with the session's record, shown by `cm info` as `on_restore`, so a
+reboot or shelving does not lose it: a revive uses its own `--on-restore` if it passes one, which then
+becomes the session's, else the session's, else the config's. A session's own `command` counts as asking
+only for what its attach started. On a plain attach that is the spawn argv, so `cm attach
+--on-restore=command NAME -- kitten ssh host` reconnects without `safe_commands`. With `--in-shell` it is the
+command the attach typed, and a declaration that command makes, until it returns; the record keeps which
+frame that is. Whatever is typed into the session later gets the config's `safe_commands`, and is prefilled
+otherwise. A revive's own `--on-restore=command` covers everything that revive brings back, and a command it
+types back keeps the grant. Before it was kept, only the reviving attach's value was seen, and a terminal
+restoring a window passes none, so `--on-restore=command` lasted one attach.
+
 
 - `shell` (default) starts a fresh shell in the recorded directory. Safe, and right for per-window
   sessions.

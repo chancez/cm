@@ -170,7 +170,7 @@ func TestInheritForRestoreDeclaredCommand(t *testing.T) {
 		{name: "command allowlisted runs", configured: RestoreCommand, safe: true,
 			want: &typedCommand{argv: claude, run: true, declared: true}},
 		{name: "command asked for on the session runs", configured: RestoreShell, perSession: RestoreCommand,
-			want: &typedCommand{argv: claude, run: true, declared: true}},
+			want: &typedCommand{argv: claude, run: true, declared: true, granted: true}},
 		{name: "prefill asked for on the session", configured: RestoreShell, perSession: RestorePrefill,
 			want: &typedCommand{argv: claude, declared: true}},
 	}
@@ -424,6 +424,147 @@ func TestInheritForRestorePrecedence(t *testing.T) {
 	}
 }
 
+// A session's own --on-restore, kept with its record, decides a revive that names none, and counts as asked
+// for explicitly; a revive that names one wins, and becomes the session's.
+//
+// The regression: only the reviving request's value was seen, and a terminal restoring a window passes none,
+// so a session created with --on-restore=command came back as a shell after a reboot unless its program was in
+// safe_commands. Nothing is allowlisted here, so only the kept value can let the spawn argv run.
+func TestInheritForRestoreKeepsTheSessionsOnRestore(t *testing.T) {
+	ssh := []string{"sh", "-c", `echo "CONNECTED [$1]"; exec sleep 999`, "sh", "host a"}
+
+	type restored struct {
+		OnRestore   RestoreAction
+		Command     []string
+		TypeOnStart *typedCommand
+	}
+	tests := []struct {
+		name       string
+		configured RestoreAction
+		kept       string
+		reviving   RestoreAction
+		want       restored
+	}{
+		{name: "the kept command runs without the allowlist", configured: RestoreCommand, kept: "command",
+			want: restored{OnRestore: RestoreCommand, Command: ssh}},
+		{name: "the kept command applies over a shell default", configured: RestoreShell, kept: "command",
+			want: restored{OnRestore: RestoreCommand, Command: ssh}},
+		{name: "a reviving shell overrides the kept command", configured: RestoreCommand, kept: "command",
+			reviving: RestoreShell, want: restored{OnRestore: RestoreShell}},
+		{name: "with nothing kept the configured command prefills", configured: RestoreCommand,
+			want: restored{TypeOnStart: &typedCommand{argv: ssh}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, dirs := newTestManager(t, nil)
+			policy := testPolicy()
+			policy.OnRestore = tt.configured
+			mgr.SetPersistPolicy(policy)
+
+			rec := store.Session{
+				ID: "ssh1", LogPath: dirs.SessionLog("ssh1"), Command: ssh, OnRestore: tt.kept,
+			}
+			got := mgr.inheritForRestore(OpenOptions{Ref: "ssh1", OnRestore: tt.reviving}, rec)
+			r := restored{OnRestore: got.OnRestore, Command: got.Command, TypeOnStart: got.typeOnStart}
+			if !reflect.DeepEqual(r, tt.want) {
+				t.Errorf("restored %+v (typeOnStart %+v), want %+v (typeOnStart %+v)",
+					r, r.TypeOnStart, tt.want, tt.want.TypeOnStart)
+			}
+		})
+	}
+}
+
+// A session's kept --on-restore=command lets run without the allowlist only what the attach that set it
+// started. From an --in-shell attach that is the command it typed and a declaration that command made, bound
+// to their frame; a command typed after it returned is the user's and gets the configured policy, here
+// prefill since nothing is allowlisted. From a plain attach it is the spawn argv, and a declaration the
+// session's program made outside any frame. The reviving request's own --on-restore=command still covers
+// everything that revive brings back.
+//
+// The regression: the kept value counted as asking for everything, so whatever was typed into an --in-shell
+// session's shell later ran on every revive, allowlisted or not.
+func TestTheKeptOnRestoreCoversOnlyWhatItsAttachStarted(t *testing.T) {
+	claude := []string{"claude", "--resume", "abc"}
+	ssh := []string{"kitten", "ssh", "host"}
+	tests := []struct {
+		name   string
+		rec    store.Session
+		asked  RestoreAction
+		want   *typedCommand
+		wantEx []string
+	}{
+		{name: "an --in-shell attach's command runs",
+			rec:  store.Session{Typed: store.TypedCommand{Line: "sleep 999", Frame: "sh-1"}, OnRestoreFrame: "sh-1"},
+			want: &typedCommand{line: "sleep 999", run: true, granted: true}},
+		{name: "a command typed after it returned is prefilled",
+			rec:  store.Session{Typed: store.TypedCommand{Line: "sleep 998", Frame: "sh-2"}},
+			want: &typedCommand{line: "sleep 998"}},
+		{name: "a grant bound to another frame does not cover it",
+			rec:  store.Session{Typed: store.TypedCommand{Line: "sleep 998", Frame: "sh-2"}, OnRestoreFrame: "sh-1"},
+			want: &typedCommand{line: "sleep 998"}},
+		{name: "a declaration in the granted frame runs",
+			rec:  store.Session{Resume: store.ResumeCommand{Argv: claude, Frame: "sh-1"}, OnRestoreFrame: "sh-1"},
+			want: &typedCommand{argv: claude, run: true, declared: true, granted: true}},
+		{name: "a declaration from a command typed later is prefilled",
+			rec:  store.Session{Resume: store.ResumeCommand{Argv: claude, Frame: "sh-2"}},
+			want: &typedCommand{argv: claude, declared: true}},
+		{name: "a program's own declaration runs",
+			rec:  store.Session{Command: ssh, Resume: store.ResumeCommand{Argv: claude}},
+			want: &typedCommand{argv: claude, run: true, declared: true, granted: true}},
+		{name: "a shell's declaration outside any frame is prefilled",
+			rec:  store.Session{Resume: store.ResumeCommand{Argv: claude}},
+			want: &typedCommand{argv: claude, declared: true}},
+		{name: "a plain attach's spawn argv runs",
+			rec: store.Session{Command: ssh}, wantEx: ssh},
+		{name: "an --in-shell grant does not cover the spawn argv",
+			rec:  store.Session{Command: ssh, OnRestoreFrame: "sh-1"},
+			want: &typedCommand{argv: ssh}},
+		{name: "the reviving request's own command covers a later command",
+			rec:   store.Session{Typed: store.TypedCommand{Line: "sleep 998", Frame: "sh-2"}},
+			asked: RestoreCommand, want: &typedCommand{line: "sleep 998", run: true, granted: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr, _, dirs := newTestManager(t, nil)
+			policy := testPolicy()
+			policy.OnRestore = RestoreCommand
+			mgr.SetPersistPolicy(policy)
+
+			rec := tt.rec
+			rec.ID, rec.LogPath, rec.OnRestore = "kept", dirs.SessionLog("kept"), "command"
+			got := mgr.inheritForRestore(OpenOptions{Ref: "kept", OnRestore: tt.asked}, rec)
+			if !reflect.DeepEqual(got.typeOnStart, tt.want) || !reflect.DeepEqual(got.Command, tt.wantEx) {
+				t.Errorf("restored command %q, typeOnStart %+v; want %q, %+v",
+					got.Command, got.typeOnStart, tt.wantEx, tt.want)
+			}
+		})
+	}
+}
+
+// The grant an --in-shell attach or a revive leaves waiting binds to the next frame, the typed command's,
+// and ends when that frame closes, back to the spawn argv; a kill that keeps the session freezes it, as it
+// freezes the declaration, since the hangup closes the frame.
+func TestAnOnRestoreGrantLastsAsLongAsItsFrame(t *testing.T) {
+	sess := newNestedTestSession(t, &fakeTerminal{})
+	sess.onRestoreFrame = resumeNextFrame
+	var got []string
+	sess.processChunk(frame("sh-1", "sleep 999", false), 0)
+	got = append(got, sess.OnRestoreFrame())
+	sess.processChunk(frame("sh-1", "", true), 0)
+	got = append(got, sess.OnRestoreFrame())
+
+	kept := newNestedTestSession(t, &fakeTerminal{})
+	kept.onRestoreFrame = resumeNextFrame
+	kept.processChunk(frame("sh-1", "sleep 999", false), 0)
+	kept.keepRecord.Store(true)
+	kept.processChunk(frame("sh-1", "", true), 0)
+	got = append(got, kept.OnRestoreFrame())
+
+	if want := []string{"sh-1", "", "sh-1"}; !slices.Equal(got, want) {
+		t.Errorf("on_restore_frame bound, after its frame closed, and frozen = %q, want %q", got, want)
+	}
+}
+
 // A typed line runs on a revive only when it is a plain program invocation; anything a shell would read as
 // more is prefilled, under on_restore = "command" with the program allowlisted.
 //
@@ -504,7 +645,7 @@ func TestATypedLineRunsOnlyWhenPlain(t *testing.T) {
 
 	// And a session that asked for --on-restore=command does not get past it either.
 	line := "sleep 1; echo x"
-	if got, want := mgr.restoreTyped(line, RestoreCommand, true), (&typedCommand{line: line}); !reflect.DeepEqual(got, want) {
+	if got, want := mgr.restoreTyped(line, RestoreCommand, true), (&typedCommand{line: line, granted: true}); !reflect.DeepEqual(got, want) {
 		t.Errorf("restoreTyped(%q) with the session asking for command = %+v, want %+v", line, got, want)
 	}
 }

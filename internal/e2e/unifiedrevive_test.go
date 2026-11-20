@@ -159,3 +159,87 @@ func TestReviveRerunsTheSpawnArgvExactly(t *testing.T) {
 	}
 	e.mustRun("kill", "quoted")
 }
+
+// A session created with --on-restore=command keeps it: shelved, then restored by a plain attach that names
+// none, it re-runs its spawn argv exactly, quoted argument included, with nothing in safe_commands. A revive
+// that names --on-restore=shell overrides it.
+//
+// The regression: the store kept no on_restore, so the revive saw only its own request, and the session came
+// back as a shell after its replayed output, with nothing running.
+func TestASessionsOwnOnRestoreIsKept(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.writeConfig("[persist]\nenabled = true\non_restore = \"command\"\n")
+	e.restartServer()
+	e.mustRun("attach", "--no-attach", "--persist", "--on-restore=command", "ssh1", "--",
+		"sh", "-c", `echo "CONNECTED [$1]"; exec sleep 999`, "sh", "host a")
+	e.waitForHistory("ssh1", "CONNECTED [host a]")
+	if got := e.mustRun("info", "ssh1", "--field", "on_restore"); got != "command\n" {
+		t.Errorf("on_restore = %q, want %q", got, "command\n")
+	}
+
+	e.mustRun("shelve", "ssh1")
+	e.mustRun("attach", "--no-attach", "ssh1", "--", "/bin/sh")
+	e.waitForHistory("ssh1", "CONNECTED [host a]\nCONNECTED [host a]")
+	if got := e.mustRun("info", "ssh1", "--field", "on_restore"); got != "command\n" {
+		t.Errorf("on_restore after the revive = %q, want it kept as %q", got, "command\n")
+	}
+
+	// Overridden by a revive that names one, which then becomes the session's.
+	e.mustRun("shelve", "ssh1")
+	e.mustRun("attach", "--no-attach", "--on-restore=shell", "ssh1")
+	e.mustRun("send", "ssh1", `printf 'SHELL%s\n' BACK`, "--enter")
+	history := e.waitForHistory("ssh1", "SHELLBACK")
+	if n := strings.Count(history, "CONNECTED [host a]"); n != 2 {
+		t.Errorf("CONNECTED printed %d times after a revive with --on-restore=shell, want the 2 replayed; "+
+			"history:\n%s", n, history)
+	}
+	if got := e.mustRun("info", "ssh1", "--field", "on_restore"); got != "shell\n" {
+		t.Errorf("on_restore after an overriding revive = %q, want %q", got, "shell\n")
+	}
+	e.mustRun("kill", "ssh1")
+}
+
+// A session created with --in-shell --on-restore=command keeps the command it typed coming back running, and
+// only that one: once the command returns, a command typed after it gets the configured policy, which with
+// nothing in safe_commands is prefill.
+//
+// The command is not allowlisted, so only the kept value can let it run. Revived twice, since each revive types
+// it again and the grant has to follow it to its new frame. The regression: the kept value covered everything,
+// so the later command ran too.
+func TestAnInShellOnRestoreCoversOnlyTheCommandItTyped(t *testing.T) {
+	skipIfShort(t)
+	e := typedEnv(t)
+	running := func(line string) func() bool {
+		return func() bool {
+			s, ok := e.session("work")
+			return ok && s.State == "running" && len(s.Location) == 1 && s.Location[0].Argv == line
+		}
+	}
+	e.mustRun("attach", "--no-attach", "--persist", "--in-shell", "--on-restore=command", "work", "--",
+		"sleep", "999")
+	e.waitFor("the attach's command to be running", 15*time.Second, running("sleep 999"))
+	for range 2 {
+		e.mustRun("shelve", "work")
+		e.mustRun("attach", "--no-attach", "work")
+		e.waitFor("the revived shell to be running the attach's command", 15*time.Second, running("sleep 999"))
+	}
+
+	e.mustRun("send", "work", "--key", "ctrl-c")
+	e.waitFor("the attach's command to have returned", 15*time.Second, func() bool {
+		return typedCommand(e, "work") == ""
+	})
+	e.mustRun("send", "work", "sleep 998", "--enter")
+	e.waitFor("the later command to be running", 15*time.Second, running("sleep 998"))
+	e.mustRun("shelve", "work")
+	e.mustRun("attach", "--no-attach", "work")
+	e.waitFor("the later command to be typed on the revived prompt", 15*time.Second, func() bool {
+		h := strings.TrimRight(e.run("history", "work").stdout, " \n")
+		return strings.HasSuffix(h, "% sleep 998")
+	})
+	time.Sleep(time.Second)
+	if s, _ := e.session("work"); len(s.Location) != 0 {
+		t.Errorf("the later command ran on the revive: location %+v", s.Location)
+	}
+	e.mustRun("kill", "work")
+}

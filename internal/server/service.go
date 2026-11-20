@@ -1026,6 +1026,7 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			Restorable: restorable(s.mgr.persist, rec),
 			// The record's, which is what a revive reads; a live session's is fresher and replaces it below.
 			TypedCommand: rec.Typed.Line,
+			OnRestore:    rec.OnRestore,
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.ID); live {

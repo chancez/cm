@@ -1208,7 +1208,16 @@ func (m *Manager) createWithID(ctx context.Context, opts OpenOptions) (*Session,
 // ended session, kept so it could be revived, and this is the revive: a session that ends again later
 // follows the configured schedule unless it is kept with a retention of its own again.
 func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOptions {
-	// Tags first, and deliberately not gated on persistence below. The record is about to be deleted
+	// The session's own on_restore, kept from the attach that created or last revived it, unless this
+	// revive names one. Set on opts, so it picks the restore behavior below and the new record keeps it.
+	// Before it was kept, a session created with --on-restore=command came back as a shell after a reboot,
+	// since only the reviving request's value was seen and a terminal restoring a window passes none. What it
+	// lets run without the allowlist is narrower than what the request's own would: see restoreWhatRan.
+	asked := opts.OnRestore
+	if opts.OnRestore == "" {
+		opts.OnRestore = RestoreAction(rec.OnRestore)
+	}
+	// Tags next, and deliberately not gated on persistence below. The record is about to be deleted
 	// whether or not it had a log, so a session whose shell exited and is attached to again would
 	// otherwise silently lose its tags, and it would lose them on a plain install where persistence
 	// is off entirely. Tags describe the session rather than its content, so they survive on their
@@ -1249,7 +1258,7 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 	}
 
 	if len(opts.Command) == 0 && action != RestoreNone {
-		opts = m.restoreWhatRan(opts, rec, action)
+		opts = m.restoreWhatRan(opts, rec, action, asked)
 	}
 	if action == RestoreNone {
 		// Nothing is started. The client still gets the replayed screen, so the session reads as
@@ -1277,7 +1286,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 	// revive then restores a shell rather than re-running the program in place of one.
 	typed := opts.typeOnStart
 	if opts.InShell && len(opts.Command) > 0 {
-		typed = &typedCommand{argv: opts.Command, run: true}
+		typed = &typedCommand{argv: opts.Command, run: true, granted: true}
 		opts.Command = nil
 	}
 
@@ -1331,6 +1340,14 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Tags:       opts.Tags,
 		// Records why there is a log, which is what expiry keys off.
 		PersistRequested: requested,
+		// What a revive of this session does, when the revive does not say. See inheritForRestore.
+		OnRestore: string(opts.OnRestore),
+	}
+	// The session's own on_restore covers what this attach started. That is the spawn argv unless a command is
+	// typed into the shell, by --in-shell or by a revive allowed to run it, and then it is that command,
+	// bound to whichever frame opens next, its own. See keptGrantCovers.
+	if opts.OnRestore != "" && typed != nil && typed.granted {
+		rec.OnRestoreFrame = resumeNextFrame
 	}
 	// Carried into the new incarnation, bound to whichever frame opens next: the typed command's. See
 	// resumeNextFrame.

@@ -97,6 +97,24 @@ func (s *Session) bindResumeLocked(frame string) {
 	s.signalRestoreLocked()
 }
 
+// OnRestoreFrame returns what the session's own on_restore covers. See store.Session.OnRestoreFrame.
+func (s *Session) OnRestoreFrame() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.onRestoreFrame
+}
+
+// bindGrantLocked binds an on_restore grant waiting for the next frame to the one just opened, which is the
+// frame of the command an --in-shell attach or a revive typed into the shell, by the same rule a carried
+// declaration binds. It ends with that frame, in dropFramedLocked.
+func (s *Session) bindGrantLocked(frame string) {
+	if s.onRestoreFrame != resumeNextFrame {
+		return
+	}
+	s.onRestoreFrame = frame
+	s.signalRestoreLocked()
+}
+
 // noteTypedLocked records the command a frame just opened for, when it is the session's own.
 //
 // Only the outermost frame, which is the one this session's own shell opened. A frame above it comes from a
@@ -199,12 +217,14 @@ func isKittyShellLauncher(argv []string) bool {
 func (s *Session) dropFramedLocked(closed map[string]bool) {
 	resume := s.resume.Frame != "" && s.resume.Frame != resumeNextFrame && closed[s.resume.Frame]
 	typed := s.typed.Frame != "" && closed[s.typed.Frame]
-	if !resume && !typed {
+	grant := s.onRestoreFrame != "" && s.onRestoreFrame != resumeNextFrame && closed[s.onRestoreFrame]
+	if !resume && !typed && !grant {
 		return
 	}
 	if s.keepRecord.Load() {
 		s.log.Info("kept what a revive brings back, whose command ended with a kill that keeps the session",
-			"session", s.label, "resume_frame", s.resume.Frame, "typed_frame", s.typed.Frame)
+			"session", s.label, "resume_frame", s.resume.Frame, "typed_frame", s.typed.Frame,
+			"on_restore_frame", s.onRestoreFrame)
 		return
 	}
 	if resume {
@@ -214,6 +234,11 @@ func (s *Session) dropFramedLocked(closed map[string]bool) {
 	}
 	if typed {
 		s.typed = store.TypedCommand{}
+	}
+	if grant {
+		// Back to the spawn argv, which for a session whose grant was bound to a frame is the shell: what the
+		// user types next is theirs, not what the attach started.
+		s.onRestoreFrame = ""
 	}
 	s.signalRestoreLocked()
 }
@@ -234,10 +259,11 @@ func (s *Session) signalRestoreLocked() {
 // on the pump would stall it, and coalesced: the writer reads both values when it runs.
 func (m *Manager) persistRestore(sess *Session) {
 	write := func() {
-		r, typed := sess.Resume(), sess.Typed()
+		r, typed, grant := sess.Resume(), sess.Typed(), sess.OnRestoreFrame()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := m.store.Apply(ctx, sess.id, store.Update{Resume: &r, Typed: &typed}); err != nil {
+		u := store.Update{Resume: &r, Typed: &typed, OnRestoreFrame: &grant}
+		if err := m.store.Apply(ctx, sess.id, u); err != nil {
 			m.log.Warn("recording what a revive brings back failed", "session", sess.id, "error", err)
 		}
 	}
@@ -323,6 +349,10 @@ type typedCommand struct {
 	// bound to the next frame. Nothing else is carried: a typed or recorded command is recorded again by the
 	// frame its typed line opens.
 	declared bool
+	// granted says it may run without the allowlist because the session's own on_restore or the reviving
+	// request's said so, which the new record carries forward as a grant bound to the frame its typed line
+	// opens. See keptGrantCovers.
+	granted bool
 }
 
 // restoreWhatRan decides what a revive brings back when the caller named no command, in order:
@@ -337,31 +367,59 @@ type typedCommand struct {
 // the session asked for command or the program is in safe_commands, and is prefilled otherwise; "prefill"
 // prefills; "shell" brings nothing back. Prefilled rather than dropped, because the user asked for the
 // command back and the safe form of that is one keypress away from it.
-func (m *Manager) restoreWhatRan(opts OpenOptions, rec store.Session, action RestoreAction) OpenOptions {
+//
+// "The session asked" is asked, the reviving request's own --on-restore, which covers whatever this revive
+// brings back, or else the session's kept one, which covers only what the attach that set it started. See
+// keptGrantCovers.
+func (m *Manager) restoreWhatRan(
+	opts OpenOptions, rec store.Session, action, asked RestoreAction,
+) OpenOptions {
 	if action != RestorePrefill && action != RestoreCommand {
 		return opts
 	}
-	explicit := opts.OnRestore == RestoreCommand
+	explicit := func(frame string, spawn bool) bool {
+		if asked != "" {
+			return asked == RestoreCommand
+		}
+		return rec.OnRestore == string(RestoreCommand) && keptGrantCovers(rec, frame, spawn)
+	}
 	switch {
 	case len(rec.Resume.Argv) > 0:
-		opts.typeOnStart = m.restoreDeclared(rec.Resume.Argv, action, explicit)
+		opts.typeOnStart = m.restoreDeclared(rec.Resume.Argv, action, explicit(rec.Resume.Frame, false))
 	case rec.Resume.Frame != "" && rec.Resume.Frame != resumeNextFrame:
 		// Cleared in a frame that was still open, which says nothing is to come back for it.
 	case rec.Typed.Line != "" && runsAShell(rec.Command):
 		// A session that is a program, like an ssh, comes back as that program rather than as a line its far
 		// side ran. Such a session records no typed command now, but a record kept before that rule has one.
-		opts.typeOnStart = m.restoreTyped(rec.Typed.Line, action, explicit)
+		opts.typeOnStart = m.restoreTyped(rec.Typed.Line, action, explicit(rec.Typed.Frame, false))
 	case len(rec.Command) > 0 && !isJustAShell(rec.Command):
 		argv := slices.Clone(rec.Command)
 		// Exec'd in place when it runs, as a recorded command always was, rather than typed: it is what the
 		// session was, not something its shell ran.
-		if action == RestoreCommand && (explicit || m.safeToRerun(argv)) {
+		if action == RestoreCommand && (explicit("", true) || m.safeToRerun(argv)) {
 			opts.Command = argv
 		} else {
 			opts.typeOnStart = &typedCommand{argv: argv}
 		}
 	}
 	return opts
+}
+
+// keptGrantCovers reports whether a session's own on_restore, kept with its record, covers a command: one
+// bound to frame, a declaration or a typed command, or with spawn the spawn argv.
+//
+// It covers what the attach that set it started, not what the user runs in the session later. Before it was
+// scoped, a session created with --in-shell --on-restore=command ran any line typed into its shell since,
+// on every revive, without the allowlist. From a plain attach that is the spawn argv, the session itself,
+// which is the ssh case the kept value exists for; and a declaration bound to no frame in a session that is
+// a program, since a session with no shell of its own has no frames, so only that program or something it
+// runs can have made it. From an --in-shell attach, or a revive that typed a command back, it is the command
+// typed into the shell and a declaration it made, both bound to its frame, until that frame closes.
+func keptGrantCovers(rec store.Session, frame string, spawn bool) bool {
+	if rec.OnRestoreFrame == "" {
+		return spawn || (frame == "" && !runsAShell(rec.Command))
+	}
+	return !spawn && frame == rec.OnRestoreFrame
 }
 
 // restoreDeclared decides how a revive restores a declared command.
@@ -371,7 +429,7 @@ func (m *Manager) restoreWhatRan(opts OpenOptions, rec store.Session, action Res
 // the shell's preexec hook opens a frame for it, which is what the carried declaration binds to.
 func (m *Manager) restoreDeclared(argv []string, action RestoreAction, explicit bool) *typedCommand {
 	run := action == RestoreCommand && (explicit || m.safeToRerun(argv))
-	return &typedCommand{argv: slices.Clone(argv), run: run, declared: true}
+	return &typedCommand{argv: slices.Clone(argv), run: run, declared: true, granted: explicit}
 }
 
 // restoreTyped decides how a revive restores a typed command, typed back verbatim like a declared one.
@@ -385,7 +443,7 @@ func (m *Manager) restoreTyped(line string, action RestoreAction, explicit bool)
 	argv, plain := plainInvocation(line)
 	run := action == RestoreCommand && plain && (explicit || m.safeToRerun(argv)) &&
 		len(line) < osc.MaxFrameArgv
-	return &typedCommand{line: line, run: run}
+	return &typedCommand{line: line, run: run, granted: explicit}
 }
 
 // plainInvocation splits a typed line into its words when it is nothing but a program and its arguments,

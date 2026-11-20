@@ -160,6 +160,9 @@ type sessionJSON struct {
 	// record so a revive can bring it back. Not Command, which is what is running right now: the two differ
 	// for a session that has ended, whose Command is empty while this says what a revive would type.
 	TypedCommand string `json:"typed_command"`
+	// OnRestore is the session's own restore behavior, kept from the attach that created or last revived it,
+	// empty when it follows the configured on_restore.
+	OnRestore string `json:"on_restore"`
 }
 
 // locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
@@ -277,6 +280,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ShimBuild:           s.ShimBuild,
 		ExpireAfter:         s.ExpireAfter,
 		TypedCommand:        s.TypedCommand,
+		OnRestore:           s.OnRestore,
 		Location:            location,
 		Resume:              resume,
 		AttachedClients:     clients,
@@ -860,6 +864,8 @@ func sessionFields(s *serverv1.Session) []struct {
 		// Bare, and empty for a session on the configured schedule, which is the common case.
 		{"expire_after", j.ExpireAfter},
 		{"typed_command", j.TypedCommand},
+		// Empty when the session follows the configured on_restore, like expire_after.
+		{"on_restore", j.OnRestore},
 	}
 }
 

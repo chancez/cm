@@ -3923,7 +3923,11 @@ type Session struct {
 	// would bring it back when nothing was declared: from the shell's outermost command frame, kept with the
 	// record so it survives the session ending, a server restart and a reboot. Distinct from command, which is
 	// what is running right now and is not kept. Empty at a prompt, and for a shell without cm's integration.
-	TypedCommand  string `protobuf:"bytes,33,opt,name=typed_command,json=typedCommand,proto3" json:"typed_command,omitempty"`
+	TypedCommand string `protobuf:"bytes,33,opt,name=typed_command,json=typedCommand,proto3" json:"typed_command,omitempty"`
+	// on_restore is the session's own restore behavior, from --on-restore on the attach that created or last
+	// revived it: "shell", "none", "prefill" or "command". Empty means the configured on_restore. A revive that
+	// passes none uses this, and one that passes one replaces it.
+	OnRestore     string `protobuf:"bytes,34,opt,name=on_restore,json=onRestore,proto3" json:"on_restore,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4185,6 +4189,13 @@ func (x *Session) GetRestorable() bool {
 func (x *Session) GetTypedCommand() string {
 	if x != nil {
 		return x.TypedCommand
+	}
+	return ""
+}
+
+func (x *Session) GetOnRestore() string {
+	if x != nil {
+		return x.OnRestore
 	}
 	return ""
 }
@@ -5800,7 +5811,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x12\n" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xe9\t\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\x88\n" +
+	"\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -5840,7 +5852,9 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
 	"restorable\x18  \x01(\bR\n" +
 	"restorable\x12#\n" +
-	"\rtyped_command\x18! \x01(\tR\ftypedCommand\x1a7\n" +
+	"\rtyped_command\x18! \x01(\tR\ftypedCommand\x12\x1d\n" +
+	"\n" +
+	"on_restore\x18\" \x01(\tR\tonRestore\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +

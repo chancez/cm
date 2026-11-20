@@ -434,8 +434,11 @@ type Session struct {
 	// typed is the command line the shell's outermost open frame is running, bound to that frame, which a
 	// revive brings back when nothing was declared. See noteTypedLocked.
 	typed store.TypedCommand
-	// restoreChanged is signalled when resume or typed changes, so the manager can write them to the store off
-	// the pump.
+	// onRestoreFrame is what the session's own on_restore lets run without the allowlist, bound to a frame the
+	// way a declaration is. See store.Session.OnRestoreFrame and bindGrantLocked.
+	onRestoreFrame string
+	// restoreChanged is signalled when resume, typed or onRestoreFrame changes, so the manager can write them
+	// to the store off the pump.
 	// Buffered with a depth of one and coalescing, like a metadata subscription: the writer only needs to
 	// know that something changed, and reads the current value itself. Nil in a Session literal built by a
 	// test, which the non-blocking send tolerates.
@@ -821,6 +824,7 @@ func newSession(
 		// From the record, so a declaration survives a server restart and reaches a revived session.
 		resume:         rec.Resume,
 		typed:          rec.Typed,
+		onRestoreFrame: rec.OnRestoreFrame,
 		restoreChanged: make(chan struct{}, 1),
 		// From the record for the same reason: an idle shell adopted by a restarted server has no marker
 		// left in the replayed window to say it has integration.
@@ -2197,6 +2201,7 @@ func (s *Session) noteFrame(f osc.Frame) {
 		s.noteTypedLocked(f, len(s.frames) == 0)
 		s.frames = append(s.frames, sessionFrame{id: f.ID, argv: f.Argv})
 		s.bindResumeLocked(f.ID)
+		s.bindGrantLocked(f.ID)
 		return
 	}
 

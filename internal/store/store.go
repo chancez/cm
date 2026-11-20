@@ -237,9 +237,19 @@ type Session struct {
 	// Typed is the command line the session's shell last started and has not yet returned from, bound to the
 	// command frame it opened, so a revive can bring back what was running when nothing was declared. See
 	// TypedCommand.
-	Typed     TypedCommand
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Typed TypedCommand
+	// OnRestore is the session's own restore behavior, from `--on-restore` on the attach that created or last
+	// revived it: "shell", "none", "prefill" or "command". Empty means the configured on_restore. A revive
+	// that names one of its own uses that instead, and it becomes the session's from then on.
+	OnRestore string
+	// OnRestoreFrame is what OnRestore's permission to run without the allowlist covers, which is what the
+	// attach that set it started rather than everything the session runs later. Empty: the spawn argv, which
+	// is the session itself, from a plain attach. A frame ID: the command typed into the shell in that frame,
+	// by an --in-shell attach or a revive, until it returns. "next": that command, whose frame has not opened
+	// yet, as a declaration carried into a revive waits for one.
+	OnRestoreFrame string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // BackupPath names the snapshot taken before migrating a database off a given schema version.
@@ -571,5 +581,17 @@ var migrations = []string{
 	`
 	ALTER TABLE sessions ADD COLUMN typed_command TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sessions ADD COLUMN typed_frame TEXT NOT NULL DEFAULT '';
+	`,
+	// The session's own --on-restore, which was honored only by the attach that passed it: a session created
+	// with --on-restore=command came back as a shell after a reboot, since the revive saw only its own request.
+	// Empty, which is what every existing row gets, means the configured on_restore. See Session.OnRestore.
+	//
+	// on_restore_frame scopes it: a session created with --in-shell --on-restore=command ran whatever was typed
+	// into its shell later without the allowlist, since the kept value counted as asking for everything. Empty,
+	// the value every existing row gets, scopes it to the spawn argv, which is what a plain attach started. See
+	// Session.OnRestoreFrame.
+	`
+	ALTER TABLE sessions ADD COLUMN on_restore TEXT NOT NULL DEFAULT '';
+	ALTER TABLE sessions ADD COLUMN on_restore_frame TEXT NOT NULL DEFAULT '';
 	`,
 }

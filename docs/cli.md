@@ -179,7 +179,8 @@ it, since that clears what was left behind and this was kept on purpose.
 back without attaching. There is one revive: an exited session, one dead after a reboot or a crash, and a
 shelved one all come back the same way. A shell starts in the recorded directory, the saved output is
 replayed, and the declared resume command, else the typed command, else a spawn argv that is a program, is
-handled by `on_restore` with its usual permissions. The retention is cleared. A command after `--` is
+handled by `on_restore` with its usual permissions: the attach's `--on-restore`, else the one the session
+was created with, which its record keeps as `on_restore`, else the config's. The retention is cleared. A command after `--` is
 ignored and the client's own directory is not used, but `--dir` is: `Open.cwd_explicit` says it was asked
 for, because every client fills the directory in. The states differ only in how the session got there, its
 label, its retention, and `cm forget --ended` leaving a shelved one alone.

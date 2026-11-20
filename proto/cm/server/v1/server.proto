@@ -1259,6 +1259,11 @@ message Session {
   // record so it survives the session ending, a server restart and a reboot. Distinct from command, which is
   // what is running right now and is not kept. Empty at a prompt, and for a shell without cm's integration.
   string typed_command = 33;
+
+  // on_restore is the session's own restore behavior, from --on-restore on the attach that created or last
+  // revived it: "shell", "none", "prefill" or "command". Empty means the configured on_restore. A revive that
+  // passes none uses this, and one that passes one replaces it.
+  string on_restore = 34;
 }
 
 // LocationFrame is one command a session is inside.

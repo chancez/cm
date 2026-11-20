@@ -51,7 +51,10 @@ func sampleSession(id string) Session {
 		// Not a whole number of milliseconds, unlike the timestamps, so a column that rounded would show.
 		ExpireAfter: Expiry(720*time.Hour + time.Microsecond),
 		Typed:       TypedCommand{Line: `nvim "my notes.md" | tee log`, Frame: "salt-3"},
-		CreatedAt:   time.UnixMilli(1_700_000_000_000),
+		OnRestore:   "command",
+		// Bound to a frame, as an --in-shell attach's grant is once its command starts.
+		OnRestoreFrame: "salt-4",
+		CreatedAt:      time.UnixMilli(1_700_000_000_000),
 	}
 }
 
@@ -917,6 +920,33 @@ func TestApplyRoundTripsATypedCommand(t *testing.T) {
 		want.UpdatedAt = got.UpdatedAt
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("after Apply(%+v), Get() = %+v\nwant %+v", typed, got, want)
+		}
+	}
+}
+
+// What a session's own on_restore covers reads back as it was written, including empty, which scopes it back to
+// the spawn argv when the frame it covered closes.
+func TestApplyRoundTripsTheOnRestoreFrame(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rec := sampleSession("grant")
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, frame := range []string{"next", "salt-5", ""} {
+		if err := s.Apply(ctx, "grant", Update{OnRestoreFrame: new(frame)}); err != nil {
+			t.Fatalf("Apply(%q) error = %v", frame, err)
+		}
+		got, err := s.Get(ctx, "grant")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		want := rec
+		want.OnRestoreFrame = frame
+		want.UpdatedAt = got.UpdatedAt
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("after Apply(%q), Get() = %+v\nwant %+v", frame, got, want)
 		}
 	}
 }
