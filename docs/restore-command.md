@@ -1,9 +1,11 @@
 # Program resume protocol (draft)
 
-**Status: the sequence is a draft and unimplemented; cm's side is implemented without it.** A proposal for a
-sequence a program writes to say how it should be started again when its window is restored, plus how cm
-implements the same thing through `cm restore-with`. Written to be proposed to
-terminals beyond cm, ghostty first, so the spec half avoids anything cm-specific.
+**Status: the sequence is a draft and unimplemented; cm implements the rest of the model without it.** A
+proposal for a sequence a program writes to say how it should be started again when its window is restored,
+and for the rules a terminal follows in restoring it, plus how cm implements the same thing through
+`cm restore-with`, its shell integration's command frames, and `on_restore`. Written to be proposed to
+terminals beyond cm, ghostty first, so the spec half avoids anything cm-specific. The rules below the wire
+format are what implementing it in cm taught; each says what went wrong without it.
 
 ## The problem
 
@@ -144,7 +146,14 @@ way MUST be discarded whole. The whole sequence MUST NOT exceed 4096 bytes.
 
 A terminal keeps at most one record per window. `op=set` replaces it, `op=clear` removes it.
 
-A record describes the program that is running now, so it MUST be removed:
+A record describes the program that is running now, so it ends with that program. A terminal that tracks
+command frames, the span from OSC 133;C to OSC 133;D its shell integration reports for each command, or an
+equivalent, MUST bind a record to the innermost frame open when the report arrives, and MUST remove it when
+that frame closes. That is the precise form of the rule: a frame closes for the command that opened it,
+rather than for whichever prompt comes next, and stays open while the command is a stopped job, so a
+program suspended with ctrl-z keeps its record. A report that arrives with no frame open is bound to none.
+
+A terminal without frames MUST remove the record:
 
 - at the next prompt mark, OSC 133;A, since a prompt means the program has exited back to a shell;
 - when the window's own child process exits;
@@ -153,6 +162,22 @@ A record describes the program that is running now, so it MUST be removed:
 A terminal with neither signal keeps the record until it is replaced or cleared. This is the lifetime OSC
 7501 gives `working` and `blocked` records, and for the same reason: a record that outlives its program
 resurrects something that was deliberately quit.
+
+`op=clear` in a frame leaves a cleared record bound to that frame rather than none: nothing is restored for
+that frame, not even an inferred command (see Inferring a command), and it ends with the frame like any
+record, so a command run after the program returns is restorable again. A `terraform apply` wrapper clears
+so that its window comes back as a shell even under a broad allowlist; without the marker, the inferred
+`terraform apply` would fill the gap the clear left.
+
+### Ending a window to restore it later
+
+A terminal or multiplexer that ends a window's programs on purpose so that it can restore them later,
+rather than because they exited or the user quit them, MUST freeze the window's record, cleared record and
+inferred command as they stood when it began, ignoring every change until the programs are gone. Ending them
+is what closes their frames: zsh answers SIGHUP by printing `zsh: hangup` and drawing a prompt before it
+dies, and that withdrew a program's record 36ms after the hangup was sent, so the window came back as a bare
+shell. An exit hook may also send a clear or a new report as its program dies. If the programs survive the
+attempt and keep running, the terminal MUST lift the freeze.
 
 ### Authentication
 
@@ -170,12 +195,68 @@ Those can write escape sequences but cannot read the environment of the program 
 - A program running on another host over ssh does not have the token unless the user forwards it. That is
   the intended default: a remote host should not choose what runs locally.
 
+### Inferring a command
+
+A terminal MAY infer a command for a window that declared none, from the command line its shell integration
+reports for a frame, such as the `cmdline` of OSC 133;C. If it does:
+
+- The inferred command is the line of the outermost open frame, and only in a window whose own program, the
+  one the terminal spawned, is a shell. A frame above the outermost is written by a shell further in,
+  through the same pty: the far side of an ssh, a nested multiplexer, a subshell. Its line belongs to that
+  shell, and run here it would start the remote or nested program locally. The outermost frame is the ssh
+  or the nested attach itself, which run again reconnects. A window whose own program is not a shell, such
+  as `kitten ssh host`, has no frames of its own, so every frame it shows comes from a deeper shell, and
+  nothing is inferred from them.
+- It is bound to that frame and removed when the frame closes, like a record.
+- It is a line as the shell reported it, not an argv. Restoring types it back verbatim into the same kind of
+  shell, which parses it as it did the first time, so nothing is re-quoted.
+- It MUST NOT be run unless it is a plain invocation, whatever the user's policy allows for a declared
+  command, since it goes to a shell that runs all of it: with `sleep` allowed, `sleep 1; rm -rf x` would run
+  in full. Anything else MAY be presented, and is never run. A line at the length the shell or the
+  terminal truncates it to is not plain, since its end may be missing.
+
+A plain invocation is a program word followed by argument words, separated by spaces or tabs, each
+optionally quoted with `'...'` or `"..."`. A line is not plain if it has:
+
+- an operator or grouping, `;` `|` `&` `<` `>` `(` `)` `{` `}`, which covers `&&`, `||`, `>>` and
+  here-documents;
+- an expansion, `$` or a backtick, outside quotes or inside double quotes;
+- a glob, `*` `?` `[` outside quotes, or `#` or `^`, which zsh's extended globbing reads as patterns;
+- history: `!` outside single quotes, or a line starting with `^`, which is quick substitution;
+- a backslash outside single quotes, which covers a continuation, or a newline anywhere;
+- a `~` that is not a word on its own or the start of `~/`, so `~user` and zsh's `a~b` exclusion;
+- a word starting with `=`, which zsh expands to a command's path;
+- a first word that assigns, `VAR=value`;
+- an unbalanced quote, or nothing at all.
+
+The program word, with its quotes removed, is what an allowlist matches. What the rule cannot see is what a
+word means to the shell: an alias or a function named like an allowed program runs as itself, so an
+allowlist is a convenience rather than a safety boundary.
+
 ### Restoring
 
-When a window with a record is restored, the terminal runs `argv` in `cwd`, subject to the user's policy.
+When a window is restored, what comes back is, in order:
+
+1. the record, when the window has one; a cleared record for a frame still open stops here, with nothing;
+2. else the inferred command, when the terminal infers one;
+3. else the window's own spawn argv, when it is a program rather than just a shell;
+4. else nothing, and the window gets a shell.
+
+The rules for running it:
 
 - The terminal MUST NOT run the command without the user having allowed it, by configuration or by
   confirming at restore. The default SHOULD be to present the command rather than run it.
+- A per-window permission to run without asking, given when the window was opened, covers what that window
+  was started with and MUST NOT cover what the user runs in it later. That is the window's spawn argv, or
+  the command its opener had typed into its shell, and a record that command makes, until that command's
+  frame closes; what follows gets the terminal's configured policy. A restore that runs a covered command
+  keeps the permission for it. Unscoped, a window opened once to run one program without asking ran
+  whatever was later typed into it, on every restore.
+- Restoring MUST ignore the command and the implicit working directory of whatever reopened the window. A
+  terminal replaying a saved session reopens each window with the command it was first opened with, and
+  letting that command win reran the window's original program after every reboot and buried the record.
+  The window comes back in its recorded directory; a directory the opener named explicitly is a request and
+  is honored, while one filled in from the opener's own is not.
 - The terminal MUST pass `argv` to `exec` as given, or to a shell quoted so that it parses back to the same
   arguments. It MUST NOT join the arguments with spaces.
 - The terminal SHOULD run the command so that exiting it leaves a shell, as kitty does for
@@ -197,7 +278,16 @@ nesting without either layer knowing what the other runs.
 
 ## How cm implements it
 
-Three parts, each useful without the others, and all three are built.
+Three parts, each useful without the others.
+
+Built: a declaration through `cm restore-with`, bound to its frame, with the cleared record; the freeze
+while `cm kill --keep` or `cm shelve` ends a session; the inferred command, outermost frame only and only in
+a session whose own program is a shell, with the plain-invocation rule; the restoring order, the scoped
+permission, and ignoring the opener's command and implicit directory, through `on_restore`, `cm attach`
+and `cm restore`.
+
+Not built: the sequence itself, so no token is exported, no report is parsed, and there is no feature query;
+and cm declaring itself to the outer terminal, as the Multiplexers section allows.
 
 **Inferred: the typed command.** A session's spawn argv is, for a `kitty.*` session, the shell, so
 `on_restore = "command"` and `safe_commands` never saw the program running in it. The shell integration
@@ -229,8 +319,8 @@ is in [persistence.md](persistence.md#the-allowlist-is-a-convenience-not-a-safet
 
 **Declared: the sequence and `cm restore-with`.** Two channels, the same split as OSC 7501 and `cm report`:
 
-- The sequence, for a program that writes it itself. cm exports the token, validates it, and does not
-  forward the sequence to the client's terminal.
+- The sequence, for a program that writes it itself. Not built: cm would export the token, validate it, and
+  not forward the sequence to the client's terminal.
 - `cm restore-with [session] -- ARGV...` and `cm restore-with --clear`, for hooks and wrappers. It
   authenticates by reaching the server's socket, and defaults to `CM_SESSION` as `cm report` does.
 
@@ -278,7 +368,11 @@ What "the command" is, in order:
 4. else nothing, and the revive is a shell.
 
 `command` runs it only with the permission it always took to re-run a recorded command: the session asked
-with `--on-restore=command`, or `safe_commands` matches the program name. Without either it prefills, which
+with `--on-restore=command`, or `safe_commands` matches the program name. A session's own
+`--on-restore=command`, kept with its record, is the per-window permission, and covers what its attach
+started: on a plain attach the spawn argv, with `--in-shell` the command that attach typed and a declaration
+it makes, until its frame closes; the record keeps that frame. A revive's own `--on-restore=command` covers
+everything that revive brings back. Without permission it prefills, which
 keeps the command one keypress away rather than dropping it. `prefill` never runs, whatever the allowlist
 says, so it is the mode to choose for seeing what would be resumed before it is. A declared or typed
 command is typed into the new shell; a spawn argv that runs is exec'd in place of it, as a recorded command
