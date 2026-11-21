@@ -110,6 +110,13 @@ const (
 	// `cm attach --space infra` creates a session the server files in no space, which `cm space` then
 	// reports by refusing.
 	Spaces Name = "spaces"
+
+	// Close means the server implements the Close RPC, which applies the window-close policy.
+	//
+	// Checked before `cm close` sends anything, for the reason Shelve is: an older server answers with an
+	// Unimplemented error naming a method, and a close watcher that reads it as a failure leaves the window's
+	// session as it was, which is at least not destructive.
+	Close Name = "close"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -288,6 +295,7 @@ func Server() Set {
 		KillExpireAfter,
 		Shelve,
 		Spaces,
+		Close,
 	)
 }
 

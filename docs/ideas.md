@@ -799,8 +799,11 @@ because otherwise sessions pile up in the flat list. Spaces remove the reason: a
 stays visible in its space. The policy, the same on every host:
 
 - An explicit close, `cm close REF`, detaches a session running a command and shelves an idle one. Shelving
-  keeps the scrollback, names, tags and restore command, and `--expire-after` bounds the pile. A session
-  with no shell integration reports no idle state, so it is treated as busy and detached.
+  keeps the scrollback, names, tags and restore command, and the configured `expire_after` bounds the pile.
+  An idle session that saved no output has nothing to shelve to and is killed, losing only its scrollback;
+  persistence is off by default, so on a plain install that is the common case. A session with no shell
+  integration reports no idle state, so it is treated as busy and detached. A session another window still
+  shows is left alone, which `cm_reap.py` could not tell apart from a last window.
 - A disconnect of any kind is a detach and nothing else. Over `--remote` a dropped link and a closed window
   both look like a hangup to the server, so the policy must run only on the stated intent. kitty's watcher
   `on_close` reports `reason` and `cause`, and the watcher calls `cm close` rather than the server inferring
@@ -823,15 +826,14 @@ second.
 
 *Order*, each useful without the next:
 
-1. Spaces on one host: the record, a session's space in the store and in `Open`, `default`, moving a
-   session, `cm ls` and `cm tui` grouped by space.
-2. The close policy and `cm close`, replacing `cm kill --force` in `cm_reap.py`.
+1. **Built.** Spaces on one host: the record, a session's space in the store and in `Open`, `default`,
+   moving a session, `cm ls` and `cm tui` grouped by space. See docs/cli.md.
+2. **Built in cm.** The close policy and `cm close`. What remains is the dotfiles' `cm_reap.py` calling it
+   with the window's client pid in place of `cm kill --force`.
 3. Named remotes and qualified references, resolving locally for the local host's name.
 4. Cross-host `cm ls` and `cm tui` with the stale cache.
 5. kspaces reading spaces from cm.
 
-The first two change `internal/server` and `internal/store`, which the shim-removal rewrite on
-`pr/chancez/server-ptys` is changing, and should start from it.
 
 **A kitty wrapper for spawning windows.** A `cmk` or `kitten cm` that creates a kitty window or tab with a
 cm session already in it, so an agent could give each sub-agent its own visible tab instead of a headless

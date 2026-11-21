@@ -150,6 +150,30 @@ restorable indefinitely, which is how kspaces suspends one. `cm info` reports it
 for a session on the schedule. `--expire-after` needs `--keep`, and is refused against a server that
 reports capabilities without `kill.expire-after` rather than being silently ignored.
 
+## Closing a window
+
+```sh
+cm close [SESSION] [--client-pid PID] [--json]
+```
+
+For a terminal emulator's window-close hook, in place of `cm kill`. The server decides, so the rule is
+the same on every host and in every terminal:
+
+| Session | `cm close` |
+| --- | --- |
+| another window still shows it | `kept`: only the closed window's client detaches |
+| a command running, a command frame open, a program reporting work, or no OSC 133 ever seen | `detached` |
+| idle at a prompt, saving output | `shelved`, kept for the configured `expire_after` |
+| idle at a prompt, saving no output | `killed`, which loses only its scrollback |
+| reached by a name that borrowed it | `unbound`: the name is released, as `cm kill` by it does |
+| not running | `not_running` |
+
+A command frame counts because OSC 133 alone does not: a remote shell's prompt markers arriving through a
+local `ssh` read as the local shell idle, while the frame the local shell opened for the ssh stays open.
+`--client-pid` names the closed window's client; without it every client detaches. Only ever run on a
+stated close, since over `--remote` a dropped link and a closed window look the same to the server.
+Refused against a server without the `close` capability.
+
 ## Shelving a session, and restoring it
 
 ```sh
@@ -256,7 +280,7 @@ space.
 
 `list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `rename`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
-`clients current`, `clients upgrade`, `clients restart`, `space list`, and `space move` accept
+`clients current`, `clients upgrade`, `clients restart`, `space list`, `space move`, and `close` accept
 `--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.

@@ -173,6 +173,11 @@ func (s *stubService) Move(
 ) (*serverv1.MoveResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Close(
+	context.Context, *serverv1.CloseRequest,
+) (*serverv1.CloseResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Shelve(
 	context.Context, *serverv1.ShelveRequest,
 ) (*serverv1.ShelveResponse, error) {

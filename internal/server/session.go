@@ -3410,6 +3410,31 @@ func (s *Session) EvictClients() int {
 	return asked
 }
 
+// EvictClientPID asks the clients a process holds to detach, and reports how many other clients remain.
+//
+// For a window that was closed: its client is the one to let go, and whether any other remains decides
+// whether the session is still being shown somewhere. A client already asked to leave is not counted as
+// remaining, so a close racing another eviction does not read the session as still shown. A pid that holds
+// no client, because the closed window's client has already gone, asks nobody and counts every client.
+func (s *Session) EvictClientPID(pid int32) (asked, remaining int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for tok, ch := range s.evicts {
+		select {
+		case <-ch:
+			continue
+		default:
+		}
+		if cs := s.clientSizes[tok]; cs != nil && cs.pid == pid {
+			close(ch)
+			asked++
+			continue
+		}
+		remaining++
+	}
+	return asked, remaining
+}
+
 // UpgradeClients asks attached clients to re-exec and come back, returning how many were asked and how
 // many were left alone for already running current.
 //

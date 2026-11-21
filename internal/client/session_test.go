@@ -286,6 +286,11 @@ func (c *fakeClient) Move(
 ) (*serverv1.MoveResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Close(
+	context.Context, *serverv1.CloseRequest,
+) (*serverv1.CloseResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Shelve(
 	context.Context, *serverv1.ShelveRequest,
 ) (*serverv1.ShelveResponse, error) {

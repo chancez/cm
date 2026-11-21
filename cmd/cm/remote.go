@@ -461,6 +461,7 @@ var remoteCapable = map[string]bool{
 	"space move":      true,
 	"signal":          true,
 	"detach":          true,
+	"close":           true,
 	"clients current": true,
 	"clients list":    true,
 	"clients upgrade": true,

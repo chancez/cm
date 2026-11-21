@@ -32,6 +32,7 @@ type ServerService interface {
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
+	Close(context.Context, *CloseRequest) (*CloseResponse, error)
 	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -223,6 +224,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Detach(ctx, &req)
 			},
+			"Close": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req CloseRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Close(ctx, &req)
+			},
 			"UpgradeClients": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req UpgradeClientsRequest
 				if err := unmarshal(&req); err != nil {
@@ -282,6 +290,7 @@ type ServerClient interface {
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
 	Detach(context.Context, *DetachRequest) (*DetachResponse, error)
+	Close(context.Context, *CloseRequest) (*CloseResponse, error)
 	UpgradeClients(context.Context, *UpgradeClientsRequest) (*UpgradeClientsResponse, error)
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
@@ -510,6 +519,14 @@ func (c *serverClient) Switch(ctx context.Context, req *SwitchRequest) (*SwitchR
 func (c *serverClient) Detach(ctx context.Context, req *DetachRequest) (*DetachResponse, error) {
 	var resp DetachResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Detach", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Close(ctx context.Context, req *CloseRequest) (*CloseResponse, error) {
+	var resp CloseResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Close", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

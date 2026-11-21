@@ -140,6 +140,15 @@ service Server {
   // it, since every existing route to detaching is a keystroke.
   rpc Detach(DetachRequest) returns (DetachResponse);
 
+  // Close says a window showing a session was closed, and the server decides what that means: detach a
+  // session running something, shelve an idle one, leave one another window still shows.
+  //
+  // Decided here rather than by the caller, a terminal emulator's close watcher, because only the server
+  // knows whether the shell is at a prompt, and so that the rule is one rule on every host and in every
+  // terminal. Only ever called on a stated close: a dropped connection is a detach and nothing more, since
+  // over --remote a lost link and a closed window look the same from here.
+  rpc Close(CloseRequest) returns (CloseResponse);
+
   // UpgradeClients asks attached clients to replace themselves with the newest binary on disk.
   //
   // Exists because a server restart upgrades the server and nothing else. Shims are deliberately left
@@ -1065,6 +1074,38 @@ message MoveResponse {
   map<string, string> moved = 1;
   // Sessions that could not be moved, keyed by reference. Shaped like KillResponse.errors.
   map<string, string> errors = 2;
+}
+
+message CloseRequest {
+  // The session the closed window showed. Empty means the session the caller is in, from CM_SESSION.
+  string session = 1;
+  // The pid of the closed window's client, so it alone is detached and another window showing the session
+  // keeps it. Zero detaches every client, which is what a caller with no window in mind means.
+  int32 client_pid = 2;
+}
+
+enum CloseOutcome {
+  CLOSE_OUTCOME_UNSPECIFIED = 0;
+  // Another client still shows the session, so only the closed window's client was detached.
+  CLOSE_OUTCOME_KEPT = 1;
+  // Something is running, or the shell reports nothing that says it is idle, so the session was left
+  // running with no client.
+  CLOSE_OUTCOME_DETACHED = 2;
+  // The shell was idle at a prompt and the session saved output, so it was shelved, kept for the
+  // configured expire_after.
+  CLOSE_OUTCOME_SHELVED = 3;
+  // The shell was idle at a prompt and saved no output, so there was nothing to shelve it to and it was
+  // killed, losing only its scrollback.
+  CLOSE_OUTCOME_KILLED = 4;
+  // The session was reached by a name that borrowed it, so the name was released and the session left
+  // alone, as cm kill does by that name.
+  CLOSE_OUTCOME_UNBOUND = 5;
+  // The session was not running, so there was nothing to do.
+  CLOSE_OUTCOME_NOT_RUNNING = 6;
+}
+
+message CloseResponse {
+  CloseOutcome outcome = 1;
 }
 
 message DetachRequest {
