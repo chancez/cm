@@ -3,6 +3,9 @@ package client
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/chancez/cm/internal/keymap"
 )
 
 // An action moved in the config is performed by the new key and not by the old one.
@@ -130,4 +133,36 @@ func TestOverlayHelpLeavesOutAnUnboundAction(t *testing.T) {
 	if !strings.Contains(body, "switch session") {
 		t.Errorf("help = %q, want the actions that are bound", body)
 	}
+}
+
+// The whole help fits the overlay's block at 24x80 with every verb in it.
+//
+// The block is capped, and what it cuts it replaces with "... and N more lines": one entry a line ran to 15
+// rows once new, rename and shelve had keys, and help itself was among the lines cut.
+func TestOverlayHelpFitsWithEveryVerb(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("?"))
+
+	rows := o.rows(24, 80)
+	body := strings.Join(rows, "\n")
+	if strings.Contains(body, "more lines") {
+		t.Fatalf("the help was cut:\n%s", body)
+	}
+	// The session table is the overlay's verbs, which is what the help has to cover; the chooser's keys are
+	// on its last line instead.
+	for _, def := range keymap.Definitions(keymap.Session) {
+		if def.Action == keymap.SessionPrefix || def.Action == keymap.OverlaySendDetach {
+			continue
+		}
+		if !strings.Contains(body, def.Label) {
+			t.Errorf("the help does not name %q:\n%s", def.Label, body)
+		}
+	}
+	for _, row := range rows {
+		if n := utf8.RuneCountInString(row); n > 79 {
+			t.Errorf("row is %d columns, past the 79 the overlay draws:\n%s", n, row)
+		}
+	}
+	t.Logf("\n%s", body)
 }

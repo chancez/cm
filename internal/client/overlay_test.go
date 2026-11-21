@@ -64,7 +64,7 @@ func newTestOverlayWithKeys(
 func sameResponse(a, b overlayResponse) bool {
 	return string(a.Send) == string(b.Send) &&
 		strings.Join(a.Run, "\x00") == strings.Join(b.Run, "\x00") &&
-		a.List == b.List && a.OpenPicker == b.OpenPicker && a.OpenPager == b.OpenPager &&
+		a.List == b.List && a.NewSession == b.NewSession && a.OpenPicker == b.OpenPicker && a.OpenPager == b.OpenPager &&
 		a.SwitchTo == b.SwitchTo &&
 		a.Detach == b.Detach && a.Repaint == b.Repaint
 }
@@ -124,6 +124,12 @@ func TestOverlayArmedActions(t *testing.T) {
 			name:     "b opens a name field",
 			keys:     "b",
 			wantMode: overlayPrompt,
+		},
+		{
+			name:     "c asks for a new session",
+			keys:     "c",
+			want:     overlayResponse{NewSession: true},
+			wantMode: overlayRunning,
 		},
 		{
 			name:     "z opens the shelve chooser",

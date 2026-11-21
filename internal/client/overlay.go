@@ -202,6 +202,13 @@ type overlayResponse struct {
 	// A pager rather than a scrollback mode drawn by cm, which is what kitty's scrollback_pager does: search,
 	// selection and copying are the pager's, and whoever wants nvim for that configures nvim.
 	OpenPager bool
+	// NewSession asks the caller to create a session the server names, in this session's directory, and
+	// to report it through overlay.created, which then switches to it.
+	//
+	// The caller's because creating is an Open on the server connection, which the overlay does not hold. Not
+	// a `cm attach --no-attach` child, which would create in the directory the client was started in and
+	// print a name the overlay would then have to parse.
+	NewSession bool
 	// SwitchTo names a session this client should move to.
 	//
 	// A reference the caller acts on rather than a `cm switch` command, because the client can already do
@@ -417,6 +424,16 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 			return
 		}
 		o.startMove(moveLast, resp)
+	case keymap.OverlayNew:
+		if o.readOnly {
+			// Refused rather than performed: the window would switch to a session it cannot type in.
+			o.status = "a read-only client cannot start a session"
+			o.mode = overlayResult
+			return
+		}
+		resp.NewSession = true
+		o.status = "starting a new session..."
+		o.mode = overlayRunning
 	case keymap.OverlayName:
 		// A name is new text, so this one really does need typing. Only the name, though: the verb is the
 		// keypress.
@@ -497,46 +514,54 @@ func (o *overlay) keyFor(action keymap.Action) string { return o.keys.First(acti
 // helpBody is the help screen, built from the bindings rather than written out.
 //
 // Generated because a rebinding that left the help describing the old keys would be a documentation bug
-// that a reader blames on cm, and this help is the only place most of these keys are discoverable. Two
-// columns where the labels are short, one where they are not, so the block stays inside the width the
-// overlay is capped to.
+// that a reader blames on cm, and this help is the only place most of these keys are discoverable.
+//
+// Two columns, the left padded to its widest entry, because the block is capped at maxOverlayRows: one
+// entry a line ran to 15 rows once new, rename and shelve had keys, and the cap cut the last three off,
+// including help itself. Paired by kind so the eye can find one: moving on the left, acting on this
+// session on the right.
 func (o *overlay) helpBody() []string {
 	pairs := [][2]keymap.Action{
 		{keymap.OverlaySwitch, keymap.OverlayName},
-		{keymap.OverlayRename, ""},
-		{keymap.OverlayNext, keymap.OverlayPrevious},
-		{keymap.OverlayLast, keymap.OverlayDetach},
-		{keymap.OverlayKill, keymap.OverlayShelve},
-		{keymap.OverlayCommand, ""},
+		{keymap.OverlayNext, keymap.OverlayRename},
+		{keymap.OverlayPrevious, keymap.OverlayNew},
+		{keymap.OverlayLast, keymap.OverlayKill},
+		{keymap.OverlayPicker, keymap.OverlayShelve},
+		{keymap.OverlayPager, keymap.OverlayCommand},
+		{keymap.OverlayDetach, keymap.OverlaySendDetach},
 	}
-	var lines []string
+	var left, right []string
+	width := 0
 	for _, pair := range pairs {
-		left, right := o.helpEntry(pair[0]), o.helpEntry(pair[1])
-		switch {
-		case left == "" && right == "":
-		case right == "":
-			lines = append(lines, left)
-		case left == "":
-			lines = append(lines, right)
-		default:
-			lines = append(lines, fmt.Sprintf("%-20s %s", left, right))
+		l, r := o.helpEntry(pair[0]), o.helpEntry(pair[1])
+		if l == "" {
+			l, r = r, ""
 		}
+		if l == "" {
+			continue
+		}
+		left, right = append(left, l), append(right, r)
+		width = max(width, utf8.RuneCountInString(l))
+	}
+	lines := make([]string, 0, len(left)+2)
+	for i := range left {
+		if right[i] == "" {
+			lines = append(lines, left[i])
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%-*s  %s", width, left[i], right[i]))
 	}
 	// The way back from the picker is named here because it is the thing a reader cannot guess: the picker
 	// takes the whole screen and this bar is gone by then, so its own notice is the only other place it
 	// appears.
-	if entry := o.helpEntry(keymap.OverlayPicker); entry != "" {
-		lines = append(lines, entry+"; "+o.prefix.Name+" there comes back")
+	last := "ctrl-c  leave the overlay"
+	if key := o.keyFor(keymap.OverlayHelp); key != "" {
+		last = key + "  help    " + last
 	}
-	if entry := o.helpEntry(keymap.OverlayPager); entry != "" {
-		lines = append(lines, entry)
+	if o.keyFor(keymap.OverlayPicker) != "" {
+		last += "    " + o.prefix.Name + " in the picker comes back"
 	}
-	if entry := o.helpEntry(keymap.OverlaySendDetach); entry != "" {
-		lines = append(lines, fmt.Sprintf("%s  send %s to the program",
-			o.keyFor(keymap.OverlaySendDetach), o.detach.Name))
-	}
-	lines = append(lines,
-		fmt.Sprintf("%s  help    ctrl-c  leave the overlay", o.keyFor(keymap.OverlayHelp)),
+	lines = append(lines, last,
 		fmt.Sprintf("in a list: type to filter, %s/%s to move, %s to choose",
 			o.keyFor(keymap.OverlayDown), o.keyFor(keymap.OverlayUp), o.keyFor(keymap.OverlayChoose)))
 	return lines
@@ -550,6 +575,10 @@ func (o *overlay) helpEntry(action keymap.Action) string {
 	key := o.keyFor(action)
 	if key == "" {
 		return ""
+	}
+	if action == keymap.OverlaySendDetach {
+		// Named with the key it sends, since which key that is is the half a reader needs.
+		return key + "  send " + o.detach.Name + " to the program"
 	}
 	return key + "  " + o.keys.Label(action)
 }
@@ -827,6 +856,26 @@ func (o *overlay) confirmKey(key overlayKey, resp *overlayResponse) {
 		return
 	}
 	o.close(resp)
+}
+
+// created applies a new session the caller made, switching to it, or says why there is none.
+func (o *overlay) created(ref string, err error) overlayResponse {
+	var resp overlayResponse
+	if o.mode != overlayRunning {
+		// Escaped while the session was being made. It exists and is listed, which is all the user is owed for
+		// changing their mind; switching to it now would move a window they have gone back to using.
+		o.log.Debug("a new session arrived after its overlay moved on", "session", ref, "err", err)
+		return resp
+	}
+	if err != nil {
+		o.status = "starting a session: " + err.Error()
+		o.mode = overlayResult
+		o.paint()
+		return resp
+	}
+	resp.SwitchTo = ref
+	o.close(&resp)
+	return resp
 }
 
 // finish reports a dispatched command's outcome, which the attach loop delivers when the child exits.
@@ -1180,6 +1229,12 @@ func clip(s string, width int) string {
 // overlayCommand is a finished command on its way back to the overlay.
 type overlayCommand struct {
 	out string
+	err error
+}
+
+// overlayCreated is a session made for the overlay's new-session key, on its way back to it.
+type overlayCreated struct {
+	ref string
 	err error
 }
 

@@ -57,6 +57,7 @@ const (
 	OverlayNext       Action = "next"
 	OverlayPrevious   Action = "previous"
 	OverlayLast       Action = "last"
+	OverlayNew        Action = "new"
 	OverlayName       Action = "name"
 	OverlayRename     Action = "rename"
 	OverlayKill       Action = "kill"
@@ -135,6 +136,8 @@ var definitions = map[Context][]Definition{
 		{Action: OverlayNext, Label: "next session", Defaults: []string{"n"}},
 		{Action: OverlayPrevious, Label: "previous session", Defaults: []string{"p"}},
 		{Action: OverlayLast, Label: "last visited session", Defaults: []string{"l"}},
+		// c, tmux's new-window, since n is the next session here where the picker can spend it on new.
+		{Action: OverlayNew, Label: "new session", Defaults: []string{"c"}},
 		{Action: OverlayName, Label: "name this session", Defaults: []string{"b"}},
 		// r, as in the picker: the new name in place of the old one, which b keeps.
 		{Action: OverlayRename, Label: "rename this session", Defaults: []string{"r"}},
@@ -210,7 +213,7 @@ var definitions = map[Context][]Definition{
 // question -- which is the point, since a single keystroke that ends a shell is not something to add by
 // accident.
 var sessionVerbs = []Action{
-	OverlaySwitch, OverlayNext, OverlayPrevious, OverlayLast,
+	OverlaySwitch, OverlayNext, OverlayPrevious, OverlayLast, OverlayNew,
 	OverlayName, OverlayRename, OverlayKill, OverlayShelve, OverlayPicker, OverlaySendDetach,
 	OverlayCommand, OverlayHelp,
 }

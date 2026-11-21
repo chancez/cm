@@ -20,6 +20,7 @@ ctrl-] s      switch: choose a session from a list, a shelved one restores
 ctrl-] n      switch to the next session, in creation order, wrapping
 ctrl-] p      switch to the previous one
 ctrl-] l      switch back to the last session this window was on
+ctrl-] c      start a new session in this one's directory and switch to it
 ctrl-] k      kill: choose one, then y to confirm
 ctrl-] z      shelve: choose one, then y to confirm
 ctrl-] b      name this session: type just the name
@@ -126,6 +127,26 @@ Four decisions in them:
 
 Both failure lines are said rather than swallowed: "no other session to switch to" and "the session you came
 from has ended". A key that silently does nothing reads as the overlay being broken.
+
+## A new session from here
+
+`c` is tmux's new-window, since `n` here is the next session. The overlay asks the attach loop, which holds
+the connection, to Open a session the server names on a second stream, then switches this window to it as
+`s` would. Three decisions:
+
+- **This session's directory**, from the list, when the session reports a local one. The client's own is
+  where the window was started, which a shell that has since moved has left behind. A session that has
+  ssh'd elsewhere reports a path on the other machine, so the client's directory is used instead.
+- **Nothing from this window's own attach**: not its `-- command`, tags, persist or on_restore, which were
+  given for the session it opened. Inherited, a window opened as `cm attach work -- nvim` would start nvim
+  again in every new session. The environment and the client's description are kept, as any attach sends them.
+- **Not the pending queries.** `Options.Open` consumes the questions a reconnect re-offers, so building this
+  Open from the options as they stand would have handed them to the new session and lost them for this one.
+
+Refused on a read-only client, which would switch to a session it cannot type in.
+
+The help is two columns for the same reason the bar is short: the block is capped at 12 rows, and one entry
+a line ran to 15 once `c`, `r` and `z` had keys, cutting the help key itself off the bottom.
 
 ## Escape goes up, ctrl-c goes out
 

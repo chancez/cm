@@ -62,6 +62,34 @@ func TestOverlayRenamesTheSessionItIsIn(t *testing.T) {
 	})
 }
 
+// The overlay's c makes a session the server names and moves this window to it, leaving the old one running.
+func TestOverlayStartsANewSessionAndSwitchesToIt(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "work", "--", "/bin/sh")
+	c.waitReady()
+
+	c.write([]byte{0x1d})
+	c.waitForOutput("cm work", 15*time.Second)
+	c.write([]byte("c"))
+	e.waitFor("a second session holding this client, with work left running", 20*time.Second, func() bool {
+		sessions := e.list()
+		if len(sessions) != 2 {
+			return false
+		}
+		for _, s := range sessions {
+			if s.Name == "work" && (s.Clients != 0 || s.State != "running") {
+				return false
+			}
+			if s.Name != "work" && s.Clients != 1 {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // Pressing the detach key from inside the overlay forwards it to the program instead of detaching.
 //
 // This is the regression test for a race found only in a real terminal: closing the overlay repaints,

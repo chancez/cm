@@ -1074,6 +1074,8 @@ func runSession(
 	cmdDone := make(chan overlayCommand, 1)
 	// The session list the overlay's chooser asked for, fetched the same way and for the same reason.
 	listDone := make(chan overlaySessions, 1)
+	// A session the overlay asked for, made the same way and for the same reason.
+	newDone := make(chan overlayCreated, 1)
 	// A timer exists only while the gate is holding something. Nil channels block forever, which is
 	// what keeps this case out of the select the rest of the time.
 	var (
@@ -1158,6 +1160,24 @@ func runSession(
 				out, err := cl.List(ctx, &serverv1.ListRequest{})
 				select {
 				case listDone <- overlaySessions{items: pickItemsFrom(out, id), err: err}:
+				case <-ctx.Done():
+				}
+			}()
+		}
+		if resp.NewSession {
+			// In this session's directory, which the list says: one request, on this connection, before the
+			// Open. A failed list leaves the client's own directory, which is a session in the wrong place
+			// rather than no session.
+			id := result.SessionID
+			rows, cols := tty.Size()
+			go func() {
+				var dir string
+				if list, err := cl.List(ctx, &serverv1.ListRequest{}); err == nil {
+					dir = sessionDir(list, id)
+				}
+				ref, err := createSession(ctx, cl, newSessionOpen(opts, dir, rows, cols))
+				select {
+				case newDone <- overlayCreated{ref: ref, err: err}:
 				case <-ctx.Done():
 				}
 			}()
@@ -1257,6 +1277,11 @@ func runSession(
 		select {
 		case cmd := <-cmdDone:
 			ov.finish(cmd.out, cmd.err)
+
+		case made := <-newDone:
+			if outcome, done := applyOverlay(ov.created(made.ref, made.err)); done {
+				return outcome, nil
+			}
 
 		case list := <-listDone:
 			// Applied rather than only shown, because a move key decides where to go only once the list is
