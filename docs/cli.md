@@ -84,10 +84,11 @@ with one running the command, the same idea as `cm rebind --replace`.
 ### Running the command in the shell
 
 By default CMD runs in place of the shell, so the session ends when CMD does. `--in-shell` starts the
-shell as usual and types CMD into it at its first prompt, so quitting CMD leaves that shell at a prompt.
-This is kitty's `cmd_at_shell_startup`, and the same typing a revive does for a declared resume command
-(see [restore-command.md](restore-command.md)): it waits for the shell's OSC 133 prompt marker, or 10s
-for a shell that sends none, and types nothing if a command has started in the shell by then.
+shell as usual and runs CMD in it at its first prompt, so quitting CMD leaves that shell at a prompt.
+This is kitty's `cmd_at_shell_startup`, and the same path a revive takes for a declared resume command
+(see [restore-command.md](restore-command.md)): cm's shell integration runs CMD itself from
+`CM_RESTORE_COMMAND`, and a shell without it has CMD typed in once it sends its OSC 133 prompt marker, or
+after 10s for a shell that sends none, and nothing typed if a command has started in the shell by then.
 
 It is for a window that should outlive its command, kitty's `launch --hold`. The usual way to get that,
 `cm attach NAME -- sh -c '"$@"; exec "$SHELL" -l' sh gr`, starts the program before any shell exists,

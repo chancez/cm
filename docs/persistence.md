@@ -86,7 +86,7 @@ restoring a window passes none, so `--on-restore=command` lasted one attach.
   sessions.
 - `none` leaves the restored content as read-only history and starts nothing until asked. Nothing is
   re-executed.
-- `prefill` types the command onto a fresh shell's prompt, unrun.
+- `prefill` puts the command in a fresh shell's line editor, unrun.
 - `command` runs the command when the session asked for it or its program is in `safe_commands`, and
   prefills it otherwise.
 
@@ -98,9 +98,10 @@ means nothing comes back for it, not even the typed command.
 
 A declared command is how a program whose state is not in its argv comes back as itself: `claude` re-run
 is a new conversation, `claude --resume <id>` is the old one. A typed command is how everything else does:
-`sleep 999`, a `watch`, a `gr` typed at a prompt. Both are typed into the shell once the shell prompts, never
-exec'd as the session's command, so quitting them leaves a prompt; a spawn argv that runs is exec'd in place,
-as it always was. See [restore-command.md](restore-command.md).
+`sleep 999`, a `watch`, a `gr` typed at a prompt. Both start in the shell at its first prompt, never exec'd
+as the session's command, so quitting them leaves a prompt; a spawn argv that runs is exec'd in place, as it
+always was. cm's shell integration starts the command itself, with nothing typed after the prompt; a shell
+without it has the line typed in. See [restore-command.md](restore-command.md).
 
 ### The allowlist is a convenience, not a safety boundary
 

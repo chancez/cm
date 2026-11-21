@@ -144,10 +144,35 @@ _cm_frame_enter() {
 # those versions works but replaces every element, which would silently drop whatever else a prompt
 # framework installed.
 PS0='$(_cm_frame_enter)'"${PS0-}"
+
+# A revived session's command, run by this shell rather than typed in by cm. What the variables are, and why
+# they are read and the report sent while this is sourced, is in the zsh script.
+#
+# Only to run it. bash has no way to put a line in the editor from a prompt hook, so a command only offered
+# is left to cm, which types it in as it does for a shell without this integration, and no report goes out.
+# Run from the prompt hook with PS0 expanded first, as bash expands it before a command the user entered:
+# that is cm's frame open, and kitty's OSC 133;C, which is how cm knows the command is running. The line goes
+# into the history first, since _cm_frame_enter reads the command from there.
+_cm_restore_line=
+if [ -n "${CM_RESTORE_COMMAND-}" ] && [ "${CM_RESTORE_RUN-}" = 1 ]; then
+  _cm_restore_line=$CM_RESTORE_COMMAND
+  printf '\033]25453;restore=taken\007' > /dev/tty 2>/dev/null
+fi
+unset CM_RESTORE_COMMAND CM_RESTORE_RUN
+_cm_restore() {
+  [ -n "$_cm_restore_line" ] || return 0
+  local line=$_cm_restore_line
+  _cm_restore_line=
+  history -s -- "$line"
+  printf '%s' "${PS0@P}"
+  eval "$line"
+  _cm_frame_prompt
+}
+
 if [ "${BASH_VERSINFO[0]}" -gt 5 ] || { [ "${BASH_VERSINFO[0]}" -eq 5 ] && [ "${BASH_VERSINFO[1]}" -ge 1 ]; }; then
-  PROMPT_COMMAND+=(_cm_frame_prompt)
+  PROMPT_COMMAND+=(_cm_frame_prompt _cm_restore)
 else
-  PROMPT_COMMAND="_cm_frame_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  PROMPT_COMMAND="_cm_frame_prompt;_cm_restore${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 fi
 fi
 

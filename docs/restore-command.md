@@ -378,10 +378,27 @@ says, so it is the mode to choose for seeing what would be resumed before it is.
 command is typed into the new shell; a spawn argv that runs is exec'd in place of it, as a recorded command
 always was, and one that is prefilled is typed.
 
-The command is typed once the new shell sends its first OSC 133 prompt mark, and after 10 seconds without
-one it is typed anyway: the tty holds it until the line editor reads it, so a shell with no prompt marks
-still gets it, and only an rc file that reads stdin could take it first. Waiting for the mark is not
-cosmetic. Measured in the e2e test, a revive that missed the mark took 13.8s against 3.8s.
+The new shell is handed the command in its environment, `CM_RESTORE_COMMAND` with the line and
+`CM_RESTORE_RUN=1` to run it or `0` to offer it, which is kitty's `KITTY_SI_RUN_COMMAND_AT_STARTUP`. cm's
+shell integration reads and unsets both while the rc file sources it, so no program the shell starts sees
+them, and reports `restore=taken` on OSC 25453. At the first prompt it adds the line to the history and runs
+it between the shell's own preexec and precmd hooks, everyone's and not only cm's: zsh calls them, bash
+expands PS0, fish emits `fish_preexec` and `fish_postexec`. So cm's frame opens for it, kitty's or starship's
+OSC 133;C tells cm it is running, and a title hook names the window, as for a command the user entered.
+Offered, it goes in the line editor: zsh `print -z`, fish `commandline -r`. Nothing is typed, so the prompt
+is not followed by the line being echoed. bash has no way
+to fill the line editor from a prompt hook, so it takes only a command to run, and an offered one is typed
+in. The variables go to the shell through the shim and are not recorded as the session's client
+environment, so `cm get-env` does not hand them out, and they are dropped from what a shim inherits from the
+server, so a server started from a shell that kept them does not pass its command to every new session.
+
+The report arrives while the rc file runs, before the shell's first OSC 133 prompt mark, and the server reads
+it ahead of a prompt mark in the same chunk of output. A prompt mark with no report is a shell without the
+integration, which has the command typed in at that mark. After 10 seconds without a mark it is typed anyway:
+the tty holds it until the line editor reads it, so a shell with no prompt marks still gets it, and only an
+rc file that reads stdin could take it first. Waiting for the mark is not cosmetic. Measured in the e2e
+test, a revive that missed the mark took 13.8s against 3.8s. A shell without the integration keeps the
+variables, and anything it starts inherits them.
 
 Not typed at all, though, once a command frame has opened in the new shell: something is then in the
 foreground, and the line would be its input. A revived window whose shell sent no prompt mark had its user

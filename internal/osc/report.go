@@ -139,6 +139,9 @@ type ReportTracker struct {
 	// a begin and an end in the same chunk cancel out, and collapsing them would leave the parent
 	// believing a client that has already gone is still there.
 	nests []Nesting
+	// restoreTaken says a shell integration took a revived session's command to run or offer itself. See
+	// RestoreTaken.
+	restoreTaken bool
 	// partial holds a trailing fragment that may be the start of a sequence.
 	partial []byte
 }
@@ -180,6 +183,13 @@ func (t *ReportTracker) TakeFrames() []Frame {
 	out := t.frames
 	t.frames = nil
 	return out
+}
+
+// TakeRestore reports whether a shell said it took its restore command since the last call, and clears it.
+func (t *ReportTracker) TakeRestore() bool {
+	taken := t.restoreTaken
+	t.restoreTaken = false
+	return taken
 }
 
 // Feed consumes a chunk of shell output and reports whether a report was found.
@@ -229,6 +239,8 @@ func (t *ReportTracker) Feed(p []byte) bool {
 			if len(t.frames) < maxPendingNesting {
 				t.frames = append(t.frames, f)
 			}
+		} else if bytes.Equal(payload, []byte(restoreTakenPayload)) {
+			t.restoreTaken = true
 		} else if r, ok := parseReport(payload); ok {
 			t.last, t.has = r, true
 			found = true
@@ -350,6 +362,17 @@ func FrameSequence(id, argv string, ended bool) []byte {
 	}
 	return []byte(reportIntro + "frame=enter;id=" + id + ";argv=" + escapeCmdline(argv) + "\a")
 }
+
+// restoreTakenPayload is what a shell integration reports when it takes the command a revive handed it in
+// CM_RESTORE_COMMAND, to run or offer at its first prompt, so the server does not type it in as well.
+//
+// Sent while the integration is sourced, which is before the shell's first prompt mark, so the server, which
+// types a revived shell's command once it prompts, has the report by then. Matched whole, since nothing else
+// rides it.
+const restoreTakenPayload = "restore=taken"
+
+// RestoreTaken is the sequence carrying restoreTakenPayload, as the shells write it.
+const RestoreTaken = reportIntro + restoreTakenPayload + "\a"
 
 // parseFrame reads a command frame, reporting whether the payload was one.
 //

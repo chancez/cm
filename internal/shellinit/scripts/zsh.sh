@@ -175,4 +175,50 @@ _cm_frame_exit() {
 add-zsh-hook preexec _cm_frame_enter
 add-zsh-hook precmd _cm_frame_exit
 
+# A revived session's command, which cm hands to the shell in CM_RESTORE_COMMAND rather than typing it in, so
+# it starts with nothing echoed after the prompt. CM_RESTORE_RUN=1 runs it, anything else puts it in the line
+# editor to run, edit, or clear. kitty does the same with KITTY_SI_RUN_COMMAND_AT_STARTUP.
+#
+# Read and unset while this is sourced, so neither reaches a program the shell starts. The taken report goes
+# out now for the same reason: from the rc file it reaches cm before any prompt mark, and cm, which types the
+# line into a shell that sends a prompt mark and no report, does not type this one.
+#
+# Run at the first prompt rather than here, after the rest of the rc file has run, and between the shell's
+# own preexec and precmd hooks, as a command the user ran would be: cm's frame hooks, since the frame is what
+# the declaration and on_restore grant carried into the revived session bind to and its argv records the line
+# as the typed command again, and everyone else's, since kitty's or starship's OSC 133;C is how cm knows a
+# command is running and a title hook names the window after it. Run without them, `cm list` showed the
+# restored program as nothing and `cm wait --until idle` returned while it ran.
+#
+# The precmd hooks run again afterwards only up to this one: those after it have yet to run for this prompt
+# and do when this returns. The close is in an always block because a command interrupted with ctrl-c aborts
+# the hook it runs in, which left its frame open, so the session went on saying it ran and a revive brought it
+# back.
+if [[ -n ${CM_RESTORE_COMMAND-} ]]; then
+  typeset -g _cm_restore_line=$CM_RESTORE_COMMAND _cm_restore_run=${CM_RESTORE_RUN-}
+  printf '\033]25453;restore=taken\007' > /dev/tty 2>/dev/null
+  _cm_restore() {
+    local -a ran=(${precmd_functions[1,$(( ${precmd_functions[(i)_cm_restore]} - 1 ))]})
+    add-zsh-hook -d precmd _cm_restore
+    local line=$_cm_restore_line run=$_cm_restore_run f
+    unset _cm_restore_line _cm_restore_run
+    if [[ $run == 1 ]]; then
+      print -rs -- "$line"
+      (( $+functions[preexec] )) && preexec "$line" "$line" "$line"
+      for f in $preexec_functions; do "$f" "$line" "$line" "$line"; done
+      {
+        eval "$line"
+      } always {
+        (( $+functions[precmd] )) && precmd
+        # Only those still installed: kitty's first precmd sets its integration up and removes itself.
+        for f in $ran; do (( ${precmd_functions[(Ie)$f]} )) && "$f"; done
+      }
+    else
+      print -rz -- "$line"
+    fi
+  }
+  add-zsh-hook precmd _cm_restore
+fi
+unset CM_RESTORE_COMMAND CM_RESTORE_RUN
+
 fi

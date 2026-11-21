@@ -1382,6 +1382,12 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		}
 	}
 
+	// A command to bring back goes to the shell in its environment as well, for cm's integration to start
+	// itself, and is typed in only if the shell does not take it. Command is empty here, so this is always the
+	// default shell. See restoreEnv.
+	if typed != nil {
+		opts.Env = slices.Concat(opts.Env, restoreEnv(*typed, opts.Command))
+	}
 	pid, err := m.spawnShim(ctx, opts, socket, logPath)
 	if err != nil {
 		_ = m.store.Delete(ctx, opts.id)
@@ -1541,7 +1547,7 @@ func (m *Manager) spawnShim(ctx context.Context, opts OpenOptions, socket, logPa
 	args := m.shimArgs(opts, logPath)
 
 	cmd := exec.Command(m.selfExe, args...)
-	cmd.Env = append(os.Environ(), opts.Env...)
+	cmd.Env = append(withoutRestoreEnv(os.Environ()), opts.Env...)
 	cmd.SysProcAttr = newShimSysProcAttr()
 	// The shim's own stdio is not a terminal and must not be the server's: inheriting it
 	// would tie the shim's lifetime to the server's console.

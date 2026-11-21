@@ -63,12 +63,16 @@ func typedCommand(e *env, name string) string {
 	return strings.TrimSuffix(e.mustRun("info", name, "--field", "typed_command"), "\n")
 }
 
-// A command typed into a shell comes back with the session: run when its program is in safe_commands, typed on
-// the prompt unrun when it is not.
+// A command typed into a shell comes back with the session: run when its program is in safe_commands, put in
+// the line editor unrun when it is not.
 //
 // The regression is that a revive could only bring back the spawn argv, which for a session started as a shell
 // is the shell, so `sleep` in safe_commands never matched anything and a shelved agent window came back as
 // a bare prompt. Shelved, then restored by an attach that names a command of its own, which is ignored.
+//
+// The shell has cm's integration, so it takes the command from its environment and the server types nothing:
+// typed, the line would be echoed after the new prompt, a second `% sleep 999` on the screen beside the one
+// replayed from before the shelve, and the server would log it.
 func TestARevivedShellBringsBackItsTypedCommand(t *testing.T) {
 	skipIfShort(t)
 	for _, tc := range []struct {
@@ -92,22 +96,35 @@ func TestARevivedShellBringsBackItsTypedCommand(t *testing.T) {
 			}
 
 			e.mustRun("attach", "--no-attach", "work", "--", "/bin/sh")
+			e.waitFor("the revived shell to take its command", 15*time.Second, func() bool {
+				log, _ := os.ReadFile(e.serverLogPath())
+				return strings.Contains(string(log), "the new shell took its command to run itself")
+			})
 			if tc.runs {
 				e.waitFor("the revived shell to be running the typed command", 15*time.Second, func() bool {
 					s, ok := e.session("work")
 					return ok && s.State == "running" && len(s.Location) == 1 && s.Location[0].Argv == "sleep 999"
 				})
-				return
+				if got := typedCommand(e, "work"); got != "sleep 999" {
+					t.Errorf("typed_command after the revive = %q, want %q recorded again", got, "sleep 999")
+				}
+				if h := e.run("history", "work").stdout; strings.Count(h, "% sleep 999") != 1 {
+					t.Errorf("the command was echoed after the revived prompt; history:\n%s", h)
+				}
+			} else {
+				// In the line editor: the history's last line is the prompt with the command on it.
+				e.waitFor("the command to be on the revived prompt", 15*time.Second, func() bool {
+					h := strings.TrimRight(e.run("history", "work").stdout, " \n")
+					return strings.HasSuffix(h, "% sleep 999")
+				})
+				time.Sleep(time.Second)
+				s, _ := e.session("work")
+				if len(s.Location) != 0 || typedCommand(e, "work") != "" {
+					t.Errorf("a prefilled command ran: location %+v, typed_command %q", s.Location, typedCommand(e, "work"))
+				}
 			}
-			// Typed on the prompt: the history's last line is the prompt with the command on it.
-			e.waitFor("the command to be typed on the revived prompt", 15*time.Second, func() bool {
-				h := strings.TrimRight(e.run("history", "work").stdout, " \n")
-				return strings.HasSuffix(h, "% sleep 999")
-			})
-			time.Sleep(time.Second)
-			s, _ := e.session("work")
-			if len(s.Location) != 0 || typedCommand(e, "work") != "" {
-				t.Errorf("a prefilled command ran: location %+v, typed_command %q", s.Location, typedCommand(e, "work"))
+			if log, _ := os.ReadFile(e.serverLogPath()); strings.Contains(string(log), "typed a command into a new shell") {
+				t.Errorf("the server typed the command into a shell that took it:\n%s", log)
 			}
 		})
 	}
@@ -218,8 +235,9 @@ func TestAKittyShellLauncherSessionIsAShell(t *testing.T) {
 // before the deadline, got the restore command typed into it and read the leading / as a search.
 //
 // The shell has cm's integration, so it reports frames, and a prompt with no OSC 133;A, as a setup whose
-// prompt marks did not load has. The declared command prints RESUMED- and the sum, so its line on the screen
-// is told apart from its output; neither may appear.
+// prompt marks did not load has. The rc file drops the restore variables before loading the integration, so
+// the shell leaves the command to the server, as bash does with one it is only to offer. The declared command
+// prints RESUMED- and the sum, so its line on the screen is told apart from its output; neither may appear.
 func TestTheRestoreCommandIsNotTypedIntoAProgramStartedFirst(t *testing.T) {
 	skipIfShort(t)
 	zsh, err := exec.LookPath("zsh")
@@ -232,7 +250,7 @@ func TestTheRestoreCommandIsNotTypedIntoAProgramStartedFirst(t *testing.T) {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	rc := "eval \"$(" + e.bin + " shell-init zsh)\"\nPROMPT='%% '\n"
+	rc := "unset CM_RESTORE_COMMAND CM_RESTORE_RUN\neval \"$(" + e.bin + " shell-init zsh)\"\nPROMPT='%% '\n"
 	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(rc), 0o600); err != nil {
 		t.Fatal(err)
 	}

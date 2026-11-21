@@ -576,14 +576,27 @@ func (m *Manager) safeToRerun(argv []string) bool {
 // startedOnItsOwn.
 const typePromptWait = 10 * time.Second
 
-// typeCommand types a command into a new session's shell once it is at its first prompt.
+// typeCommand types a command into a new session's shell once it is at its first prompt, unless the shell's
+// integration took it from the environment. See restoreEnv.
+//
+// The integration reports that while the rc file runs, before the first prompt mark, so a prompt mark with
+// no report is a shell without it, or one that leaves this command to cm, and gets it typed in.
 func (m *Manager) typeCommand(sess *Session, t typedCommand) {
 	deadline := time.NewTimer(typePromptWait)
 	defer deadline.Stop()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 wait:
-	for !sess.PromptSeen() {
+	for {
+		prompted, taken := sess.startMarks()
+		if taken {
+			m.log.Info("the new shell took its command to run itself, not typing it",
+				"session", sess.id, "run", t.run)
+			return
+		}
+		if prompted {
+			break
+		}
 		select {
 		case <-tick.C:
 		case <-deadline.C:
@@ -600,21 +613,59 @@ wait:
 		return
 	}
 
-	line := t.line
-	if line == "" {
-		line = shquote.Join(t.argv, isFish(sess.record.Command))
-	}
 	var enter []byte
 	if t.run {
 		enter = []byte("\r")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := writeInputThenEnter(ctx, sess, []byte(line), enter); err != nil {
+	if err := writeInputThenEnter(ctx, sess, []byte(t.commandLine(sess.record.Command)), enter); err != nil {
 		m.log.Warn("typing a command into a new shell failed", "session", sess.id, "error", err)
 		return
 	}
 	m.log.Info("typed a command into a new shell", "session", sess.id, "run", t.run)
+}
+
+// commandLine is the line a shell is given for the command: the typed line verbatim, or the argv quoted for
+// the shell the session runs, which command is the spawn argv of.
+func (t typedCommand) commandLine(command []string) string {
+	if t.line != "" {
+		return t.line
+	}
+	return shquote.Join(t.argv, isFish(command))
+}
+
+// restoreEnv is the environment that hands a new shell the command to run or offer at its first prompt, so
+// cm's shell integration starts it itself with nothing typed after the prompt. kitty does the same with
+// KITTY_SI_RUN_COMMAND_AT_STARTUP.
+//
+// Given to the shim, which passes it to the shell, and not recorded as the session's client environment, so
+// `cm get-env` never hands it out. The integration unsets both while it is sourced, so no program the shell
+// runs sees them; a shell without it keeps them, and is typed into, as typeCommand describes.
+func restoreEnv(t typedCommand, command []string) []string {
+	run := "0"
+	if t.run {
+		run = "1"
+	}
+	return []string{"CM_RESTORE_COMMAND=" + t.commandLine(command), "CM_RESTORE_RUN=" + run}
+}
+
+// withoutRestoreEnv drops the restore variables from the environment a shim inherits, so only the session
+// handed a command gets one. A server started from a shell that never unset its own would otherwise pass that
+// command to every session it creates, and each with cm's integration would run it.
+func withoutRestoreEnv(env []string) []string {
+	return slices.DeleteFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "CM_RESTORE_COMMAND=") || strings.HasPrefix(kv, "CM_RESTORE_RUN=")
+	})
+}
+
+// startMarks reports whether the shell has sent a prompt marker and whether its integration has taken the
+// restore command, read together so a report and a marker in one chunk are seen in that order. See
+// processChunk.
+func (s *Session) startMarks() (prompted, taken bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.promptSeen, s.restoreTaken
 }
 
 // startedOnItsOwn reports whether a command frame is open in a new session's shell before its restore command

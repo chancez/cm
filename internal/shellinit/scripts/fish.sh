@@ -148,4 +148,37 @@ end
 function _cm_frame_prompt_reap --on-event fish_prompt
     _cm_frame_reap (_cm_jobs)
 end
+
+# A revived session's command, run or offered by this shell rather than typed in by cm. What the variables
+# are, and why they are read and the report sent while this is sourced, is in the zsh script. Run at the first
+# prompt between the fish_preexec and fish_postexec events, emitted for it as for a command the user entered:
+# cm's frame handlers, and kitty's OSC 133 marks and title, are handlers for those. Offered with commandline,
+# which puts it in the line editor that prompt opens.
+#
+# An INT handler is defined while it runs, empty, because fish cancels the rest of an event handler when its
+# command is interrupted with ctrl-c unless one is: the frame stayed open, so the session went on saying the
+# command ran and a revive brought it back.
+if test -n "$CM_RESTORE_COMMAND"
+    set -g _cm_restore_line $CM_RESTORE_COMMAND
+    set -g _cm_restore_run $CM_RESTORE_RUN
+    set -e CM_RESTORE_COMMAND CM_RESTORE_RUN
+    printf '\033]25453;restore=taken\007' > /dev/tty 2>/dev/null
+    function _cm_restore --on-event fish_prompt
+        functions --erase _cm_restore
+        set -l line $_cm_restore_line
+        set -l run $_cm_restore_run
+        set -e _cm_restore_line _cm_restore_run
+        if test "$run" = 1
+            history append -- $line 2>/dev/null
+            emit fish_preexec $line
+            function _cm_restore_int --on-signal INT
+            end
+            eval $line
+            functions --erase _cm_restore_int
+            emit fish_postexec $line
+        else
+            commandline -r -- $line
+        end
+    end
+end
 end

@@ -162,6 +162,12 @@ func writeScript(t *testing.T, shell, script string) string {
 // Ends on the marker rather than on a fixed sleep, so a slow machine waits and a fast one does not.
 func driveShell(t *testing.T, bin string, args []string, lines ...string) []byte {
 	t.Helper()
+	return driveShellEnv(t, bin, args, nil, lines...)
+}
+
+// driveShellEnv is driveShell with env added to the shell's environment.
+func driveShellEnv(t *testing.T, bin string, args, env []string, lines ...string) []byte {
+	t.Helper()
 	if len(lines) < 2 {
 		t.Fatal("driveShell needs at least a line to type and a marker")
 	}
@@ -171,7 +177,7 @@ func driveShell(t *testing.T, bin string, args []string, lines ...string) []byte
 	cmd := exec.Command(bin, args...)
 	// CM_SESSION is what the whole script is gated on, which TestScriptsGuardOnSessionEnv covers from the
 	// other side. TERM is dumb so no shell decides to draw anything clever on this pty.
-	cmd.Env = append(cmd.Environ(), "CM_SESSION=@test", "TERM=dumb", "PS1=$ ")
+	cmd.Env = append(append(cmd.Environ(), "CM_SESSION=@test", "TERM=dumb", "PS1=$ "), env...)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

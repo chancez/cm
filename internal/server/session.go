@@ -448,6 +448,9 @@ type Session struct {
 	promptSeen bool
 	// promptNoted is the pump's own copy of promptSeen, so it takes the lock once rather than per chunk.
 	promptNoted bool
+	// restoreTaken says the shell's integration took the restore command handed to it in CM_RESTORE_COMMAND,
+	// to run or offer itself, so typeCommand types nothing. Guarded by mu.
+	restoreTaken bool
 	// promptSeenChanged is signalled when promptSeen becomes true, so the manager can record it in the store
 	// off the pump. Nil in a Session literal built by a test, which the non-blocking send tolerates.
 	promptSeenChanged chan struct{}
@@ -977,6 +980,16 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	// skipped here can split a sequence across the resume and leave the next real report
 	// unrecognizable. What nesting suppresses is the attribution, inside noteCommand and
 	// noteReport, not the parsing.
+	//
+	// cm's own sequence is read first, so a shell's report that it took its restore command is noted no later
+	// than a prompt marker in the same chunk: typeCommand reads the two together, and the prompt seen alone
+	// would have it type the command into a shell about to run it.
+	s.reports.Feed(data)
+	if s.reports.TakeRestore() {
+		s.mu.Lock()
+		s.restoreTaken = true
+		s.mu.Unlock()
+	}
 	changed := s.commands.Feed(data)
 	// Apart from the change below, which a prompt marker on its own is not: a shell's first prompt changes
 	// no state, and it is the marker a revive waits for. Locked once, on the first, rather than per chunk.
@@ -997,8 +1010,7 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	// cm's own sequence and the program status protocol, read from the same stream for the same reason: a
 	// program writes them straight to the pty, which costs nothing, where shelling out to `cm report` from a
 	// prompt hook costs about 23ms twice per command. That was measured before choosing this design, and it
-	// is the whole reason the sequence exists rather than only the command.
-	s.reports.Feed(data)
+	// is the whole reason the sequence exists rather than only the command. cm's own was fed above.
 	s.statuses.Feed(data)
 	s.noteStatus()
 
