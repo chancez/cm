@@ -758,6 +758,10 @@ func (m *Manager) persistMetadata(sess *Session) {
 // watch records a session's outcome once it ends and drops it from the registry.
 func (m *Manager) watch(sess *Session) {
 	<-sess.Done()
+	// Once the outcome is recorded and the registry no longer holds the session. See Session.retired.
+	if sess.retired != nil {
+		defer close(sess.retired)
+	}
 
 	// A session this server deliberately let go of is still alive; its record must stay
 	// as-is so the next server adopts it.

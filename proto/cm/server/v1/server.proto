@@ -954,6 +954,10 @@ message Output {
 // try to reconnect.
 message Exited {
   int32 exit_code = 1;
+  // The session was shelved rather than exiting on its own, and the shelve has finished: the record says
+  // shelved and a restore can start it again. A client on a terminal stays up and offers that restore. An
+  // older client ignores the field and exits as it always did.
+  bool shelved = 2;
 }
 
 message SignalRequest {

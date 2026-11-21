@@ -786,6 +786,7 @@ func (m model) syncPreview() (model, tea.Cmd) {
 		m.preview.err = nil
 		m.preview.due = true
 	}
+	m.preview.shelved = it.session.State == serverv1.SessionState_SESSION_STATE_SHELVED
 	if m.preview.info {
 		// Rendered from the row rather than read, so it costs nothing and is as fresh as the last list.
 		// Rebuilt on every pass for the same reason, since a refresh replaces the row.

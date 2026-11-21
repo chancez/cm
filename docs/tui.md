@@ -97,6 +97,10 @@ session is recognised exactly, from `CM_SESSION`; any other picker only by the c
 (`cm ... tui`, anywhere in a compound line), so without shell integration two pickers can still face each
 other.
 
+**A shelved session's pane says so.** Its output is the last screen it had, read from the persisted log, so
+the pane draws it faint under a line saying the session is shelved and that attaching restores it, which is
+what a client attached at the shelve shows. See [overlay.md](overlay.md#a-shelved-session-keeps-its-windows).
+
 **The list is sized to its rows, and the pane takes the rest.** bubbles pads a list to whatever height
 it is told, so three sessions on a tall window left ten blank lines above the pane. What the list spends
 on its own title and count is asked of its paginator rather than assumed: the first version guessed

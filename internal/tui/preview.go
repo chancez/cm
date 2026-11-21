@@ -42,6 +42,10 @@ type preview struct {
 	// mirror says why the selected session is not being read, or is empty when it is. See mirrorReason.
 	mirror string
 
+	// shelved marks the selected session as shelved, so its output is the last screen it had: drawn faint
+	// under a line saying so, as an attached client draws it once the session is shelved.
+	shelved bool
+
 	// due marks the content as worth re-reading even though the selection has not changed, which is
 	// what a refresh means: the session is still running and its last lines move.
 	due bool
@@ -194,6 +198,16 @@ func (p preview) view(label string) string {
 
 	body := p.lines
 	switch {
+	case p.shelved && !p.info && p.mirror == "" && p.err == nil && p.have != "":
+		if label == "" {
+			label = "this session"
+		}
+		dimmed := make([]string, 0, len(body)+1)
+		dimmed = append(dimmed, selectedStyle.Render(truncate(label+" is shelved; attaching restores it", p.width)))
+		for _, line := range body {
+			dimmed = append(dimmed, faintStyle.Render(line))
+		}
+		body = dimmed
 	case p.mirror != "":
 		body = []string{p.mirror}
 	case p.err != nil:

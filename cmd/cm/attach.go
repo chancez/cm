@@ -418,6 +418,8 @@ func runAttach(
 		return attachErr
 	}
 	switch {
+	case res.Shelved:
+		fmt.Fprintf(os.Stderr, "session %s shelved\n", res.Session)
 	case res.Exited && res.ExitCode < 0:
 		// A negative code means the shim became unreachable rather than the shell reporting a
 		// status, so there is no exit code worth showing.

@@ -477,6 +477,16 @@ type Session struct {
 	// rather than exited or dead. Without it the two writes race, and whichever landed second decided what
 	// the session was. Set before the kill, alongside keepRecord, and cleared if the kill fails.
 	shelving atomic.Bool
+	// shelved is closed when a shelve that ended this session has finished: the processes are gone, watch
+	// has dropped the session from the registry, and the record says shelved. What an attached client is
+	// told waits for it, so a Restore the client sends straight back revives the session rather than finding
+	// the ended one still registered, or starting a copy while the old processes are still exiting. Nil in a
+	// Session literal built by a test. See finishShelving.
+	shelved     chan struct{}
+	shelvedOnce sync.Once
+	// retired is closed when watch has recorded the session's outcome and dropped it from the registry, so
+	// a shelve can wait for that before saying it has finished. Nil in a Session literal built by a test.
+	retired chan struct{}
 
 	// clients counts attached clients for reporting.
 	clients atomic.Int64
@@ -822,6 +832,8 @@ func newSession(
 		modelRows: uint16(rec.Rows),
 		modelCols: uint16(rec.Cols),
 		done:      make(chan struct{}),
+		shelved:   make(chan struct{}),
+		retired:   make(chan struct{}),
 		stopPump:  stopPump,
 		pumpCtx:   pumpCtx,
 		// From the record, so a declaration survives a server restart and reaches a revived session.

@@ -3136,8 +3136,12 @@ func (x *Output) GetNextSeq() uint64 {
 // Exited reports that the session's shell exited, so the client should stop rather than
 // try to reconnect.
 type Exited struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExitCode      int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ExitCode int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// The session was shelved rather than exiting on its own, and the shelve has finished: the record says
+	// shelved and a restore can start it again. A client on a terminal stays up and offers that restore. An
+	// older client ignores the field and exits as it always did.
+	Shelved       bool `protobuf:"varint,2,opt,name=shelved,proto3" json:"shelved,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3177,6 +3181,13 @@ func (x *Exited) GetExitCode() int32 {
 		return x.ExitCode
 	}
 	return 0
+}
+
+func (x *Exited) GetShelved() bool {
+	if x != nil {
+		return x.Shelved
+	}
+	return false
 }
 
 type SignalRequest struct {
@@ -5899,9 +5910,10 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x10\n" +
 	"\x03gap\x18\x03 \x01(\bR\x03gap\x12\x19\n" +
-	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"%\n" +
+	"\bnext_seq\x18\x04 \x01(\x04R\anextSeq\"?\n" +
 	"\x06Exited\x12\x1b\n" +
-	"\texit_code\x18\x01 \x01(\x05R\bexitCode\"d\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x18\n" +
+	"\ashelved\x18\x02 \x01(\bR\ashelved\"d\n" +
 	"\rSignalRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x16\n" +
 	"\x06signal\x18\x02 \x01(\x05R\x06signal\x12!\n" +

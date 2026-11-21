@@ -282,7 +282,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 			}); err != nil {
 				return err
 			}
-			return s.sendExited(srv, sess)
+			return s.sendExited(ctx, srv, sess)
 		}
 		return err
 	}
@@ -447,7 +447,7 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				// client stops rather than trying to reconnect to a session that is gone.
 				if errors.Is(msg.err, seqlog.ErrClosed) {
 					if ended, _ := sess.Ended(); ended {
-						return s.sendExited(srv, sess)
+						return s.sendExited(ctx, srv, sess)
 					}
 					return nil
 				}
@@ -1687,11 +1687,18 @@ func describeCommand(argv []string) string {
 // attach that arrived after the shell had already exited. Both must say the same thing, since the
 // client exits with whatever code it is told and a short-lived command can take either path
 // depending on timing.
-func (s *Service) sendExited(srv serverv1.Server_AttachServer, sess *Session) error {
+//
+// A session being shelved is reported once the shelve has finished, as shelved and with no exit code, since
+// the code is the hangup's. Waiting is what lets a client restore it straight away: see Session.shelved.
+func (s *Service) sendExited(ctx context.Context, srv serverv1.Server_AttachServer, sess *Session) error {
 	_, code := sess.Ended()
+	shelved := sess.awaitShelved(ctx)
+	if shelved {
+		code = 0
+	}
 	return srv.Send(&serverv1.AttachResponse{
 		Event: &serverv1.AttachResponse_Exited{
-			Exited: &serverv1.Exited{ExitCode: int32(code)},
+			Exited: &serverv1.Exited{ExitCode: int32(code), Shelved: shelved},
 		},
 	})
 }

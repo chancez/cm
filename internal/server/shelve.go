@@ -78,6 +78,9 @@ func (m *Manager) Shelve(ctx context.Context, id string, expiry store.Expiry) (S
 			// Before the kill, so watch() records what this is when the shell dies. See
 			// Session.shelving.
 			sess.shelving.Store(true)
+			// However this returns, so a client waiting to be told the session was shelved is not left
+			// waiting. See Session.shelved.
+			defer sess.finishShelving()
 			// The pid from the shim rather than the record, which an adopted session may never have had
 			// written: recordShellPID runs only when a session is created.
 			if st, err := sess.State(ctx); err == nil && st.ShellPid > 0 {
@@ -100,6 +103,9 @@ func (m *Manager) Shelve(ctx context.Context, id string, expiry store.Expiry) (S
 		}
 		if err := m.awaitExit(ctx, id, pids); err != nil {
 			return 0, err
+		}
+		if live {
+			sess.awaitRetired(ctx, shelveExitWait)
 		}
 	}
 
@@ -157,6 +163,45 @@ func waitGone(ctx context.Context, pids []int, bound time.Duration) ([]int, erro
 			return left, ctx.Err()
 		case <-time.After(shelvePoll):
 		}
+	}
+}
+
+// finishShelving says a shelve that ended this session is over, whether it succeeded or not. See
+// Session.shelved.
+func (s *Session) finishShelving() {
+	s.shelvedOnce.Do(func() {
+		if s.shelved != nil {
+			close(s.shelved)
+		}
+	})
+}
+
+// awaitShelved waits for a shelve that is ending this session to finish, and reports whether the session
+// was shelved. False at once for a session nothing is shelving.
+func (s *Session) awaitShelved(ctx context.Context) bool {
+	if !s.shelving.Load() || s.shelved == nil {
+		return false
+	}
+	select {
+	case <-s.shelved:
+	case <-ctx.Done():
+		return false
+	}
+	return s.shelving.Load()
+}
+
+// awaitRetired waits, up to bound, for watch to have recorded the session's outcome and dropped it from the
+// registry. Bounded because a Session built by a test has no watch.
+func (s *Session) awaitRetired(ctx context.Context, bound time.Duration) {
+	if s.retired == nil {
+		return
+	}
+	t := time.NewTimer(bound)
+	defer t.Stop()
+	select {
+	case <-s.retired:
+	case <-t.C:
+	case <-ctx.Done():
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/chancez/cm/internal/ansi"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -566,5 +567,37 @@ func TestInfoLinesAreSanitized(t *testing.T) {
 	// Cut from the bottom, so a short pane keeps the first fields.
 	if got := infoLines([]InfoField{{"a", "1"}, {"b", "2"}, {"c", "3"}}, 80, 2); !reflect.DeepEqual(got, []string{"a  1", "b  2"}) {
 		t.Errorf("a two-row pane holds %q", got)
+	}
+}
+
+// A shelved session's pane says so above its last screen, as a client attached to it at the shelve shows,
+// and a running one's does not.
+func TestAShelvedSessionsPaneSaysItIsShelved(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state serverv1.SessionState
+		want  []string
+	}{
+		{"shelved", serverv1.SessionState_SESSION_STATE_SHELVED, []string{"work is shelved; attaching restores it", "prompt"}},
+		{"running", serverv1.SessionState_SESSION_STATE_RUNNING, []string{"prompt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := session("work", "a7k2m9x4", 100)
+			s.State = tc.state
+			h := newHarnessPreviewing(t, s)
+			h.sessions.output["@a7k2m9x4"] = "prompt"
+			h.list()
+
+			rows := strings.Split(string(ansi.Strip([]byte(h.model.preview.view("work")))), "\n")
+			var got []string
+			for _, row := range rows[1:] {
+				if row != "" {
+					got = append(got, row)
+				}
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("pane rows = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

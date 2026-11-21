@@ -287,6 +287,36 @@ typed during an outage -- and the reconnect flushes them straight after Open. De
 The general form is worth remembering: anything that returns `outcomeReconnect` in the same breath as
 sending on the stream it is about to close has this bug.
 
+## A shelved session keeps its windows
+
+`cm shelve` ends a session's processes, and the attach stream used to end with them, as it does for a
+shell that exits: every window on the session closed, so shelving from `cm tui`, the CLI or a keeper
+yanked windows away from whoever was looking at them. The server now marks the `Exited` event `shelved`,
+and a client that has a terminal of its own stays up on a notice instead: the session's last screen,
+faint, under a box with a Restore and a Detach button.
+
+It owns the whole screen, unlike the overlay. Nothing is attached, so nothing else draws, and the screen
+under the box comes from the persisted log through `Read`, as `cm read` gets it, since the server's model
+of the session ended with it. Painted as plain text: the colours would need a second screen model in the
+client, and faint text is what dimmed has to mean on a theme cm has not seen. Repainted whole on a resize.
+
+The keys are fixed rather than in the keymap table: `r` restores, `d`, `q`, ctrl-c and the detach key
+detach, tab and the arrows move the focus, enter presses the focused button. Mouse reporting is turned on
+only while the notice is up, in SGR form, so a click presses the button under it; it is turned off before
+the session is opened again, whose restore brings back whatever mouse mode its program had.
+
+Restore opens the session again by ID through the attach loop, the same Open `cm attach` sends, which
+revives a shelved session under the rules `cm restore` uses: the session's kept `on_restore` and the
+config's, and nothing granted for the press. Each client on the notice also asks `List` every 500ms whether
+the session is running, and goes back to it when it is, so restoring from one window, `cm tui` or
+`cm restore` brings them all back. A read-only client offers only Detach, since a read-only attach does
+not start processes, and still goes back when the session runs.
+
+The server sends the event only once the shelve has finished: the processes gone, the session out of the
+registry, the record shelved. Sent at the hangup, as an exit is, a Restore pressed straight away reached the
+ended session still registered and was told it had exited again, or revived it while the old processes
+were still exiting, which a shelve exists to prevent.
+
 ## Reading input while holding the keyboard
 
 The subtle part, and the one with the most history behind it. While the overlay is open it takes every

@@ -396,6 +396,9 @@ type Result struct {
 	// Exited is true when the session's shell exited.
 	Exited   bool
 	ExitCode int
+	// Shelved is true when the session ended because `cm shelve` ended it. Exited is set too. A client on a
+	// terminal does not return with it, since it offers a restore instead: see shelvedNotice.
+	Shelved bool
 }
 
 // readsTerminal reports whether anything in this attachment will consume a keystroke.
@@ -660,6 +663,35 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 			result.Detached, result.Upgrade, result.SwitchTo = false, false, ""
 			log.Debug("switching this client to another session", "session", ref)
 			continue
+		case outcomeShelved:
+			notice := &shelvedNotice{
+				session:       result.Session,
+				readOnly:      opts.ReadOnly,
+				barStyle:      styleOr(opts.BarStyle, DefaultBarStyle),
+				bodyStyle:     styleOr(opts.BodyStyle, DefaultBodyStyle),
+				selectedStyle: styleOr(opts.SelectedStyle, DefaultSelectedStyle),
+			}
+			choice, err := waitShelved(ctx, tty, &opts, notice, result.SessionID, in, winch, opts.detachKeySet())
+			if err != nil {
+				return result, err
+			}
+			switch choice {
+			case shelvedDetach:
+				result.Exited, result.ExitCode, result.Shelved = false, 0, false
+				result.Detached = true
+				return result, nil
+			case shelvedGone:
+				return result, nil
+			}
+			// Restored here or elsewhere, so open it again by ID: the same Open `cm attach` sends, which revives
+			// a shelved session under the rules `cm restore` uses, or attaches to it once something else has. A
+			// fresh attach, since the screen is the notice's, and nothing typed is carried over.
+			log.Debug("reopening a shelved session", "session", result.SessionID, "restored_here", choice == shelvedRestore)
+			ref = paths.FormatSessionID(result.SessionID)
+			resumeFrom = nil
+			pending = pending[:0]
+			result.Exited, result.ExitCode, result.Shelved = false, 0, false
+			continue
 		case outcomeDone:
 			// Carried out so a replacement process can resume exactly here rather than repainting. Set
 			// only for an upgrade: every other way of finishing is a client that is not coming back, and
@@ -817,6 +849,9 @@ const (
 	// pending input discarded. Sharing the branch would have made a switch wait out a backoff and log an
 	// outage that never happened.
 	outcomeSwitch
+	// outcomeShelved means `cm shelve` ended the session, and this client shows the shelved notice rather
+	// than exiting. See shelvedNotice.
+	outcomeShelved
 )
 
 // runSession runs one connection's worth of attachment.
@@ -974,13 +1009,7 @@ func runSession(
 		}
 	}()
 
-	detachKeys := keySet(opts.DetachKeys)
-	if len(detachKeys) == 0 {
-		// An empty list means the caller configured none, which is the default key rather than no key: an
-		// unset setting must not silently remove the only way to leave a session.
-		key, _ := ParseDetachKey(DefaultDetachKey)
-		detachKeys = keySet{key}
-	}
+	detachKeys := opts.detachKeySet()
 
 	// Defaulted here rather than at each use, so the overlay never has to check: a Map with nothing in it
 	// would silently bind no keys, and the caller that forgot to pass one is a test rather than a user.
@@ -1264,6 +1293,13 @@ func runSession(
 			if ex := msg.resp.GetExited(); ex != nil {
 				result.Exited = true
 				result.ExitCode = int(ex.ExitCode)
+				result.Shelved = ex.Shelved
+				// Shelved from somewhere else, so the window stays and offers to bring it back. Only with a
+				// terminal of its own to paint, which is the overlay's condition: a follower writing to a pipe
+				// ends as it would for an exit.
+				if ex.Shelved && ov.enabled {
+					return outcomeShelved, nil
+				}
 				return outcomeDone, nil
 			}
 			// An unsolicited Detached means `cm detach` asked this client to let go, so it leaves as
@@ -1691,6 +1727,19 @@ func dial(socketPath string) (transport.Conn, serverv1.ServerClient, error) {
 // One place deciding between the two, so the reconnect loop reads the same whether the server is on this
 // machine or another: a remote link dropping and a local server restarting arrive here identically, as a
 // dial that failed.
+// detachKeySet is the detach keys, the default key when none were configured.
+//
+// An empty list means the caller configured none, which is the default key rather than no key: an unset
+// setting must not silently remove the only way to leave a session.
+func (o *Options) detachKeySet() keySet {
+	keys := keySet(o.DetachKeys)
+	if len(keys) == 0 {
+		key, _ := ParseDetachKey(DefaultDetachKey)
+		keys = keySet{key}
+	}
+	return keys
+}
+
 func (o *Options) connect(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
 	if o.Dial != nil {
 		return o.Dial(ctx)

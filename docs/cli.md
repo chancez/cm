@@ -177,6 +177,16 @@ the same per-session retention as `cm kill --keep --expire-after`, and `cm info`
 `expire_after`, `never` by default. `cm kill` and `cm forget` remove one at once; `cm forget --ended` leaves
 it, since that clears what was left behind and this was kept on purpose.
 
+A client attached when its session is shelved stays up, wherever the shelve came from: `cm tui`, the CLI,
+or a keeper such as kspaces'. It shows the session's last screen dimmed under a box saying it is shelved,
+with a Restore and a Detach button: `r` or a click on Restore opens the session again, which revives it
+as `cm attach NAME` would, under the same `on_restore` rules as `cm restore`; `d`, `q`, ctrl-c, the detach
+key or a click on Detach leaves as a detach does. Every client on the notice also goes back to the session
+once it runs again, however it was restored. The server tells the clients only once the shelve has
+finished, so a Restore pressed at once finds the session shelved and its processes gone. A client with no
+terminal of its own, such as `cm read --follow`, ends as it does for an exit, and so does an older client.
+See [overlay.md](overlay.md#a-shelved-session-keeps-its-windows).
+
 `cm restore` starts an ended session that saved output again without attaching, which is the same revive an
 attach performs, and there is one: an exited session, one dead after a reboot or a crash, and a shelved
 one all come back the same way. A shell starts in the recorded directory, the saved output is replayed,
