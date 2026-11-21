@@ -19,6 +19,7 @@ type keyMap struct {
 	Back         key.Binding
 	New          key.Binding
 	Kill         key.Binding
+	Shelve       key.Binding
 	Rename       key.Binding
 	AddName      key.Binding
 	Preview      key.Binding
@@ -41,6 +42,7 @@ func bindingsFrom(keys keymap.Map) (keyMap, list.KeyMap) {
 		Back:         binding(keys, keymap.TUIBack),
 		New:          binding(keys, keymap.TUINew),
 		Kill:         binding(keys, keymap.TUIKill),
+		Shelve:       binding(keys, keymap.TUIShelve),
 		Rename:       binding(keys, keymap.TUIRename),
 		AddName:      binding(keys, keymap.TUIAddName),
 		Preview:      binding(keys, keymap.TUIOutput),
@@ -93,7 +95,7 @@ func binding(keys keymap.Map, action keymap.Action) key.Binding {
 
 // ShortHelp is the one line under the list.
 //
-// Switch, Back, AddName and Info are not on it, for a measured reason: the line reached column 89 of 100 with the
+// Switch, Back, Shelve, AddName and Info are not on it, for a measured reason: the line reached column 89 of 100 with the
 // entries below, and any of them takes it past the width. Neither help line is truncated and the layout
 // measures the footer by counting newlines, so anything that overflows either costs the list a row or is cut
 // off the right edge. They are in the expanded help, in the column they belong to.
@@ -112,7 +114,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Attach, k.Switch, k.New},
-		{k.Kill, k.Rename, k.AddName},
+		{k.Kill, k.Shelve, k.Rename, k.AddName},
 		// Back sits with quit because that is what it is a spelling of.
 		{k.Preview, k.Info, k.Help, k.Quit, k.Back},
 	}

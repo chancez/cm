@@ -148,6 +148,12 @@ look identical and only one of them removes anything.
 `b` costs the list's `b` as a page-up alias: two defaults on one key in one context is a collision
 `internal/keymap` fails a test on, and `left`, `h`, `pageup` and `u` still turn the page.
 
+**`z` shelves or restores, by the row.** On a running session it asks, as a kill does, and then shelves:
+the screen and the record stay, but whatever the programs held in memory goes. On an ended session it
+restores without a question and without attaching, which is `cm restore` at the picker's size; `enter`
+restores and attaches, as `cm attach` does. Unbound when the server says it cannot shelve. The label reads
+only "shelve" because "shelve/restore" took the expanded help to 102 columns of 100.
+
 **A confirmation captures its target.** The list refreshes while the question is on screen. When the
 selected session ends on its own there is nothing to put the cursor back on, so it stays where it is
 and a different session is under it: a kill that re-read the selection at `y` would end that one.

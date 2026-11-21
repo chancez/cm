@@ -85,6 +85,7 @@ const (
 	TUIBack         Action = "back"
 	TUINew          Action = "new"
 	TUIKill         Action = "kill"
+	TUIShelve       Action = "shelve"
 	TUIRename       Action = "rename"
 	TUIAddName      Action = "add-name"
 	TUIOutput       Action = "output"
@@ -159,6 +160,10 @@ var definitions = map[Context][]Definition{
 		{Action: TUIBack, Label: "back to the session"},
 		{Action: TUINew, Label: "new session", Defaults: []string{"n"}},
 		{Action: TUIKill, Label: "kill", Defaults: []string{"x"}},
+		// One key for both directions, decided by the row: a running session is shelved, an ended one is
+		// restored without attaching. enter restores and attaches, as cm attach does. The label says only
+		// the first: "shelve/restore" took the expanded help to 102 columns of 100.
+		{Action: TUIShelve, Label: "shelve", Defaults: []string{"z"}},
 		{Action: TUIRename, Label: "rename", Defaults: []string{"r"}},
 		// b, the same key the overlay names a session with, because it is the same request: one more name
 		// pointing at the session, nothing taken away. The two differ only in which session they act on.

@@ -28,6 +28,10 @@ type fakeSessions struct {
 	killed  []*serverv1.KillRequest
 	bound   []*serverv1.BindRequest
 	unbound []*serverv1.UnbindRequest
+	shelved []*serverv1.ShelveRequest
+	// restored records every Restore, and restoreResponse is what it answers instead of success.
+	restored        []*serverv1.RestoreRequest
+	restoreResponse *serverv1.RestoreResponse
 
 	killErr      error
 	killResponse *serverv1.KillResponse
@@ -77,6 +81,23 @@ func (f *fakeSessions) Unbind(
 ) (*serverv1.UnbindResponse, error) {
 	f.unbound = append(f.unbound, req)
 	return &serverv1.UnbindResponse{}, nil
+}
+
+func (f *fakeSessions) Shelve(
+	_ context.Context, req *serverv1.ShelveRequest,
+) (*serverv1.ShelveResponse, error) {
+	f.shelved = append(f.shelved, req)
+	return &serverv1.ShelveResponse{Shelved: req.Sessions}, nil
+}
+
+func (f *fakeSessions) Restore(
+	_ context.Context, req *serverv1.RestoreRequest,
+) (*serverv1.RestoreResponse, error) {
+	f.restored = append(f.restored, req)
+	if f.restoreResponse != nil {
+		return f.restoreResponse, nil
+	}
+	return &serverv1.RestoreResponse{Restored: req.Sessions}, nil
 }
 
 func (f *fakeSessions) Read(
@@ -814,12 +835,18 @@ func TestSwitchReportsAFailure(t *testing.T) {
 // silently loses the columns to its right.
 func TestTheExpandedHelpFitsWithTheSwitchKey(t *testing.T) {
 	h := newHarnessSwitching(t, manySessions(40)...)
+	// Shelving too, which puts its key in the kill column, so the widest help this picker can show is the
+	// one measured.
+	h.model = newModel(context.Background(), Options{
+		Sessions: h.sessions, Attach: h.model.attach, Switch: h.model.switchTo, Shelving: true,
+		Refresh: new(time.Duration),
+	})
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
 	h.list()
 	h.press("?")
 
 	got := h.model.help.View(h.model.fullHelp())
-	if !strings.Contains(got, "switch here") {
+	if !strings.Contains(got, "switch here") || !strings.Contains(got, "shelve") {
 		t.Fatalf("the expanded help does not name the switch key:\n%s", got)
 	}
 	if w := lipgloss.Width(got); w > h.model.width {
@@ -831,5 +858,93 @@ func TestTheExpandedHelpFitsWithTheSwitchKey(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the expanded help lost the %q column:\n%s", want, got)
 		}
+	}
+}
+
+// shelvedSession builds a session that cm shelve ended.
+func shelvedSession(name, id string, createdAt int64) *serverv1.Session {
+	s := session(name, id, createdAt)
+	s.State = serverv1.SessionState_SESSION_STATE_SHELVED
+	s.Exited = true
+	return s
+}
+
+// The shelve key asks before ending a running session's programs, and shelves the session the question
+// named, by ID, for the reason the kill does.
+func TestShelveAsksFirst(t *testing.T) {
+	h := newHarnessWith(t, Options{Shelving: true}, session("work", "a7k2m9x4", 100))
+	h.list()
+
+	h.press("z")
+	if got, want := strings.SplitN(h.model.footer(), "\n", 2)[0],
+		"shelve work? its programs end, z or enter restores it [y/N]"; got != want {
+		t.Fatalf("the footer reads %q, want %q", got, want)
+	}
+	h.press("n")
+	if len(h.sessions.shelved) != 0 {
+		t.Fatalf("answering n shelved %v", h.sessions.shelved)
+	}
+
+	h.press("z")
+	h.run(h.press("y"))
+	want := []*serverv1.ShelveRequest{{Sessions: []string{"@a7k2m9x4"}}}
+	if !reflect.DeepEqual(h.sessions.shelved, want) {
+		t.Errorf("shelved %v, want %v", h.sessions.shelved, want)
+	}
+	if got, want := h.model.status, "shelved work"; got != want {
+		t.Errorf("status %q, want %q", got, want)
+	}
+}
+
+// On an ended session the same key restores it without attaching, at the picker's size and with the
+// environment the caller chose, which is what cm restore sends.
+func TestShelveOnAnEndedSessionRestoresWithoutAttaching(t *testing.T) {
+	env := []string{"TERM=xterm-kitty"}
+	h := newHarnessWith(t, Options{Shelving: true, Env: env}, shelvedSession("work", "a7k2m9x4", 100))
+	h.list()
+
+	h.run(h.press("z"))
+
+	want := []*serverv1.RestoreRequest{{Sessions: []string{"@a7k2m9x4"}, Rows: 24, Cols: 80, Env: env}}
+	if !reflect.DeepEqual(h.sessions.restored, want) {
+		t.Errorf("restored %v, want %v", h.sessions.restored, want)
+	}
+	if len(h.attached) != 0 {
+		t.Errorf("attached to %v, want no attachment", h.attached)
+	}
+	if got, want := h.model.status, "restored work"; got != want {
+		t.Errorf("status %q, want %q", got, want)
+	}
+}
+
+// A restore the server refused for the session is an error, not a success: the call itself succeeds.
+func TestARestoreThatFailsPerSessionIsNotReportedAsSuccess(t *testing.T) {
+	h := newHarnessWith(t, Options{Shelving: true}, shelvedSession("work", "a7k2m9x4", 100))
+	h.list()
+	h.sessions.restoreResponse = &serverv1.RestoreResponse{
+		Errors: map[string]string{"@a7k2m9x4": "saved no output"},
+	}
+
+	h.run(h.press("z"))
+
+	if got, want := fmt.Sprint(h.model.err), "restoring work: saved no output"; got != want {
+		t.Errorf("error %q, want %q", got, want)
+	}
+}
+
+// A server that has said it cannot shelve gets no shelve key, rather than one that fails every time.
+func TestShelveIsAbsentWhenTheServerCannot(t *testing.T) {
+	h := newHarness(t, session("work", "a7k2m9x4", 100))
+	h.list()
+
+	h.run(h.press("z"))
+
+	if h.model.mode != modeList || len(h.sessions.shelved) != 0 || len(h.sessions.restored) != 0 {
+		t.Errorf("z did something without the capability: mode %d, shelved %v, restored %v",
+			h.model.mode, h.sessions.shelved, h.sessions.restored)
+	}
+	h.press("?")
+	if got := h.model.help.View(h.model.fullHelp()); strings.Contains(got, "shelve") {
+		t.Errorf("the help offers a shelve key the server cannot honor:\n%s", got)
 	}
 }

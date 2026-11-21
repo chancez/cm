@@ -29,6 +29,8 @@ const (
 	modeList mode = iota
 	// modeConfirmKill is waiting for y or n on a kill.
 	modeConfirmKill
+	// modeConfirmShelve is waiting for y or n on a shelve, which ends the session's programs as a kill does.
+	modeConfirmShelve
 	// modeRename is reading a new name.
 	modeRename
 	// modeAddName is reading another name, which the session keeps alongside the ones it has.
@@ -47,8 +49,10 @@ type model struct {
 	// switchTo moves whoever opened the picker, or is nil when there is nobody to move. See SwitchFunc.
 	switchTo SwitchFunc
 	info     InfoFunc
-	tags     []string
-	home     string
+	// env is what a restored shell starts with. See Options.Env.
+	env  []string
+	tags []string
+	home string
 	// self is the session this picker runs in, as a reference, or empty outside one. See Options.Self.
 	self string
 	// interval is how often the list re-reads the server, zero for not at all. See Options.Refresh.
@@ -135,6 +139,9 @@ func newModel(ctx context.Context, opts Options) model {
 	if opts.Info == nil {
 		keys.Info.SetEnabled(false)
 	}
+	if !opts.Shelving {
+		keys.Shelve.SetEnabled(false)
+	}
 
 	l := list.New(nil, delegate{home: home, now: time.Now()}, 0, 0)
 	l.Title = "sessions"
@@ -162,6 +169,7 @@ func newModel(ctx context.Context, opts Options) model {
 		attach:   opts.Attach,
 		switchTo: opts.Switch,
 		info:     opts.Info,
+		env:      opts.Env,
 		tags:     opts.Tags,
 		home:     home,
 		self:     opts.Self,
@@ -191,6 +199,13 @@ type killedMsg struct {
 	// session cannot be asked what it was called.
 	label string
 	err   error
+}
+
+// shelvedMsg is a completed Shelve or Restore, and restored says which.
+type shelvedMsg struct {
+	label    string
+	restored bool
+	err      error
 }
 
 // renamedMsg is a completed rename.
@@ -294,6 +309,16 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, m.fetch()
 
+	case shelvedMsg:
+		m.err = msg.err
+		if msg.err == nil {
+			m.status = "shelved " + msg.label
+			if msg.restored {
+				m.status = "restored " + msg.label
+			}
+		}
+		return m, m.fetch()
+
 	case switchedMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -377,7 +402,7 @@ func (m model) applyList(msg listedMsg) (model, tea.Cmd) {
 // key routes a keypress to whatever is currently asking a question.
 func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	switch m.mode {
-	case modeConfirmKill:
+	case modeConfirmKill, modeConfirmShelve:
 		return m.confirmKey(msg)
 	case modeRename, modeAddName:
 		return m.nameKey(msg)
@@ -477,6 +502,24 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.target = it.session
 		return m, nil
 
+	case key.Matches(msg, m.keys.Shelve):
+		it, ok := m.selected()
+		if !ok {
+			return m, nil
+		}
+		m.err = nil
+		if it.session.State != serverv1.SessionState_SESSION_STATE_RUNNING {
+			// An ended session comes back without a question: nothing is lost by restoring, and a restore
+			// the session cannot have is refused by the server with the reason. Without attaching, which is
+			// the difference from enter.
+			return m, m.restore(it.session)
+		}
+		// Asked first, as a kill is. A shelve keeps the screen and the record, but whatever the programs held
+		// in memory goes with them, and that is a keystroke away from a running build.
+		m.mode = modeConfirmShelve
+		m.target = it.session
+		return m, nil
+
 	case key.Matches(msg, m.keys.Rename):
 		it, ok := m.selected()
 		if !ok {
@@ -505,17 +548,20 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	return m, cmd
 }
 
-// confirmKey answers a kill confirmation.
+// confirmKey answers a kill or shelve confirmation.
 //
 // Only "y" kills. Anything else cancels, rather than only a listed cancel key: a stray keypress at a
 // prompt that ends a shell should do nothing, and there is no keystroke worth guessing at here.
 func (m model) confirmKey(msg tea.KeyPressMsg) (model, tea.Cmd) {
-	target := m.target
+	target, shelving := m.target, m.mode == modeConfirmShelve
 	m.mode = modeList
 	m.target = nil
 	if msg.String() != "y" {
 		m.status = "left it running"
 		return m, nil
+	}
+	if shelving {
+		return m, m.shelve(target)
 	}
 	return m, m.kill(target)
 }
@@ -597,6 +643,55 @@ func (m model) kill(target *serverv1.Session) tea.Cmd {
 			return killedMsg{label: label, err: fmt.Errorf("killing %s: %s", label, failure)}
 		}
 		return killedMsg{label: label}
+	}
+}
+
+// shelve ends a session's programs and keeps what restoring it needs.
+func (m model) shelve(target *serverv1.Session) tea.Cmd {
+	if target == nil {
+		return nil
+	}
+	label := target.Name
+	ref := paths.FormatSessionID(target.Id)
+	return func() tea.Msg {
+		resp, err := m.sessions.Shelve(m.ctx, &serverv1.ShelveRequest{Sessions: []string{ref}})
+		if err != nil {
+			return shelvedMsg{label: label, err: err}
+		}
+		// Per session, for the reason kill reads Errors: the usual refusal is a session that saves no output.
+		if failure, ok := resp.Errors[ref]; ok {
+			return shelvedMsg{label: label, err: fmt.Errorf("shelving %s: %s", label, failure)}
+		}
+		return shelvedMsg{label: label}
+	}
+}
+
+// restore starts an ended session again without attaching, which is `cm restore`.
+//
+// At the picker's own size, which is the terminal the session will most likely be attached from next, and
+// with on_restore left to the session and the config: nothing here grants a command more than cm restore
+// does.
+func (m model) restore(target *serverv1.Session) tea.Cmd {
+	if target == nil {
+		return nil
+	}
+	label := target.Name
+	ref := paths.FormatSessionID(target.Id)
+	req := &serverv1.RestoreRequest{
+		Sessions: []string{ref},
+		Rows:     uint32(max(m.height, 1)),
+		Cols:     uint32(max(m.width, 1)),
+		Env:      m.env,
+	}
+	return func() tea.Msg {
+		resp, err := m.sessions.Restore(m.ctx, req)
+		if err != nil {
+			return shelvedMsg{label: label, restored: true, err: err}
+		}
+		if failure, ok := resp.Errors[ref]; ok {
+			return shelvedMsg{label: label, restored: true, err: fmt.Errorf("restoring %s: %s", label, failure)}
+		}
+		return shelvedMsg{label: label, restored: true}
 	}
 }
 
@@ -845,6 +940,8 @@ func (m model) footer() string {
 		// The session is named in the question rather than left as "this one", because the answer is
 		// one keystroke and the list is still on screen behind it with a cursor that may have moved.
 		line = fmt.Sprintf("kill %s? [y/N]", m.target.Name)
+	case m.mode == modeConfirmShelve && m.target != nil:
+		line = fmt.Sprintf("shelve %s? its programs end, z or enter restores it [y/N]", m.target.Name)
 	case m.mode == modeRename && m.target != nil:
 		line = fmt.Sprintf("rename %s to %s", m.target.Name, m.input.View())
 	case m.mode == modeAddName && m.target != nil:

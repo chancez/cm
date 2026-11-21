@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/tui"
@@ -122,7 +123,13 @@ to the selected session instead of nesting an attachment inside it.`,
 				Preview:  preview,
 				Switch:   switchTo,
 				Info:     tuiInfo,
-				BackKey:  backKey,
+				// Offered unless the server has said it cannot, as requireServerCapability decides for
+				// cm shelve: an older server that reports nothing gets the key and its own error.
+				Shelving: serverCapabilities(cmd.Context(), cl).Supports(capability.Shelve) != capability.Absent,
+				// What cm restore sends, chosen by the machine the session runs on. See
+				// globals.sessionEnvFor.
+				Env:     g.sessionEnvFor(os.Environ(), nil),
+				BackKey: backKey,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.
 				Refresh: &refresh,
@@ -274,7 +281,7 @@ func tuiInfo(s *serverv1.Session) []tui.InfoField {
 	return out
 }
 
-// The generated client is what the picker talks to, and tui.Sessions names the four RPCs it uses. This
+// The generated client is what the picker talks to, and tui.Sessions names the RPCs it uses. This
 // is where a change to one of their signatures fails, with the interface named, rather than inside a
 // call in another package.
 var _ tui.Sessions = serverv1.ServerClient(nil)

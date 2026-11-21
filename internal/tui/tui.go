@@ -70,6 +70,8 @@ type Sessions interface {
 	Kill(context.Context, *serverv1.KillRequest) (*serverv1.KillResponse, error)
 	Bind(context.Context, *serverv1.BindRequest) (*serverv1.BindResponse, error)
 	Unbind(context.Context, *serverv1.UnbindRequest) (*serverv1.UnbindResponse, error)
+	Shelve(context.Context, *serverv1.ShelveRequest) (*serverv1.ShelveResponse, error)
+	Restore(context.Context, *serverv1.RestoreRequest) (*serverv1.RestoreResponse, error)
 	// Read is the preview pane's source: the plain form renders the session's cells to text, so no
 	// escape sequence from the program reaches the frame. The raw form would, which is why it is not
 	// used here. See previewLines.
@@ -136,6 +138,12 @@ type Options struct {
 	Switch SwitchFunc
 	// Info renders a session's details for the pane, or is nil to leave the info key unbound.
 	Info InfoFunc
+	// Shelving reports that the server can shelve and restore. False leaves the shelve key unbound, which is
+	// what a server that has said it cannot gets: the RPC would fail with a method nobody has heard of.
+	Shelving bool
+	// Env is the environment a restored shell starts with, which the caller chooses for the machine the
+	// session runs on, as `cm restore` does.
+	Env []string
 	// Keys is what each key does, from the config file. The zero value means the built-in defaults, which
 	// is what a caller with no config to read wants: see internal/keymap.
 	Keys keymap.Map
