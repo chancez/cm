@@ -1018,3 +1018,42 @@ func TestOverlayShades(t *testing.T) {
 		t.Errorf("%d bars in a command's output, want 1", n)
 	}
 }
+
+// Output longer than the block is a window the list's keys scroll, rather than its head with the rest cut.
+func TestOverlayScrollsLongOutput(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte(":ls\r"))
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	o.finish(strings.Join(lines, "\n"), nil)
+
+	window := func(from, to int) []string {
+		want := []string{clip(" cm work | cm ls ", 79)}
+		want = append(want, lines[from-1:to]...)
+		return append(want, fmt.Sprintf("lines %d-%d of 20, ctrl-j/ctrl-k to scroll, any other key closes", from, to))
+	}
+	if got, want := o.rows(24, 80), window(1, 10); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %q, want %q", got, want)
+	}
+
+	o.feed([]byte{0x0a})
+	if got, want := o.rows(24, 80), window(2, 11); !reflect.DeepEqual(got, want) {
+		t.Errorf("after ctrl-j rows = %q, want %q", got, want)
+	}
+	// Held at the end rather than scrolled into blank rows.
+	o.feed(bytes.Repeat([]byte{0x0a}, 30))
+	if got, want := o.rows(24, 80), window(11, 20); !reflect.DeepEqual(got, want) {
+		t.Errorf("past the end rows = %q, want %q", got, want)
+	}
+	o.feed([]byte{0x0b})
+	if got, want := o.rows(24, 80), window(10, 19); !reflect.DeepEqual(got, want) {
+		t.Errorf("after ctrl-k rows = %q, want %q", got, want)
+	}
+
+	if got := o.feed([]byte("x")); !sameResponse(got, overlayResponse{Repaint: true}) {
+		t.Errorf("another key = %+v, want the output closed", got)
+	}
+}

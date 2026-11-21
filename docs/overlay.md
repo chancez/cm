@@ -404,8 +404,10 @@ One paint per keypress, which needed fixing: the caller opens the overlay and th
 followed the prefix key, and both painted, so the transcript hook showed the whole block reaching the
 terminal twice for one press.
 
-The block is capped at half the terminal and 12 rows. What it cuts, it says: a truncated `cm list` read as
-a complete one is a wrong answer, not a short one.
+The block is capped at half the terminal and 12 rows. A command's output longer than that is a window
+the list's up and down keys scroll, with its last row saying which lines are shown; any other key closes it.
+Anything else it cuts, it says: a truncated `cm list` read as a complete one is a wrong answer, not a short
+one.
 
 The session's own bytes are still written verbatim and never withheld, so a program that draws while the
 overlay is up paints over it. The overlay repaints after each chunk of session output and after a resize,

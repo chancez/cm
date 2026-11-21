@@ -97,6 +97,11 @@ type overlay struct {
 	status string
 	// body is a command's output, under the bar.
 	body []string
+	// scroll is the first body row shown when a command's output is longer than the block. Clamped where
+	// the block is laid out, since only that knows how many rows there are.
+	scroll int
+	// ran is the command on screen, for the bar once its output arrives.
+	ran []string
 	// painted is how many rows are dirty, so closing erases exactly those. Counted rather than
 	// recomputed, since the terminal may have been resized since the paint.
 	painted int
@@ -238,6 +243,8 @@ func (o *overlay) reset() {
 	o.prompt = promptCommand
 	o.status = ""
 	o.body = nil
+	o.scroll = 0
+	o.ran = nil
 	o.pick = nil
 	// Redundant for discarding a late answer, and said so rather than left looking load-bearing: sessions
 	// keys on the mode, which an escape has already changed, so removing this line fails no test. It is
@@ -356,10 +363,18 @@ func (o *overlay) handleKey(key overlayKey, resp *overlayResponse) {
 		// otherwise act on the result screen that is about to appear, which is not what the user was
 		// answering. Escape still steps out, since back runs before this.
 	case overlayResult:
-		// Any key dismisses, and the key is not acted on: the user is closing a message, and treating that
-		// keystroke as a new action would run something they did not choose. Escape does not arrive here at
-		// all; it steps back to the action keys instead.
-		o.close(resp)
+		// The list's up and down keys scroll output longer than the block. Any other key dismisses, and the
+		// key is not acted on: the user is closing a message, and treating that keystroke as a new action
+		// would run something they did not choose. Escape does not arrive here at all; it steps back to the
+		// action keys instead.
+		switch action, _ := o.keys.Lookup(key.Press); action {
+		case keymap.OverlayDown:
+			o.scroll++
+		case keymap.OverlayUp:
+			o.scroll = max(o.scroll-1, 0)
+		default:
+			o.close(resp)
+		}
 	}
 }
 
@@ -600,6 +615,7 @@ func (o *overlay) promptKey(key overlayKey, resp *overlayResponse) {
 			o.close(resp)
 		default:
 			resp.Run = args
+			o.ran = args
 			o.status = "running " + strings.Join(args, " ")
 			o.body = nil
 			o.mode = overlayRunning
@@ -849,6 +865,7 @@ func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 func (o *overlay) confirmKey(key overlayKey, resp *overlayResponse) {
 	if key.Press.Rune == 'y' || key.Press.Rune == 'Y' {
 		resp.Run = o.confirm
+		o.ran = o.confirm
 		o.status = "running " + strings.Join(o.confirm, " ")
 		o.confirm, o.confirmWhat = nil, ""
 		o.body = nil
@@ -886,8 +903,10 @@ func (o *overlay) finish(out string, err error) {
 		o.log.Debug("a cm command finished after its overlay closed", "err", err, "output", out)
 		return
 	}
-	o.status = "cm " + string(o.line)
+	// What ran rather than what was typed, which for a confirmed kill or a name prompt is not the command.
+	o.status = "cm " + strings.Join(o.ran, " ")
 	o.body = overlayBody(out, err)
+	o.scroll = 0
 	o.mode = overlayResult
 	o.paint()
 }
@@ -966,6 +985,19 @@ func (o *overlay) rows(rows, cols int) []string {
 	body := o.body
 	if o.mode == overlayPick && o.pick != nil {
 		body = o.pick.body(budget - 1)
+	}
+
+	if o.mode == overlayResult && len(body) > budget-1 && budget >= 3 {
+		// A window onto the output rather than its head, since the output is the whole point of this screen:
+		// `cm info` is 27 rows against a block of 12. The last row says where the window is and how to move it.
+		shown := budget - 2
+		o.scroll = min(max(o.scroll, 0), len(body)-shown)
+		for _, line := range body[o.scroll : o.scroll+shown] {
+			out = append(out, clip(line, width))
+		}
+		return append(out, clip(fmt.Sprintf("lines %d-%d of %d, %s/%s to scroll, any other key closes",
+			o.scroll+1, o.scroll+shown, len(body), o.keyFor(keymap.OverlayDown), o.keyFor(keymap.OverlayUp)),
+			width))
 	}
 
 	for i, line := range body {
