@@ -741,6 +741,98 @@ overlay picker, which must refuse under `--remote` rather than answer from the w
 `KITTY_LISTEN_ON` is a known limit rather than a bug to fix: a kitten inside a remote session cannot reach
 the local kitty. kitty's own `ssh` kitten forwards it, and cm should not try to.
 
+**Spaces, and sessions across hosts.** A named, durable group of sessions, so a fleet of hosts reads as one
+set of spaces rather than several flat lists of hundreds of sessions. The flat namespace is already hard to
+navigate on one machine, and `--remote` multiplies it: a long-running process on a server outlives the
+local window that started it, and then it has to be found again by name among everything else on that host.
+A space is what it is found in. It survives the window closing, and it is what a server with no kitty is
+navigated by.
+
+*What a space is.* Every session belongs to exactly one, `default` when created without one, and can be
+moved to another, since a session started in the wrong place, or one that has outlived its topic, is
+ordinary. A space exists without sessions: it is a record of its own, so it does not vanish when the last
+session in it ends. Spaces are flat. kspaces' groups are a display concern and stay in kspaces. A space is
+not tied to a directory or a repository, which is what lets one be a topic rather than a checkout; a repo
+space in kspaces is one that happens to have a root.
+
+*Rejected: tags as spaces.* Tags are many-valued and say nothing about where a session lives, so "which
+space is it in" has several answers or none, and an empty tag does not exist. Tags still apply, inside a
+space and across spaces, for what they do today.
+
+*Membership is owned by the session's host.* The server records that `build` is in space `cm`, and every
+viewer agrees. A space of the same name on two hosts is one space in a view, its sessions listed together
+with their hosts beside them. Nothing replicates, so nothing conflicts. The alternative, each viewer
+organizing the same sessions its own way, fails exactly where grouping is needed most: the server reached
+over plain ssh has no viewer but itself. Perspective comes from which hosts a machine looks at, below.
+
+*Qualified references.* `host:name` and `host:@id`. `ValidateSessionName` admits only `[A-Za-z0-9._-]`,
+so `:` cannot appear in a name and the two never collide. The host is the name given to a remote in config,
+not its hostname, for the reason measured under "A session's location": hostnames do not reconstruct ssh
+aliases. The local host has one too, so a reference means the same thing on every machine.
+
+- Stored references are always qualified and use the ID: `server:@a7k2m9x4`. A rename must not break a
+  window's binding, the same reason IDs exist locally.
+- Displayed names are qualified only on collision. `work` when it is unique in the space, `server:work` and
+  `laptop:work` when it is not.
+- A bare name matching sessions on two hosts is an error naming both, never a guess.
+
+*A window is bound to a session, not to a local proxy of one.* The window's `cm_session` user variable,
+which kitty already saves in its session files, holds a qualified reference, and `launch_wrapper.py`
+reattaches through `--remote` on restore. That is the decision under `--remote` above, a client dialing the
+remote directly, extended to restore. Rejected: a local session running `ssh host cm attach`. Two emulators,
+two scrollbacks, a nested detach key and query replies crossing two multiplexers, and after a reboot the
+local session is dead and something has to re-run the ssh.
+
+*Federation is pull, and directed.* Each host lists the remotes it looks at, the named-hosts config section
+still open under `--remote`. A laptop lists the server and the desktop, the desktop lists the server, the
+server lists nobody. A cross-host `cm ls` or `cm tui` is the client-side fan-out already decided there, not a
+server re-serving remotes. Rejected: a central meta server. It adds discovery while every host is off, at the
+cost of a single point of failure, a second source of truth about sessions the hosts already own, and
+per-viewer filtering rebuilt on top. "A cm that listens on the network" stays ruled out; this needs only ssh.
+
+An unreachable remote is the one real cost. Its last listing is cached client-side and shown stale with the
+time it was taken. A window bound to a session there reports the host unreachable, not the session gone:
+the client's reconnect loop already treats a lost link as an outage to wait out.
+
+*Closing a window decides nothing destructive.* `cm_reap.py` runs `cm kill --force` on a window close today,
+because otherwise sessions pile up in the flat list. Spaces remove the reason: a closed window's session
+stays visible in its space. The policy, the same on every host:
+
+- An explicit close, `cm close REF`, detaches a session running a command and shelves an idle one. Shelving
+  keeps the scrollback, names, tags and restore command, and `--expire-after` bounds the pile. A session
+  with no shell integration reports no idle state, so it is treated as busy and detached.
+- A disconnect of any kind is a detach and nothing else. Over `--remote` a dropped link and a closed window
+  both look like a hangup to the server, so the policy must run only on the stated intent. kitty's watcher
+  `on_close` reports `reason` and `cause`, and the watcher calls `cm close` rather than the server inferring
+  it.
+- Killing stays explicit: `exit` in the shell, `cm kill`, or a space's clean-up action, which kills its
+  shelved sessions.
+
+Rejected: prompting on close as the mechanism. A prompt only covers a close through a mapping cm's side
+controls; closing the OS window, quitting kitty, a crash and a dropped link all bypass it, so the unprompted
+path has to lose nothing anyway. A prompt can sit on top of that.
+
+*kspaces.* Reads spaces from cm, local and remote, for the spaces that are not repositories, beside the ones
+it configures. Its sidebar and `cm tui` are then two views of the same data.
+
+*What will bite.* Hosts upgrade independently, so anything a server answers about spaces needs the
+capability tokens of `docs/capabilities.md` from the first version. A remote client answers terminal queries
+across a WAN round trip, which `docs/architecture.md` on what cm presents itself as has not had to consider.
+And authority: reading and attaching are one grant, killing and shelving on another host may want to be a
+second.
+
+*Order*, each useful without the next:
+
+1. Spaces on one host: the record, a session's space in the store and in `Open`, `default`, moving a
+   session, `cm ls` and `cm tui` grouped by space.
+2. The close policy and `cm close`, replacing `cm kill --force` in `cm_reap.py`.
+3. Named remotes and qualified references, resolving locally for the local host's name.
+4. Cross-host `cm ls` and `cm tui` with the stale cache.
+5. kspaces reading spaces from cm.
+
+The first two change `internal/server` and `internal/store`, which the shim-removal rewrite on
+`pr/chancez/server-ptys` is changing, and should start from it.
+
 **A kitty wrapper for spawning windows.** A `cmk` or `kitten cm` that creates a kitty window or tab with a
 cm session already in it, so an agent could give each sub-agent its own visible tab instead of a headless
 session. Mechanically this is cheap: kitty's remote control can launch a window running any command, and
