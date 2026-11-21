@@ -89,8 +89,6 @@ func TestTheOverlayShelvesThisSession(t *testing.T) {
 	c.write([]byte{0x1d})
 	c.waitForOutput("cm agent", 15*time.Second)
 	c.write([]byte("z"))
-	c.waitForOutput("shelve:", 10*time.Second)
-	c.write([]byte("agent\r"))
 	c.waitForOutput("shelve agent?", 10*time.Second)
 	c.write([]byte("y"))
 	c.waitForOutput("agent is shelved", 15*time.Second)

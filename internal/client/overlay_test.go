@@ -138,10 +138,9 @@ func TestOverlayArmedActions(t *testing.T) {
 			wantMode: overlayRunning,
 		},
 		{
-			name:     "z opens the shelve chooser",
+			name:     "z asks before shelving this session",
 			keys:     "z",
-			want:     overlayResponse{List: true},
-			wantMode: overlayPick,
+			wantMode: overlayConfirm,
 		},
 		{
 			name:     "an unbound key says so and waits to be dismissed",
@@ -622,27 +621,40 @@ func TestOverlayPickerKillConfirms(t *testing.T) {
 	}
 }
 
-// Shelving confirms as a kill does, and offers only running sessions: one that has ended is already as
-// shelved as it can be.
-func TestOverlayPickerShelveConfirms(t *testing.T) {
+// z shelves this session, as d detaches it, after one y: the screen and the record stay but the programs
+// end. No session is named, since `cm shelve` takes CM_SESSION, which the runner sets to this one.
+func TestOverlayShelvesThisSession(t *testing.T) {
 	o, _ := newTestOverlay(t, 24, 80)
 	o.open()
+	if got := o.feed([]byte("z")); !sameResponse(got, overlayResponse{}) {
+		t.Fatalf("z = %+v, want nothing run yet", got)
+	}
+	if got, want := o.bar(), " cm work | shelve work? y to confirm, any other key cancels "; got != want {
+		t.Fatalf("bar %q, want %q", got, want)
+	}
+	if got := o.feed([]byte("y")); !sameResponse(got, overlayResponse{Run: []string{"shelve"}}) {
+		t.Errorf("y = %+v, want cm shelve run", got)
+	}
+
+	o, _ = newTestOverlay(t, 24, 80)
+	o.open()
 	o.feed([]byte("z"))
+	if got := o.feed([]byte("n")); !sameResponse(got, overlayResponse{Repaint: true}) {
+		t.Errorf("a key other than y = %+v, want the shelve abandoned", got)
+	}
+}
+
+// The kill chooser offers only running sessions: killing an ended one is cm forget.
+func TestOverlayKillChooserLeavesOutEndedSessions(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("k"))
 	items := pickItems(3)
 	items[0].Ended = true
 	o.sessions(items, nil)
 
 	if got, want := o.pick.items, items[1:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("the shelve chooser offers %+v, want %+v", got, want)
-	}
-	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{}) {
-		t.Fatalf("choosing to shelve = %+v, want nothing run yet", got)
-	}
-	if got, want := o.bar(), " cm work | shelve session-1? y to confirm, any other key cancels "; got != want {
-		t.Fatalf("bar %q, want %q", got, want)
-	}
-	if got := o.feed([]byte("y")); !sameResponse(got, overlayResponse{Run: []string{"shelve", "@id1"}}) {
-		t.Errorf("y = %+v, want the shelve run by ID", got)
+		t.Errorf("the kill chooser offers %+v, want %+v", got, want)
 	}
 }
 

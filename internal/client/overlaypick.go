@@ -88,8 +88,6 @@ const (
 	pickSwitch pickAction = iota
 	// pickKill ends it, after a confirmation.
 	pickKill
-	// pickShelve shelves it, after a confirmation.
-	pickShelve
 )
 
 // matches returns the items the filter allows, in order.

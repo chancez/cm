@@ -22,7 +22,7 @@ ctrl-] p      switch to the previous one
 ctrl-] l      switch back to the last session this window was on
 ctrl-] c      start a new session in this one's directory and switch to it
 ctrl-] k      kill: choose one, then y to confirm
-ctrl-] z      shelve: choose one, then y to confirm
+ctrl-] z      shelve this session, after a y
 ctrl-] b      name this session: type just the name
 ctrl-] r      rename this session: the new name replaces its only one, as cm rename does
 ctrl-] d      detach
@@ -336,8 +336,9 @@ the session is running, and goes back to it when it is, so restoring from one wi
 `cm restore` brings them all back. A read-only client offers only Detach, since a read-only attach does
 not start processes, and still goes back when the session runs.
 
-`ctrl-] z` shelves from inside, with a chooser and a confirmation as kill has, and this session among the
-choices, since shelving the one in front of you is the usual case and the window then stays on the notice.
+`ctrl-] z` shelves the session in front of you, as `d` detaches it, after one `y` since the programs end.
+No chooser: shelving is something done to this session, and the window then stays on the notice. It runs
+`cm shelve` with no argument, which takes `CM_SESSION`.
 The way back from elsewhere is `ctrl-] s`: its chooser lists every ended session that can be restored,
 marked with how it ended, and switching to one revives it through the same Open. `n`, `p` and `l` skip
 them, since restoring is something to choose rather than a side effect of moving.

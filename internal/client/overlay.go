@@ -422,9 +422,12 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 	case keymap.OverlayKill:
 		o.startPick("kill", pickKill, resp)
 	case keymap.OverlayShelve:
-		// A chooser, as kill is, and this session among the choices: shelving the one in front of you is the
-		// usual case, and the window then stays on the shelved notice rather than closing.
-		o.startPick("shelve", pickShelve, resp)
+		// This session, as detach is, rather than a chooser: shelving is something done to the session in
+		// front of you, and the window then stays on the shelved notice. Asked once, as a kill is, since the
+		// screen and the record stay but the programs end. `cm shelve` with no argument takes CM_SESSION.
+		o.mode = overlayConfirm
+		o.confirm = []string{"shelve"}
+		o.confirmWhat = "shelve " + o.label()
 	case keymap.OverlayNext:
 		o.startMove(moveNext, resp)
 	case keymap.OverlayPrevious:
@@ -751,8 +754,7 @@ func (o *overlay) sessions(items []pickItem, err error) overlayResponse {
 		return resp
 	}
 	if o.pick.action != pickSwitch {
-		// Only a switch has anything to do with an ended session. Killing one is cm forget, and shelving one
-		// that has already ended is a no-op.
+		// Only a switch has anything to do with an ended session. Killing one is cm forget.
 		items = running(items)
 	}
 	o.pick.items = items
@@ -855,12 +857,6 @@ func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 			o.mode = overlayConfirm
 			o.confirm = []string{"kill", it.Ref}
 			o.confirmWhat = "kill " + it.Label
-			o.pick = nil
-		case pickShelve:
-			// Asked for the reason a kill is: the screen and the record stay, but the programs end.
-			o.mode = overlayConfirm
-			o.confirm = []string{"shelve", it.Ref}
-			o.confirmWhat = "shelve " + it.Label
 			o.pick = nil
 		}
 	}
@@ -1021,12 +1017,17 @@ func (o *overlay) rows(rows, cols int) []string {
 	return out
 }
 
+// label is what the bar calls this session.
+func (o *overlay) label() string {
+	if o.session == "" {
+		return "session"
+	}
+	return o.session
+}
+
 // bar is the top row's text, which says what the overlay is for as well as what it is doing.
 func (o *overlay) bar() string {
-	label := o.session
-	if label == "" {
-		label = "session"
-	}
+	label := o.label()
 	switch {
 	case o.status != "":
 		return fmt.Sprintf(" cm %s | %s ", label, o.status)

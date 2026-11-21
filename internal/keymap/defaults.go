@@ -145,7 +145,7 @@ var definitions = map[Context][]Definition{
 		{Action: OverlayRename, Label: "rename this session", Defaults: []string{"r"}},
 		{Action: OverlayKill, Label: "kill a session", Defaults: []string{"k"}},
 		// z, the picker's key for the same thing, which is free in both.
-		{Action: OverlayShelve, Label: "shelve a session", Defaults: []string{"z"}},
+		{Action: OverlayShelve, Label: "shelve this session", Defaults: []string{"z"}},
 		{Action: OverlayPicker, Label: "the full picker", Defaults: []string{"t"}},
 		// i, as in the picker, where it swaps the pane to the same fields.
 		{Action: OverlayInfo, Label: "this session's info", Defaults: []string{"i"}},
