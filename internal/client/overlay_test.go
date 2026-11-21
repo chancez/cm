@@ -126,6 +126,12 @@ func TestOverlayArmedActions(t *testing.T) {
 			wantMode: overlayPrompt,
 		},
 		{
+			name:     "i runs cm info without the empty fields",
+			keys:     "i",
+			want:     overlayResponse{Run: []string{"info", "--omit-empty"}},
+			wantMode: overlayRunning,
+		},
+		{
 			name:     "c asks for a new session",
 			keys:     "c",
 			want:     overlayResponse{NewSession: true},

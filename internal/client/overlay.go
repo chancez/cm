@@ -455,6 +455,13 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 		o.mode = overlayPrompt
 		o.prompt = promptName
 		o.line = o.line[:0]
+	case keymap.OverlayInfo:
+		// `cm info` itself, so the fields and their spelling are the command's, as the picker's pane takes them
+		// from the same list. The empty ones are left out: half of the 27 usually are, against 12 rows.
+		resp.Run = []string{"info", "--omit-empty"}
+		o.ran = []string{"info"}
+		o.status = "running info"
+		o.mode = overlayRunning
 	case keymap.OverlayRename:
 		o.mode = overlayPrompt
 		o.prompt = promptRename
@@ -542,7 +549,8 @@ func (o *overlay) helpBody() []string {
 		{keymap.OverlayPrevious, keymap.OverlayNew},
 		{keymap.OverlayLast, keymap.OverlayKill},
 		{keymap.OverlayPicker, keymap.OverlayShelve},
-		{keymap.OverlayPager, keymap.OverlayCommand},
+		{keymap.OverlayPager, keymap.OverlayInfo},
+		{keymap.OverlayCommand, ""},
 		{keymap.OverlayDetach, keymap.OverlaySendDetach},
 	}
 	var left, right []string

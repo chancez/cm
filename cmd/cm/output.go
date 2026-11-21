@@ -919,6 +919,26 @@ func printSessionInfo(w io.Writer, s *serverv1.Session, field string) error {
 		return fmt.Errorf("unknown field %q, want one of %v", field, names)
 	}
 
+	return writeInfoTable(w, fields)
+}
+
+// printNonEmptySessionInfo is printSessionInfo's table without the fields that have no value.
+func printNonEmptySessionInfo(w io.Writer, s *serverv1.Session) error {
+	fields := sessionFields(s)
+	set := fields[:0:0]
+	for _, f := range fields {
+		if f.value != "" {
+			set = append(set, f)
+		}
+	}
+	return writeInfoTable(w, set)
+}
+
+// writeInfoTable is `cm info`'s two columns.
+func writeInfoTable(w io.Writer, fields []struct {
+	name  string
+	value string
+}) error {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	for _, f := range fields {
 		fmt.Fprintf(tw, "%s\t%s\n", f.name, f.value)

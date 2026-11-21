@@ -14,14 +14,16 @@ import (
 
 func newInfoCommand(g *globals) *cobra.Command {
 	var (
-		field   string
-		asJSON  bool
-		tagArgs []string
+		field     string
+		asJSON    bool
+		omitEmpty bool
+		tagArgs   []string
 	)
 	cmd := &cobra.Command{
 		Use:   "info [session]",
 		Short: "Print one session's details",
-		Long: `Print details for a single session.
+		Long: `Print details for a single session, the one this command runs in when none
+is named.
 
 --field prints one value alone, which is what a script wants: a terminal emulator
 opening a new window in a session's directory needs the path with no header,
@@ -40,6 +42,15 @@ line, so a selector plus a field is a list of that field across the group:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateSelectors(tagArgs); err != nil {
 				return err
+			}
+			// The calling session when nothing is named, as bind, tag and report default: `cm info` inside a
+			// session describes that one, which is what the overlay's i runs. Here rather than in
+			// sessionTargets, whose other callers include wait and read, for which a session waiting on or
+			// following itself is not a default anybody wants.
+			if len(args) == 0 && len(tagArgs) == 0 {
+				if self := os.Getenv(paths.SessionEnv()); self != "" {
+					args = []string{self}
+				}
 			}
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				names, fromSelector, err := sessionTargets(ctx, cl, args, tagArgs)
@@ -97,7 +108,11 @@ line, so a selector plus a field is a list of that field across the group:
 							return err
 						}
 					}
-					if err := printSessionInfo(os.Stdout, s, field); err != nil {
+					print := func() error { return printSessionInfo(os.Stdout, s, field) }
+					if omitEmpty && field == "" {
+						print = func() error { return printNonEmptySessionInfo(os.Stdout, s) }
+					}
+					if err := print(); err != nil {
 						return err
 					}
 				}
@@ -111,5 +126,9 @@ line, so a selector plus a field is a list of that field across the group:
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"print the sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
+	// For the overlay, whose block is capped at 12 rows: half the 27 fields are usually empty. Hidden because
+	// a script wants every field in a fixed place, which is what the table is for.
+	f.BoolVar(&omitEmpty, "omit-empty", false, "leave out fields with no value")
+	_ = f.MarkHidden("omit-empty")
 	return cmd
 }

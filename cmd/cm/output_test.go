@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1086,5 +1087,28 @@ func TestSessionJSONReportsAnAnnouncedClientInTheLocation(t *testing.T) {
 	}
 	if got := toSessionJSON(wire).Location; !reflect.DeepEqual(got, want) {
 		t.Errorf("location = %+v, want %+v", got, want)
+	}
+}
+
+// --omit-empty leaves out exactly the fields with no value, keeping the table's order.
+func TestPrintNonEmptySessionInfo(t *testing.T) {
+	var buf bytes.Buffer
+	s := &serverv1.Session{
+		Id: "a7k2m9x4", Name: "work", Names: []string{"work"},
+		State: serverv1.SessionState_SESSION_STATE_RUNNING, Cwd: "/tmp/w", CwdIsLocal: true,
+	}
+	if err := printNonEmptySessionInfo(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for line := range strings.Lines(buf.String()) {
+		got = append(got, strings.Fields(line)[0])
+	}
+	want := []string{
+		"name", "id", "names", "state", "pid", "clients", "cwd", "cwd_is_local", "created_at", "busy",
+		"last_command_exit_code", "command_finished", "announced_clients", "shim_build",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fields printed = %q, want %q", got, want)
 	}
 }

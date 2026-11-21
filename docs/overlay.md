@@ -28,6 +28,7 @@ ctrl-] r      rename this session: the new name replaces its only one, as cm ren
 ctrl-] d      detach
 ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
+ctrl-] i      cm info for this session, without the empty fields
 ctrl-] t      the full picker: cm tui, with its filter and preview pane
               ctrl-] there comes back, so the round trip is one key each way
 ctrl-] [      the scrollback in a pager: see [scrollback] pager in config.md

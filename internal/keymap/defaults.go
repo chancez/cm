@@ -63,6 +63,7 @@ const (
 	OverlayKill       Action = "kill"
 	OverlayShelve     Action = "shelve"
 	OverlayPicker     Action = "picker"
+	OverlayInfo       Action = "info"
 	OverlayPager      Action = "scrollback"
 	OverlayDetach     Action = "detach"
 	OverlaySendDetach Action = "send-detach"
@@ -145,6 +146,8 @@ var definitions = map[Context][]Definition{
 		// z, the picker's key for the same thing, which is free in both.
 		{Action: OverlayShelve, Label: "shelve a session", Defaults: []string{"z"}},
 		{Action: OverlayPicker, Label: "the full picker", Defaults: []string{"t"}},
+		// i, as in the picker, where it swaps the pane to the same fields.
+		{Action: OverlayInfo, Label: "this session's info", Defaults: []string{"i"}},
 		// tmux enters copy mode with prefix [, which is the habit this serves.
 		{Action: OverlayPager, Label: "scrollback in a pager", Defaults: []string{"["}},
 		{Action: OverlayDetach, Label: "detach", Defaults: []string{"d"}},
@@ -214,7 +217,7 @@ var definitions = map[Context][]Definition{
 // accident.
 var sessionVerbs = []Action{
 	OverlaySwitch, OverlayNext, OverlayPrevious, OverlayLast, OverlayNew,
-	OverlayName, OverlayRename, OverlayKill, OverlayShelve, OverlayPicker, OverlaySendDetach,
+	OverlayName, OverlayRename, OverlayKill, OverlayShelve, OverlayPicker, OverlayInfo, OverlaySendDetach,
 	OverlayCommand, OverlayHelp,
 }
 

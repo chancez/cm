@@ -46,7 +46,7 @@ makes it stick. `cm rebind --replace` also ends the session the name came off, a
 default. `cm bind` and `cm unbind` manage names: between them they cover giving a session a second name and moving a
 name to another session. `cm rename` is the two in one, and drops the old name only when the session had
 exactly one. `cm bind <name>` with no session names the session it is run
-in, from `CM_SESSION`, the same way `cm tag` and `cm report` default. The same two are a key each where a
+in, from `CM_SESSION`, the same way `cm tag`, `cm report` and `cm info` default. The same two are a key each where a
 session is in front of you: `ctrl-] b` in an attached session, `b` in `cm tui`, both adding a name rather
 than moving one. Renaming a session a terminal emulator named is the case to be careful with, and
 [tui.md](tui.md) says why. `cm bind --borrow` marks a name whose kill releases the name

@@ -90,6 +90,21 @@ func TestOverlayStartsANewSessionAndSwitchesToIt(t *testing.T) {
 	})
 }
 
+// The overlay's i shows cm info for the session it is in, under the bar.
+func TestOverlayShowsTheSessionsInfo(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "work", "--", "/bin/sh")
+	c.waitReady()
+
+	c.write([]byte{0x1d})
+	c.waitForOutput("cm work", 15*time.Second)
+	c.write([]byte("i"))
+	c.waitForOutput(e.sessionID("work"), 15*time.Second)
+	c.waitForOutput("cm work | cm info", 5*time.Second)
+}
+
 // Pressing the detach key from inside the overlay forwards it to the program instead of detaching.
 //
 // This is the regression test for a race found only in a real terminal: closing the overlay repaints,
