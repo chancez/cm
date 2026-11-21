@@ -49,6 +49,7 @@ type model struct {
 	// switchTo moves whoever opened the picker, or is nil when there is nobody to move. See SwitchFunc.
 	switchTo SwitchFunc
 	info     InfoFunc
+	pager    PagerFunc
 	// env is what a restored shell starts with. See Options.Env.
 	env  []string
 	tags []string
@@ -76,6 +77,8 @@ type model struct {
 
 	// handoff is the attachment the terminal was last handed to, or nil. See model.handOff.
 	handoff *attachCommand
+	// paging is the pager the terminal was last handed to, or nil, kept for the same reason as handoff.
+	paging *pagerCommand
 
 	// preview is the output pane under the list. See syncPreview for how it is kept in step with the
 	// selection.
@@ -142,6 +145,9 @@ func newModel(ctx context.Context, opts Options) model {
 	if !opts.Shelving {
 		keys.Shelve.SetEnabled(false)
 	}
+	if opts.Pager == nil {
+		keys.Scrollback.SetEnabled(false)
+	}
 
 	l := list.New(nil, delegate{home: home, now: time.Now()}, 0, 0)
 	l.Title = "sessions"
@@ -169,6 +175,7 @@ func newModel(ctx context.Context, opts Options) model {
 		attach:   opts.Attach,
 		switchTo: opts.Switch,
 		info:     opts.Info,
+		pager:    opts.Pager,
 		env:      opts.Env,
 		tags:     opts.Tags,
 		home:     home,
@@ -308,6 +315,20 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			m.status = "killed " + msg.label
 		}
 		return m, m.fetch()
+
+	case historyMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("reading the scrollback of %s: %w", msg.label, msg.err)
+			return m, nil
+		}
+		// Handed over only once the text is here, so a slow History leaves the list answering keys rather
+		// than a released terminal showing nothing.
+		m.paging = &pagerCommand{ctx: m.ctx, pager: m.pager, text: msg.text}
+		return m, tea.Exec(m.paging, func(err error) tea.Msg { return pagedMsg{err: err} })
+
+	case pagedMsg:
+		m.err = msg.err
+		return m, nil
 
 	case shelvedMsg:
 		m.err = msg.err
@@ -452,6 +473,14 @@ func (m model) key(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.preview = preview{on: true, info: info}
 		m.layout()
 		return m, nil
+
+	case key.Matches(msg, m.keys.Scrollback):
+		it, ok := m.selected()
+		if !ok {
+			return m, nil
+		}
+		m.err = nil
+		return m, m.history(it.session)
 
 	case key.Matches(msg, m.keys.HalfPageDown):
 		m.moveCursor(m.halfPage())
@@ -643,6 +672,25 @@ func (m model) kill(target *serverv1.Session) tea.Cmd {
 			return killedMsg{label: label, err: fmt.Errorf("killing %s: %s", label, failure)}
 		}
 		return killedMsg{label: label}
+	}
+}
+
+// history reads a session's scrollback for the pager.
+//
+// The ansi format, for the overlay's reason: styled text and nothing else, where vt would put its modes and
+// a cursor move on the pager's last page. By ID, as every action here is.
+func (m model) history(target *serverv1.Session) tea.Cmd {
+	label := target.Name
+	ref := paths.FormatSessionID(target.Id)
+	return func() tea.Msg {
+		resp, err := m.sessions.History(m.ctx, &serverv1.HistoryRequest{
+			Session: ref,
+			Format:  serverv1.HistoryFormat_HISTORY_FORMAT_ANSI,
+		})
+		if err != nil {
+			return historyMsg{label: label, err: err}
+		}
+		return historyMsg{label: label, text: resp.GetData()}
 	}
 }
 

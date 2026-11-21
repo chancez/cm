@@ -128,7 +128,9 @@ to the selected session instead of nesting an attachment inside it.`,
 				Shelving: serverCapabilities(cmd.Context(), cl).Supports(capability.Shelve) != capability.Absent,
 				// What cm restore sends, chosen by the machine the session runs on. See
 				// globals.sessionEnvFor.
-				Env:     g.sessionEnvFor(os.Environ(), nil),
+				Env: g.sessionEnvFor(os.Environ(), nil),
+				// The overlay's pager, so the two show scrollback the same way. See pagerCommand.
+				Pager:   tui.PagerFunc(overlayPager(cfg.Scrollback.Pager)),
 				BackKey: backKey,
 				// Passed as a pointer because zero means something: no polling at all. A flag that cannot
 				// express that would leave someone who wants a list that holds still with no way to say so.

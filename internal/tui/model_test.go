@@ -29,6 +29,8 @@ type fakeSessions struct {
 	bound   []*serverv1.BindRequest
 	unbound []*serverv1.UnbindRequest
 	shelved []*serverv1.ShelveRequest
+	// histories records every History, which answers from output as Read does.
+	histories []*serverv1.HistoryRequest
 	// restored records every Restore, and restoreResponse is what it answers instead of success.
 	restored        []*serverv1.RestoreRequest
 	restoreResponse *serverv1.RestoreResponse
@@ -98,6 +100,13 @@ func (f *fakeSessions) Restore(
 		return f.restoreResponse, nil
 	}
 	return &serverv1.RestoreResponse{Restored: req.Sessions}, nil
+}
+
+func (f *fakeSessions) History(
+	_ context.Context, req *serverv1.HistoryRequest,
+) (*serverv1.HistoryResponse, error) {
+	f.histories = append(f.histories, req)
+	return &serverv1.HistoryResponse{Data: []byte(f.output[req.Session])}, nil
 }
 
 func (f *fakeSessions) Read(
@@ -839,6 +848,7 @@ func TestTheExpandedHelpFitsWithTheSwitchKey(t *testing.T) {
 	// one measured.
 	h.model = newModel(context.Background(), Options{
 		Sessions: h.sessions, Attach: h.model.attach, Switch: h.model.switchTo, Shelving: true,
+		Pager:   func(context.Context, []byte) error { return nil },
 		Refresh: new(time.Duration),
 	})
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -846,7 +856,8 @@ func TestTheExpandedHelpFitsWithTheSwitchKey(t *testing.T) {
 	h.press("?")
 
 	got := h.model.help.View(h.model.fullHelp())
-	if !strings.Contains(got, "switch here") || !strings.Contains(got, "shelve") {
+	if !strings.Contains(got, "switch here") || !strings.Contains(got, "shelve") ||
+		!strings.Contains(got, "history") {
 		t.Fatalf("the expanded help does not name the switch key:\n%s", got)
 	}
 	if w := lipgloss.Width(got); w > h.model.width {
@@ -946,5 +957,45 @@ func TestShelveIsAbsentWhenTheServerCannot(t *testing.T) {
 	h.press("?")
 	if got := h.model.help.View(h.model.fullHelp()); strings.Contains(got, "shelve") {
 		t.Errorf("the help offers a shelve key the server cannot honor:\n%s", got)
+	}
+}
+
+// The scrollback key reads the selected session's history by ID in the ansi format and hands the text to
+// the pager, which is what the overlay's [ does for the session it is in.
+func TestScrollbackHandsTheHistoryToThePager(t *testing.T) {
+	var paged []string
+	h := newHarnessWith(t, Options{Pager: func(_ context.Context, text []byte) error {
+		paged = append(paged, string(text))
+		return nil
+	}}, session("work", "a7k2m9x4", 100))
+	h.sessions.output["@a7k2m9x4"] = "the scrollback"
+	h.list()
+
+	h.run(h.press("["))
+
+	want := []*serverv1.HistoryRequest{{Session: "@a7k2m9x4", Format: serverv1.HistoryFormat_HISTORY_FORMAT_ANSI}}
+	if !reflect.DeepEqual(h.sessions.histories, want) {
+		t.Fatalf("history requests %v, want %v", h.sessions.histories, want)
+	}
+	if h.model.paging == nil {
+		t.Fatal("the history arrived and no pager was handed the terminal")
+	}
+	if err := h.model.paging.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(paged, []string{"the scrollback"}) {
+		t.Errorf("the pager was given %q, want the session's history", paged)
+	}
+}
+
+// Without a pager there is no scrollback key, rather than one that does nothing.
+func TestScrollbackIsAbsentWithoutAPager(t *testing.T) {
+	h := newHarness(t, session("work", "a7k2m9x4", 100))
+	h.list()
+
+	h.run(h.press("["))
+
+	if len(h.sessions.histories) != 0 || h.model.paging != nil {
+		t.Errorf("[ without a pager read %v and paged %v", h.sessions.histories, h.model.paging)
 	}
 }

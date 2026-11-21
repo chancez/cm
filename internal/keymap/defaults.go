@@ -94,6 +94,7 @@ const (
 	TUIAddName      Action = "add-name"
 	TUIOutput       Action = "output"
 	TUIInfo         Action = "info"
+	TUIScrollback   Action = "scrollback"
 	TUIHelp         Action = "help"
 	TUIQuit         Action = "quit"
 	TUIUp           Action = "up"
@@ -187,6 +188,9 @@ var definitions = map[Context][]Definition{
 		{Action: TUIOutput, Label: "output", Defaults: []string{"p"}},
 		// i for info, which is `cm info` in the pane where the output was.
 		{Action: TUIInfo, Label: "info", Defaults: []string{"i"}},
+		// [, the overlay's key for the same pager. Labelled after `cm history`, which is the same text:
+		// "scrollback" took the expanded help to 102 columns of 100.
+		{Action: TUIScrollback, Label: "history", Defaults: []string{"["}},
 		{Action: TUIHelp, Label: "keys", Defaults: []string{"?"}},
 		{Action: TUIQuit, Label: "quit", Defaults: []string{"q"}, Always: []string{"ctrl-c"}},
 		{Action: TUIUp, Label: "up", Defaults: []string{"up", "k"}},

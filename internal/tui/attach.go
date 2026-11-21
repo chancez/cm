@@ -52,6 +52,34 @@ func (a *attachCommand) Run() error {
 	return a.err
 }
 
+// pagerCommand hands the terminal to the pager while the picker stands aside, as attachCommand does for
+// an attachment and for the same reason.
+type pagerCommand struct {
+	ctx   context.Context
+	pager PagerFunc
+	text  []byte
+}
+
+// SetStdin, SetStdout and SetStderr are empty for attachCommand's reason: the pager is given the real
+// terminal by the caller, and the text on stdin.
+func (*pagerCommand) SetStdin(io.Reader)  {}
+func (*pagerCommand) SetStdout(io.Writer) {}
+func (*pagerCommand) SetStderr(io.Writer) {}
+
+func (p *pagerCommand) Run() error { return p.pager(p.ctx, p.text) }
+
+// historyMsg is a session's scrollback, fetched for the pager.
+type historyMsg struct {
+	label string
+	text  []byte
+	err   error
+}
+
+// pagedMsg reports that the pager exited.
+type pagedMsg struct {
+	err error
+}
+
 // attachedMsg reports an ended attachment back to the model.
 type attachedMsg struct {
 	// ref is what was asked for, so an error can name it. The Attachment names the session the server

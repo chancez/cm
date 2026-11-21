@@ -72,6 +72,8 @@ type Sessions interface {
 	Unbind(context.Context, *serverv1.UnbindRequest) (*serverv1.UnbindResponse, error)
 	Shelve(context.Context, *serverv1.ShelveRequest) (*serverv1.ShelveResponse, error)
 	Restore(context.Context, *serverv1.RestoreRequest) (*serverv1.RestoreResponse, error)
+	// History is the scrollback key's source, in the ansi format the overlay's pager is given.
+	History(context.Context, *serverv1.HistoryRequest) (*serverv1.HistoryResponse, error)
 	// Read is the preview pane's source: the plain form renders the session's cells to text, so no
 	// escape sequence from the program reaches the frame. The raw form would, which is why it is not
 	// used here. See previewLines.
@@ -116,6 +118,9 @@ type Attachment struct {
 // be a longer way round to the same place. See the overlay's picker handover in internal/client.
 type SwitchFunc func(ref string) error
 
+// PagerFunc shows text in the user's pager and returns when it exits.
+type PagerFunc func(ctx context.Context, text []byte) error
+
 // InfoFunc is what `cm info` says about a session, in its order.
 //
 // A function rather than a table here, because the fields and their spelling belong to the command: the
@@ -141,6 +146,11 @@ type Options struct {
 	// Shelving reports that the server can shelve and restore. False leaves the shelve key unbound, which is
 	// what a server that has said it cannot gets: the RPC would fail with a method nobody has heard of.
 	Shelving bool
+	// Pager shows a session's scrollback, given as text, or is nil to leave the scrollback key unbound.
+	//
+	// Called while bubbletea has released the terminal, as an attachment is, so it may run a program that
+	// takes the terminal over. The caller's because which pager is configuration: see the overlay's.
+	Pager PagerFunc
 	// Env is the environment a restored shell starts with, which the caller chooses for the machine the
 	// session runs on, as `cm restore` does.
 	Env []string

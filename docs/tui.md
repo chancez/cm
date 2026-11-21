@@ -154,6 +154,12 @@ restores without a question and without attaching, which is `cm restore` at the 
 restores and attaches, as `cm attach` does. Unbound when the server says it cannot shelve. The label reads
 only "shelve" because "shelve/restore" took the expanded help to 102 columns of 100.
 
+**`[` opens the selected session's history in the pager**, the overlay's `[` and the same pager: `CM_PAGER`,
+`[scrollback] pager`, `PAGER`, then `less -R +G`, given the `ansi` history on stdin. The terminal is handed
+over with `tea.Exec`, as an attachment is, and only once the history has arrived, so a slow read leaves the
+list answering keys. Labelled "history" after `cm history`, since "scrollback" took the expanded help to
+102 columns of 100.
+
 **A confirmation captures its target.** The list refreshes while the question is on screen. When the
 selected session ends on its own there is nothing to put the cursor back on, so it stays where it is
 and a different session is under it: a kill that re-read the selection at `y` would end that one.
