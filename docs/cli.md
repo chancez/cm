@@ -153,13 +153,14 @@ reports capabilities without `kill.expire-after` rather than being silently igno
 ## Shelving a session, and restoring it
 
 ```sh
-cm shelve NAME... [--tag K[=V]]... [--expire-after DURATION|never] [--json]
+cm shelve [NAME]... [--tag K[=V]]... [--expire-after DURATION|never] [--json]
 cm restore NAME... [--tag K[=V]]... [--size COLSxROWS] [--on-restore MODE] [--json]
 ```
 
 `cm shelve` ends a session's programs and keeps everything needed to bring it back as it was: the
 record, names, tags, saved output and declared resume command. The session is listed with the state
-`shelved`, beside `running`, `exited` and `dead`. It is not SIGTSTP, which is what "suspend" means in a
+`shelved`, beside `running`, `exited` and `dead`. With no name it shelves the session it runs in, from
+`CM_SESSION`, as `cm detach` and `cm bind` default; `ctrl-] z` in the overlay is that. It is not SIGTSTP, which is what "suspend" means in a
 shell: nothing is stopped to be continued. The shell is sent SIGHUP as `cm kill --keep` sends it, the
 declaration is frozen as it was when the shelving began, and the server waits up to 3s for the shell and
 anything else the hangup reached to exit, then SIGKILLs what is left. The wait is why a shelved session

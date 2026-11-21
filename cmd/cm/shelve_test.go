@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/capability"
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/transport"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -129,6 +130,19 @@ func TestShelveValidatesExpireAfter(t *testing.T) {
 		if err := cmd.Execute(); err == nil || err.Error() != tc.want {
 			t.Errorf("Execute(%q) error = %v, want %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// With nothing named and nothing to fall back on, a shelve says so rather than shelving nothing.
+func TestShelveWithNoSessionOutsideOne(t *testing.T) {
+	t.Setenv(paths.SessionEnv(), "")
+	cmd := newShelveCommand(&globals{})
+	cmd.SetArgs(nil)
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	want := "no session given and CM_SESSION is not set, so there is no session to shelve"
+	if err := cmd.Execute(); err == nil || err.Error() != want {
+		t.Errorf("Execute() error = %v, want %q", err, want)
 	}
 }
 

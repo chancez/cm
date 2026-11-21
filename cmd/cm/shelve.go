@@ -23,7 +23,7 @@ func newShelveCommand(g *globals) *cobra.Command {
 		tagArgs []string
 	)
 	cmd := &cobra.Command{
-		Use:   "shelve <session>...",
+		Use:   "shelve [session]...",
 		Short: "End sessions, keeping what is needed to restore them as they were",
 		Long: `End a session's programs, keeping everything needed to bring it back as it was.
 
@@ -31,6 +31,7 @@ Its record, names, tags, saved output and the resume command a program declared
 with 'cm restore-with' are all kept, and the session is listed as shelved:
 
   cm shelve work
+  cm shelve                # the session this is running in, from CM_SESSION
   cm restore work          # or 'cm attach work', which restores it and attaches
 
 This is not SIGTSTP, which is what "suspend" means in a shell (ctrl-z): nothing
@@ -51,16 +52,22 @@ duration counted from now, after which it is removed like any ended session.
 --tag shelves the sessions carrying a tag, and a selector that matches
 nothing is an error.`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(tagArgs) > 0 {
-				if len(args) > 0 {
-					return errors.New("--tag takes no session names")
-				}
-				return nil
+			if len(tagArgs) > 0 && len(args) > 0 {
+				return errors.New("--tag takes no session names")
 			}
-			return cobra.MinimumNArgs(1)(cmd, args)
+			return nil
 		},
 		ValidArgsFunction: completeSessionNames(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 && len(tagArgs) == 0 {
+				// The calling session, as detach and bind default: shelving the one in front of you is the
+				// usual case, and it is what the overlay's z runs.
+				self, err := sessionTarget(nil, "shelve")
+				if err != nil {
+					return err
+				}
+				args = []string{self}
+			}
 			if cmd.Flags().Changed("expire-after") {
 				if _, err := store.ParseExpiry(expire); err != nil {
 					return fmt.Errorf("--expire-after: %w", err)
