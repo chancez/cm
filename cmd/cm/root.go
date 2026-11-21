@@ -131,6 +131,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newRebindCommand(g),
 		newBindCommand(g),
 		newUnbindCommand(g),
+		newRenameCommand(g),
 		newSignalCommand(g),
 		newDoctorCommand(g),
 		newDebugCommand(g),

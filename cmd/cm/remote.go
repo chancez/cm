@@ -449,6 +449,7 @@ var remoteCapable = map[string]bool{
 	// Names, tags, and what a client is pointed at.
 	"bind":            true,
 	"unbind":          true,
+	"rename":          true,
 	"rebind":          true,
 	"switch":          true,
 	"tag":             true,

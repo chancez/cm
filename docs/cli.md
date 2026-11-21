@@ -43,8 +43,9 @@ than one name being cut in half: everything the column shows is meant to be type
 `cm switch` moves this window's client to another session and leaves every name alone, so a restarted
 terminal returns to the session it always named. `cm rebind` moves the window's name as well, which is what
 makes it stick. `cm rebind --replace` also ends the session the name came off, and `rebind_replaces` makes that the
-default. `cm bind` and `cm unbind` manage names: between them they cover renaming a session, giving it a second
-name, and moving a name to another session. `cm bind <name>` with no session names the session it is run
+default. `cm bind` and `cm unbind` manage names: between them they cover giving a session a second name and moving a
+name to another session. `cm rename` is the two in one, and drops the old name only when the session had
+exactly one. `cm bind <name>` with no session names the session it is run
 in, from `CM_SESSION`, the same way `cm tag` and `cm report` default. The same two are a key each where a
 session is in front of you: `ctrl-] b` in an attached session, `b` in `cm tui`, both adding a name rather
 than moving one. Renaming a session a terminal emulator named is the case to be careful with, and
@@ -219,7 +220,7 @@ restorable, and the client prints the notice only for one it does.
 
 ## JSON output
 
-`list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `switch`, `wait`, `send`, `run`, `status`,
+`list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `rename`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
 `clients current`, `clients upgrade`, and `clients restart` accept
 `--json`.

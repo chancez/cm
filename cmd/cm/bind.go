@@ -54,7 +54,7 @@ than ending someone's shell.`,
 		Args:              cobra.RangeArgs(1, 2),
 		ValidArgsFunction: completeBindArgs(g),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, session, err := splitBindArgs(args)
+			name, session, err := splitBindArgs(args, "bind a name to")
 			if err != nil {
 				return err
 			}
@@ -154,7 +154,7 @@ there is no way to make a shell unreachable by taking a name away from it.`,
 // The name is checked before the target is resolved, so what is wrong with the name is what gets
 // reported. The other order answers `cm bind @a7k2m9x4` outside a session with "no session given", which
 // names the argument that was omitted rather than the one that cannot mean what it says.
-func splitBindArgs(args []string) (name, session string, err error) {
+func splitBindArgs(args []string, verb string) (name, session string, err error) {
 	name = args[0]
 	// An ID cannot be bound, since an ID is what names point at. Refused here so a typo costs no server
 	// round trip, and because the error can name the rule.
@@ -165,7 +165,7 @@ func splitBindArgs(args []string) (name, session string, err error) {
 	if err := paths.ValidateSessionName(name); err != nil {
 		return "", "", err
 	}
-	session, err = sessionTarget(args[1:], "bind a name to")
+	session, err = sessionTarget(args[1:], verb)
 	if err != nil {
 		return "", "", err
 	}

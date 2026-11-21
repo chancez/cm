@@ -58,7 +58,7 @@ func TestSplitBindArgs(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			t.Setenv(paths.SessionEnv(), tt.env)
 
-			name, session, err := splitBindArgs(tt.args)
+			name, session, err := splitBindArgs(tt.args, "bind a name to")
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("splitBindArgs(%q) error = %v, want one containing %q",
