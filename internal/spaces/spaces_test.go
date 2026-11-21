@@ -1,6 +1,7 @@
 package spaces
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -28,5 +29,14 @@ func TestValidateName(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("ValidateName(%q) = %v, want ok=%v", tc.name, err, tc.ok)
 		}
+	}
+}
+
+func TestCompareGroupsDefaultFirst(t *testing.T) {
+	got := []string{"zeta", "", "alpha", "default", "cm"}
+	slices.SortStableFunc(got, Compare)
+	want := []string{"", "default", "alpha", "cm", "zeta"}
+	if !slices.Equal(got, want) {
+		t.Errorf("sorted = %q, want %q", got, want)
 	}
 }

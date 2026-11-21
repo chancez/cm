@@ -127,6 +127,13 @@ right. Not attempted yet.
 
 ## Choices worth knowing
 
+**Grouped by space.** Rows sort by space, `default` first, then by creation as `cm ls` does, so a list
+across several spaces reads as one block per space. A row outside `default` starts with `[space]`, and
+`/` matches it; inside `default` nothing is shown, since repeating it on every row says nothing.
+`--space` limits the list to one, filtered on the server like `--tag`. Headers between the blocks were
+not added: bubbles' list has no non-selectable rows, and a header the cursor could land on would be a
+row that acts on nothing.
+
 **Attaching by ID, never by name.** A row is drawn from a list up to a second old, and a name is a
 binding that `cm bind` or `cm switch` can move in that window. Worse, `cm attach` creates a session for
 a name that holds nothing, so a name unbound since the refresh would silently make a new shell.

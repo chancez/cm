@@ -26,6 +26,7 @@ func newTUICommand(g *globals) *cobra.Command {
 		preview    bool
 		refresh    time.Duration
 		tagArgs    []string
+		space      string
 		chosenFile string
 		backKey    string
 		filter     string
@@ -59,6 +60,9 @@ to the selected session instead of nesting an attachment inside it.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateSelectors(tagArgs); err != nil {
+				return err
+			}
+			if err := validateSpaceArg(space); err != nil {
 				return err
 			}
 			// Checked before a server is started, since a picker with nothing to draw on has nothing to
@@ -112,11 +116,18 @@ to the selected session instead of nesting an attachment inside it.`,
 				return err
 			}
 			pickerKeys, _ := cfg.Keymap(keymap.TUI)
+			// An older server ignores the filter and would show every space as though it were this one.
+			if space != "" {
+				if err := requireSpaces(cmd.Context(), cl); err != nil {
+					return err
+				}
+			}
 
 			return tui.Run(cmd.Context(), tui.Options{
 				Sessions: cl,
 				Keys:     pickerKeys,
 				Tags:     tagArgs,
+				Space:    space,
 				Filter:   filter,
 				Notice:   notice,
 				Self:     os.Getenv(paths.SessionEnv()),
@@ -146,6 +157,7 @@ to the selected session instead of nesting an attachment inside it.`,
 		"show the selected session's last output under the list")
 	f.DurationVar(&refresh, "refresh", time.Second,
 		"how often to re-read the session list, or 0 to only refresh after an action")
+	f.StringVar(&space, "space", "", "only sessions in this space")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.StringVar(&filter, "filter", "",

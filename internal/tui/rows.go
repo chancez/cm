@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/spaces"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -37,8 +38,8 @@ func (i item) ref() string { return paths.FormatSessionID(i.session.Id) }
 // is the directory, the command that is running, or the tag they grouped it under.
 func (i item) FilterValue() string {
 	s := i.session
-	fields := make([]string, 0, 6+len(s.Names)+len(s.Tags))
-	fields = append(fields, s.Name, s.Id, s.Command, s.Title, s.Cwd, s.ReportedDetail)
+	fields := make([]string, 0, 7+len(s.Names)+len(s.Tags))
+	fields = append(fields, s.Name, s.Id, s.Command, s.Title, s.Cwd, s.ReportedDetail, s.Space)
 	fields = append(fields, s.Names...)
 	for k, v := range s.Tags {
 		if v == "" {
@@ -310,6 +311,11 @@ func (d delegate) tail(it item) string {
 		where, title = it.session.Title, ""
 	}
 	var parts []string
+	// The space first, in brackets so it does not read as a title, and only outside default: a list where
+	// everything is in default says nothing by repeating it.
+	if sp := it.session.Space; sp != "" && sp != spaces.Default {
+		parts = append(parts, "["+sp+"]")
+	}
 	for _, part := range []string{title, where, it.detail(title != "")} {
 		if part != "" {
 			parts = append(parts, part)
@@ -355,6 +361,10 @@ func rows(sessions []*serverv1.Session) []list.Item {
 	sorted := make([]*serverv1.Session, len(sessions))
 	copy(sorted, sessions)
 	sort.SliceStable(sorted, func(i, j int) bool {
+		// By space first, as `cm ls` groups them.
+		if c := spaces.Compare(sorted[i].Space, sorted[j].Space); c != 0 {
+			return c < 0
+		}
 		if sorted[i].CreatedAtUnix != sorted[j].CreatedAtUnix {
 			return sorted[i].CreatedAtUnix < sorted[j].CreatedAtUnix
 		}

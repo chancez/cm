@@ -9,6 +9,7 @@
 package spaces
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,4 +52,19 @@ func ValidateName(name string) error {
 		}
 	}
 	return nil
+}
+
+// Compare orders spaces as listings group by them: default first, since it is where everything without a
+// space of its own lands, then by name. Empty, from a server that predates spaces, sorts as default.
+func Compare(a, b string) int {
+	a, b = cmp.Or(a, Default), cmp.Or(b, Default)
+	switch {
+	case a == b:
+		return 0
+	case a == Default:
+		return -1
+	case b == Default:
+		return 1
+	}
+	return strings.Compare(a, b)
 }

@@ -1112,3 +1112,20 @@ func TestPrintNonEmptySessionInfo(t *testing.T) {
 		t.Errorf("fields printed = %q, want %q", got, want)
 	}
 }
+
+// A listing groups by space, default first, and keeps creation order within one.
+func TestSortSessionsGroupsBySpace(t *testing.T) {
+	sessions := []*serverv1.Session{
+		{Name: "infra", Space: "infra", CreatedAtUnix: 1},
+		{Name: "new", Space: "default", CreatedAtUnix: 9},
+		{Name: "old", Space: "default", CreatedAtUnix: 2},
+	}
+	sortSessions(sessions)
+	var got []string
+	for _, s := range sessions {
+		got = append(got, s.Name)
+	}
+	if want := []string{"old", "new", "infra"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sorted = %v, want %v", got, want)
+	}
+}

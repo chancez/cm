@@ -445,6 +445,11 @@ func writeJSON(w io.Writer, v any) error {
 // sortSessions orders sessions oldest first, so output is stable across calls.
 func sortSessions(sessions []*serverv1.Session) {
 	sort.Slice(sessions, func(i, j int) bool {
+		// Grouped by space first, so a listing across several reads as one block per space. Changes
+		// nothing for someone who uses only default.
+		if c := spaces.Compare(sessions[i].Space, sessions[j].Space); c != 0 {
+			return c < 0
+		}
 		if sessions[i].CreatedAtUnix != sessions[j].CreatedAtUnix {
 			return sessions[i].CreatedAtUnix < sessions[j].CreatedAtUnix
 		}

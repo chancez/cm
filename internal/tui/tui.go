@@ -172,6 +172,8 @@ type Options struct {
 	// Tags filters the list, in the form `cm ls --tag` takes. Applied on the server for every
 	// refresh, so a session that gains a matching tag appears without a restart.
 	Tags []string
+	// Space limits the list to one space, applied on the server like Tags. Empty lists every space.
+	Space string
 	// Filter starts the picker with this already typed into "/", applied. See Match.
 	Filter string
 	// Preview starts the picker with the output pane open.

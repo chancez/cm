@@ -162,6 +162,14 @@ func TestARowShowsTheProgramTitle(t *testing.T) {
 		name:    "no title leaves the command",
 		session: &serverv1.Session{Cwd: "/home/u/docs", CwdIsLocal: true, Command: "make test"},
 		want:    "~/docs  make test",
+	}, {
+		name:    "a space other than default leads",
+		session: &serverv1.Session{Cwd: "/home/u/docs", CwdIsLocal: true, Space: "infra"},
+		want:    "[infra]  ~/docs",
+	}, {
+		name:    "default is not repeated on every row",
+		session: &serverv1.Session{Cwd: "/home/u/docs", CwdIsLocal: true, Space: "default"},
+		want:    "~/docs",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,5 +213,32 @@ func TestAStartingFilterShowsWhatMatchReturns(t *testing.T) {
 	}
 	if got := h.model.list.FilterState(); got != list.FilterApplied {
 		t.Errorf("filter state %v, want applied so the keys act on the list", got)
+	}
+}
+
+// Rows group by space, default first, and keep creation order within one, as `cm ls` does.
+func TestRowsGroupBySpace(t *testing.T) {
+	sessions := []*serverv1.Session{
+		{Name: "infra-old", Space: "infra", CreatedAtUnix: 1},
+		{Name: "default-new", Space: "default", CreatedAtUnix: 9},
+		{Name: "cm", Space: "cm", CreatedAtUnix: 5},
+		{Name: "infra-new", Space: "infra", CreatedAtUnix: 8},
+		{Name: "default-old", Space: "default", CreatedAtUnix: 2},
+	}
+	var got []string
+	for _, it := range rows(sessions) {
+		got = append(got, it.(item).session.Name)
+	}
+	want := []string{"default-old", "default-new", "cm", "infra-old", "infra-new"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %v, want %v", got, want)
+	}
+}
+
+// "/" finds a session by its space.
+func TestFilterValueIncludesTheSpace(t *testing.T) {
+	it := item{session: &serverv1.Session{Name: "s17", Space: "infra"}}
+	if !strings.Contains(it.FilterValue(), "infra") {
+		t.Errorf("FilterValue = %q, want the space in it", it.FilterValue())
 	}
 }

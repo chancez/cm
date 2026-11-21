@@ -53,7 +53,9 @@ type model struct {
 	// env is what a restored shell starts with. See Options.Env.
 	env  []string
 	tags []string
-	home string
+	// space limits the list to one space. See Options.Space.
+	space string
+	home  string
 	// self is the session this picker runs in, as a reference, or empty outside one. See Options.Self.
 	self string
 	// interval is how often the list re-reads the server, zero for not at all. See Options.Refresh.
@@ -178,6 +180,7 @@ func newModel(ctx context.Context, opts Options) model {
 		pager:    opts.Pager,
 		env:      opts.Env,
 		tags:     opts.Tags,
+		space:    opts.Space,
 		home:     home,
 		self:     opts.Self,
 		list:     l,
@@ -244,7 +247,7 @@ func (m model) Init() tea.Cmd {
 // fetch asks the server what exists.
 func (m model) fetch() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := m.sessions.List(m.ctx, &serverv1.ListRequest{Tags: m.tags})
+		resp, err := m.sessions.List(m.ctx, &serverv1.ListRequest{Tags: m.tags, Space: m.space})
 		if err != nil {
 			return listedMsg{err: err}
 		}
