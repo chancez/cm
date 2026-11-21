@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/chancez/cm/internal/seq"
+	"github.com/chancez/cm/internal/spaces"
 	"strings"
 	"time"
 )
@@ -15,7 +16,7 @@ const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
 	reported_at, resume_argv, resume_frame, prompt_seen, expire_after, command_argv,
-	typed_command, typed_frame, on_restore, on_restore_frame`
+	typed_command, typed_frame, on_restore, on_restore_frame, space`
 
 // Create inserts a session record.
 //
@@ -30,10 +31,22 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	if sess.State == "" {
 		sess.State = StateRunning
 	}
+	if sess.Space == "" {
+		sess.Space = spaces.Default
+	}
 
-	_, err := s.db.ExecContext(ctx, `
+	// One transaction, so a session is never written naming a space that has no record.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("creating session %s: %w", sess.ID, err)
+	}
+	defer tx.Rollback()
+	if err := ensureSpace(ctx, tx, sess.Space, now); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, strings.Join(sess.Command, " "),
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
@@ -42,12 +55,12 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		sess.Reported.State, sess.Reported.Detail, sess.Reported.Source,
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
 		sess.PromptSeen, int64(sess.ExpireAfter), encodeArgv(sess.Command),
-		sess.Typed.Line, sess.Typed.Frame, sess.OnRestore, sess.OnRestoreFrame,
+		sess.Typed.Line, sess.Typed.Frame, sess.OnRestore, sess.OnRestoreFrame, sess.Space,
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Get returns one session by ID.
@@ -146,6 +159,8 @@ type Update struct {
 	Typed *TypedCommand
 	// OnRestoreFrame replaces what the session's own on_restore covers. See Session.OnRestoreFrame.
 	OnRestoreFrame *string
+	// Space moves the session to another space, creating that space's record if it has none.
+	Space *string
 }
 
 // TypedCommand is the command line a session's shell started and has not returned from, as the shell
@@ -317,15 +332,29 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	if u.OnRestoreFrame != nil {
 		add("on_restore_frame", *u.OnRestoreFrame)
 	}
+	if u.Space != nil {
+		add("space", *u.Space)
+	}
 	if len(sets) == 0 {
 		return nil
 	}
 
-	add("updated_at", time.Now().UnixMilli())
+	now := time.Now()
+	add("updated_at", now.UnixMilli())
 	args = append(args, id)
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("updating session %s: %w", id, err)
+	}
+	defer tx.Rollback()
+	if u.Space != nil {
+		if err := ensureSpace(ctx, tx, *u.Space, now); err != nil {
+			return err
+		}
+	}
 	// Column names come from this function's own literals, never from input.
-	res, err := s.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
 	if err != nil {
 		return fmt.Errorf("updating session %s: %w", id, err)
@@ -337,7 +366,7 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	if n == 0 {
 		return fmt.Errorf("%q: %w", id, ErrNotFound)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // encodeStringMap renders a map column for storage. An empty map is stored as an empty string
@@ -423,7 +452,7 @@ func scanSession(sc scanner) (Session, error) {
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
 		&sess.PromptSeen, &expireAfter, &commandArgv, &sess.Typed.Line, &sess.Typed.Frame,
-		&sess.OnRestore, &sess.OnRestoreFrame,
+		&sess.OnRestore, &sess.OnRestoreFrame, &sess.Space,
 	)
 	if err != nil {
 		return Session{}, err

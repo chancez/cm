@@ -248,8 +248,11 @@ type Session struct {
 	// by an --in-shell attach or a revive, until it returns. "next": that command, whose frame has not opened
 	// yet, as a declaration carried into a revive waits for one.
 	OnRestoreFrame string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Space is the space the session belongs to. Empty on Create means spaces.Default. The store creates a
+	// space's record when a session is put in one, so a space a session names always exists.
+	Space     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // BackupPath names the snapshot taken before migrating a database off a given schema version.
@@ -593,5 +596,22 @@ var migrations = []string{
 	`
 	ALTER TABLE sessions ADD COLUMN on_restore TEXT NOT NULL DEFAULT '';
 	ALTER TABLE sessions ADD COLUMN on_restore_frame TEXT NOT NULL DEFAULT '';
+	`,
+	// Spaces: the group every session belongs to exactly one of. See internal/spaces.
+	//
+	// A table of its own rather than only a column, because a space has to outlive its sessions: it is what
+	// a closed window's session is found again in, and one that vanished with its last session would take
+	// the place to look with it. Every existing row is put in default, which the table holds from the start
+	// so no session's space lacks a record.
+	`
+	CREATE TABLE spaces (
+		name       TEXT PRIMARY KEY,
+		created_at INTEGER NOT NULL
+	) STRICT;
+
+	INSERT INTO spaces (name, created_at) VALUES ('default', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+	ALTER TABLE sessions ADD COLUMN space TEXT NOT NULL DEFAULT 'default';
+	CREATE INDEX sessions_space ON sessions(space);
 	`,
 }

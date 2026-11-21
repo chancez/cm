@@ -54,6 +54,7 @@ func sampleSession(id string) Session {
 		OnRestore:   "command",
 		// Bound to a frame, as an --in-shell attach's grant is once its command starts.
 		OnRestoreFrame: "salt-4",
+		Space:          "cm",
 		CreatedAt:      time.UnixMilli(1_700_000_000_000),
 	}
 }
@@ -428,8 +429,10 @@ func TestUpgradeFromThePreviousSchemaKeepsSessions(t *testing.T) {
 		ID:         "mig00001",
 		ShimSocket: "/run/cm/shim-old.sock",
 		State:      StateRunning,
-		CreatedAt:  time.UnixMilli(1_700_000_000_000),
-		UpdatedAt:  time.UnixMilli(1_700_000_000_000),
+		// Every row from before spaces is put in the default one.
+		Space:     "default",
+		CreatedAt: time.UnixMilli(1_700_000_000_000),
+		UpdatedAt: time.UnixMilli(1_700_000_000_000),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("after upgrading from the previous schema Get() = %+v\nwant %+v", got, want)
@@ -875,6 +878,7 @@ func TestUpgradeReadsAnOldJoinedCommand(t *testing.T) {
 		ShimSocket: "/run/cm/shim-old.sock",
 		State:      StateExited,
 		Command:    []string{"nvim", "notes.md"},
+		Space:      "default",
 		CreatedAt:  time.UnixMilli(1_700_000_000_000),
 		UpdatedAt:  time.UnixMilli(1_700_000_000_000),
 	}

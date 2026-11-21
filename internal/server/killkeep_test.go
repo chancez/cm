@@ -141,6 +141,7 @@ func TestKillWithKeepRecordsARetentionOnAnEndedSession(t *testing.T) {
 		ShimSocket:       dirs.ShimSocket("ended"),
 		State:            store.StateExited,
 		PersistRequested: true,
+		Space:            "cm",
 	}
 	recordSession(t, st, rec)
 
