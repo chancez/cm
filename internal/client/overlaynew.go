@@ -21,11 +21,15 @@ import (
 //
 // dir is the current session's directory, which is what "a new session here" means, or empty for the
 // directory this client was started in. Explicit when given, so the server does not treat it as a guess.
-func newSessionOpen(opts Options, dir string, rows, cols uint16) *serverv1.Open {
+// space is the current session's space, for the same reason, or empty to let the server decide.
+func newSessionOpen(opts Options, dir, space string, rows, cols uint16) *serverv1.Open {
 	opts.pending = nil
 	open := opts.Open("")
 	open.Command = nil
 	open.Tags = nil
+	// The current session's rather than this window's --space, which named the session the window was opened
+	// on: after a switch or a move, "here" is somewhere else.
+	open.Space = space
 	open.Persist = false
 	open.OnRestore = ""
 	open.IfRunning = serverv1.IfRunning_IF_RUNNING_UNSPECIFIED
@@ -49,6 +53,17 @@ func sessionDir(resp *serverv1.ListResponse, currentID string) string {
 	for _, s := range resp.GetSessions() {
 		if s.GetId() == currentID && s.GetCwdIsLocal() {
 			return s.GetCwd()
+		}
+	}
+	return ""
+}
+
+// sessionSpace is the space of the session with currentID, or empty when the list does not hold it, which
+// leaves the choice to the server.
+func sessionSpace(resp *serverv1.ListResponse, currentID string) string {
+	for _, s := range resp.GetSessions() {
+		if s.GetId() == currentID {
+			return s.GetSpace()
 		}
 	}
 	return ""

@@ -101,6 +101,18 @@ service Server {
   // metadata would create the session if the name were wrong.
   rpc Tag(TagRequest) returns (TagResponse);
 
+  // Spaces lists every space with how many sessions it holds; CreateSpace and RemoveSpace manage one; Move
+  // puts sessions in another.
+  //
+  // A space is a record of its own rather than something derived from the sessions, because it has to
+  // outlive them: it is where a session whose window was closed is found again. Move is separate from Tag
+  // for the reason Tag is separate from Attach: a session in the wrong space is corrected without
+  // attaching to it.
+  rpc Spaces(SpacesRequest) returns (SpacesResponse);
+  rpc CreateSpace(CreateSpaceRequest) returns (CreateSpaceResponse);
+  rpc RemoveSpace(RemoveSpaceRequest) returns (RemoveSpaceResponse);
+  rpc Move(MoveRequest) returns (MoveResponse);
+
   // Bind points a name at a session, and Unbind removes a name.
   //
   // Separate calls rather than flags on Attach because neither one attaches: naming a session that
@@ -642,6 +654,20 @@ message Open {
   // not tell a request from a default. False from an older client, whose --dir is then not honored on a
   // revive.
   bool cwd_explicit = 29;
+
+  // The space a newly created session is put in. Empty means the space of the session space_from names,
+  // and otherwise default. A revive keeps the space its record was in unless this names another. Ignored
+  // when attaching to a session that is running, since an attach is not how a session moves; Move is.
+  string space = 30;
+
+  // The session a newly created one takes its space from when space is empty: the one this client runs
+  // inside, from CM_SESSION, so a session started from inside a space stays in it.
+  //
+  // Not inside_session, which is set only for an attach nested on a terminal and suspends the parent's
+  // detach key: a script's `cm run` inside a session is no nesting, and is still in that session's space.
+  // And a reference resolved by the server rather than an exported CM_SPACE, which every flag's CM_
+  // binding would read as --space, and which would go stale the moment the session moved.
+  string space_from = 31;
 }
 
 // IfRunning is what an Open carrying a command does when its session is already running.
@@ -995,6 +1021,52 @@ message TagResponse {
   map<string, string> tags = 1;
 }
 
+message SpacesRequest {}
+
+message SpacesResponse {
+  repeated Space spaces = 1;
+}
+
+message Space {
+  string name = 1;
+  int64 created_at_unix = 2;
+  // How many session records are in it, ended ones included, since a shelved session is in its space
+  // as much as a running one.
+  uint32 sessions = 3;
+  // How many of those are running.
+  uint32 running = 4;
+}
+
+message CreateSpaceRequest {
+  string name = 1;
+}
+
+// Empty: creating a space that exists already succeeds, since the caller's intent is satisfied.
+message CreateSpaceResponse {}
+
+message RemoveSpaceRequest {
+  string name = 1;
+}
+
+// Empty: removing refuses a space that still holds a session, and the default space, as an error.
+message RemoveSpaceResponse {}
+
+message MoveRequest {
+  // Sessions to move. Empty means the session the caller is in, from CM_SESSION.
+  repeated string sessions = 1;
+  // The space to put them in, created if it does not exist, so moving a session somewhere new is one
+  // step rather than two.
+  string space = 2;
+}
+
+message MoveResponse {
+  // The space each session was in before, keyed by the reference given, so a caller can say what moved
+  // from where.
+  map<string, string> moved = 1;
+  // Sessions that could not be moved, keyed by reference. Shaped like KillResponse.errors.
+  map<string, string> errors = 2;
+}
+
 message DetachRequest {
   // Sessions whose clients to disconnect. Repeated to match Kill, so one call can clear several.
   repeated string sessions = 1;
@@ -1064,6 +1136,8 @@ message ListRequest {
   // Strings rather than a map so a bare key is expressible: a map entry with an empty value cannot
   // distinguish "has this key" from "has this key set to empty".
   repeated string tags = 2;
+  // Only sessions in this space. Empty matches every space.
+  string space = 3;
 }
 
 message ListResponse {
@@ -1272,6 +1346,9 @@ message Session {
   // revived it: "shell", "none", "prefill" or "command". Empty means the configured on_restore. A revive that
   // passes none uses this, and one that passes one replaces it.
   string on_restore = 34;
+
+  // The space the session is in. Empty from a server that predates spaces.
+  string space = 35;
 }
 
 // LocationFrame is one command a session is inside.

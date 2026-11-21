@@ -14,6 +14,7 @@ import (
 
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/shquote"
+	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -109,6 +110,8 @@ type sessionJSON struct {
 	// should not have to parse a rendering meant for a column. Always present, and empty rather than
 	// null for a session with no tags, so `jq '.[].tags.project'` does not have to special-case it.
 	Tags map[string]string `json:"tags"`
+	// Space is the space the session is in. Empty only from a server that predates spaces.
+	Space string `json:"space"`
 	// Hosting names the sessions attached from inside this one by a nested `cm attach`.
 	//
 	// Also says why this session's own title and directory are standing still: while it hosts a nested
@@ -275,6 +278,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedProgress:    s.ReportedProgress,
 		ReportedAt:          unixTimeOrNil(s.ReportedAtUnix),
 		Tags:                sessionTags,
+		Space:               s.Space,
 		Hosting:             hosting,
 		AnnouncedClients:    s.AnnouncedClients,
 		ShimBuild:           s.ShimBuild,
@@ -656,10 +660,14 @@ func writeSessionsTable(w io.Writer, sessions []*serverv1.Session, termCols int)
 	//
 	// Keyed on the whole list rather than per row, so the header and every row agree on the shape.
 	// Deciding per row misaligns the table, which is worse than an empty cell.
-	var showTags, showTitle bool
+	var showTags, showTitle, showSpace bool
 	for _, s := range sessions {
 		if len(s.Tags) > 0 {
 			showTags = true
+		}
+		// Someone who has made no space but default pays nothing for the column.
+		if s.Space != "" && s.Space != spaces.Default {
+			showSpace = true
 		}
 		if s.Title != "" {
 			showTitle = true
@@ -689,6 +697,11 @@ func writeSessionsTable(w io.Writer, sessions []*serverv1.Session, termCols int)
 		{"CREATED", func(s *serverv1.Session) string {
 			return humanAge(time.Unix(s.CreatedAtUnix, 0))
 		}},
+	}
+	if showSpace {
+		// Before TITLE, since a space name is bounded and short, and it is the grouping a listing of several
+		// spaces is read by.
+		columns = append(columns, column{"SPACE", func(s *serverv1.Session) string { return s.Space }})
 	}
 	// titleIndex marks which column TITLE ended up at, so the sizing pass below can find it without
 	// matching on the header string. -1 when no session reported a title and the column is absent.
@@ -844,6 +857,7 @@ func sessionFields(s *serverv1.Session) []struct {
 		// Rendered as "k=v,k" here rather than as a map, since --field prints one bare value for a
 		// script to read. The JSON output carries the map for anything that wants the structure.
 		{"tags", tags.Format(j.Tags)},
+		{"space", j.Space},
 		// Space-separated, since a session name cannot contain a space and `--field hosting` is read
 		// by a script that would otherwise have to strip punctuation.
 		{"hosting", strings.Join(j.Hosting, " ")},

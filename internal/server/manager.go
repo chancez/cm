@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/chancez/cm/internal/progstatus"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
+	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -947,6 +949,13 @@ type OpenOptions struct {
 	// Tags are the caller's own labels for a newly created session. Ignored when the session
 	// already exists, since an attach is not how tags are changed.
 	Tags map[string]string
+	// Space is the space a newly created session is put in, as the caller asked for it. Ignored when the
+	// session is running, since an attach is not how a session moves. Empty: a revive keeps its record's
+	// space, and anything else takes InheritSpace.
+	Space string
+	// InheritSpace is the space of the session the client is inside, used when Space is empty and there is
+	// no record to keep one from, so a session started from inside a space stays in it. Empty means default.
+	InheritSpace string
 
 	// restoreFrom is a saved log to replay before the session starts producing output. Set
 	// internally when reviving a dead session, never by a caller.
@@ -1204,6 +1213,12 @@ func (m *Manager) createWithID(ctx context.Context, opts OpenOptions) (*Session,
 	return sess, true, nil
 }
 
+// space is the space a session created from these options goes in: the one asked for, else the parent's,
+// else default. A revive has already put its record's in Space by now; see inheritForRestore.
+func (o OpenOptions) space() string {
+	return cmp.Or(o.Space, o.InheritSpace, spaces.Default)
+}
+
 // inheritForRestore carries a dead session's saved state into the options that will recreate it.
 //
 // The record is deleted immediately after, so anything a restore needs has to be read here.
@@ -1242,6 +1257,12 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 			merged[k] = v
 		}
 		opts.Tags = merged
+	}
+
+	// The space, for the reason tags are kept above: it says where the session is found, not what it held.
+	// A revive is the session coming back, so it comes back where it was left unless the caller moves it.
+	if opts.Space == "" {
+		opts.Space = rec.Space
 	}
 
 	if m.persist == nil || rec.LogPath == "" {
@@ -1345,6 +1366,7 @@ func (m *Manager) create(ctx context.Context, opts OpenOptions) (*Session, error
 		Cols:       int(opts.Cols),
 		Env:        opts.ClientEnv,
 		Tags:       opts.Tags,
+		Space:      opts.space(),
 		// Records why there is a log, which is what expiry keys off.
 		PersistRequested: requested,
 		// What a revive of this session does, when the revive does not say. See inheritForRestore.

@@ -15,6 +15,7 @@ func newListCommand(g *globals) *cobra.Command {
 		prefix  string
 		asJSON  bool
 		tagArgs []string
+		space   string
 	)
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -33,7 +34,9 @@ belongs to some project.
 
 Tags group sessions that a name cannot. A per-window session is named by the
 server, so it is called "s17" and --prefix has nothing to match on, and a session
-belongs to several groupings at once while its name only says one thing.`,
+belongs to several groupings at once while its name only says one thing.
+
+--space lists one space. See 'cm space'.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Parsed client-side too, so a typo is reported the same way whether or not a server is
@@ -41,8 +44,18 @@ belongs to several groupings at once while its name only says one thing.`,
 			if _, err := tags.ParseSelector(tagArgs); err != nil {
 				return err
 			}
+			if err := validateSpaceArg(space); err != nil {
+				return err
+			}
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
-				resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix, Tags: tagArgs})
+				// Only when filtering on one, since an older server would ignore the filter and list every
+				// space as though it were the one asked for.
+				if space != "" {
+					if err := requireSpaces(ctx, cl); err != nil {
+						return err
+					}
+				}
+				resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix, Tags: tagArgs, Space: space})
 				if err != nil {
 					return err
 				}
@@ -57,6 +70,7 @@ belongs to several groupings at once while its name only says one thing.`,
 	f.StringVar(&prefix, "prefix", "", "only sessions whose name starts with this")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.StringVar(&space, "space", "", "only sessions in this space")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
 	return cmd
 }

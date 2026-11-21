@@ -568,6 +568,8 @@ type sessionJSON struct {
 	ReportedAt     *time.Time `json:"reported_at"`
 	// Tags are the caller's own labels for the session.
 	Tags map[string]string `json:"tags"`
+	// Space is the space the session is in.
+	Space string `json:"space"`
 	// Hosting names the sessions attached from inside this one by a nested `cm attach`, which is also
 	// what decides who owns the detach key.
 	Hosting []string `json:"hosting"`

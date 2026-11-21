@@ -219,11 +219,44 @@ Both commands are refused against a server that reports capabilities without `sh
 restart that fixes it. `cm attach` needs no check: a server that predates this reports no session as
 restorable, and the client prints the notice only for one it does.
 
+## Spaces
+
+```sh
+cm attach --space NAME ...        cm run --space NAME ...
+cm list --space NAME
+cm space list [--json]
+cm space create NAME
+cm space remove NAME
+cm space move SPACE [SESSION]... [--json]
+```
+
+Every session is in exactly one space. A created session goes in the one `--space` names, else in the
+space of the session the command runs in, from `CM_SESSION`, else in `default`. A revive keeps the space
+its record was in unless `--space` names another, and an attach to a running session ignores the flag:
+`cm space move` is how a session moves, ended ones included, and it creates the space it names. A new
+session from the overlay goes in the space of the session the window is on.
+
+A space is a record of its own, so it outlives its sessions: `cm space list` shows each with its session
+and running counts, empty ones included. `cm space remove` refuses a space that holds any session,
+shelved and exited ones included, and `default`. Names follow session names, so `:` is refused, which a
+qualified reference to another host will need.
+
+The session is told nothing. cm exports no `CM_SPACE`, which every flag's `CM_` binding would read as
+`--space` and which would go stale on a move; the server resolves the calling session through
+`Open.space_from` instead, which is cleared under `--remote` since it names a local session. `CM_SPACE` set
+by hand is read as `--space` and not inherited by a session's shell.
+
+`cm list` shows a SPACE column once some session is outside `default`, and `space` in its JSON and in
+`cm info`. Every `cm space` command and `cm list --space` are refused against a server without the `spaces`
+capability, which would ignore the filter. `cm attach --space` is not checked, since the attach handshake
+reports no capabilities and attach is every window's startup; an older server files the session in no
+space.
+
 ## JSON output
 
 `list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `rename`, `switch`, `wait`, `send`, `run`, `status`,
 `doctor`, `config`, `version`, `detach`, `upgrade`, `rebind`, `clients`, `clients list`,
-`clients current`, `clients upgrade`, and `clients restart` accept
+`clients current`, `clients upgrade`, `clients restart`, `space list`, and `space move` accept
 `--json`.
 
 The shape is a contract, defined in `cmd/cm/output.go` rather than by marshalling the wire messages.

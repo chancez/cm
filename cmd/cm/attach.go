@@ -32,6 +32,7 @@ func newAttachCommand(g *globals) *cobra.Command {
 		prefixKeyArg string
 		noAttach     bool
 		tagArgs      []string
+		space        string
 		ifRunningArg string
 		sizeArg      string
 		inShell      bool
@@ -110,6 +111,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 			}
 			sessionTags, err := tags.ParseAll(tagArgs)
 			if err != nil {
+				return err
+			}
+			if err := validateSpaceArg(space); err != nil {
 				return err
 			}
 			ifRunning, ok := ifRunningValues[ifRunningArg]
@@ -248,6 +252,10 @@ matters for another multiplexer, which sees the key first and never passes it on
 				Persist:   persist,
 				OnRestore: onRestore,
 				Tags:      sessionTags,
+				Space:     space,
+				// Unconditional, unlike InsideSession below: a script's --no-attach inside a session is no
+				// nesting but is still in that session's space.
+				SpaceFrom: os.Getenv(paths.SessionEnv()),
 				// What the command does when the session is already running. Applied to this attach's
 				// first Open only, so a reconnect or an upgrade returns to the session it created.
 				IfRunning: ifRunning,
@@ -317,6 +325,8 @@ matters for another multiplexer, which sees the key first and never passes it on
 		"set a KEY=VALUE in the new session's environment (repeatable, ignored when reattaching)")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"label the new session, as key or key=value (repeatable, ignored when reattaching)")
+	f.StringVar(&space, "space", "",
+		"put the new session in this space (default: the calling session's, else default; ignored when reattaching)")
 	f.StringVar(&detachKeyArg, "detach-key", "",
 		`key that detaches this client: "ctrl-<key>" or "none" (default from config)`)
 	f.StringVar(&prefixKeyArg, "prefix-key", "",

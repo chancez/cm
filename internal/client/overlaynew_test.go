@@ -75,15 +75,18 @@ func TestNewSessionOpenDropsThisAttachmentsSettings(t *testing.T) {
 		Persist:    true,
 		OnRestore:  "command",
 		Tags:       map[string]string{"k": "v"},
+		Space:      "opened-in",
 		IfRunning:  serverv1.IfRunning_IF_RUNNING_ERROR,
 		ConfigPath: "/cfg.toml",
 		pending:    &pendingQueries{},
 	}
 	opts.pending.add([]byte("\x1b[6n"))
-	got := newSessionOpen(opts, "/session/dir", 40, 120)
+	got := newSessionOpen(opts, "/session/dir", "here", 40, 120)
 	want := &serverv1.Open{
-		Cwd:                "/session/dir",
-		CwdExplicit:        true,
+		Cwd:         "/session/dir",
+		CwdExplicit: true,
+		// The current session's space, not the one this window was opened with.
+		Space:              "here",
 		Env:                []string{"A=1"},
 		ClientEnv:          map[string]string{"TERM": "xterm-kitty"},
 		ClientVersion:      paths.Version(),
@@ -104,7 +107,7 @@ func TestNewSessionOpenDropsThisAttachmentsSettings(t *testing.T) {
 	}
 
 	// No directory from the session leaves the client's own, as an ordinary attach sends it.
-	if got := newSessionOpen(opts, "", 40, 120); got.Cwd != "/client/dir" || got.CwdExplicit {
+	if got := newSessionOpen(opts, "", "", 40, 120); got.Cwd != "/client/dir" || got.CwdExplicit {
 		t.Errorf("without a session directory, cwd %q explicit %v, want the client's, not explicit",
 			got.Cwd, got.CwdExplicit)
 	}
@@ -121,5 +124,18 @@ func TestSessionDir(t *testing.T) {
 	}
 	if got := sessionDir(resp, "b2"); got != "" {
 		t.Errorf("sessionDir(b2) = %q, want empty for a session elsewhere", got)
+	}
+}
+
+func TestSessionSpace(t *testing.T) {
+	resp := &serverv1.ListResponse{Sessions: []*serverv1.Session{
+		{Id: "other", Space: "infra"},
+		{Id: "current", Space: "cm"},
+	}}
+	if got := sessionSpace(resp, "current"); got != "cm" {
+		t.Errorf("sessionSpace(current) = %q, want cm", got)
+	}
+	if got := sessionSpace(resp, "gone"); got != "" {
+		t.Errorf("sessionSpace(gone) = %q, want empty, leaving it to the server", got)
 	}
 }

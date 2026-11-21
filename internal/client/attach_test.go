@@ -153,6 +153,26 @@ func (s *stubService) Shutdown(
 ) (*serverv1.ShutdownResponse, error) {
 	panic("unused")
 }
+func (s *stubService) Spaces(
+	context.Context, *serverv1.SpacesRequest,
+) (*serverv1.SpacesResponse, error) {
+	panic("unused")
+}
+func (s *stubService) CreateSpace(
+	context.Context, *serverv1.CreateSpaceRequest,
+) (*serverv1.CreateSpaceResponse, error) {
+	panic("unused")
+}
+func (s *stubService) RemoveSpace(
+	context.Context, *serverv1.RemoveSpaceRequest,
+) (*serverv1.RemoveSpaceResponse, error) {
+	panic("unused")
+}
+func (s *stubService) Move(
+	context.Context, *serverv1.MoveRequest,
+) (*serverv1.MoveResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Shelve(
 	context.Context, *serverv1.ShelveRequest,
 ) (*serverv1.ShelveResponse, error) {

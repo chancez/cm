@@ -37,6 +37,7 @@ func newRunCommand(g *globals) *cobra.Command {
 		quiet    bool
 		raw      bool
 		tagArgs  []string
+		space    string
 		match    string
 		matchRaw bool
 	)
@@ -97,6 +98,9 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			if err != nil {
 				return err
 			}
+			if err := validateSpaceArg(space); err != nil {
+				return err
+			}
 			if matchRaw && match == "" {
 				return errors.New("--match-raw only applies with --match")
 			}
@@ -112,6 +116,11 @@ owns the process and reaps it, so nothing is inferred from output.`,
 			}
 
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
+				if space != "" {
+					if err := requireSpaces(ctx, cl); err != nil {
+						return err
+					}
+				}
 				// The server refuses this too, for any client; asked here first only so the message arrives
 				// as itself rather than inside the transport's "rpc error: code = Unknown desc =" wrapper.
 				if session != "" {
@@ -127,6 +136,9 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					persist: persist,
 					env:     g.sessionEnvFor(os.Environ(), env),
 					tags:    sessionTags,
+					space:   space,
+					// A remote server cannot resolve the local session this runs in.
+					spaceFrom: spaceFrom(g),
 				})
 				if err != nil {
 					return err
@@ -192,6 +204,8 @@ owns the process and reaps it, so nothing is inferred from output.`,
 		"set a KEY=VALUE in the command's environment (repeatable)")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"label the session, as key or key=value (repeatable, ignored when reusing a session)")
+	f.StringVar(&space, "space", "",
+		"put a created session in this space (default: the calling session's, else default)")
 	f.StringVar(&match, "match", "",
 		"on a reused session, wait until this text appears instead of for the shell to be idle")
 	f.BoolVar(&matchRaw, "match-raw", false,
@@ -212,6 +226,10 @@ type runOptions struct {
 	env []string
 	// tags label the session, for grouping a fan-out of runs and addressing it as a unit.
 	tags map[string]string
+	// space is the space a created session goes in, empty to let the server decide.
+	space string
+	// spaceFrom is the session whose space it takes otherwise. See Open.space_from.
+	spaceFrom string
 }
 
 // startRun opens a session running the command and returns its resolved name.
@@ -251,7 +269,9 @@ func startRun(
 				Env: opts.env,
 				// Only applied when this call creates the session. Reusing a name sends the command
 				// to a shell that is already running, and its tags were set when it was created.
-				Tags: opts.tags,
+				Tags:      opts.tags,
+				Space:     opts.space,
+				SpaceFrom: opts.spaceFrom,
 				// Always, so `cm history` works once the command has exited, which is what this
 				// command's help promises. Without it the output is gone the moment the command
 				// finishes, which for a short command is immediately.

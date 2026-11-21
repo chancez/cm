@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/shim"
+	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/tags"
 	"github.com/chancez/cm/internal/transport"
@@ -127,6 +129,7 @@ func openOptionsFrom(open *serverv1.Open) OpenOptions {
 		CaptureOutput: open.CaptureOutput,
 		OnRestore:     RestoreAction(open.OnRestore),
 		Tags:          open.Tags,
+		Space:         open.Space,
 		IfRunning:     ifRunningFrom(open.IfRunning),
 		InShell:       open.InShell,
 		// Carried so a reader is not given a new shell in place of the session it asked to observe.
@@ -169,8 +172,18 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	if err := tags.Validate(open.Tags); err != nil {
 		return err
 	}
+	if open.Space != "" {
+		if err := spaces.ValidateName(open.Space); err != nil {
+			return err
+		}
+	}
 
-	sess, created, err := s.mgr.Open(ctx, openOptionsFrom(open))
+	opts := openOptionsFrom(open)
+	if opts.Space == "" {
+		// space_from from a current client; inside_session covers a nested attach from an older one.
+		opts.InheritSpace = s.parentSpace(ctx, cmp.Or(open.SpaceFrom, open.InsideSession))
+	}
+	sess, created, err := s.mgr.Open(ctx, opts)
 	if err != nil {
 		// A reader asked for a session whose shell is gone, so it is told that rather than given a new
 		// one. Answered with the same Opened-then-Exited pair as an exit observed mid-stream, since a
@@ -992,6 +1005,9 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 		if !selector.Match(rec.Tags) {
 			continue
 		}
+		if req.Space != "" && rec.Space != req.Space {
+			continue
+		}
 		names := namesByID[rec.ID]
 		// A prefix now asks "is this session named something starting with this", which a session can
 		// answer several times over or not at all. Matched in Go rather than in SQL: names live in
@@ -1016,6 +1032,8 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// From the record rather than the live session: tags are metadata the store owns, so
 			// unlike cwd or the reported state there is no fresher copy in the registry.
 			Tags: rec.Tags,
+			// From the record, for the reason tags are: nothing live holds a fresher copy.
+			Space: rec.Space,
 			// The record's, which is what a revive of a dead session would run. A live session's is
 			// fresher and replaces it below.
 			ResumeArgv: rec.Resume.Argv,

@@ -81,6 +81,8 @@ func (o Options) Open(session string) *serverv1.Open {
 		Persist:       o.Persist,
 		OnRestore:     o.OnRestore,
 		Tags:          o.Tags,
+		Space:         o.Space,
+		SpaceFrom:     o.SpaceFrom,
 		IfRunning:     o.IfRunning,
 		InShell:       o.InShell,
 		NoRestore:     o.NoRestore,
@@ -153,6 +155,12 @@ type Options struct {
 	// Tags label a session being created, for grouping and filtering. Ignored when attaching to a
 	// session that already exists, since an attach is not how tags are changed.
 	Tags map[string]string
+	// Space is the space a session being created is put in. Empty lets the server decide: the space of the
+	// session this client is inside, else default. Ignored when attaching to one that exists.
+	Space string
+	// SpaceFrom is the session whose space a created session takes when Space is empty: the one this client
+	// runs inside. See Open.space_from.
+	SpaceFrom string
 	// DetachKeys are the keys that detach, the first of which is the one named in help. An empty list
 	// means the default key rather than none, since an unset setting must not remove the only way to
 	// leave a session.
@@ -1171,11 +1179,12 @@ func runSession(
 			id := result.SessionID
 			rows, cols := tty.Size()
 			go func() {
-				var dir string
+				var dir, space string
 				if list, err := cl.List(ctx, &serverv1.ListRequest{}); err == nil {
 					dir = sessionDir(list, id)
+					space = sessionSpace(list, id)
 				}
-				ref, err := createSession(ctx, cl, newSessionOpen(opts, dir, rows, cols))
+				ref, err := createSession(ctx, cl, newSessionOpen(opts, dir, space, rows, cols))
 				select {
 				case newDone <- overlayCreated{ref: ref, err: err}:
 				case <-ctx.Done():

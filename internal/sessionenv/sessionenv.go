@@ -149,6 +149,12 @@ var NoInherit = []string{
 	// This is the first variable that belongs here while staying *out* of noEnvFlags: binding it to the
 	// --remote flag is wanted, and inheriting it is not. The two lists answer different questions.
 	"CM_REMOTE",
+
+	// The space a created session goes in, as the --space flag reads it. Not exported by cm, which leaves the
+	// parent's space to the server through inside_session, but a window may set it for its own cm attach.
+	// A shell that inherited it would put every session created inside it in that space even after this one
+	// was moved elsewhere, which the server's inheritance follows and a copied variable cannot.
+	"CM_SPACE",
 }
 
 // CrossHostVars lists the variables a session created on *another machine* is given.

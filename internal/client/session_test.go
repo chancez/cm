@@ -266,6 +266,26 @@ func (c *fakeClient) Forget(
 ) (*serverv1.ForgetResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) Spaces(
+	context.Context, *serverv1.SpacesRequest,
+) (*serverv1.SpacesResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) CreateSpace(
+	context.Context, *serverv1.CreateSpaceRequest,
+) (*serverv1.CreateSpaceResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) RemoveSpace(
+	context.Context, *serverv1.RemoveSpaceRequest,
+) (*serverv1.RemoveSpaceResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) Move(
+	context.Context, *serverv1.MoveRequest,
+) (*serverv1.MoveResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Shelve(
 	context.Context, *serverv1.ShelveRequest,
 ) (*serverv1.ShelveResponse, error) {

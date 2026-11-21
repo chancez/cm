@@ -99,6 +99,17 @@ const (
 	// an Unimplemented error whose text names a method rather than the cause, and the remedy, restarting
 	// the server onto the binary already installed, appears nowhere in it.
 	Shelve Name = "shelve"
+
+	// Spaces means the server implements the Spaces, CreateSpace, RemoveSpace and Move RPCs, Open.space,
+	// ListRequest.space and Session.space.
+	//
+	// Checked before anything that names a space is sent, except an attach. The failure it prevents is
+	// silent rather than an error: an older server reads ListRequest.space as absent, so `cm list --space
+	// infra` lists every session. An attach would need a Status call of its own, since the attach
+	// handshake reports no capabilities, and an attach is every window's startup; against an older server
+	// `cm attach --space infra` creates a session the server files in no space, which `cm space` then
+	// reports by refusing.
+	Spaces Name = "spaces"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -276,6 +287,7 @@ func Server() Set {
 		WaitProgramStatus,
 		KillExpireAfter,
 		Shelve,
+		Spaces,
 	)
 }
 

@@ -24,6 +24,10 @@ type ServerService interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Spaces(context.Context, *SpacesRequest) (*SpacesResponse, error)
+	CreateSpace(context.Context, *CreateSpaceRequest) (*CreateSpaceResponse, error)
+	RemoveSpace(context.Context, *RemoveSpaceRequest) (*RemoveSpaceResponse, error)
+	Move(context.Context, *MoveRequest) (*MoveResponse, error)
 	Bind(context.Context, *BindRequest) (*BindResponse, error)
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
@@ -163,6 +167,34 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Tag(ctx, &req)
 			},
+			"Spaces": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req SpacesRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Spaces(ctx, &req)
+			},
+			"CreateSpace": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req CreateSpaceRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.CreateSpace(ctx, &req)
+			},
+			"RemoveSpace": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req RemoveSpaceRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.RemoveSpace(ctx, &req)
+			},
+			"Move": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req MoveRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.Move(ctx, &req)
+			},
 			"Bind": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req BindRequest
 				if err := unmarshal(&req); err != nil {
@@ -242,6 +274,10 @@ type ServerClient interface {
 	Doctor(context.Context, *DoctorRequest) (*DoctorResponse, error)
 	Signal(context.Context, *SignalRequest) (*SignalResponse, error)
 	Tag(context.Context, *TagRequest) (*TagResponse, error)
+	Spaces(context.Context, *SpacesRequest) (*SpacesResponse, error)
+	CreateSpace(context.Context, *CreateSpaceRequest) (*CreateSpaceResponse, error)
+	RemoveSpace(context.Context, *RemoveSpaceRequest) (*RemoveSpaceResponse, error)
+	Move(context.Context, *MoveRequest) (*MoveResponse, error)
 	Bind(context.Context, *BindRequest) (*BindResponse, error)
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
@@ -410,6 +446,38 @@ func (c *serverClient) Signal(ctx context.Context, req *SignalRequest) (*SignalR
 func (c *serverClient) Tag(ctx context.Context, req *TagRequest) (*TagResponse, error) {
 	var resp TagResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Tag", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Spaces(ctx context.Context, req *SpacesRequest) (*SpacesResponse, error) {
+	var resp SpacesResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Spaces", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) CreateSpace(ctx context.Context, req *CreateSpaceRequest) (*CreateSpaceResponse, error) {
+	var resp CreateSpaceResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "CreateSpace", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) RemoveSpace(ctx context.Context, req *RemoveSpaceRequest) (*RemoveSpaceResponse, error) {
+	var resp RemoveSpaceResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "RemoveSpace", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) Move(ctx context.Context, req *MoveRequest) (*MoveResponse, error) {
+	var resp MoveResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "Move", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

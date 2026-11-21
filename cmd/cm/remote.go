@@ -301,6 +301,8 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	// a local session hands the detach key to the inner client the same as a local nesting does, over the pty
 	// rather than through an RPC, and three presses escape a handover nothing is acting on.
 	opts.InsideSession = ""
+	// For the same reason: it names a local session, and a remote one of the same name is unrelated.
+	opts.SpaceFrom = ""
 }
 
 // completionTimeout bounds a completion that has to reach another machine.
@@ -453,6 +455,10 @@ var remoteCapable = map[string]bool{
 	"rebind":          true,
 	"switch":          true,
 	"tag":             true,
+	"space list":      true,
+	"space create":    true,
+	"space remove":    true,
+	"space move":      true,
 	"signal":          true,
 	"detach":          true,
 	"clients current": true,
