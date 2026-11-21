@@ -77,3 +77,48 @@ func TestClientsOnAShelvedSessionReattachWhenItIsRestored(t *testing.T) {
 	})
 	e.mustRun("kill", "agent")
 }
+
+// The overlay's z shelves the session in front of it, and the window stays on the shelved notice.
+func TestTheOverlayShelvesThisSession(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	startDeclared(e, "agent", filepath.Join(e.state, "recorded-dir"))
+	c := attachOnPty(t, e, "agent")
+	c.waitForOutput(promptMarker, 15*time.Second)
+
+	c.write([]byte{0x1d})
+	c.waitForOutput("cm agent", 15*time.Second)
+	c.write([]byte("z"))
+	c.waitForOutput("shelve:", 10*time.Second)
+	c.write([]byte("agent\r"))
+	c.waitForOutput("shelve agent?", 10*time.Second)
+	c.write([]byte("y"))
+	c.waitForOutput("agent is shelved", 15*time.Second)
+	if s, ok := e.session("agent"); !ok || s.State != "shelved" {
+		t.Fatalf("session after the overlay's shelve = %+v, %v; want it shelved", s, ok)
+	}
+	e.mustRun("kill", "agent")
+}
+
+// The overlay's switch chooser offers a shelved session, and switching to it restores it.
+func TestTheOverlaySwitchesToAShelvedSessionAndRestoresIt(t *testing.T) {
+	skipIfShort(t)
+	e := shelveEnv(t)
+	startDeclared(e, "parked", filepath.Join(e.state, "parked-dir"))
+	e.mustRun("shelve", "parked")
+	startDeclared(e, "work", filepath.Join(e.state, "work-dir"))
+	c := attachOnPty(t, e, "work")
+	c.waitForOutput(promptMarker, 15*time.Second)
+
+	c.write([]byte{0x1d})
+	c.waitForOutput("cm work", 15*time.Second)
+	c.write([]byte("s"))
+	c.waitForOutput("shelved", 10*time.Second)
+	c.write([]byte("parked\r"))
+	c.waitForOutput("RESUMED-parked-dir", 15*time.Second)
+	e.waitFor("the restored session to have this client attached", 15*time.Second, func() bool {
+		s, ok := e.session("parked")
+		return ok && s.State == "running" && s.Clients == 1
+	})
+	e.mustRun("kill", "parked", "work")
+}

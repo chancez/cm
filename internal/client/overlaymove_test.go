@@ -181,3 +181,26 @@ func TestOnlyThisClientsOwnMoveIsALastSession(t *testing.T) {
 		t.Errorf("l = %+v, want the list a move resolves against", got)
 	}
 }
+
+// An ended session is not in the ring, and l does not go back to one: restoring is something to choose.
+func TestOverlayMovesSkipEndedSessions(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("n"))
+	items := ringItems(3, 0)
+	items[1].Ended = true
+	if got := o.sessions(items, nil); !sameResponse(got, overlayResponse{SwitchTo: "@id2", Repaint: true}) {
+		t.Errorf("n past an ended session = %+v, want a switch to the running one after it", got)
+	}
+
+	o, _ = newTestOverlay(t, 24, 80)
+	o.lastSession = "@id1"
+	o.open()
+	o.feed([]byte("l"))
+	if got := o.sessions(items, nil); !sameResponse(got, overlayResponse{}) {
+		t.Errorf("l to an ended session = %+v, want nothing done", got)
+	}
+	if got, want := o.status, "the session you came from has ended"; got != want {
+		t.Errorf("status %q, want %q", got, want)
+	}
+}

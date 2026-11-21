@@ -16,11 +16,12 @@ an action can have several keys, and `cm keys` prints what is in effect. The def
 
 ```
 ctrl-]        open
-ctrl-] s      switch: choose a session from a list
+ctrl-] s      switch: choose a session from a list, a shelved one restores
 ctrl-] n      switch to the next session, in creation order, wrapping
 ctrl-] p      switch to the previous one
 ctrl-] l      switch back to the last session this window was on
 ctrl-] k      kill: choose one, then y to confirm
+ctrl-] z      shelve: choose one, then y to confirm
 ctrl-] b      name this session: type just the name
 ctrl-] d      detach
 ctrl-] q      send ctrl-\ to the program
@@ -311,6 +312,12 @@ config's, and nothing granted for the press. Each client on the notice also asks
 the session is running, and goes back to it when it is, so restoring from one window, `cm tui` or
 `cm restore` brings them all back. A read-only client offers only Detach, since a read-only attach does
 not start processes, and still goes back when the session runs.
+
+`ctrl-] z` shelves from inside, with a chooser and a confirmation as kill has, and this session among the
+choices, since shelving the one in front of you is the usual case and the window then stays on the notice.
+The way back from elsewhere is `ctrl-] s`: its chooser lists every ended session that can be restored,
+marked with how it ended, and switching to one revives it through the same Open. `n`, `p` and `l` skip
+them, since restoring is something to choose rather than a side effect of moving.
 
 The server sends the event only once the shelve has finished: the processes gone, the session out of the
 registry, the record shelved. Sent at the hangup, as an exit is, a Restore pressed straight away reached the

@@ -75,6 +75,9 @@ type pickItem struct {
 	Detail string
 	// Current marks the session this client is already attached to.
 	Current bool
+	// Ended marks a session that has ended with saved output to come back to. Only the switch chooser
+	// offers one, since switching to it restores it, as attaching does.
+	Ended bool
 }
 
 // pickAction is what happens to the chosen item.
@@ -85,6 +88,8 @@ const (
 	pickSwitch pickAction = iota
 	// pickKill ends it, after a confirmation.
 	pickKill
+	// pickShelve shelves it, after a confirmation.
+	pickShelve
 )
 
 // matches returns the items the filter allows, in order.
@@ -255,15 +260,15 @@ const maxPickLabel = 24
 
 // pickItemsFrom turns the server's session list into rows, marking the one this client is on.
 //
-// Sessions that have ended are dropped: switching to one shows a dead screen and killing one is
-// meaningless, and neither is what the user reached for the picker to do.
+// An ended session is kept only when it can be restored, and marked Ended: switching to one revives it,
+// which is what enter on it in `cm tui` does. One that saved no output would show a dead screen.
 func pickItemsFrom(resp *serverv1.ListResponse, currentID string) []pickItem {
 	if resp == nil {
 		return nil
 	}
 	out := make([]pickItem, 0, len(resp.Sessions))
 	for _, s := range resp.Sessions {
-		if s.GetExited() {
+		if s.GetExited() && !s.GetRestorable() {
 			continue
 		}
 		label := s.GetName()
@@ -277,6 +282,7 @@ func pickItemsFrom(resp *serverv1.ListResponse, currentID string) []pickItem {
 			Label:   label,
 			Detail:  pickDetail(s),
 			Current: s.GetId() == currentID,
+			Ended:   s.GetExited(),
 		})
 	}
 	return out
@@ -287,7 +293,11 @@ func pickItemsFrom(resp *serverv1.ListResponse, currentID string) []pickItem {
 // Deliberately short. The full picture is what `cm list` and the TUI are for; this has one line under a
 // program's screen, and a row that wraps would take a row the picker counted on.
 func pickDetail(s *serverv1.Session) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
+	if s.GetExited() {
+		// First, since it is what decides whether choosing the row restores a session.
+		parts = append(parts, endedState(s))
+	}
 	if dir := pickDir(s); dir != "" {
 		parts = append(parts, dir)
 	}
@@ -298,6 +308,17 @@ func pickDetail(s *serverv1.Session) string {
 		parts = append(parts, fmt.Sprintf("%d attached", n))
 	}
 	return strings.Join(parts, "  ")
+}
+
+// endedState is the word for how an ended session ended, as `cm ls` spells it.
+func endedState(s *serverv1.Session) string {
+	switch s.GetState() {
+	case serverv1.SessionState_SESSION_STATE_SHELVED:
+		return "shelved"
+	case serverv1.SessionState_SESSION_STATE_DEAD:
+		return "dead"
+	}
+	return "exited"
 }
 
 // pickDir shortens a session's directory for a row.

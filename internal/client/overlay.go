@@ -397,6 +397,10 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 		o.startPick("switch to", pickSwitch, resp)
 	case keymap.OverlayKill:
 		o.startPick("kill", pickKill, resp)
+	case keymap.OverlayShelve:
+		// A chooser, as kill is, and this session among the choices: shelving the one in front of you is the
+		// usual case, and the window then stays on the shelved notice rather than closing.
+		o.startPick("shelve", pickShelve, resp)
 	case keymap.OverlayNext:
 		o.startMove(moveNext, resp)
 	case keymap.OverlayPrevious:
@@ -494,8 +498,9 @@ func (o *overlay) helpBody() []string {
 	pairs := [][2]keymap.Action{
 		{keymap.OverlaySwitch, keymap.OverlayName},
 		{keymap.OverlayNext, keymap.OverlayPrevious},
-		{keymap.OverlayLast, keymap.OverlayKill},
-		{keymap.OverlayDetach, keymap.OverlayCommand},
+		{keymap.OverlayLast, keymap.OverlayDetach},
+		{keymap.OverlayKill, keymap.OverlayShelve},
+		{keymap.OverlayCommand, ""},
 	}
 	var lines []string
 	for _, pair := range pairs {
@@ -682,6 +687,11 @@ func (o *overlay) sessions(items []pickItem, err error) overlayResponse {
 		o.paint()
 		return resp
 	}
+	if o.pick.action != pickSwitch {
+		// Only a switch has anything to do with an ended session. Killing one is cm forget, and shelving one
+		// that has already ended is a no-op.
+		items = running(items)
+	}
 	o.pick.items = items
 	o.paint()
 	return resp
@@ -712,6 +722,9 @@ func (o *overlay) applyMove(kind moveKind, items []pickItem, resp *overlayRespon
 // list is a second old at most but the session it describes may have been created after the last one:
 // an index kept across keypresses would walk somewhere nobody asked for.
 func (o *overlay) moveTarget(kind moveKind, items []pickItem) (pickItem, bool) {
+	// Ended sessions are not in the ring and l does not go back to one. Restoring a session is something to
+	// choose, and n, p and l are for moving without looking.
+	items = running(items)
 	if kind == moveLast {
 		for _, it := range items {
 			if it.Ref == o.lastSession && !it.Current {
@@ -742,6 +755,17 @@ func (o *overlay) moveTarget(kind moveKind, items []pickItem) (pickItem, bool) {
 	return items[((at+step)%len(items)+len(items))%len(items)], true
 }
 
+// running drops the ended sessions from a list.
+func running(items []pickItem) []pickItem {
+	out := make([]pickItem, 0, len(items))
+	for _, it := range items {
+		if !it.Ended {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
 // pickKey applies one keypress to the chooser and acts on a choice.
 func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 	action, _ := o.keys.Lookup(key.Press)
@@ -768,6 +792,12 @@ func (o *overlay) pickKey(key overlayKey, resp *overlayResponse) {
 			o.mode = overlayConfirm
 			o.confirm = []string{"kill", it.Ref}
 			o.confirmWhat = "kill " + it.Label
+			o.pick = nil
+		case pickShelve:
+			// Asked for the reason a kill is: the screen and the record stay, but the programs end.
+			o.mode = overlayConfirm
+			o.confirm = []string{"shelve", it.Ref}
+			o.confirmWhat = "shelve " + it.Label
 			o.pick = nil
 		}
 	}

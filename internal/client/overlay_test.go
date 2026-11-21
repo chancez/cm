@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/chancez/cm/internal/keymap"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // newTestOverlay builds an overlay painting into a buffer, with the default keys.
@@ -124,8 +126,14 @@ func TestOverlayArmedActions(t *testing.T) {
 			wantMode: overlayPrompt,
 		},
 		{
-			name:     "an unbound key says so and waits to be dismissed",
+			name:     "z opens the shelve chooser",
 			keys:     "z",
+			want:     overlayResponse{List: true},
+			wantMode: overlayPick,
+		},
+		{
+			name:     "an unbound key says so and waits to be dismissed",
+			keys:     "y",
 			wantMode: overlayResult,
 		},
 		{
@@ -599,6 +607,62 @@ func TestOverlayPickerKillConfirms(t *testing.T) {
 	o.feed([]byte("\r"))
 	if got := o.feed([]byte("y")); !sameResponse(got, overlayResponse{Run: []string{"kill", "@id0"}}) {
 		t.Errorf("y = %+v, want the kill run by ID", got)
+	}
+}
+
+// Shelving confirms as a kill does, and offers only running sessions: one that has ended is already as
+// shelved as it can be.
+func TestOverlayPickerShelveConfirms(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("z"))
+	items := pickItems(3)
+	items[0].Ended = true
+	o.sessions(items, nil)
+
+	if got, want := o.pick.items, items[1:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("the shelve chooser offers %+v, want %+v", got, want)
+	}
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{}) {
+		t.Fatalf("choosing to shelve = %+v, want nothing run yet", got)
+	}
+	if got, want := o.bar(), " cm work | shelve session-1? y to confirm, any other key cancels "; got != want {
+		t.Fatalf("bar %q, want %q", got, want)
+	}
+	if got := o.feed([]byte("y")); !sameResponse(got, overlayResponse{Run: []string{"shelve", "@id1"}}) {
+		t.Errorf("y = %+v, want the shelve run by ID", got)
+	}
+}
+
+// An ended session that can be restored is offered by the switch chooser, and choosing it switches there,
+// which restores it as attaching does.
+func TestOverlayPickerSwitchesToAnEndedSession(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("s"))
+	items := pickItems(2)
+	items[1].Ended = true
+	o.sessions(items, nil)
+
+	o.feed([]byte{0x0e})
+	if got := o.feed([]byte("\r")); !sameResponse(got, overlayResponse{SwitchTo: "@id1", Repaint: true}) {
+		t.Errorf("enter = %+v, want a switch to the ended session", got)
+	}
+}
+
+// pickItemsFrom keeps an ended session only when it can be restored, and says how it ended.
+func TestPickItemsFromKeepsRestorableSessions(t *testing.T) {
+	resp := &serverv1.ListResponse{Sessions: []*serverv1.Session{
+		{Id: "a1", Name: "work", State: serverv1.SessionState_SESSION_STATE_RUNNING},
+		{Id: "b2", Name: "parked", State: serverv1.SessionState_SESSION_STATE_SHELVED, Exited: true, Restorable: true},
+		{Id: "c3", Name: "gone", State: serverv1.SessionState_SESSION_STATE_EXITED, Exited: true},
+	}}
+	want := []pickItem{
+		{Ref: "@a1", Label: "work", Current: true},
+		{Ref: "@b2", Label: "parked", Detail: "shelved", Ended: true},
+	}
+	if got := pickItemsFrom(resp, "a1"); !reflect.DeepEqual(got, want) {
+		t.Errorf("pickItemsFrom = %+v, want %+v", got, want)
 	}
 }
 
