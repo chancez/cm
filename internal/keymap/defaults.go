@@ -58,6 +58,7 @@ const (
 	OverlayPrevious   Action = "previous"
 	OverlayLast       Action = "last"
 	OverlayName       Action = "name"
+	OverlayRename     Action = "rename"
 	OverlayKill       Action = "kill"
 	OverlayShelve     Action = "shelve"
 	OverlayPicker     Action = "picker"
@@ -135,6 +136,8 @@ var definitions = map[Context][]Definition{
 		{Action: OverlayPrevious, Label: "previous session", Defaults: []string{"p"}},
 		{Action: OverlayLast, Label: "last visited session", Defaults: []string{"l"}},
 		{Action: OverlayName, Label: "name this session", Defaults: []string{"b"}},
+		// r, as in the picker: the new name in place of the old one, which b keeps.
+		{Action: OverlayRename, Label: "rename this session", Defaults: []string{"r"}},
 		{Action: OverlayKill, Label: "kill a session", Defaults: []string{"k"}},
 		// z, the picker's key for the same thing, which is free in both.
 		{Action: OverlayShelve, Label: "shelve a session", Defaults: []string{"z"}},
@@ -208,7 +211,7 @@ var definitions = map[Context][]Definition{
 // accident.
 var sessionVerbs = []Action{
 	OverlaySwitch, OverlayNext, OverlayPrevious, OverlayLast,
-	OverlayName, OverlayKill, OverlayShelve, OverlayPicker, OverlaySendDetach,
+	OverlayName, OverlayRename, OverlayKill, OverlayShelve, OverlayPicker, OverlaySendDetach,
 	OverlayCommand, OverlayHelp,
 }
 

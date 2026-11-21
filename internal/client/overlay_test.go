@@ -701,6 +701,20 @@ func TestOverlayNamePrompt(t *testing.T) {
 	}
 }
 
+// r asks for the name that replaces this session's, worded apart from b's prompt since only this one takes a
+// name away, and runs cm rename with it.
+func TestOverlayRenamePrompt(t *testing.T) {
+	o, _ := newTestOverlay(t, 24, 80)
+	o.open()
+	o.feed([]byte("r"))
+	if got, want := o.bar(), " cm work | rename to: "; got != want {
+		t.Fatalf("bar %q, want %q", got, want)
+	}
+	if got := o.feed([]byte("refactor\r")); !sameResponse(got, overlayResponse{Run: []string{"rename", "refactor"}}) {
+		t.Errorf("typing a name = %+v, want a rename", got)
+	}
+}
+
 // Two things a real terminal showed: the terminal drew its own cursor on top of the bar, and the bar's
 // highlight stopped where its text did, which reads as a stray line of output rather than as cm's.
 func TestOverlayHidesTheCursorAndFillsTheWidth(t *testing.T) {

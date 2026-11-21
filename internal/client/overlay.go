@@ -140,6 +140,8 @@ const (
 	promptCommand promptKind = iota
 	// promptName is a name for this session, which becomes `cm bind <name>`.
 	promptName
+	// promptRename is a name to replace this session's, which becomes `cm rename <name>`.
+	promptRename
 )
 
 // overlayStyleOff ends a styled row. Everything else about the appearance is configurable: see ParseStyle
@@ -421,6 +423,10 @@ func (o *overlay) perform(action keymap.Action, pressed string, resp *overlayRes
 		o.mode = overlayPrompt
 		o.prompt = promptName
 		o.line = o.line[:0]
+	case keymap.OverlayRename:
+		o.mode = overlayPrompt
+		o.prompt = promptRename
+		o.line = o.line[:0]
 	case keymap.OverlayPicker:
 		if !o.canPick {
 			o.status = "this client cannot open the picker"
@@ -497,6 +503,7 @@ func (o *overlay) keyFor(action keymap.Action) string { return o.keys.First(acti
 func (o *overlay) helpBody() []string {
 	pairs := [][2]keymap.Action{
 		{keymap.OverlaySwitch, keymap.OverlayName},
+		{keymap.OverlayRename, ""},
 		{keymap.OverlayNext, keymap.OverlayPrevious},
 		{keymap.OverlayLast, keymap.OverlayDetach},
 		{keymap.OverlayKill, keymap.OverlayShelve},
@@ -587,10 +594,13 @@ func (o *overlay) promptArgs() ([]string, error) {
 	if text == "" {
 		return nil, nil
 	}
-	if o.prompt == promptName {
+	switch o.prompt {
+	case promptName:
 		// Not split like a command line: a name is one argument, and quoting rules would only be a way to
 		// get a confusing error. cm validates it, which is where that check belongs.
 		return []string{"bind", text}, nil
+	case promptRename:
+		return []string{"rename", text}, nil
 	}
 	return splitCommandLine(text)
 }
@@ -937,6 +947,9 @@ func (o *overlay) bar() string {
 		return fmt.Sprintf(" cm %s | %s: %s", label, o.pick.prompt, string(o.pick.filter))
 	case o.mode == overlayPrompt && o.prompt == promptName:
 		return fmt.Sprintf(" cm %s | name: %s", label, string(o.line))
+	case o.mode == overlayPrompt && o.prompt == promptRename:
+		// Worded apart from the name prompt, as the picker's two are, since only this one takes a name away.
+		return fmt.Sprintf(" cm %s | rename to: %s", label, string(o.line))
 	case o.mode == overlayPrompt:
 		return fmt.Sprintf(" cm %s : %s", label, string(o.line))
 	default:

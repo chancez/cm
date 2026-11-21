@@ -43,6 +43,25 @@ func TestOverlayBindsTheSessionItIsIn(t *testing.T) {
 	}
 }
 
+// The overlay's r runs cm rename on the session it is in, which takes the old name off as well.
+func TestOverlayRenamesTheSessionItIsIn(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	c := attachOnPty(t, e, "work", "--", "/bin/sh")
+	c.waitReady()
+
+	c.write([]byte{0x1d})
+	c.waitForOutput("cm work", 15*time.Second)
+	c.write([]byte("r"))
+	c.waitForOutput("rename to:", 15*time.Second)
+	c.write([]byte("renamed\r"))
+	e.waitFor("the session to answer to the new name only", 20*time.Second, func() bool {
+		s, ok := e.session("renamed")
+		return ok && slices.Equal(s.Names, []string{"renamed"})
+	})
+}
+
 // Pressing the detach key from inside the overlay forwards it to the program instead of detaching.
 //
 // This is the regression test for a race found only in a real terminal: closing the overlay repaints,

@@ -23,6 +23,7 @@ ctrl-] l      switch back to the last session this window was on
 ctrl-] k      kill: choose one, then y to confirm
 ctrl-] z      shelve: choose one, then y to confirm
 ctrl-] b      name this session: type just the name
+ctrl-] r      rename this session: the new name replaces its only one, as cm rename does
 ctrl-] d      detach
 ctrl-] q      send ctrl-\ to the program
 ctrl-] ctrl-] send ctrl-] to the program
