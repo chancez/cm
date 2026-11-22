@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,4 +52,40 @@ func TestForgetCompletesOnlyEndedSessions(t *testing.T) {
 			t.Errorf("offers after one name = %q, want the name already given dropped", second)
 		}
 	}
+}
+
+// `cm attach @<TAB>` offers an ID reference for every session, named or not.
+//
+// Through `__complete` because half of the bug was the server: the typed `@` was sent as a name prefix, and
+// no name can contain the sigil, so even a nameless session, whose only candidate is its ID, was filtered out.
+func TestCompletesSessionIDReferences(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	e.mustRun("run", "--session", "named", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	id := e.sessionID("named")
+
+	got := candidates(e.mustRun("__complete", "attach", "@"+id[:2]))
+	if want := []string{"@" + id}; !slices.Equal(got, want) {
+		t.Errorf("candidates = %q, want %q", got, want)
+	}
+
+	// A name still completes to the name, not the ID.
+	got = candidates(e.mustRun("__complete", "attach", "na"))
+	if want := []string{"named"}; !slices.Equal(got, want) {
+		t.Errorf("candidates = %q, want %q", got, want)
+	}
+}
+
+// candidates returns the values in `__complete` output, without descriptions or the trailing directive.
+func candidates(out string) []string {
+	var vals []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.HasPrefix(line, ":") {
+			break
+		}
+		val, _, _ := strings.Cut(line, "\t")
+		vals = append(vals, val)
+	}
+	return vals
 }

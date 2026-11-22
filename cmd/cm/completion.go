@@ -130,14 +130,28 @@ func sessionNames(
 	}
 	defer conn.Close()
 
-	resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: prefix})
+	// An ID reference is completed here rather than by the server, whose prefix matches names only. Sent as a
+	// prefix, `@a7k2<TAB>` matched nothing, a nameless session included, since no name can contain the sigil.
+	listPrefix := prefix
+	if strings.HasPrefix(prefix, paths.IDSigil) {
+		listPrefix = ""
+	}
+	resp, err := cl.List(ctx, &serverv1.ListRequest{Prefix: listPrefix})
 	if err != nil {
 		return nil, err
 	}
 
 	sortSessions(resp.Sessions)
-	out := make([]string, 0, len(resp.Sessions))
-	for _, s := range resp.Sessions {
+	return sessionCandidates(resp.Sessions, prefix, want), nil
+}
+
+// sessionCandidates turns sessions into completion candidates for what has been typed so far.
+//
+// Split from sessionNames so the choice of candidates is testable without a server.
+func sessionCandidates(sessions []*serverv1.Session, prefix string, want func(*serverv1.Session) bool) []string {
+	byID := strings.HasPrefix(prefix, paths.IDSigil)
+	out := make([]string, 0, len(sessions))
+	for _, s := range sessions {
 		if want != nil && !want(s) {
 			continue
 		}
@@ -151,21 +165,29 @@ func sessionNames(
 		if s.Title != "" {
 			desc += ", " + s.Title
 		}
-		// Names, and an ID reference for a session that has none.
+		ref := paths.FormatSessionID(s.Id)
+		// Typing the sigil asks for an ID, so every session offers one, named or not.
+		if byID {
+			if strings.HasPrefix(ref, prefix) {
+				out = append(out, ref+"\t"+desc)
+			}
+			continue
+		}
+		// Otherwise names, and an ID reference for a session that has none.
 		//
 		// Both, rather than one or the other: a name is what a person types, and a session with no name
 		// is otherwise impossible to complete at all, which is the case `cm attach` with no argument and
 		// `cm run -d` both produce. Not both for every session, which would double every candidate list
 		// with values nobody types when a name exists.
 		if len(s.Names) == 0 {
-			out = append(out, paths.FormatSessionID(s.Id)+"\t"+desc)
+			out = append(out, ref+"\t"+desc)
 			continue
 		}
 		for _, name := range s.Names {
 			out = append(out, name+"\t"+desc)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // without returns names not present in exclude.
