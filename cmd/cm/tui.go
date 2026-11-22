@@ -173,6 +173,7 @@ to the selected session instead of nesting an attachment inside it.`,
 	// client opened this knows what it actually intercepts, and a picker that re-derived it would offer the
 	// wrong key to anyone who set prefix_key on the command line. Same pattern as --session-ref to a shim.
 	_ = f.MarkHidden("back-key")
+	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
 }
 

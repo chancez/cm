@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -141,8 +142,10 @@ func printSpacesTable(w io.Writer, all []*serverv1.Space) error {
 
 func newSpaceCreateCommand(g *globals) *cobra.Command {
 	return &cobra.Command{
-		Use:   "create NAME",
-		Short: "Create an empty space",
+		// A new name, so nothing to offer; and no files, which is cobra's default otherwise.
+		ValidArgsFunction: cobra.NoFileCompletions,
+		Use:               "create NAME",
+		Short:             "Create an empty space",
 		Long: `Create an empty space. Creating one that exists already succeeds.
 
 Not needed before putting a session in a space, since --space and 'cm space move'
@@ -174,7 +177,8 @@ A space holding any session is refused, shelved and exited sessions included,
 rather than emptied into default: a space is how its sessions are found, and
 scattering them into default would lose that. Move or forget them first. The
 default space cannot be removed.`,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeSpaceArg(g, removableSpace),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := spaces.ValidateName(args[0]); err != nil {
 				return err
@@ -202,6 +206,13 @@ With no session, the one this command is running in is moved, from ` + paths.Ses
 Ended sessions move too, since a shelved session in the wrong space is the one
 that is hardest to find.`,
 		Args: cobra.MinimumNArgs(1),
+		// The space first, then sessions, which may name several.
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return completeSpaceNames(g, nil)(cmd, args, toComplete)
+			}
+			return completeSessionNames(g)(cmd, args[1:], toComplete)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			space, refs := args[0], args[1:]
 			if err := spaces.ValidateName(space); err != nil {
@@ -261,4 +272,72 @@ func reportMove(w io.Writer, space string, resp *serverv1.MoveResponse, asJSON b
 		}
 	}
 	return reportedErrors(resp.Errors, asJSON)
+}
+
+// completeSpaceNames returns a completion function offering the server's spaces, for --space and for a
+// command's first argument. want filters which are offered, nil offering all; a command whose later
+// arguments are not spaces takes none past the first.
+//
+// Deliberately starts no server, as session completion does not: see completeSessionNames.
+func completeSpaceNames(
+	g *globals, want func(*serverv1.Space) bool,
+) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		all, err := listSpaces(cmd.Context(), g)
+		if err != nil {
+			// Silence rather than an error: a completion that prints a diagnostic corrupts the command line
+			// being typed. An older server answers Unimplemented, which lands here too.
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		return spaceCandidates(all, toComplete, want), cobra.ShellCompDirectiveNoFileComp
+	}
+}
+
+// completeSpaceArg completes a command whose only argument is a space.
+func completeSpaceArg(
+	g *globals, want func(*serverv1.Space) bool,
+) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	spaceNames := completeSpaceNames(g, want)
+	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) > 0 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		return spaceNames(cmd, args, toComplete)
+	}
+}
+
+// listSpaces asks whichever server this invocation names, bounded as every completion is. See
+// globals.completionServer.
+func listSpaces(ctx context.Context, g *globals) ([]*serverv1.Space, error) {
+	ctx, cancel := g.completionDeadline(ctx)
+	defer cancel()
+	conn, cl, err := g.completionServer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	resp, err := cl.Spaces(ctx, &serverv1.SpacesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Spaces, nil
+}
+
+// spaceCandidates turns spaces into completion candidates for what has been typed so far, each described by
+// what it holds. Split from listSpaces so the candidates are testable without a server.
+func spaceCandidates(all []*serverv1.Space, prefix string, want func(*serverv1.Space) bool) []string {
+	out := make([]string, 0, len(all))
+	for _, sp := range all {
+		if !strings.HasPrefix(sp.Name, prefix) || (want != nil && !want(sp)) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s\t%d sessions, %d running", sp.Name, sp.Sessions, sp.Running))
+	}
+	return out
+}
+
+// removableSpace is a space `cm space remove` accepts: empty, and not default. Offering one it refuses
+// completes to a guaranteed refusal, the reason completeEndedSessionNames filters.
+func removableSpace(sp *serverv1.Space) bool {
+	return sp.Sessions == 0 && sp.Name != spaces.Default
 }

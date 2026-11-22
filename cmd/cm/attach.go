@@ -347,6 +347,7 @@ matters for another multiplexer, which sees the key first and never passes it on
 	// the argv did not exit on an unknown flag. Removed once every live client was running a build that
 	// writes none: checked by comparing each client's running image against the installed binary, and by
 	// ps showing no positions left in any argv.
+	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
 }
 

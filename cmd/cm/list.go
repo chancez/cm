@@ -72,5 +72,6 @@ belongs to several groupings at once while its name only says one thing.
 		"only sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.StringVar(&space, "space", "", "only sessions in this space")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
+	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
 }

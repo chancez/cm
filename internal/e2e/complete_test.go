@@ -89,3 +89,32 @@ func candidates(out string) []string {
 	}
 	return vals
 }
+
+// Spaces complete wherever one is named: --space, `cm space move`'s first argument with sessions after it,
+// and `cm space remove`, which offers only the spaces it would remove.
+func TestSpacesComplete(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	e.mustRun("run", "--session", "busy", "--space", "infra", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	e.mustRun("space", "create", "empty")
+
+	check := func(args []string, want, notWant []string) {
+		t.Helper()
+		offers := e.mustRun(append([]string{"__complete"}, args...)...)
+		for _, w := range want {
+			if !strings.Contains(offers, w+"\t") {
+				t.Errorf("__complete %q = %q, want %q offered", args, offers, w)
+			}
+		}
+		for _, w := range notWant {
+			if strings.Contains(offers, w+"\t") {
+				t.Errorf("__complete %q = %q, want %q left out", args, offers, w)
+			}
+		}
+	}
+	check([]string{"attach", "--space", ""}, []string{"infra", "empty", "default"}, nil)
+	check([]string{"list", "--space", "in"}, []string{"infra"}, []string{"empty"})
+	check([]string{"space", "move", ""}, []string{"infra", "empty"}, nil)
+	check([]string{"space", "move", "empty", ""}, []string{"busy"}, []string{"infra"})
+	check([]string{"space", "remove", ""}, []string{"empty"}, []string{"infra", "default"})
+}

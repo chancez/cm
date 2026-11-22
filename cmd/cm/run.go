@@ -210,6 +210,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 		"on a reused session, wait until this text appears instead of for the shell to be idle")
 	f.BoolVar(&matchRaw, "match-raw", false,
 		"match the bytes the program emitted rather than the text they rendered to")
+	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
 }
 
