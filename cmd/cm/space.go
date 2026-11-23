@@ -39,8 +39,8 @@ carry many tags or none, so "where is it" has no single reply from them, and a
 tag nothing carries does not exist. Tags still work inside a space and across
 spaces.
 
-Names follow session names: letters, digits, '-', '_' and '.', not starting
-with '.'.`,
+Names are letters, digits, '-', '_' and '.', and may start with '.', as a
+repository's directory such as .dotfiles does; '.' and '..' are refused.`,
 	}
 	cmd.AddCommand(
 		newSpaceListCommand(g),

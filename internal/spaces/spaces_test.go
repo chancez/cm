@@ -18,7 +18,9 @@ func TestValidateName(t *testing.T) {
 		{name: strings.Repeat("a", MaxNameLen+1)},
 		{name: ""},
 		{name: "."},
-		{name: ".hidden"},
+		{name: ".."},
+		// A repository's directory, as kspaces names a space after it.
+		{name: ".dotfiles", ok: true},
 		{name: "host:cm"},
 		{name: "a b"},
 		{name: "a/b"},

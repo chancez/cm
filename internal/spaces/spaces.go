@@ -31,6 +31,11 @@ var ErrEmptyName = errors.New("space name is empty")
 // one carrying an escape sequence could repaint the terminal of whoever lists it, and it is typed as a
 // bare shell word. ':' is excluded for a reason of its own, since a qualified reference spells a host
 // before one.
+//
+// A leading '.' is allowed, unlike in a session name, where it kept a socket from being a hidden file. A
+// space is never a file, and kspaces names a space after its repository's directory, so ~/.dotfiles is
+// .dotfiles: refusing it put every window there in default. "." and ".." are still refused, as names
+// that read as directories rather than as spaces.
 func ValidateName(name string) error {
 	if name == "" {
 		return ErrEmptyName
@@ -38,8 +43,8 @@ func ValidateName(name string) error {
 	if len(name) > MaxNameLen {
 		return fmt.Errorf("space name %q is %d bytes, limit is %d", name, len(name), MaxNameLen)
 	}
-	if strings.HasPrefix(name, ".") {
-		return fmt.Errorf("space name %q starts with '.'", name)
+	if name == "." || name == ".." {
+		return fmt.Errorf("space name %q is not a name", name)
 	}
 	for _, r := range name {
 		switch {

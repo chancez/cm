@@ -262,8 +262,9 @@ session from the overlay goes in the space of the session the window is on.
 
 A space is a record of its own, so it outlives its sessions: `cm space list` shows each with its session
 and running counts, empty ones included. `cm space remove` refuses a space that holds any session,
-shelved and exited ones included, and `default`. Names follow session names, so `:` is refused, which a
-qualified reference to another host will need.
+shelved and exited ones included, and `default`. Names are a session name's characters, so `:` is refused, which a
+qualified reference to another host will need. Unlike a session name, one may start with `.`, since kspaces
+names a space after its repository's directory and `~/.dotfiles` is `.dotfiles`; `.` and `..` are refused.
 
 The session is told nothing. cm exports no `CM_SPACE`, which every flag's `CM_` binding would read as
 `--space` and which would go stale on a move; the server resolves the calling session through
