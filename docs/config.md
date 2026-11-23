@@ -116,6 +116,12 @@ expire_after = "168h"
 # Remove an ended session that saved no output after this long.
 forget_unpersisted_after = "5m"
 
+[close]
+# What `cm close`, a terminal's window-close hook, does to an idle shell: "shelve" or "kill".
+idle = "shelve"
+# And to a session running something: "detach" or "kill".
+busy = "detach"
+
 [debug]
 # Serve runtime profiles for `cm debug pprof`.
 pprof = false
@@ -544,6 +550,27 @@ gone unconditionally. See [persistence.md](persistence.md) for how restore works
 - **`max_bytes`** applies regardless of `max_lines`, so one very long line cannot fill the disk.
 - **`expire_after`** and **`forget_unpersisted_after`** bound how long records are kept. Both reject
   zero, which would delete a session's record the moment it ended.
+
+## [close]
+
+What `cm close` does to the session a closed window showed, once no other window shows it. See
+[cli.md](cli.md#closing-a-window) for the whole policy.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `idle` | `shelve`, `kill` | `shelve` |
+| `busy` | `detach`, `kill` | `detach` |
+
+- **`idle`** is a shell at its prompt. `shelve` keeps it to restore, for `expire_after`; `kill` ends it. One
+  that saves no output is killed either way, having nothing to shelve to.
+- **`busy`** is a session running a command, inside a command frame, whose program reports work, or whose
+  shell never reported a prompt, so nothing says it is idle. `detach` leaves it running, to be found again
+  in its space; `kill` ends it.
+
+`kill` for both is for someone who closes a window only to be done with it, and keeps a session with the
+detach key instead. Read by the server that owns the session, so each host keeps its own: a server can keep
+`busy = "detach"`, so a long job there outlives a laptop window closing on it, while the laptop kills its
+own. A session another window still shows is never ended, whatever these say.
 
 ## [remote]
 

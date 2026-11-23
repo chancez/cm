@@ -636,3 +636,32 @@ func TestFlightWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestClosePolicyDefaultAndValidation(t *testing.T) {
+	type policy struct {
+		idle, busy string
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  CloseConfig
+		want policy
+		err  bool
+	}{
+		// Unset keeps what runs and shelves what is idle, the choice that loses nothing.
+		{name: "unset", cfg: CloseConfig{}, want: policy{"shelve", "detach"}},
+		{name: "kill both", cfg: CloseConfig{Idle: "kill", Busy: "kill"}, want: policy{"kill", "kill"}},
+		// A misspelling is refused rather than defaulted, since one side of it ends sessions.
+		{name: "bad idle", cfg: CloseConfig{Idle: "kil"}, err: true},
+		{name: "bad busy", cfg: CloseConfig{Busy: "shelve"}, err: true},
+	} {
+		cfg := &Config{Close: tc.cfg}
+		idle, busy, err := cfg.ClosePolicy()
+		if (err != nil) != tc.err {
+			t.Errorf("%s: ClosePolicy() error = %v, want error %v", tc.name, err, tc.err)
+			continue
+		}
+		if got := (policy{idle, busy}); !tc.err && got != tc.want {
+			t.Errorf("%s: ClosePolicy() = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}

@@ -64,6 +64,8 @@ type Manager struct {
 	// persist decides which sessions survive a reboot and what happens when one is revived. Nil
 	// disables persistence entirely, which is the default.
 	persist *PersistPolicy
+	// closePolicy is what `cm close` does; see ClosePolicy.
+	closePolicy ClosePolicy
 	// log records what the manager does. Never nil, so callers do not have to check.
 	log *slog.Logger
 	// shimLogRetention is how long an exited shim's diagnostic log is kept. Zero disables pruning.
@@ -188,6 +190,18 @@ func (m *Manager) SetLogger(l *slog.Logger) {
 		m.log = l
 	}
 }
+
+// ClosePolicy is what `cm close` does to a session no other window shows. The zero value is the default:
+// shelve an idle one, detach a busy one.
+type ClosePolicy struct {
+	// KillIdle ends an idle session rather than shelving it.
+	KillIdle bool
+	// KillBusy ends a busy session rather than detaching it.
+	KillBusy bool
+}
+
+// SetClosePolicy sets what `cm close` does. See ClosePolicy.
+func (m *Manager) SetClosePolicy(p ClosePolicy) { m.closePolicy = p }
 
 // SetPersistPolicy enables persistence.
 func (m *Manager) SetPersistPolicy(p *PersistPolicy) { m.persist = p }

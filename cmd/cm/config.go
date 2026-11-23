@@ -86,6 +86,9 @@ type configJSON struct {
 	// The remote settings, reported for the same reason the retentions are: "my setting does nothing" is what
 	// this command answers, and a connection shared for a minute by default is a process the user did not
 	// start, so being able to read back whether it is on matters.
+	// What a closed window does to an idle and to a busy session, since one setting of each ends sessions.
+	CloseIdle               string `json:"close_idle"`
+	CloseBusy               string `json:"close_busy"`
 	RemoteSSHCommand        string `json:"remote_ssh_command"`
 	RemoteConnectionPersist string `json:"remote_connection_persist"`
 	// UnknownSettings are settings in the file this build does not know, which everything else ignores
@@ -124,6 +127,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		return err
 	}
 	flightWindow, err := cfg.FlightWindow()
+	if err != nil {
+		return err
+	}
+	closeIdle, closeBusy, err := cfg.ClosePolicy()
 	if err != nil {
 		return err
 	}
@@ -213,6 +220,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		// Through the accessor, so what is printed is what a remote connection actually uses, including the
 		// default a blank setting means. "off" rather than "0s" for no sharing, because that is the question
 		// being answered.
+		CloseIdle:               closeIdle,
+		CloseBusy:               closeBusy,
 		RemoteSSHCommand:        remoteSSHCommandOrDefault(cfg.Remote.SSHCommand),
 		RemoteConnectionPersist: persistOrOff(remotePersist),
 		UnknownSettings:         cfg.UnknownSettings(),
@@ -264,6 +273,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "rebind_replaces           %t\n", out.RebindReplaces)
 	fmt.Fprintf(os.Stdout, "debug.pprof               %t\n", out.DebugPprof)
 	fmt.Fprintf(os.Stdout, "debug.flight_recorder     %s\n", out.DebugFlightRecorder)
+	fmt.Fprintf(os.Stdout, "close.idle                %s\n", out.CloseIdle)
+	fmt.Fprintf(os.Stdout, "close.busy                %s\n", out.CloseBusy)
 	fmt.Fprintf(os.Stdout, "remote.ssh_command        %s\n", out.RemoteSSHCommand)
 	fmt.Fprintf(os.Stdout, "remote.connection_persist %s\n", out.RemoteConnectionPersist)
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))

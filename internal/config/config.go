@@ -108,6 +108,20 @@ type Config struct {
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 	Remote  RemoteConfig  `toml:"remote"`
+	Close   CloseConfig   `toml:"close"`
+}
+
+// CloseConfig is what `cm close`, a terminal's window-close hook, does to the session a closed window showed
+// when no other window shows it. Read by the server that owns the session, so each host keeps its own rule:
+// a server can keep a long job running when a laptop's window on it closes, while the laptop ends its own.
+type CloseConfig struct {
+	// Idle is what happens to a shell idle at a prompt: "shelve", the default, keeps it to restore, and
+	// "kill" ends it. A session that saves no output is killed either way, having nothing to shelve to.
+	Idle string `toml:"idle"`
+	// Busy is what happens to a session running something, or one whose shell never reported a prompt:
+	// "detach", the default, leaves it running, and "kill" ends it. For someone who closes a window only to
+	// be done with it, and detaches with the detach key to keep one.
+	Busy string `toml:"busy"`
 }
 
 // RemoteConfig is how cm reaches a server on another machine.
@@ -578,6 +592,26 @@ func (c *Config) RestoreMode() (RestoreMode, error) {
 		return RestoreShell, fmt.Errorf(
 			"on_restore = %q, want \"shell\", \"none\", \"prefill\", or \"command\"", c.Persist.OnRestore)
 	}
+}
+
+// ClosePolicy returns what a close does to an idle session and to a busy one, validating both.
+func (c *Config) ClosePolicy() (idle, busy string, err error) {
+	idle, busy = c.Close.Idle, c.Close.Busy
+	switch idle {
+	case "":
+		idle = "shelve"
+	case "shelve", "kill":
+	default:
+		return "", "", fmt.Errorf("close.idle = %q, want \"shelve\" or \"kill\"", c.Close.Idle)
+	}
+	switch busy {
+	case "":
+		busy = "detach"
+	case "detach", "kill":
+	default:
+		return "", "", fmt.Errorf("close.busy = %q, want \"detach\" or \"kill\"", c.Close.Busy)
+	}
+	return idle, busy, nil
 }
 
 // PersistsSession reports whether a session name persists by configuration alone.

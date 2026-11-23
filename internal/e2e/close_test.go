@@ -63,3 +63,32 @@ func TestCloseFollowsTheShellsState(t *testing.T) {
 		t.Errorf("states after closing = %v, want %v", states, want)
 	}
 }
+
+// With [close] set to kill, a close ends the session whatever it is doing, for someone who closes a window
+// only to be done with it.
+func TestClosePolicyKills(t *testing.T) {
+	skipIfShort(t)
+	requireShell(t, "/bin/zsh")
+	e := newEnv(t)
+	e.writeConfig("[persist]\nenabled = true\n\n[close]\nidle = \"kill\"\nbusy = \"kill\"\n")
+	e.restartServer()
+
+	e.startPromptShell("idle", true)
+	e.startPromptShell("busy", true)
+	e.mustRun("send", "busy", "sleep 120", "--enter")
+	e.waitFor("busy to report its command", 20*time.Second, func() bool {
+		s, ok := e.session("busy")
+		return ok && s.Busy
+	})
+
+	got := map[string]string{}
+	for _, name := range []string{"idle", "busy"} {
+		got[name] = e.mustRunWithin(30*time.Second, "close", name)
+	}
+	if want := map[string]string{"idle": "idle: killed\n", "busy": "busy: killed\n"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("cm close printed %v, want %v", got, want)
+	}
+	if left := e.list(); len(left) != 0 {
+		t.Errorf("sessions after closing = %v, want none", left)
+	}
+}

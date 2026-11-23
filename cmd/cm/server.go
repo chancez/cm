@@ -434,6 +434,13 @@ func runServer(ctx context.Context, dirs paths.Dirs, cfg *config.Config, foregro
 	}
 	mgr.SetPersistPolicy(policy)
 
+	idle, busy, err := cfg.ClosePolicy()
+	if err != nil {
+		l.Close()
+		return err
+	}
+	mgr.SetClosePolicy(server.ClosePolicy{KillIdle: idle == "kill", KillBusy: busy == "kill"})
+
 	// Set separately from the persist policy, and deliberately not part of it: a shim log is written for
 	// every session regardless of whether its output is persisted, so folding this into a policy that
 	// persistence configures would tie it to an unrelated setting.

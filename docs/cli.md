@@ -168,6 +168,9 @@ the same on every host and in every terminal:
 | reached by a name that borrowed it | `unbound`: the name is released, as `cm kill` by it does |
 | not running | `not_running` |
 
+The `detached` and `shelved` rows are the defaults; `[close]` in the config can kill either kind instead. See
+[config.md](config.md#close).
+
 A command frame counts because OSC 133 alone does not: a remote shell's prompt markers arriving through a
 local `ssh` read as the local shell idle, while the frame the local shell opened for the ssh stays open.
 `--client-pid` names the closed window's client; without it every client detaches. Only ever run on a

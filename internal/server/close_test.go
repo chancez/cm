@@ -27,8 +27,32 @@ func TestDecideClose(t *testing.T) {
 		// Nothing says a shell without integration is idle, so it is treated as busy.
 		{name: "no shell integration", facts: closeFacts{}, want: closeDetach},
 	} {
-		if got := decideClose(tc.facts); got != tc.want {
+		if got := decideClose(tc.facts, ClosePolicy{}); got != tc.want {
 			t.Errorf("%s: decideClose(%+v) = %v, want %v", tc.name, tc.facts, got, tc.want)
+		}
+	}
+}
+
+// Policy ends either kind outright, and never one another window still shows.
+func TestDecideClosePolicy(t *testing.T) {
+	idle := closeFacts{promptSeen: true}
+	busy := closeFacts{promptSeen: true, running: true}
+	shown := closeFacts{promptSeen: true, running: true, others: 1}
+	for _, tc := range []struct {
+		name   string
+		facts  closeFacts
+		policy ClosePolicy
+		want   closeAction
+	}{
+		{name: "idle, kill idle", facts: idle, policy: ClosePolicy{KillIdle: true}, want: closeKill},
+		{name: "idle, kill busy only", facts: idle, policy: ClosePolicy{KillBusy: true}, want: closeEnd},
+		{name: "busy, kill busy", facts: busy, policy: ClosePolicy{KillBusy: true}, want: closeKill},
+		{name: "busy, kill idle only", facts: busy, policy: ClosePolicy{KillIdle: true}, want: closeDetach},
+		{name: "no integration, kill busy", facts: closeFacts{}, policy: ClosePolicy{KillBusy: true}, want: closeKill},
+		{name: "another window, kill both", facts: shown, policy: ClosePolicy{KillIdle: true, KillBusy: true}, want: closeKeep},
+	} {
+		if got := decideClose(tc.facts, tc.policy); got != tc.want {
+			t.Errorf("%s: decideClose = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

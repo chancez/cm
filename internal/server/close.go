@@ -36,19 +36,27 @@ const (
 	closeDetach closeAction = iota
 	// closeEnd ends the session: shelved when it saved output, killed when there is nothing to shelve to.
 	closeEnd
+	// closeKill ends the session and forgets it.
+	closeKill
 	// closeKeep does nothing more, since another window still shows the session.
 	closeKeep
 )
 
-// decideClose is the close policy. Only an idle shell is ended, and only once no window shows it: closing a
-// window must never end something running, since a long job or an agent is exactly what a window is closed
-// on to be found again later in its space.
-func decideClose(f closeFacts) closeAction {
+// decideClose is the close policy. Nothing is ended while another window shows the session. By default only
+// an idle shell is ended, since a long job or an agent is exactly what a window is closed on to be found
+// again later in its space; policy can end either kind outright, for someone who closes a window only to be
+// done with it.
+func decideClose(f closeFacts, policy ClosePolicy) closeAction {
 	switch {
 	case f.others > 0:
 		return closeKeep
 	case !f.promptSeen, f.running, f.framed, f.reportedBusy:
+		if policy.KillBusy {
+			return closeKill
+		}
 		return closeDetach
+	case policy.KillIdle:
+		return closeKill
 	}
 	return closeEnd
 }
@@ -102,11 +110,16 @@ func (s *Service) closeRef(ctx context.Context, ref string, clientPID int32) (se
 		framed:       len(sess.Location()) > 0,
 		reportedBusy: sess.Reported().Busy(),
 	}
-	switch decideClose(facts) {
+	switch decideClose(facts, s.mgr.closePolicy) {
 	case closeKeep:
 		return serverv1.CloseOutcome_CLOSE_OUTCOME_KEPT, nil
 	case closeDetach:
 		return serverv1.CloseOutcome_CLOSE_OUTCOME_DETACHED, nil
+	case closeKill:
+		if _, err := s.mgr.Kill(ctx, id, KillOptions{}); err != nil {
+			return 0, err
+		}
+		return serverv1.CloseOutcome_CLOSE_OUTCOME_KILLED, nil
 	}
 	return s.endIdle(ctx, id)
 }
