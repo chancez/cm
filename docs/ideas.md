@@ -794,46 +794,72 @@ An unreachable remote is the one real cost. Its last listing is cached client-si
 time it was taken. A window bound to a session there reports the host unreachable, not the session gone:
 the client's reconnect loop already treats a lost link as an outage to wait out.
 
-*Closing a window decides nothing destructive.* `cm_reap.py` runs `cm kill --force` on a window close today,
-because otherwise sessions pile up in the flat list. Spaces remove the reason: a closed window's session
-stays visible in its space. The policy, the same on every host:
+*Closing a window decides nothing destructive.* **Built**, as `cm close` (docs/cli.md, "Closing a window").
+The server decides from the session's state: kept when another client still shows it, detached when a
+command runs, a command frame is open, a program reports work, or no OSC 133 was ever seen; an idle shell is
+shelved for `expire_after` when it saves output and killed when it saves none. `--client-pid` detaches only
+the closed window's client. A disconnect of any kind is a detach and nothing else, so the policy runs only
+on a stated close: over `--remote` a dropped link and a closed window look the same to the server.
 
-- An explicit close, `cm close REF`, detaches a session running a command and shelves an idle one. Shelving
-  keeps the scrollback, names, tags and restore command, and the configured `expire_after` bounds the pile.
-  An idle session that saved no output has nothing to shelve to and is killed, losing only its scrollback;
-  persistence is off by default, so on a plain install that is the common case. A session with no shell
-  integration reports no idle state, so it is treated as busy and detached. A session another window still
-  shows is left alone, which `cm_reap.py` could not tell apart from a last window.
-- A disconnect of any kind is a detach and nothing else. Over `--remote` a dropped link and a closed window
-  both look like a hangup to the server, so the policy must run only on the stated intent. kitty's watcher
-  `on_close` reports `reason` and `cause`, and the watcher calls `cm close` rather than the server inferring
-  it.
-- Killing stays explicit: `exit` in the shell, `cm kill`, or a space's clean-up action, which kills its
-  shelved sessions.
+The caller is the terminal's close watcher, which is the user's dotfiles, not cm. kitty's `on_close` says
+`cause: closed` for a window closed and `program_exit` for one whose program ended: the detach key, or the
+session ending. Only `closed` is a close. On `program_exit` the watcher forgets the session if it reads
+`exited`, which a shell's `exit` leaves for `expire_after` otherwise, and leaves a running (detached) or
+shelved one alone. Rejected: prompting on close as the mechanism, since closing the OS window, quitting, a
+crash and a dropped link all bypass a prompt, so the unprompted path has to lose nothing anyway.
 
-Rejected: prompting on close as the mechanism. A prompt only covers a close through a mapping cm's side
-controls; closing the OS window, quitting kitty, a crash and a dropped link all bypass it, so the unprompted
-path has to lose nothing anyway. A prompt can sit on top of that.
-
-*kspaces.* Reads spaces from cm, local and remote, for the spaces that are not repositories, beside the ones
-it configures. Its sidebar and `cm tui` are then two views of the same data.
+*kspaces.* **Built**, decoupled from cm. kspaces knows kitty's layout and nothing about multiplexers: a
+session provider, a configured program asked in verbs over JSON (kspaces' docs/kitty.md, "Session
+providers"), owns what runs in windows and the sessions with no window, and says which windows show which
+session. The keeper protocol is its `keep` and `forget`. kspaces lists each space's sessions no window shows
+as detached, opens one in a tab, and offers kill, shelve, remove, move and clean up as the provider's
+capabilities allow. It tells a launch wrapper where a window belongs with `kspaces_space` and
+`kspaces_worktree`, since kitty runs the wrapper before the window has a session. The cm side is two
+programs in the user's dotfiles: `kspaces-provider-cm`, which matches a window to a session by client pid
+(the wrapper's window is the `cm attach` client, so `cm switch` is followed), and `launch_wrapper.py`, which
+turns the vars into `CM_SPACE` and a `worktree` tag. cm learns nothing about kspaces.
 
 *What will bite.* Hosts upgrade independently, so anything a server answers about spaces needs the
-capability tokens of `docs/capabilities.md` from the first version. A remote client answers terminal queries
-across a WAN round trip, which `docs/architecture.md` on what cm presents itself as has not had to consider.
-And authority: reading and attaching are one grant, killing and shelving on another host may want to be a
-second.
+capability tokens of `docs/capabilities.md`; `spaces` and `close` exist. A remote client answers terminal
+queries across a WAN round trip, which `docs/architecture.md` on what cm presents itself as has not had to
+consider. And authority: reading and attaching are one grant, killing and shelving on another host may want
+to be a second.
 
 *Order*, each useful without the next:
 
-1. **Built.** Spaces on one host: the record, a session's space in the store and in `Open`, `default`,
-   moving a session, `cm ls` and `cm tui` grouped by space. See docs/cli.md.
-2. **Built in cm.** The close policy and `cm close`. What remains is the dotfiles' `cm_reap.py` calling it
-   with the window's client pid in place of `cm kill --force`.
-3. Named remotes and qualified references, resolving locally for the local host's name.
-4. Cross-host `cm ls` and `cm tui` with the stale cache.
-5. kspaces reading spaces from cm.
+1. **Built.** Spaces on one host: the record, `Open.space` and `Open.space_from`, `default`, `cm space`,
+   `cm ls` and `cm tui` grouped by space, completion. A space name may start with `.`, as `.dotfiles` does.
+2. **Built.** The close policy and `cm close`, and the kitty watcher calling it.
+3. **Built.** kspaces on a session provider, with cm's provider in the dotfiles.
+4. Named remotes and qualified references, resolving locally for the local host's name.
+5. Cross-host `cm ls` and `cm tui` with the stale cache, and the provider listing every host's sessions.
 
+*Picking up the remaining work.* What a new agent needs, beyond the decisions above:
+
+- **Where the pieces live.** cm: `internal/spaces` (names, ordering), `internal/store/spaces.go` and the
+  `spaces` migration, `internal/server/spaces.go` and `close.go`, `cmd/cm/space.go` and `close.go`, the
+  `spaces` and `close` capabilities. kspaces (github.com/chancez/kspaces): the provider client in
+  `internal/spaces`, the spec in `docs/kitty.md`. Dotfiles: `bins/.local/bin/kspaces-provider-cm`, and
+  `kitty/.config/kitty/` `launch_wrapper.py`, `cm-attach` (in bins), `cm_reap.py`, `kitty.conf`.
+- **Step 4, named remotes.** The `[remote]` section has transport settings and no host list, and has no
+  default remote by design (docs/config.md). A remote needs a name, which is what a reference qualifies
+  with, and the local host needs one too. Then `host:@id` and `host:name` are parsed wherever a ref is, and a
+  qualified ref naming this host resolves locally. `ValidateSessionRef` is the place to start, and the
+  `ValidateSessionName` versus `ValidateSessionRef` trap in AGENTS.md applies.
+- **Step 5, fan-out.** `cm ls` across remotes is a client-side fan-out over `--remote` connections, never a
+  server re-serving them (decided under `--remote` above). A remote that does not answer is shown from a
+  cached listing, stale, with its time. The provider then sets each session's `host`, which kspaces already
+  groups by, and `open` returns `cm attach --remote ssh://HOST @ID`; the window's `cm_session` stores the
+  qualified ref so a restore reconnects.
+- **kspaces gaps.** Detached rows include sessions kspaces' own suspend kept, which its
+  `.kept-sessions` already names and could exclude; ended sessions could collapse behind a count so the
+  group shows running ones first; the picker and `/` do not find detached sessions, which its TODO.md records.
+- **Testing.** Never against the live server or kitty: the cm-sandbox skill for cm, a fake provider for
+  kspaces, a stub `cm` or a sandboxed one for the dotfiles scripts. The kitty-side behavior (wrapper,
+  watcher) only shows in a real kitty, through the kitty-sandbox skill, and none of it has had that yet.
+- **Applying a change.** cm: `mise run install`, then `cm server restart`, which keeps sessions. kspaces:
+  `mise run install`, then `kspaces kitty install`. Dotfiles: `mise dotfiles apply`, which a new file needs to
+  be linked at all, then a kitty restart, since kitty caches watcher modules.
 
 **A kitty wrapper for spawning windows.** A `cmk` or `kitten cm` that creates a kitty window or tab with a
 cm session already in it, so an agent could give each sub-agent its own visible tab instead of a headless
