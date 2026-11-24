@@ -664,6 +664,31 @@ looks like a rendering fault. And it writes only to the terminal model, never to
 because a resuming client has already seen that output and appending it would replay old output as
 though it were new.
 
+### Terminal modes outlive the retained window
+
+The replay covers 4 MiB, and a program sets its modes once, at startup. A gr that had run for three days
+set `?1049h` and `?1003h` at byte 11435653; an adoption whose oldest retained byte was about 12.4M rebuilt
+a model on the main screen with no mouse reporting. Every client attaching afterwards was put in that
+state: keys reached gr, clicks did nothing, and the wheel scrolled kitty's scrollback. The attach payload
+grew from 22 KB to 216 KB as gr's frames piled into the model's main-screen scrollback.
+
+So the modes are state of their own, in the store's `modes` column, like `prompt_seen` and for the same
+reason. The pump records every mode that differs from a new terminal's with the position of the chunk that
+set it, reading the model only for a chunk that can change one (`termmodes.Watch`; a read is about 2.9us).
+Adoption applies the recorded modes set *before* the shim's oldest byte, then replays, so the replay sets
+the rest at their own positions and an unchanged mode keeps its original position for the next restart.
+
+Applying the state *after* the replay was rejected: by then the program's frames are in the main screen's
+scrollback, and switching to the alternate screen clears what it should hold. Snapshotting the model on
+shutdown was rejected as the primary fix because a crash leaves the same state. Writes are coalesced to one
+a second, since nvim toggles `?25` around every redraw, plus one with the resume points on shutdown; a
+crash loses at most the last second, which the replay still holds. Synchronized output (`?2026`) is not
+recorded, being reset around every frame. A revive starts with none: the program that set them is gone, and
+`ResetModes` has put the model back to defaults.
+
+`cm info` shows the modes as the sequences that set them, `?1049h ?1003h kitty_keyboard=1`, and the log
+says which ones an adoption applied.
+
 ### Adoption needs both resume points, not one
 
 There are two of them because there are two numbering spaces, and adoption is where conflating them
