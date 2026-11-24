@@ -341,3 +341,19 @@ func (s *SessionTerminal) ResetModes() (err error) {
 	defer func() { err = recovered(recover(), err, "resetting the terminal model's modes") }()
 	return s.term.ResetModes()
 }
+
+// Modes returns the modes that differ from a new terminal's. See Terminal.Modes.
+func (s *SessionTerminal) Modes() (_ map[string]int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "reading the terminal model's modes") }()
+	return s.term.Modes()
+}
+
+// ApplyModes sets modes a replay could not. See Terminal.ApplyModes.
+func (s *SessionTerminal) ApplyModes(values map[string]int) (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "applying modes to the terminal model") }()
+	return s.term.ApplyModes(values)
+}
