@@ -338,3 +338,51 @@ func waitForStoredReport(t *testing.T, st *store.Store, id string) store.Reporte
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// A command whose start marker has been trimmed out of the shim's retained output still reads as running
+// after a restart, from the typed command the record kept with its frame.
+//
+// gr had run for three days, far more output than the shim retains, so the replay held no OSC 133 marker
+// and `cm list` said "running" beside a title of gr. Not resumed for a shell that has never sent a marker,
+// since nothing would ever mark the command finished.
+func TestAdoptionResumesATrimmedTypedCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		promptSeen bool
+		want       osc.CommandState
+	}{
+		{"shell with markers", true, osc.CommandState{Running: true, Command: "gr"}},
+		{"shell without markers", false, osc.CommandState{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, st, _ := newTestManager(t, nil)
+			ctx := context.Background()
+			// No marker anywhere in what the shim holds, which is what three days of gr leaves.
+			rec := startShimFor(t, shimConfigFor("trimmed", "printf 'frames\\r\\nMARK\\r\\n'; sleep 5"))
+			rec.State = store.StateRunning
+			recordSession(t, st, rec)
+			if err := mgr.Reconcile(ctx); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			first, ok := mgr.Get(rec.ID)
+			if !ok {
+				t.Fatal("session was not adopted by the first server")
+			}
+			sub := first.recent.Subscribe(0)
+			readUntil(t, sub, "MARK")
+			sub.Close()
+			rec.LastSeq, rec.ClientSeq = releaseForRestart(t, first)
+
+			rec.Typed = store.TypedCommand{Line: "gr", Frame: "salt-1"}
+			rec.PromptSeen = tc.promptSeen
+			second, err := mgr.adopt(ctx, rec, rec.LastSeq, rec.ClientSeq, persistedRestore{})
+			if err != nil {
+				t.Fatalf("adopt() error = %v", err)
+			}
+			t.Cleanup(second.Close)
+			if got := second.Command(); got != tc.want {
+				t.Errorf("Command() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

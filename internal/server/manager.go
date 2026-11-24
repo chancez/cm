@@ -482,6 +482,14 @@ func (m *Manager) adopt(
 	// The trackers were drained chunk by chunk as the replay applied them, so nothing in them is applied
 	// twice: see withRecoveredCommands on why leaving a report in one would republish it.
 	records := recoveredRecords(rec, rp)
+	// The command running when its marker has been trimmed out of the replay, from the record, which kept it
+	// with its frame. A gr three days old has drawn far more than the shim retains since its OSC 133 C, so
+	// `cm list` said "running" beside a title of gr. Only with no marker in the replay, since any marker is
+	// newer than the record, and only for a shell known to send them: without one, nothing would ever mark
+	// the command finished.
+	if !rp.commands.Seen() && rec.PromptSeen && rec.Typed.Line != "" {
+		rp.commands.Resume(rec.Typed.Line)
+	}
 	// The images the replay found, so a client attaching to this adopted session receives the transmissions
 	// its screen's placements refer to. See recordGraphics, and withGraphicsStore for why this is an option.
 	sess, err := newSession(rec, term, fromSeq, clientSeq,
