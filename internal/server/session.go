@@ -29,6 +29,7 @@ import (
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/seqlog"
 	"github.com/chancez/cm/internal/store"
+	"github.com/chancez/cm/internal/termmodes"
 	"github.com/chancez/cm/internal/transport"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -174,6 +175,14 @@ type Session struct {
 	outPartial    []byte
 	outPartialSeq seq.Shim
 
+	// modeTracker and modeWatch follow the modes the program has set, for noteModes. Owned by the pump
+	// goroutine alone, like outPartial. See internal/termmodes.
+	modeTracker *termmodes.Tracker
+	modeWatch   termmodes.Watch
+	// modesChanged is signalled when modes changes, for persistModes. Buffered, depth one, as
+	// restoreChanged is.
+	modesChanged chan struct{}
+
 	// recent holds output consumed from the shim, so clients can subscribe from a
 	// position rather than only receiving what arrives after they connect. Using the same
 	// log type as the shim means the gap semantics are identical on both hops.
@@ -183,6 +192,8 @@ type Session struct {
 	// lastSeq is one past the last sequence number consumed from the shim, and is the
 	// resume point if this server restarts.
 	lastSeq seq.Shim
+	// modes is modeTracker's state as of the last chunk, for the store and for `cm info`.
+	modes []termmodes.Mode
 	// ended is set once the shim reports the shell exited.
 	ended    bool
 	exitCode int
@@ -640,6 +651,12 @@ type Terminal interface {
 	// ResetModes puts every mode back to a new terminal's, keeping the content. For a model whose
 	// program died without undoing its own, which is what a revived session's replayed log leaves.
 	ResetModes() error
+	// Modes returns every mode that differs from a new terminal's, keyed as termmodes keys them, so the
+	// server can record what a program set. See internal/termmodes.
+	Modes() (map[string]int, error)
+	// ApplyModes sets modes as a program's sequences would, for an adoption whose replay lost the bytes
+	// that set them.
+	ApplyModes(values map[string]int) error
 	// Plain, VT, ANSI, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
@@ -846,6 +863,8 @@ func newSession(
 		promptSeen:        rec.PromptSeen,
 		promptNoted:       rec.PromptSeen,
 		promptSeenChanged: make(chan struct{}, 1),
+		modeTracker:       termmodes.NewTracker(nil),
+		modesChanged:      make(chan struct{}, 1),
 	}
 	s.title, s.baseTitle = initialTitle(rec, term)
 
@@ -1150,6 +1169,7 @@ func (s *Session) processChunk(raw []byte, rawSeq seq.Shim) {
 	fault.At(fault.BeforeModelFeed)
 
 	s.feedTerminal(gfxData, s.recent.Next())
+	s.noteModes(gfxData, base)
 }
 
 // modelMovedLocked returns a channel closed the next time the model advances or is discarded.

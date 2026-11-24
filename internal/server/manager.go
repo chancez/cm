@@ -27,6 +27,7 @@ import (
 	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/tags"
+	"github.com/chancez/cm/internal/termmodes"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
@@ -484,7 +485,8 @@ func (m *Manager) adopt(
 	// The images the replay found, so a client attaching to this adopted session receives the transmissions
 	// its screen's placements refer to. See recordGraphics, and withGraphicsStore for why this is an option.
 	sess, err := newSession(rec, term, fromSeq, clientSeq,
-		withRecoveredCommands(rp.commands, rp.reports, rp.statuses, records), withGraphicsStore(rp.gfx))
+		withRecoveredCommands(rp.commands, rp.reports, rp.statuses, records), withGraphicsStore(rp.gfx),
+		withModes(rp.modes))
 	if err != nil {
 		if term != nil {
 			term.Close()
@@ -506,6 +508,11 @@ func (m *Manager) adopt(
 	go m.persistMetadata(sess)
 	go m.persistRestore(sess)
 	go m.persistPromptSeen(sess, rec.PromptSeen)
+	if term != nil {
+		// Only with a model: without one nothing is observed, and writing the empty list would erase what the
+		// last server recorded.
+		go m.persistModes(sess, rec.Modes)
+	}
 
 	go m.watch(sess)
 	return sess, nil
@@ -581,6 +588,10 @@ type replayed struct {
 	// than anything stored, that nothing is being reported.
 	records   progstatus.Records
 	sawStatus bool
+	// modes follows the program's terminal modes through the replay, starting from the recorded ones the
+	// replay cannot set, nil when there is no terminal model. modeWatch is its Watch. See adoptModes.
+	modes     *termmodes.Tracker
+	modeWatch termmodes.Watch
 }
 
 // replayShimHistory feeds a shim's retained output into a terminal model and the OSC trackers, up to
@@ -607,6 +618,11 @@ func (m *Manager) replayShimHistory(
 	st, err := shim.State(ctx, &shimv1.StateRequest{})
 	if err != nil {
 		return fmt.Errorf("reading shim state: %w", err)
+	}
+	// Before anything is fed, and before the return below: a mode set before the oldest retained byte is set
+	// by nothing else, whether the replay runs or the pump is the first to feed the model.
+	if term != nil {
+		rp.modes = adoptModes(m.log, rec, term, seq.Shim(st.OldestSeq))
 	}
 	if seq.Shim(st.OldestSeq) >= fromSeq {
 		// Nothing retained before where the pump will start, so there is no history to replay.
@@ -703,6 +719,13 @@ func (m *Manager) replayShimHistory(
 		if term != nil {
 			if err := term.Write(data); err != nil {
 				return fmt.Errorf("replaying output: %w", err)
+			}
+			// At the chunk's own position, as the pump records them, so a mode the replay sets keeps where
+			// it was set rather than where this server started.
+			if rp.modes != nil && rp.modeWatch.MayChange(data) {
+				if values, err := term.Modes(); err == nil {
+					rp.modes.Observe(values, chunkStart)
+				}
 			}
 		}
 		replayedTo = chunkStart + seq.Shim(len(data))
@@ -2301,8 +2324,15 @@ func (m *Manager) Close() error {
 		// stored alongside the shim one because they count the same output differently and the adopting
 		// server needs both: one to resubscribe with, one to number its client log from.
 		shimSeq, clientSeq := sess.resumePoints()
-		if err := m.store.Apply(ctx, sess.id,
-			store.Update{LastSeq: &shimSeq, ClientSeq: &clientSeq}); err != nil {
+		upd := store.Update{LastSeq: &shimSeq, ClientSeq: &clientSeq}
+		// With the positions, so a clean restart has the modes as of the last chunk rather than as of the last
+		// write persistModes made, up to modesWriteInterval earlier. Only for a session with a model, which
+		// is the only kind that records them.
+		if sess.hasModel() {
+			modes := sess.Modes()
+			upd.Modes = &modes
+		}
+		if err := m.store.Apply(ctx, sess.id, upd); err != nil {
 			// Losing this means the next server resubscribes from an older position and replays
 			// output the client already saw, so it is worth knowing about.
 			m.log.Error("recording resume point failed",

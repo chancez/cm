@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,11 +36,14 @@ type fakeTerminal struct {
 	closed          bool
 	// modesReset counts ResetModes calls.
 	modesReset int
-	rows       uint16
-	cols       uint16
-	pending    [][]byte
-	title      string
-	pwd        string
+	// modes is what Modes reports, and applied is every ApplyModes call in order.
+	modes   map[string]int
+	applied []map[string]int
+	rows    uint16
+	cols    uint16
+	pending [][]byte
+	title   string
+	pwd     string
 	// restoreRows and restoreCols are the size the model held the last time Restore was called, and
 	// restoredAt counts the calls. Together they answer "was the screen serialized at the size the
 	// client will display it at", which is the ordering a snapshot depends on.
@@ -207,6 +211,25 @@ func (f *fakeTerminal) ResetModes() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.modesReset++
+	return nil
+}
+
+// Modes reports what a test put in modes, which is what a real model reads back from the program's output.
+func (f *fakeTerminal) Modes() (map[string]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return maps.Clone(f.modes), nil
+}
+
+// ApplyModes records what was applied, and holds it as the model's modes from then on.
+func (f *fakeTerminal) ApplyModes(values map[string]int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applied = append(f.applied, maps.Clone(values))
+	if f.modes == nil {
+		f.modes = map[string]int{}
+	}
+	maps.Copy(f.modes, values)
 	return nil
 }
 
