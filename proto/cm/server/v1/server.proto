@@ -1390,6 +1390,22 @@ message Session {
 
   // The space the session is in. Empty from a server that predates spaces.
   string space = 35;
+
+  // modes are the terminal modes the session's program has set that differ from a new terminal's, each with
+  // where in the output it set it. A restarted server applies the ones its replay no longer holds. Empty for a
+  // program that set none, and from an older server.
+  repeated TerminalMode modes = 36;
+}
+
+// TerminalMode is one terminal mode a session's program set.
+message TerminalMode {
+  // key is the mode as its sequence spells it: "?1003" for a DEC private mode, "4" for an ANSI one, or
+  // "kitty_keyboard" for the active screen's kitty keyboard flags.
+  string key = 1;
+  // value is 1 for set and 0 for reset, or the flags for kitty_keyboard.
+  int32 value = 2;
+  // set_at is where the chunk that set it starts, in the shim's numbering.
+  uint64 set_at = 3;
 }
 
 // LocationFrame is one command a session is inside.

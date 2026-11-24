@@ -16,6 +16,7 @@ import (
 	"github.com/chancez/cm/internal/shquote"
 	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/tags"
+	"github.com/chancez/cm/internal/termmodes"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -166,6 +167,20 @@ type sessionJSON struct {
 	// OnRestore is the session's own restore behavior, kept from the attach that created or last revived it,
 	// empty when it follows the configured on_restore.
 	OnRestore string `json:"on_restore"`
+	// Modes are the terminal modes the session's program has set that differ from a new terminal's, each with
+	// where it set it. What a restarted server puts back when its replay no longer holds the bytes, so a
+	// window attaching to a long-running full-screen program gets its alternate screen and mouse.
+	Modes []modeJSON `json:"modes"`
+}
+
+// modeJSON is the JSON shape of one terminal mode a session's program set.
+type modeJSON struct {
+	// Key is the mode as its sequence spells it: "?1003", "4", or "kitty_keyboard".
+	Key string `json:"key"`
+	// Value is 1 for set and 0 for reset, or the flags for kitty_keyboard.
+	Value int32 `json:"value"`
+	// SetAt is where in the session's output the chunk that set it starts.
+	SetAt uint64 `json:"set_at"`
 }
 
 // locationJSON is the JSON shape of one command a session is inside, or one client attached inside it.
@@ -242,6 +257,12 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	}
 
 	// Empty rather than null, like the two above.
+	modes := make([]modeJSON, 0, len(s.Modes))
+	for _, m := range s.Modes {
+		modes = append(modes, modeJSON{Key: m.GetKey(), Value: m.GetValue(), SetAt: m.GetSetAt()})
+	}
+
+	// Empty rather than null, like the two above.
 	clients := make([]attachedClientJSON, 0, len(s.AttachedClients))
 	for _, c := range s.AttachedClients {
 		clients = append(clients, attachedClientJSON{
@@ -285,6 +306,7 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ExpireAfter:         s.ExpireAfter,
 		TypedCommand:        s.TypedCommand,
 		OnRestore:           s.OnRestore,
+		Modes:               modes,
 		Location:            location,
 		Resume:              resume,
 		AttachedClients:     clients,
@@ -885,7 +907,19 @@ func sessionFields(s *serverv1.Session) []struct {
 		{"typed_command", j.TypedCommand},
 		// Empty when the session follows the configured on_restore, like expire_after.
 		{"on_restore", j.OnRestore},
+		// As the sequences that set them, "?1049h ?1003h kitty_keyboard=1", which is what a person comparing
+		// against what a program sends reads. The positions are in the JSON.
+		{"modes", formatModes(j.Modes)},
 	}
+}
+
+// formatModes renders modes for cm info, as termmodes.Format does.
+func formatModes(modes []modeJSON) string {
+	out := make([]termmodes.Mode, len(modes))
+	for i, m := range modes {
+		out[i] = termmodes.Mode{Key: m.Key, Value: int(m.Value)}
+	}
+	return termmodes.Format(out)
 }
 
 // formatLocation renders a frame stack as one line, outermost first.

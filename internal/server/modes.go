@@ -9,6 +9,7 @@ import (
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/termmodes"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // modesWriteInterval is the least time between two writes of a session's modes to the store.
@@ -139,4 +140,17 @@ func (m *Manager) persistModes(sess *Session, stored []termmodes.Mode) {
 			return
 		}
 	}
+}
+
+// modesProto converts recorded modes for the wire.
+func modesProto(modes []termmodes.Mode) []*serverv1.TerminalMode {
+	if len(modes) == 0 {
+		return nil
+	}
+	out := make([]*serverv1.TerminalMode, len(modes))
+	for i, m := range modes {
+		// The one crossing of the shim's numbering onto the wire, as last_seq makes.
+		out[i] = &serverv1.TerminalMode{Key: m.Key, Value: int32(m.Value), SetAt: uint64(m.SetAt)}
+	}
+	return out
 }

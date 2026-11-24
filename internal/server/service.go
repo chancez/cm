@@ -1045,6 +1045,8 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			// The record's, which is what a revive reads; a live session's is fresher and replaces it below.
 			TypedCommand: rec.Typed.Line,
 			OnRestore:    rec.OnRestore,
+			// The record's, which is what the next adoption applies; a live session's is fresher.
+			Modes: modesProto(rec.Modes),
 		}
 		// A live session's own values are fresher than the stored ones, which lag by a write.
 		if sess, live := s.mgr.Get(rec.ID); live {
@@ -1053,6 +1055,10 @@ func (s *Service) List(ctx context.Context, req *serverv1.ListRequest) (*serverv
 			item.ShimBuild = sess.shimBuildCached()
 			item.ResumeArgv = sess.Resume().Argv
 			item.TypedCommand = sess.Typed().Line
+			// Only with a model, since a session without one records nothing and the stored list stands.
+			if sess.hasModel() {
+				item.Modes = modesProto(sess.Modes())
+			}
 			// Including its outcome. A session records that it ended before the manager writes it
 			// back, so a caller polling for a short-lived command would otherwise see it as running
 			// and then briefly as dead, since an unwritten record still says running while the shim

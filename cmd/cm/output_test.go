@@ -115,6 +115,8 @@ func TestSessionJSONKeys(t *testing.T) {
 		"typed_command",
 		// The session's own restore behavior, kept with its record.
 		"on_restore",
+		// The terminal modes the program set, which a restarted server puts back.
+		"modes",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -154,6 +156,7 @@ func TestSessionJSONValues(t *testing.T) {
 		// report, which is what an older server looks like; TestSessionJSONReportsAttachedClients
 		// covers the populated case.
 		AttachedClients: []attachedClientJSON{},
+		Modes:           []modeJSON{},
 	}
 	// DeepEqual rather than ==, since the struct holds a map and pointers. Still the whole value, which
 	// is the point: a field-by-field check passes while the rest of the struct is wrong.
@@ -163,6 +166,33 @@ func TestSessionJSONValues(t *testing.T) {
 	// instant and the zone separately, so the fixture states the instant and the zone stops mattering.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toSessionJSON() = %+v\nwant %+v", got, want)
+	}
+}
+
+// The modes reach the JSON with their positions and cm info as the sequences that set them.
+func TestSessionModes(t *testing.T) {
+	s := sampleWireSession("work")
+	s.Modes = []*serverv1.TerminalMode{
+		{Key: "?1003", Value: 1, SetAt: 11435653},
+		{Key: "?1049", Value: 1, SetAt: 11435653},
+		{Key: "?25", Value: 0, SetAt: 11435653},
+		{Key: "kitty_keyboard", Value: 1, SetAt: 11435700},
+	}
+	wantJSON := []modeJSON{
+		{Key: "?1003", Value: 1, SetAt: 11435653},
+		{Key: "?1049", Value: 1, SetAt: 11435653},
+		{Key: "?25", Value: 0, SetAt: 11435653},
+		{Key: "kitty_keyboard", Value: 1, SetAt: 11435700},
+	}
+	if got := toSessionJSON(s).Modes; !reflect.DeepEqual(got, wantJSON) {
+		t.Errorf("toSessionJSON().Modes = %+v, want %+v", got, wantJSON)
+	}
+	var buf bytes.Buffer
+	if err := printSessionInfo(&buf, s, "modes"); err != nil {
+		t.Fatalf("printSessionInfo() error = %v", err)
+	}
+	if got, want := buf.String(), "?1003h ?1049h ?25l kitty_keyboard=1\n"; got != want {
+		t.Errorf("cm info --field modes = %q, want %q", got, want)
 	}
 }
 
