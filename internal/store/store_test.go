@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/chancez/cm/internal/seq"
+	"github.com/chancez/cm/internal/termmodes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -55,7 +56,12 @@ func sampleSession(id string) Session {
 		// Bound to a frame, as an --in-shell attach's grant is once its command starts.
 		OnRestoreFrame: "salt-4",
 		Space:          "cm",
-		CreatedAt:      time.UnixMilli(1_700_000_000_000),
+		// Beyond what an int32 holds, so a column that narrowed the position would show.
+		Modes: []termmodes.Mode{
+			{Key: termmodes.AltScreen, Value: 1, SetAt: 11_435_653_000},
+			{Key: "?25", Value: 0, SetAt: 11_435_661_000},
+		},
+		CreatedAt: time.UnixMilli(1_700_000_000_000),
 	}
 }
 
@@ -924,6 +930,38 @@ func TestApplyRoundTripsATypedCommand(t *testing.T) {
 		want.UpdatedAt = got.UpdatedAt
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("after Apply(%+v), Get() = %+v\nwant %+v", typed, got, want)
+		}
+	}
+}
+
+// Recorded modes read back as written, and an empty list clears them, which is what a revive writes.
+func TestApplyRoundTripsModes(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rec := sampleSession("modes")
+	rec.Modes = nil
+	if err := s.Create(ctx, rec); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, modes := range [][]termmodes.Mode{
+		{{Key: "?1003", Value: 1, SetAt: 100}, {Key: termmodes.KittyKeyboard, Value: 1, SetAt: 120}},
+		{},
+	} {
+		if err := s.Apply(ctx, "modes", Update{Modes: new(modes)}); err != nil {
+			t.Fatalf("Apply(%+v) error = %v", modes, err)
+		}
+		got, err := s.Get(ctx, "modes")
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		want := rec
+		if len(modes) > 0 {
+			want.Modes = modes
+		}
+		want.UpdatedAt = got.UpdatedAt
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("after Apply(%+v), Get() = %+v\nwant %+v", modes, got, want)
 		}
 	}
 }

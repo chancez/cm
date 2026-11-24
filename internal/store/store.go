@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/chancez/cm/internal/seq"
+	"github.com/chancez/cm/internal/termmodes"
 	_ "modernc.org/sqlite" // pure-Go driver, so cgo stays confined to internal/vt
 )
 
@@ -250,7 +251,14 @@ type Session struct {
 	OnRestoreFrame string
 	// Space is the space the session belongs to. Empty on Create means spaces.Default. The store creates a
 	// space's record when a session is put in one, so a space a session names always exists.
-	Space     string
+	Space string
+	// Modes are the terminal modes a program in the session has set, each with where it set it, so a
+	// restarted server can apply the ones its replay no longer holds. See internal/termmodes.
+	//
+	// Stored for the reason PromptSeen is: they are in the output, but adoption replays only the shim's
+	// retained window, and a program sets its modes once at startup. A gr three days old had had them trimmed
+	// out of it, and every client attaching after the restart got a main screen with no mouse reporting.
+	Modes     []termmodes.Mode
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -613,5 +621,10 @@ var migrations = []string{
 
 	ALTER TABLE sessions ADD COLUMN space TEXT NOT NULL DEFAULT 'default';
 	CREATE INDEX sessions_space ON sessions(space);
+	`,
+	// The terminal modes a program has set, as JSON, each with where it set it. See Session.Modes. Empty, the
+	// value every existing row gets, is none recorded, which adopts as before.
+	`
+	ALTER TABLE sessions ADD COLUMN modes TEXT NOT NULL DEFAULT '';
 	`,
 }

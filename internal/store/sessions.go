@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/spaces"
+	"github.com/chancez/cm/internal/termmodes"
 	"strings"
 	"time"
 )
@@ -16,7 +17,7 @@ const sessionColumns = `id, shim_socket, log_path, shim_pid, shell_pid, last_seq
 	state, exit_code, command, cwd, title, rows, cols, created_at, updated_at, env,
 	persist_requested, tags, client_seq, reported_state, reported_detail, reported_source,
 	reported_at, resume_argv, resume_frame, prompt_seen, expire_after, command_argv,
-	typed_command, typed_frame, on_restore, on_restore_frame, space`
+	typed_command, typed_frame, on_restore, on_restore_frame, space, modes`
 
 // Create inserts a session record.
 //
@@ -46,7 +47,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO sessions (`+sessionColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.ShimSocket, sess.LogPath, sess.ShimPID, sess.ShellPID,
 		int64(sess.LastSeq), string(sess.State), sess.ExitCode, strings.Join(sess.Command, " "),
 		sess.Cwd, sess.Title, sess.Rows, sess.Cols,
@@ -56,6 +57,7 @@ func (s *Store) Create(ctx context.Context, sess Session) error {
 		unixMilliOrZero(sess.Reported.At), encodeArgv(sess.Resume.Argv), sess.Resume.Frame,
 		sess.PromptSeen, int64(sess.ExpireAfter), encodeArgv(sess.Command),
 		sess.Typed.Line, sess.Typed.Frame, sess.OnRestore, sess.OnRestoreFrame, sess.Space,
+		encodeModes(sess.Modes),
 	)
 	if err != nil {
 		return fmt.Errorf("creating session %s: %w", sess.ID, err)
@@ -161,6 +163,9 @@ type Update struct {
 	OnRestoreFrame *string
 	// Space moves the session to another space, creating that space's record if it has none.
 	Space *string
+	// Modes replaces the recorded terminal modes. A non-nil pointer to an empty list clears them, which is
+	// what a revive does: the program that set them is gone.
+	Modes *[]termmodes.Mode
 }
 
 // TypedCommand is the command line a session's shell started and has not returned from, as the shell
@@ -335,6 +340,9 @@ func (s *Store) Apply(ctx context.Context, id string, u Update) error {
 	if u.Space != nil {
 		add("space", *u.Space)
 	}
+	if u.Modes != nil {
+		add("modes", encodeModes(*u.Modes))
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -398,6 +406,32 @@ func encodeArgv(argv []string) string {
 	return string(b)
 }
 
+// encodeModes renders the modes column, empty for none, so a row written before the column existed reads back
+// identically.
+func encodeModes(modes []termmodes.Mode) string {
+	if len(modes) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(modes)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeModes parses the modes column, treating anything unreadable as none: an adopting server then rebuilds
+// its model from the replay alone, which is what it did before the column existed.
+func decodeModes(s string) []termmodes.Mode {
+	if s == "" {
+		return nil
+	}
+	var out []termmodes.Mode
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
 // decodeArgv parses a stored argv column, treating anything unreadable as absent: a resume command that
 // cannot be read back exactly must not be run approximately.
 func decodeArgv(s string) []string {
@@ -444,6 +478,7 @@ func scanSession(sc scanner) (Session, error) {
 		expireAfter int64
 		command     string
 		commandArgv string
+		modesJSON   string
 	)
 	err := sc.Scan(
 		&sess.ID, &sess.ShimSocket, &sess.LogPath, &sess.ShimPID, &sess.ShellPID,
@@ -452,7 +487,7 @@ func scanSession(sc scanner) (Session, error) {
 		&tagsJSON, &clientSeq, &sess.Reported.State, &sess.Reported.Detail,
 		&sess.Reported.Source, &reportedAt, &resumeArgv, &sess.Resume.Frame,
 		&sess.PromptSeen, &expireAfter, &commandArgv, &sess.Typed.Line, &sess.Typed.Frame,
-		&sess.OnRestore, &sess.OnRestoreFrame, &sess.Space,
+		&sess.OnRestore, &sess.OnRestoreFrame, &sess.Space, &modesJSON,
 	)
 	if err != nil {
 		return Session{}, err
@@ -479,6 +514,7 @@ func scanSession(sc scanner) (Session, error) {
 	if sess.Command == nil && command != "" {
 		sess.Command = strings.Fields(command)
 	}
+	sess.Modes = decodeModes(modesJSON)
 	sess.CreatedAt = time.UnixMilli(created)
 	sess.UpdatedAt = time.UnixMilli(updated)
 	return sess, nil
