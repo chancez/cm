@@ -68,6 +68,16 @@ type CommandTracker struct {
 // State returns what the shell has reported so far.
 func (t *CommandTracker) State() CommandState { return t.state }
 
+// Resume records a command as running without a marker, for an adoption whose replay no longer holds the
+// marker that started it.
+//
+// Not counted as seen and not as a run: no marker was observed, and a `send --wait` measuring Runs must not
+// count a command it did not see start. The next marker the shell sends replaces it as any marker would.
+func (t *CommandTracker) Resume(command string) {
+	t.state.Running = true
+	t.state.Command = command
+}
+
 // Seen reports whether any OSC 133 marker has been applied.
 //
 // False means nothing has been observed, which happens both for a shell with no integration loaded and

@@ -430,3 +430,20 @@ func TestCommandTrackerSeenSeparatesIdleFromSilent(t *testing.T) {
 		t.Error("Seen() = true after an unrecognized marker, want false")
 	}
 }
+
+// A resumed command reads as running until the shell's next marker says otherwise, and is neither seen nor
+// counted as a run, since no marker was.
+func TestCommandTrackerResume(t *testing.T) {
+	var tr CommandTracker
+	tr.Resume("gr")
+	if got, want := tr.State(), (CommandState{Running: true, Command: "gr"}); got != want {
+		t.Fatalf("after Resume, State() = %+v, want %+v", got, want)
+	}
+	if tr.Seen() {
+		t.Fatal("after Resume, Seen() = true, want false: no marker was observed")
+	}
+	tr.Feed([]byte(realCommandDone + realPromptStart))
+	if got, want := tr.State(), (CommandState{ExitCode: 0, Exited: true}); got != want {
+		t.Fatalf("after the command finished, State() = %+v, want %+v", got, want)
+	}
+}
