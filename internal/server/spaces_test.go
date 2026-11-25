@@ -47,9 +47,23 @@ func TestInheritForRestoreKeepsTheRecordsSpace(t *testing.T) {
 	}
 }
 
-func TestInheritForRestoreLetsTheCallerMoveIt(t *testing.T) {
+// A revive ignores --space, as an attach to a running session does: a terminal restoring a window passes a
+// guess. kitty's wrapper guessed gr for restored hubble-timescape windows, and taking it moved their sessions
+// into the space whose worktree removal then killed them.
+func TestInheritForRestoreIgnoresTheCallersSpace(t *testing.T) {
 	mgr, _, _ := newTestManager(t, nil)
 	rec := store.Session{ID: "revived", Space: "cm"}
+
+	got := mgr.inheritForRestore(OpenOptions{Ref: "revived", Space: "infra"}, rec)
+	if s := got.space(); s != "cm" {
+		t.Errorf("space() = %q, want the record's, cm", s)
+	}
+}
+
+// A record from before spaces has none, so the caller's applies rather than default.
+func TestInheritForRestoreTakesTheCallersSpaceWhenTheRecordHasNone(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	rec := store.Session{ID: "revived"}
 
 	got := mgr.inheritForRestore(OpenOptions{Ref: "revived", Space: "infra"}, rec)
 	if s := got.space(); s != "infra" {

@@ -259,8 +259,9 @@ cm space move SPACE [SESSION]... [--json]
 
 Every session is in exactly one space. A created session goes in the one `--space` names, else in the
 space of the session the command runs in, from `CM_SESSION`, else in `default`. A revive keeps the space
-its record was in unless `--space` names another, and an attach to a running session ignores the flag:
-`cm space move` is how a session moves, ended ones included, and it creates the space it names. A new
+its record was in and an attach to a running session ignores the flag, as both ignore `--tag` for a key
+the session already has: a terminal restoring a window passes a guess. `cm space move` is how a session
+moves, ended ones included, and it creates the space it names. A new
 session from the overlay goes in the space of the session the window is on.
 
 A space is a record of its own, so it outlives its sessions: `cm space list` shows each with its session

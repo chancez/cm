@@ -1290,23 +1290,28 @@ func (m *Manager) inheritForRestore(opts OpenOptions, rec store.Session) OpenOpt
 	// is off entirely. Tags describe the session rather than its content, so they survive on their
 	// own terms.
 	//
-	// Merged with the caller's rather than replaced by them, with the caller winning per key.
-	// Replacing wholesale would mean that retagging one thing on reattach dropped every other tag,
-	// which is not what asking for one tag says.
+	// Merged with the caller's, with the record winning per key: the caller's only fill in what the record
+	// lacks. --tag is documented as ignored when reattaching, and a revive is a reattach to a session whose
+	// shell happens to have exited. The caller winning let a terminal restoring a window relabel the session
+	// with a guess: kitty's wrapper tagged restored hubble-timescape windows worktree=filtering from whichever
+	// kitty session had focus, the revive after a reboot took it, and `kspaces remove` of that worktree then
+	// killed sessions whose windows were still open. `cm tag` is how a session is retagged.
 	if len(rec.Tags) > 0 {
 		merged := make(map[string]string, len(rec.Tags)+len(opts.Tags))
-		for k, v := range rec.Tags {
+		for k, v := range opts.Tags {
 			merged[k] = v
 		}
-		for k, v := range opts.Tags {
+		for k, v := range rec.Tags {
 			merged[k] = v
 		}
 		opts.Tags = merged
 	}
 
 	// The space, for the reason tags are kept above: it says where the session is found, not what it held.
-	// A revive is the session coming back, so it comes back where it was left unless the caller moves it.
-	if opts.Space == "" {
+	// A revive is the session coming back, so it comes back where it was left, whatever --space says: the
+	// same guess moved those sessions into gr. `cm space move` is how a session moves, ended ones included.
+	// A record from before spaces has none, and then the caller's applies.
+	if rec.Space != "" {
 		opts.Space = rec.Space
 	}
 

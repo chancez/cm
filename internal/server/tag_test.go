@@ -352,10 +352,11 @@ func TestInheritForRestoreCarriesTagsWithoutPersistence(t *testing.T) {
 	}
 }
 
-// Recorded tags merge with the caller's, and the caller wins per key.
+// Recorded tags merge with the caller's, and the record wins per key: the caller's only fill in what the
+// record lacks.
 //
-// Replacing wholesale would mean that asking for one tag on reattach discarded every other tag, which
-// is not what naming one tag says.
+// The caller winning let kitty's wrapper relabel restored windows' sessions worktree=filtering from a guess,
+// and `kspaces remove` of that worktree killed them. --tag is documented as ignored when reattaching.
 func TestInheritForRestoreMergesTags(t *testing.T) {
 	mgr, _, dirs := newTestManager(t, nil)
 	mgr.SetPersistPolicy(testPolicy())
@@ -371,7 +372,7 @@ func TestInheritForRestoreMergesTags(t *testing.T) {
 		Tags: map[string]string{"role": "builder", "fresh": "1"},
 	}, rec)
 
-	want := map[string]string{"project": "cm", "role": "builder", "fresh": "1"}
+	want := map[string]string{"project": "cm", "role": "reviewer", "fresh": "1"}
 	if !reflect.DeepEqual(got.Tags, want) {
 		t.Errorf("Tags = %v, want %v", got.Tags, want)
 	}
