@@ -244,6 +244,18 @@ long-lived connection, chained off each answer so there is never more than one i
 an open connection is nothing like the 23ms a fresh `cm` invocation costs. A subscription would be
 better and is a server change, not a picker change.
 
+## Every host at once
+
+`cm tui --all-hosts` (`-A`) lists this machine and every host in `[remote.hosts]`, each row's name
+qualified with its host, and sends each action to the host its session is on: the picker names a session
+as `host:@id`, and `cm/tuihosts.go` routes the request there without the host, then keys the answer back
+by what was sent. Attaching runs `cm attach host:@id`, which routes itself. One connection per remote for
+the picker's lifetime, since the list refreshes every second and a fresh one is an ssh; dropped on any
+failure and redialed on the next refresh. A remote that does not connect is left alone for 30 seconds,
+shown from its last listing as `cm ls --all-hosts` shows it, so an unreachable host costs one five-second
+wait rather than one per refresh. A shell restored on another host starts with that host's environment,
+not this one's, as `cm restore --remote` does.
+
 ## `cm search`
 
 `cm search <query>` prints what `/` would leave for the same text, best match first, and `--tui` opens the

@@ -242,3 +242,23 @@ func TestFilterValueIncludesTheSpace(t *testing.T) {
 		t.Errorf("FilterValue = %q, want the space in it", it.FilterValue())
 	}
 }
+
+// A row from a listing of several hosts names its session with the host, so every action on it reaches that
+// host; one from a single server's listing is the plain ID, as before.
+func TestSessionRefQualifiesByHost(t *testing.T) {
+	for _, tc := range []struct {
+		s    *serverv1.Session
+		ref  string
+		name string
+	}{
+		{s: &serverv1.Session{Id: "abcd2345"}, ref: "@abcd2345", name: "work"},
+		{s: &serverv1.Session{Id: "abcd2345", Host: "white"}, ref: "white:@abcd2345", name: "white:work"},
+	} {
+		if got := sessionRef(tc.s); got != tc.ref {
+			t.Errorf("sessionRef(%v) = %q, want %q", tc.s, got, tc.ref)
+		}
+		if got := sessionName(tc.s, "work"); got != tc.name {
+			t.Errorf("sessionName(%v, work) = %q, want %q", tc.s, got, tc.name)
+		}
+	}
+}

@@ -29,7 +29,26 @@ type item struct {
 // and failing is the right outcome for a row describing something that is gone. internal/server.
 // Manager.Open is explicit that a stale ID is refused rather than created, so a keypress on a row for
 // a killed session reports it instead of silently making a new one.
-func (i item) ref() string { return paths.FormatSessionID(i.session.Id) }
+func (i item) ref() string { return sessionRef(i.session) }
+
+// sessionRef is how the picker names a session to its Sessions: by ID, qualified with the host the
+// session is on when the list came from several, so whatever acts on it reaches that host.
+func sessionRef(s *serverv1.Session) string {
+	ref := paths.FormatSessionID(s.Id)
+	if s.Host != "" {
+		return s.Host + ":" + ref
+	}
+	return ref
+}
+
+// sessionName is a name of the session, qualified like sessionRef, for a request that names a name
+// rather than a session: a name lives on the host its session is on.
+func sessionName(s *serverv1.Session, name string) string {
+	if s.Host != "" {
+		return s.Host + ":" + name
+	}
+	return name
+}
 
 // FilterValue is what "/" searches.
 //
@@ -39,7 +58,7 @@ func (i item) ref() string { return paths.FormatSessionID(i.session.Id) }
 func (i item) FilterValue() string {
 	s := i.session
 	fields := make([]string, 0, 7+len(s.Names)+len(s.Tags))
-	fields = append(fields, s.Name, s.Id, s.Command, s.Title, s.Cwd, s.ReportedDetail, s.Space)
+	fields = append(fields, s.Name, s.Id, s.Command, s.Title, s.Cwd, s.ReportedDetail, s.Space, s.Host)
 	fields = append(fields, s.Names...)
 	for k, v := range s.Tags {
 		if v == "" {
@@ -261,6 +280,10 @@ func (d delegate) Render(w io.Writer, m list.Model, index int, listItem list.Ite
 	name := paths.FormatNames(s.Names, nameWidth)
 	if name == "" {
 		name = s.Name
+	}
+	// Qualified in a list of several hosts, so the row reads as the reference that reaches it.
+	if s.Host != "" {
+		name = s.Host + ":" + name
 	}
 
 	// Built as fixed-width cells and then trimmed, rather than assembled with a width budget. The

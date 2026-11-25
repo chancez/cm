@@ -663,7 +663,7 @@ func (m model) kill(target *serverv1.Session) tea.Cmd {
 		return nil
 	}
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	return func() tea.Msg {
 		resp, err := m.sessions.Kill(m.ctx, &serverv1.KillRequest{Sessions: []string{ref}})
 		if err != nil {
@@ -684,7 +684,7 @@ func (m model) kill(target *serverv1.Session) tea.Cmd {
 // a cursor move on the pager's last page. By ID, as every action here is.
 func (m model) history(target *serverv1.Session) tea.Cmd {
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	return func() tea.Msg {
 		resp, err := m.sessions.History(m.ctx, &serverv1.HistoryRequest{
 			Session: ref,
@@ -703,7 +703,7 @@ func (m model) shelve(target *serverv1.Session) tea.Cmd {
 		return nil
 	}
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	return func() tea.Msg {
 		resp, err := m.sessions.Shelve(m.ctx, &serverv1.ShelveRequest{Sessions: []string{ref}})
 		if err != nil {
@@ -727,7 +727,7 @@ func (m model) restore(target *serverv1.Session) tea.Cmd {
 		return nil
 	}
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	req := &serverv1.RestoreRequest{
 		Sessions: []string{ref},
 		Rows:     uint32(max(m.height, 1)),
@@ -761,7 +761,7 @@ func (m model) rename(target *serverv1.Session, name string) tea.Cmd {
 		return nil
 	}
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	var dropped string
 	if len(target.Names) == 1 && target.Names[0] != name {
 		dropped = target.Names[0]
@@ -773,7 +773,7 @@ func (m model) rename(target *serverv1.Session, name string) tea.Cmd {
 		if dropped == "" {
 			return renamedMsg{label: label, name: name}
 		}
-		if _, err := m.sessions.Unbind(m.ctx, &serverv1.UnbindRequest{Name: dropped}); err != nil {
+		if _, err := m.sessions.Unbind(m.ctx, &serverv1.UnbindRequest{Name: sessionName(target, dropped)}); err != nil {
 			// The new name is bound and the old one is not gone, which is a session with two names
 			// rather than a failed rename. Said plainly, because the state is fine and the user only
 			// needs to know the old name still works.
@@ -800,7 +800,7 @@ func (m model) addName(target *serverv1.Session, name string) tea.Cmd {
 		return nil
 	}
 	label := target.Name
-	ref := paths.FormatSessionID(target.Id)
+	ref := sessionRef(target)
 	return func() tea.Msg {
 		// Move is left off, so a name that already points at another session is refused by the server rather
 		// than taken from it: adding a name must not be a way to silently move one. The error says to use

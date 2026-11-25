@@ -30,6 +30,7 @@ func newTUICommand(g *globals) *cobra.Command {
 		chosenFile string
 		backKey    string
 		filter     string
+		allHosts   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "tui",
@@ -123,8 +124,18 @@ to the selected session instead of nesting an attachment inside it.`,
 				}
 			}
 
+			var sessions tui.Sessions = cl
+			if allHosts {
+				hs, err := newHostSessions(cmd.Context(), g, cl)
+				if err != nil {
+					return err
+				}
+				defer hs.Close()
+				sessions = hs
+			}
+
 			return tui.Run(cmd.Context(), tui.Options{
-				Sessions: cl,
+				Sessions: sessions,
 				Keys:     pickerKeys,
 				Tags:     tagArgs,
 				Space:    space,
@@ -160,6 +171,8 @@ to the selected session instead of nesting an attachment inside it.`,
 	f.StringVar(&space, "space", "", "only sessions in this space")
 	f.StringArrayVar(&tagArgs, "tag", nil,
 		"only list sessions with this tag, as key or key=value (repeatable, all must match)")
+	f.BoolVarP(&allHosts, "all-hosts", "A", false,
+		"list every host in [remote.hosts] too, and act on each session on its own host")
 	f.StringVar(&filter, "filter", "",
 		`start with the list filtered as though this had been typed after "/"`)
 	f.StringVar(&chosenFile, "chosen-file", "",
