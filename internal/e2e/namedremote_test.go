@@ -165,6 +165,15 @@ connection_persist = "0"
 		t.Errorf("info win name = %q, want job, from far", got)
 	}
 
+	// A restore after far's session ended: the wrapper attaches by the window's name with the window's
+	// local directory. The name is followed to far, which recreates job there, and the local --dir is
+	// dropped rather than handed to a machine where it means nothing.
+	far.mustRun("kill", "job")
+	e.mustRun("attach", "--no-attach", "--dir", "/nonexistent/here", "win")
+	if s, ok := far.session("job"); !ok || s.State != "running" || s.Cwd == "/nonexistent/here" {
+		t.Errorf("far:job after a restore by win = %+v, %v; want it running again, not in the local --dir", s, ok)
+	}
+
 	// Closing the window by its name lets go of the pointer and leaves far's session alone.
 	if r := e.run("close", "win"); r.code != 0 || !strings.Contains(r.stdout, "unbound") {
 		t.Errorf("close win = %d %q %q, want unbound", r.code, r.stdout, r.stderr)

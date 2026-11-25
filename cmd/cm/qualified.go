@@ -180,8 +180,17 @@ func (g *globals) routeQualifiedRefs(cmd *cobra.Command, args []string) error {
 	// A name of this machine's that points to another host is followed, so a window restored by its name
 	// lands where the name now points.
 	if g.remote == "" && !namesActOnThemselves[commandKey(cmd)] {
-		if err := g.followPointers(cmd.Context(), refs); err != nil {
+		followed, err := g.followPointers(cmd.Context(), refs)
+		if err != nil {
 			return err
+		}
+		// A --dir given with a name of this machine's is a path here: a launch wrapper passes the window's
+		// directory for a session it expects to be local. Followed to another host it names nothing there,
+		// and a session recreated by the name would be asked to start in it, so the far end chooses instead.
+		if f := cmd.Flags().Lookup("dir"); followed && f != nil && f.Changed {
+			if err := f.Value.Set(""); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -269,7 +278,7 @@ var namesActOnThemselves = map[string]bool{
 // running, as attaching by name starts one only once it knows the name is local. A database that is not
 // there, or is not this build's schema, holds no pointer this build can read, and the names are left as
 // given: the server refuses a pointer it is handed rather than recreating it.
-func (g *globals) followPointers(ctx context.Context, refs []qualifiedArg) error {
+func (g *globals) followPointers(ctx context.Context, refs []qualifiedArg) (bool, error) {
 	var names []int
 	for i, r := range refs {
 		if r.value != "" && !strings.ContainsAny(r.value, ":"+paths.IDSigil) {
@@ -277,34 +286,36 @@ func (g *globals) followPointers(ctx context.Context, refs []qualifiedArg) error
 		}
 	}
 	if len(names) == 0 {
-		return nil
+		return false, nil
 	}
 	dirs, err := g.dirs()
 	if err != nil {
-		return nil
+		return false, nil
 	}
 	if _, err := os.Stat(dirs.Database()); err != nil {
-		return nil
+		return false, nil
 	}
 	st, err := store.OpenExisting(ctx, dirs.Database())
 	if err != nil {
-		return nil
+		return false, nil
 	}
 	defer st.Close()
+	followed := false
 	for _, i := range names {
 		rb, err := st.RemoteBindingFor(ctx, refs[i].value)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := refs[i].set(rb.Qualified()); err != nil {
-			return err
+			return false, err
 		}
 		refs[i].value = rb.Qualified()
+		followed = true
 	}
-	return nil
+	return followed, nil
 }
 
 // lookupOn finds the session ref names on the remote host.
