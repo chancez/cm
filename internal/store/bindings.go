@@ -66,18 +66,26 @@ func (s *Store) Bind(ctx context.Context, b Binding) error {
 		b.CreatedAt = time.Now()
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("binding %s to %s: %w", b.Name, b.SessionID, err)
+	}
+	defer tx.Rollback()
+	// A name means one thing: binding it here takes it off another host.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_names WHERE name = ?`, b.Name); err != nil {
+		return fmt.Errorf("binding %s to %s: %w", b.Name, b.SessionID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO bindings (name, session_id, on_kill, created_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(name) DO UPDATE SET
 			session_id = excluded.session_id,
 			on_kill = excluded.on_kill,
 			created_at = excluded.created_at`,
-		b.Name, b.SessionID, string(b.OnKill), b.CreatedAt.UnixMilli())
-	if err != nil {
+		b.Name, b.SessionID, string(b.OnKill), b.CreatedAt.UnixMilli()); err != nil {
 		return fmt.Errorf("binding %s to %s: %w", b.Name, b.SessionID, err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Binding returns what a name points at, or ErrNotFound if nothing does.

@@ -644,4 +644,16 @@ var migrations = []string{
 		UNIQUE (space, key)
 	) STRICT;
 	`,
+	// Names that point to a session on another host. See RemoteBinding.
+	//
+	// A table of its own rather than a column on bindings, because everything that reads bindings resolves a
+	// name to a session on this machine, and would revive or recreate one under a remote session's ID.
+	`
+	CREATE TABLE remote_names (
+		name       TEXT PRIMARY KEY,
+		host       TEXT NOT NULL,
+		ref        TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	) STRICT;
+	`,
 }
