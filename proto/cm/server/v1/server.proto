@@ -48,6 +48,11 @@ service Server {
   // History returns a session's contents, scrollback included, for printing or piping.
   rpc History(HistoryRequest) returns (HistoryResponse);
 
+  // HistoryPage returns a session's contents a page at a time, as plain text with soft-wrapped lines
+  // rejoined. A whole History holds the session's terminal model for the whole render and can exceed a
+  // message's size; a page does neither. Gated by the "history.page" capability.
+  rpc HistoryPage(HistoryPageRequest) returns (HistoryPageResponse);
+
   // GetEnv returns the environment variables the session's most recent client reported.
   //
   // A shell inside a session cannot learn these any other way: nothing outside a process can
@@ -1846,6 +1851,27 @@ message HistoryRequest {
 
 message HistoryResponse {
   bytes data = 1;
+}
+
+message HistoryPageRequest {
+  string session = 1;
+  // Empty starts a walk from the top of the scrollback; otherwise the cursor a previous page returned.
+  string cursor = 2;
+  // Screen rows to return. Zero means the server's default; the server caps it.
+  uint32 rows = 3;
+}
+
+message HistoryPageResponse {
+  // The page's lines, each ending in a newline.
+  bytes data = 1;
+  // Pass back for the next page. Empty once done or discarded, when the server has already let it go. The
+  // server also lets go of a cursor left unused for 30 seconds.
+  string cursor = 2;
+  // The walk reached the bottom.
+  bool done = 3;
+  // The scrollback was pruned, cleared, or reset under the cursor, so the rest cannot be found. What earlier
+  // pages returned is still right. Starting again reads what is there now.
+  bool discarded = 4;
 }
 
 message GetEnvRequest {

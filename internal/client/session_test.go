@@ -394,6 +394,12 @@ func (c *fakeClient) Shutdown(
 	panic("unused")
 }
 
+func (c *fakeClient) HistoryPage(
+	context.Context, *serverv1.HistoryPageRequest,
+) (*serverv1.HistoryPageResponse, error) {
+	panic("unused")
+}
+
 // Compile-time checks, so a change to the generated interfaces fails here rather than in every test.
 var (
 	_ serverv1.ServerClient        = (*fakeClient)(nil)

@@ -6956,6 +6956,142 @@ func (x *HistoryResponse) GetData() []byte {
 	return nil
 }
 
+type HistoryPageRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Session string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	// Empty starts a walk from the top of the scrollback; otherwise the cursor a previous page returned.
+	Cursor string `protobuf:"bytes,2,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// Screen rows to return. Zero means the server's default; the server caps it.
+	Rows          uint32 `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryPageRequest) Reset() {
+	*x = HistoryPageRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryPageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryPageRequest) ProtoMessage() {}
+
+func (x *HistoryPageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryPageRequest.ProtoReflect.Descriptor instead.
+func (*HistoryPageRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *HistoryPageRequest) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+func (x *HistoryPageRequest) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+func (x *HistoryPageRequest) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+type HistoryPageResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page's lines, each ending in a newline.
+	Data []byte `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	// Pass back for the next page. Empty once done or discarded, when the server has already let it go. The
+	// server also lets go of a cursor left unused for 30 seconds.
+	Cursor string `protobuf:"bytes,2,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// The walk reached the bottom.
+	Done bool `protobuf:"varint,3,opt,name=done,proto3" json:"done,omitempty"`
+	// The scrollback was pruned, cleared, or reset under the cursor, so the rest cannot be found. What earlier
+	// pages returned is still right. Starting again reads what is there now.
+	Discarded     bool `protobuf:"varint,4,opt,name=discarded,proto3" json:"discarded,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryPageResponse) Reset() {
+	*x = HistoryPageResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryPageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryPageResponse) ProtoMessage() {}
+
+func (x *HistoryPageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryPageResponse.ProtoReflect.Descriptor instead.
+func (*HistoryPageResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *HistoryPageResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *HistoryPageResponse) GetCursor() string {
+	if x != nil {
+		return x.Cursor
+	}
+	return ""
+}
+
+func (x *HistoryPageResponse) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *HistoryPageResponse) GetDiscarded() bool {
+	if x != nil {
+		return x.Discarded
+	}
+	return false
+}
+
 type GetEnvRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Session       string                 `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
@@ -6965,7 +7101,7 @@ type GetEnvRequest struct {
 
 func (x *GetEnvRequest) Reset() {
 	*x = GetEnvRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[83]
+	mi := &file_cm_server_v1_server_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6977,7 +7113,7 @@ func (x *GetEnvRequest) String() string {
 func (*GetEnvRequest) ProtoMessage() {}
 
 func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[83]
+	mi := &file_cm_server_v1_server_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6990,7 +7126,7 @@ func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{83}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *GetEnvRequest) GetSession() string {
@@ -7010,7 +7146,7 @@ type GetEnvResponse struct {
 
 func (x *GetEnvResponse) Reset() {
 	*x = GetEnvResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[84]
+	mi := &file_cm_server_v1_server_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7022,7 +7158,7 @@ func (x *GetEnvResponse) String() string {
 func (*GetEnvResponse) ProtoMessage() {}
 
 func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[84]
+	mi := &file_cm_server_v1_server_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7035,7 +7171,7 @@ func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvResponse.ProtoReflect.Descriptor instead.
 func (*GetEnvResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{84}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *GetEnvResponse) GetEnv() map[string]string {
@@ -7545,7 +7681,16 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\tR\asession\x123\n" +
 	"\x06format\x18\x02 \x01(\x0e2\x1b.cm.server.v1.HistoryFormatR\x06format\"%\n" +
 	"\x0fHistoryResponse\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\")\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"Z\n" +
+	"\x12HistoryPageRequest\x12\x18\n" +
+	"\asession\x18\x01 \x01(\tR\asession\x12\x16\n" +
+	"\x06cursor\x18\x02 \x01(\tR\x06cursor\x12\x12\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\"s\n" +
+	"\x13HistoryPageResponse\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x16\n" +
+	"\x06cursor\x18\x02 \x01(\tR\x06cursor\x12\x12\n" +
+	"\x04done\x18\x03 \x01(\bR\x04done\x12\x1c\n" +
+	"\tdiscarded\x18\x04 \x01(\bR\tdiscarded\")\n" +
 	"\rGetEnvRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\"\x81\x01\n" +
 	"\x0eGetEnvResponse\x127\n" +
@@ -7591,7 +7736,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
 	"\x13HISTORY_FORMAT_HTML\x10\x02\x12\x17\n" +
-	"\x13HISTORY_FORMAT_ANSI\x10\x032\x95\x12\n" +
+	"\x13HISTORY_FORMAT_ANSI\x10\x032\xe9\x12\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
@@ -7600,7 +7745,8 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06Shelve\x12\x1b.cm.server.v1.ShelveRequest\x1a\x1c.cm.server.v1.ShelveResponse\x12F\n" +
 	"\aRestore\x12\x1c.cm.server.v1.RestoreRequest\x1a\x1d.cm.server.v1.RestoreResponse\x12=\n" +
 	"\x04Send\x12\x19.cm.server.v1.SendRequest\x1a\x1a.cm.server.v1.SendResponse\x12F\n" +
-	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponse\x12C\n" +
+	"\aHistory\x12\x1c.cm.server.v1.HistoryRequest\x1a\x1d.cm.server.v1.HistoryResponse\x12R\n" +
+	"\vHistoryPage\x12 .cm.server.v1.HistoryPageRequest\x1a!.cm.server.v1.HistoryPageResponse\x12C\n" +
 	"\x06GetEnv\x12\x1b.cm.server.v1.GetEnvRequest\x1a\x1c.cm.server.v1.GetEnvResponse\x12C\n" +
 	"\x06Report\x12\x1b.cm.server.v1.ReportRequest\x1a\x1c.cm.server.v1.ReportResponse\x12L\n" +
 	"\tSetResume\x12\x1e.cm.server.v1.SetResumeRequest\x1a\x1f.cm.server.v1.SetResumeResponse\x12=\n" +
@@ -7639,7 +7785,7 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 }
 
 var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 105)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 107)
 var file_cm_server_v1_server_proto_goTypes = []any{
 	(ReportedState)(0),              // 0: cm.server.v1.ReportedState
 	(WaitState)(0),                  // 1: cm.server.v1.WaitState
@@ -7730,28 +7876,30 @@ var file_cm_server_v1_server_proto_goTypes = []any{
 	(*SendResponse)(nil),            // 86: cm.server.v1.SendResponse
 	(*HistoryRequest)(nil),          // 87: cm.server.v1.HistoryRequest
 	(*HistoryResponse)(nil),         // 88: cm.server.v1.HistoryResponse
-	(*GetEnvRequest)(nil),           // 89: cm.server.v1.GetEnvRequest
-	(*GetEnvResponse)(nil),          // 90: cm.server.v1.GetEnvResponse
-	nil,                             // 91: cm.server.v1.Open.ClientEnvEntry
-	nil,                             // 92: cm.server.v1.Open.TagsEntry
-	nil,                             // 93: cm.server.v1.TagRequest.SetEntry
-	nil,                             // 94: cm.server.v1.TagResponse.TagsEntry
-	nil,                             // 95: cm.server.v1.RemoveSpaceResponse.ErrorsEntry
-	nil,                             // 96: cm.server.v1.MoveResponse.MovedEntry
-	nil,                             // 97: cm.server.v1.MoveResponse.ErrorsEntry
-	nil,                             // 98: cm.server.v1.DetachResponse.DetachedEntry
-	nil,                             // 99: cm.server.v1.DetachResponse.ErrorsEntry
-	nil,                             // 100: cm.server.v1.UpgradeClientsResponse.AskedEntry
-	nil,                             // 101: cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
-	nil,                             // 102: cm.server.v1.UpgradeClientsResponse.ErrorsEntry
-	nil,                             // 103: cm.server.v1.Session.TagsEntry
-	nil,                             // 104: cm.server.v1.KillResponse.ErrorsEntry
-	nil,                             // 105: cm.server.v1.KillResponse.SurvivingEntry
-	nil,                             // 106: cm.server.v1.KillResponse.UnboundEntry
-	nil,                             // 107: cm.server.v1.ForgetResponse.ErrorsEntry
-	nil,                             // 108: cm.server.v1.ShelveResponse.ErrorsEntry
-	nil,                             // 109: cm.server.v1.RestoreResponse.ErrorsEntry
-	nil,                             // 110: cm.server.v1.GetEnvResponse.EnvEntry
+	(*HistoryPageRequest)(nil),      // 89: cm.server.v1.HistoryPageRequest
+	(*HistoryPageResponse)(nil),     // 90: cm.server.v1.HistoryPageResponse
+	(*GetEnvRequest)(nil),           // 91: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),          // 92: cm.server.v1.GetEnvResponse
+	nil,                             // 93: cm.server.v1.Open.ClientEnvEntry
+	nil,                             // 94: cm.server.v1.Open.TagsEntry
+	nil,                             // 95: cm.server.v1.TagRequest.SetEntry
+	nil,                             // 96: cm.server.v1.TagResponse.TagsEntry
+	nil,                             // 97: cm.server.v1.RemoveSpaceResponse.ErrorsEntry
+	nil,                             // 98: cm.server.v1.MoveResponse.MovedEntry
+	nil,                             // 99: cm.server.v1.MoveResponse.ErrorsEntry
+	nil,                             // 100: cm.server.v1.DetachResponse.DetachedEntry
+	nil,                             // 101: cm.server.v1.DetachResponse.ErrorsEntry
+	nil,                             // 102: cm.server.v1.UpgradeClientsResponse.AskedEntry
+	nil,                             // 103: cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
+	nil,                             // 104: cm.server.v1.UpgradeClientsResponse.ErrorsEntry
+	nil,                             // 105: cm.server.v1.Session.TagsEntry
+	nil,                             // 106: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                             // 107: cm.server.v1.KillResponse.SurvivingEntry
+	nil,                             // 108: cm.server.v1.KillResponse.UnboundEntry
+	nil,                             // 109: cm.server.v1.ForgetResponse.ErrorsEntry
+	nil,                             // 110: cm.server.v1.ShelveResponse.ErrorsEntry
+	nil,                             // 111: cm.server.v1.RestoreResponse.ErrorsEntry
+	nil,                             // 112: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
 	0,   // 0: cm.server.v1.ReportRequest.state:type_name -> cm.server.v1.ReportedState
@@ -7763,8 +7911,8 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	27,  // 6: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
 	28,  // 7: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
 	23,  // 8: cm.server.v1.AttachRequest.terminal_graphics:type_name -> cm.server.v1.TerminalGraphics
-	91,  // 9: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
-	92,  // 10: cm.server.v1.Open.tags:type_name -> cm.server.v1.Open.TagsEntry
+	93,  // 9: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	94,  // 10: cm.server.v1.Open.tags:type_name -> cm.server.v1.Open.TagsEntry
 	2,   // 11: cm.server.v1.Open.if_running:type_name -> cm.server.v1.IfRunning
 	34,  // 12: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
 	35,  // 13: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
@@ -7774,36 +7922,36 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	31,  // 17: cm.server.v1.AttachResponse.query:type_name -> cm.server.v1.Query
 	30,  // 18: cm.server.v1.AttachResponse.hosting:type_name -> cm.server.v1.Hosting
 	24,  // 19: cm.server.v1.AttachResponse.images:type_name -> cm.server.v1.Images
-	93,  // 20: cm.server.v1.TagRequest.set:type_name -> cm.server.v1.TagRequest.SetEntry
-	94,  // 21: cm.server.v1.TagResponse.tags:type_name -> cm.server.v1.TagResponse.TagsEntry
+	95,  // 20: cm.server.v1.TagRequest.set:type_name -> cm.server.v1.TagRequest.SetEntry
+	96,  // 21: cm.server.v1.TagResponse.tags:type_name -> cm.server.v1.TagResponse.TagsEntry
 	43,  // 22: cm.server.v1.SpacesResponse.spaces:type_name -> cm.server.v1.Space
-	95,  // 23: cm.server.v1.RemoveSpaceResponse.errors:type_name -> cm.server.v1.RemoveSpaceResponse.ErrorsEntry
-	96,  // 24: cm.server.v1.MoveResponse.moved:type_name -> cm.server.v1.MoveResponse.MovedEntry
-	97,  // 25: cm.server.v1.MoveResponse.errors:type_name -> cm.server.v1.MoveResponse.ErrorsEntry
+	97,  // 23: cm.server.v1.RemoveSpaceResponse.errors:type_name -> cm.server.v1.RemoveSpaceResponse.ErrorsEntry
+	98,  // 24: cm.server.v1.MoveResponse.moved:type_name -> cm.server.v1.MoveResponse.MovedEntry
+	99,  // 25: cm.server.v1.MoveResponse.errors:type_name -> cm.server.v1.MoveResponse.ErrorsEntry
 	50,  // 26: cm.server.v1.ListSpaceMetaResponse.entries:type_name -> cm.server.v1.SpaceMetaEntry
 	50,  // 27: cm.server.v1.GetSpaceMetaResponse.entry:type_name -> cm.server.v1.SpaceMetaEntry
 	3,   // 28: cm.server.v1.CloseResponse.outcome:type_name -> cm.server.v1.CloseOutcome
-	98,  // 29: cm.server.v1.DetachResponse.detached:type_name -> cm.server.v1.DetachResponse.DetachedEntry
-	99,  // 30: cm.server.v1.DetachResponse.errors:type_name -> cm.server.v1.DetachResponse.ErrorsEntry
-	100, // 31: cm.server.v1.UpgradeClientsResponse.asked:type_name -> cm.server.v1.UpgradeClientsResponse.AskedEntry
-	101, // 32: cm.server.v1.UpgradeClientsResponse.already_current:type_name -> cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
-	102, // 33: cm.server.v1.UpgradeClientsResponse.errors:type_name -> cm.server.v1.UpgradeClientsResponse.ErrorsEntry
+	100, // 29: cm.server.v1.DetachResponse.detached:type_name -> cm.server.v1.DetachResponse.DetachedEntry
+	101, // 30: cm.server.v1.DetachResponse.errors:type_name -> cm.server.v1.DetachResponse.ErrorsEntry
+	102, // 31: cm.server.v1.UpgradeClientsResponse.asked:type_name -> cm.server.v1.UpgradeClientsResponse.AskedEntry
+	103, // 32: cm.server.v1.UpgradeClientsResponse.already_current:type_name -> cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
+	104, // 33: cm.server.v1.UpgradeClientsResponse.errors:type_name -> cm.server.v1.UpgradeClientsResponse.ErrorsEntry
 	67,  // 34: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
 	4,   // 35: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
-	103, // 36: cm.server.v1.Session.tags:type_name -> cm.server.v1.Session.TagsEntry
+	105, // 36: cm.server.v1.Session.tags:type_name -> cm.server.v1.Session.TagsEntry
 	69,  // 37: cm.server.v1.Session.location:type_name -> cm.server.v1.LocationFrame
 	25,  // 38: cm.server.v1.Session.attached_clients:type_name -> cm.server.v1.AttachedClient
 	68,  // 39: cm.server.v1.Session.modes:type_name -> cm.server.v1.TerminalMode
-	104, // 40: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	105, // 41: cm.server.v1.KillResponse.surviving:type_name -> cm.server.v1.KillResponse.SurvivingEntry
-	106, // 42: cm.server.v1.KillResponse.unbound:type_name -> cm.server.v1.KillResponse.UnboundEntry
-	107, // 43: cm.server.v1.ForgetResponse.errors:type_name -> cm.server.v1.ForgetResponse.ErrorsEntry
-	108, // 44: cm.server.v1.ShelveResponse.errors:type_name -> cm.server.v1.ShelveResponse.ErrorsEntry
-	109, // 45: cm.server.v1.RestoreResponse.errors:type_name -> cm.server.v1.RestoreResponse.ErrorsEntry
+	106, // 40: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	107, // 41: cm.server.v1.KillResponse.surviving:type_name -> cm.server.v1.KillResponse.SurvivingEntry
+	108, // 42: cm.server.v1.KillResponse.unbound:type_name -> cm.server.v1.KillResponse.UnboundEntry
+	109, // 43: cm.server.v1.ForgetResponse.errors:type_name -> cm.server.v1.ForgetResponse.ErrorsEntry
+	110, // 44: cm.server.v1.ShelveResponse.errors:type_name -> cm.server.v1.ShelveResponse.ErrorsEntry
+	111, // 45: cm.server.v1.RestoreResponse.errors:type_name -> cm.server.v1.RestoreResponse.ErrorsEntry
 	1,   // 46: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
 	15,  // 47: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
 	5,   // 48: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	110, // 49: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	112, // 49: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
 	72,  // 50: cm.server.v1.KillResponse.SurvivingEntry.value:type_name -> cm.server.v1.SurvivingProcesses
 	21,  // 51: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
 	65,  // 52: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
@@ -7813,64 +7961,66 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	77,  // 56: cm.server.v1.Server.Restore:input_type -> cm.server.v1.RestoreRequest
 	85,  // 57: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
 	87,  // 58: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	89,  // 59: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
-	8,   // 60: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
-	10,  // 61: cm.server.v1.Server.SetResume:input_type -> cm.server.v1.SetResumeRequest
-	12,  // 62: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
-	14,  // 63: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
-	16,  // 64: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
-	37,  // 65: cm.server.v1.Server.Signal:input_type -> cm.server.v1.SignalRequest
-	39,  // 66: cm.server.v1.Server.Tag:input_type -> cm.server.v1.TagRequest
-	41,  // 67: cm.server.v1.Server.Spaces:input_type -> cm.server.v1.SpacesRequest
-	44,  // 68: cm.server.v1.Server.CreateSpace:input_type -> cm.server.v1.CreateSpaceRequest
-	46,  // 69: cm.server.v1.Server.RemoveSpace:input_type -> cm.server.v1.RemoveSpaceRequest
-	48,  // 70: cm.server.v1.Server.Move:input_type -> cm.server.v1.MoveRequest
-	51,  // 71: cm.server.v1.Server.ListSpaceMeta:input_type -> cm.server.v1.ListSpaceMetaRequest
-	53,  // 72: cm.server.v1.Server.GetSpaceMeta:input_type -> cm.server.v1.GetSpaceMetaRequest
-	55,  // 73: cm.server.v1.Server.SetSpaceMeta:input_type -> cm.server.v1.SetSpaceMetaRequest
-	57,  // 74: cm.server.v1.Server.RemoveSpaceMeta:input_type -> cm.server.v1.RemoveSpaceMetaRequest
-	81,  // 75: cm.server.v1.Server.Bind:input_type -> cm.server.v1.BindRequest
-	83,  // 76: cm.server.v1.Server.Unbind:input_type -> cm.server.v1.UnbindRequest
-	79,  // 77: cm.server.v1.Server.Switch:input_type -> cm.server.v1.SwitchRequest
-	61,  // 78: cm.server.v1.Server.Detach:input_type -> cm.server.v1.DetachRequest
-	59,  // 79: cm.server.v1.Server.Close:input_type -> cm.server.v1.CloseRequest
-	63,  // 80: cm.server.v1.Server.UpgradeClients:input_type -> cm.server.v1.UpgradeClientsRequest
-	6,   // 81: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
-	19,  // 82: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
-	29,  // 83: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	66,  // 84: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	71,  // 85: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	74,  // 86: cm.server.v1.Server.Forget:output_type -> cm.server.v1.ForgetResponse
-	76,  // 87: cm.server.v1.Server.Shelve:output_type -> cm.server.v1.ShelveResponse
-	78,  // 88: cm.server.v1.Server.Restore:output_type -> cm.server.v1.RestoreResponse
-	86,  // 89: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	88,  // 90: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	90,  // 91: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
-	9,   // 92: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
-	11,  // 93: cm.server.v1.Server.SetResume:output_type -> cm.server.v1.SetResumeResponse
-	13,  // 94: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
-	15,  // 95: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
-	17,  // 96: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
-	38,  // 97: cm.server.v1.Server.Signal:output_type -> cm.server.v1.SignalResponse
-	40,  // 98: cm.server.v1.Server.Tag:output_type -> cm.server.v1.TagResponse
-	42,  // 99: cm.server.v1.Server.Spaces:output_type -> cm.server.v1.SpacesResponse
-	45,  // 100: cm.server.v1.Server.CreateSpace:output_type -> cm.server.v1.CreateSpaceResponse
-	47,  // 101: cm.server.v1.Server.RemoveSpace:output_type -> cm.server.v1.RemoveSpaceResponse
-	49,  // 102: cm.server.v1.Server.Move:output_type -> cm.server.v1.MoveResponse
-	52,  // 103: cm.server.v1.Server.ListSpaceMeta:output_type -> cm.server.v1.ListSpaceMetaResponse
-	54,  // 104: cm.server.v1.Server.GetSpaceMeta:output_type -> cm.server.v1.GetSpaceMetaResponse
-	56,  // 105: cm.server.v1.Server.SetSpaceMeta:output_type -> cm.server.v1.SetSpaceMetaResponse
-	58,  // 106: cm.server.v1.Server.RemoveSpaceMeta:output_type -> cm.server.v1.RemoveSpaceMetaResponse
-	82,  // 107: cm.server.v1.Server.Bind:output_type -> cm.server.v1.BindResponse
-	84,  // 108: cm.server.v1.Server.Unbind:output_type -> cm.server.v1.UnbindResponse
-	80,  // 109: cm.server.v1.Server.Switch:output_type -> cm.server.v1.SwitchResponse
-	62,  // 110: cm.server.v1.Server.Detach:output_type -> cm.server.v1.DetachResponse
-	60,  // 111: cm.server.v1.Server.Close:output_type -> cm.server.v1.CloseResponse
-	64,  // 112: cm.server.v1.Server.UpgradeClients:output_type -> cm.server.v1.UpgradeClientsResponse
-	7,   // 113: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
-	20,  // 114: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
-	83,  // [83:115] is the sub-list for method output_type
-	51,  // [51:83] is the sub-list for method input_type
+	89,  // 59: cm.server.v1.Server.HistoryPage:input_type -> cm.server.v1.HistoryPageRequest
+	91,  // 60: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	8,   // 61: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
+	10,  // 62: cm.server.v1.Server.SetResume:input_type -> cm.server.v1.SetResumeRequest
+	12,  // 63: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
+	14,  // 64: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
+	16,  // 65: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
+	37,  // 66: cm.server.v1.Server.Signal:input_type -> cm.server.v1.SignalRequest
+	39,  // 67: cm.server.v1.Server.Tag:input_type -> cm.server.v1.TagRequest
+	41,  // 68: cm.server.v1.Server.Spaces:input_type -> cm.server.v1.SpacesRequest
+	44,  // 69: cm.server.v1.Server.CreateSpace:input_type -> cm.server.v1.CreateSpaceRequest
+	46,  // 70: cm.server.v1.Server.RemoveSpace:input_type -> cm.server.v1.RemoveSpaceRequest
+	48,  // 71: cm.server.v1.Server.Move:input_type -> cm.server.v1.MoveRequest
+	51,  // 72: cm.server.v1.Server.ListSpaceMeta:input_type -> cm.server.v1.ListSpaceMetaRequest
+	53,  // 73: cm.server.v1.Server.GetSpaceMeta:input_type -> cm.server.v1.GetSpaceMetaRequest
+	55,  // 74: cm.server.v1.Server.SetSpaceMeta:input_type -> cm.server.v1.SetSpaceMetaRequest
+	57,  // 75: cm.server.v1.Server.RemoveSpaceMeta:input_type -> cm.server.v1.RemoveSpaceMetaRequest
+	81,  // 76: cm.server.v1.Server.Bind:input_type -> cm.server.v1.BindRequest
+	83,  // 77: cm.server.v1.Server.Unbind:input_type -> cm.server.v1.UnbindRequest
+	79,  // 78: cm.server.v1.Server.Switch:input_type -> cm.server.v1.SwitchRequest
+	61,  // 79: cm.server.v1.Server.Detach:input_type -> cm.server.v1.DetachRequest
+	59,  // 80: cm.server.v1.Server.Close:input_type -> cm.server.v1.CloseRequest
+	63,  // 81: cm.server.v1.Server.UpgradeClients:input_type -> cm.server.v1.UpgradeClientsRequest
+	6,   // 82: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
+	19,  // 83: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
+	29,  // 84: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	66,  // 85: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	71,  // 86: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	74,  // 87: cm.server.v1.Server.Forget:output_type -> cm.server.v1.ForgetResponse
+	76,  // 88: cm.server.v1.Server.Shelve:output_type -> cm.server.v1.ShelveResponse
+	78,  // 89: cm.server.v1.Server.Restore:output_type -> cm.server.v1.RestoreResponse
+	86,  // 90: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	88,  // 91: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	90,  // 92: cm.server.v1.Server.HistoryPage:output_type -> cm.server.v1.HistoryPageResponse
+	92,  // 93: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	9,   // 94: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
+	11,  // 95: cm.server.v1.Server.SetResume:output_type -> cm.server.v1.SetResumeResponse
+	13,  // 96: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
+	15,  // 97: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
+	17,  // 98: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
+	38,  // 99: cm.server.v1.Server.Signal:output_type -> cm.server.v1.SignalResponse
+	40,  // 100: cm.server.v1.Server.Tag:output_type -> cm.server.v1.TagResponse
+	42,  // 101: cm.server.v1.Server.Spaces:output_type -> cm.server.v1.SpacesResponse
+	45,  // 102: cm.server.v1.Server.CreateSpace:output_type -> cm.server.v1.CreateSpaceResponse
+	47,  // 103: cm.server.v1.Server.RemoveSpace:output_type -> cm.server.v1.RemoveSpaceResponse
+	49,  // 104: cm.server.v1.Server.Move:output_type -> cm.server.v1.MoveResponse
+	52,  // 105: cm.server.v1.Server.ListSpaceMeta:output_type -> cm.server.v1.ListSpaceMetaResponse
+	54,  // 106: cm.server.v1.Server.GetSpaceMeta:output_type -> cm.server.v1.GetSpaceMetaResponse
+	56,  // 107: cm.server.v1.Server.SetSpaceMeta:output_type -> cm.server.v1.SetSpaceMetaResponse
+	58,  // 108: cm.server.v1.Server.RemoveSpaceMeta:output_type -> cm.server.v1.RemoveSpaceMetaResponse
+	82,  // 109: cm.server.v1.Server.Bind:output_type -> cm.server.v1.BindResponse
+	84,  // 110: cm.server.v1.Server.Unbind:output_type -> cm.server.v1.UnbindResponse
+	80,  // 111: cm.server.v1.Server.Switch:output_type -> cm.server.v1.SwitchResponse
+	62,  // 112: cm.server.v1.Server.Detach:output_type -> cm.server.v1.DetachResponse
+	60,  // 113: cm.server.v1.Server.Close:output_type -> cm.server.v1.CloseResponse
+	64,  // 114: cm.server.v1.Server.UpgradeClients:output_type -> cm.server.v1.UpgradeClientsResponse
+	7,   // 115: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
+	20,  // 116: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
+	84,  // [84:117] is the sub-list for method output_type
+	51,  // [51:84] is the sub-list for method input_type
 	51,  // [51:51] is the sub-list for extension type_name
 	51,  // [51:51] is the sub-list for extension extendee
 	0,   // [0:51] is the sub-list for field type_name
@@ -7909,7 +8059,7 @@ func file_cm_server_v1_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   105,
+			NumMessages:   107,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

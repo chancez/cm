@@ -99,6 +99,12 @@ func (s *stubService) History(
 ) (*serverv1.HistoryResponse, error) {
 	panic("unused")
 }
+
+func (s *stubService) HistoryPage(
+	context.Context, *serverv1.HistoryPageRequest,
+) (*serverv1.HistoryPageResponse, error) {
+	panic("unused")
+}
 func (s *stubService) GetEnv(
 	context.Context, *serverv1.GetEnvRequest,
 ) (*serverv1.GetEnvResponse, error) {

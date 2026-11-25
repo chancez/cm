@@ -57,6 +57,8 @@ type NewTerminalFunc func(rows, cols uint16) (Terminal, error)
 type Manager struct {
 	dirs  paths.Dirs
 	store *store.Store
+	// cursors holds the history walks clients have open. See HistoryPage.
+	cursors historyCursors
 	// selfExe is the binary re-executed to spawn a shim. Resolved once at startup: if the
 	// binary is replaced or removed later, a stale path is better than failing to spawn,
 	// and it keeps every shim in a server's lifetime consistent.
@@ -2240,6 +2242,17 @@ func (m *Manager) RenderSnapshot(
 func (m *Manager) replayFromDisk(
 	ctx context.Context, name string, render func(Terminal) ([]byte, error),
 ) ([]byte, error) {
+	term, err := m.replayTerminal(ctx, name)
+	if err != nil || term == nil {
+		return nil, err
+	}
+	defer term.Close()
+	return render(term)
+}
+
+// replayTerminal builds a throwaway terminal model holding a finished session's persisted output, which the
+// caller closes. Nil with no error when the log is empty.
+func (m *Manager) replayTerminal(ctx context.Context, name string) (Terminal, error) {
 	rec, err := m.store.Get(ctx, name)
 	if err != nil {
 		return nil, err
@@ -2283,15 +2296,13 @@ func (m *Manager) replayFromDisk(
 	if err != nil {
 		return nil, err
 	}
-	defer term.Close()
-
 	if err := term.Write(data); err != nil {
+		term.Close()
 		return nil, fmt.Errorf("replaying output for %s: %w", name, err)
 	}
 	// Discard anything the emulator generated: those answer queries from a program that is gone.
 	term.TakePending()
-
-	return render(term)
+	return term, nil
 }
 
 // Close stops tracking sessions without terminating them.
@@ -2299,6 +2310,7 @@ func (m *Manager) replayFromDisk(
 // Shims are left running on purpose: that is what makes a server restart invisible to a
 // running shell. The next server adopts them via Reconcile.
 func (m *Manager) Close() error {
+	m.cursors.closeAll()
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, sess := range m.sessions {

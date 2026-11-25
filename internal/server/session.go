@@ -31,6 +31,7 @@ import (
 	"github.com/chancez/cm/internal/store"
 	"github.com/chancez/cm/internal/termmodes"
 	"github.com/chancez/cm/internal/transport"
+	"github.com/chancez/cm/internal/vt"
 	shimv1 "github.com/chancez/cm/proto/cm/shim/v1"
 )
 
@@ -657,6 +658,9 @@ type Terminal interface {
 	// ApplyModes sets modes as a program's sequences would, for an adoption whose replay lost the bytes
 	// that set them.
 	ApplyModes(values map[string]int) error
+	// OpenHistory starts a page-at-a-time walk of the contents from the top of the scrollback. See
+	// vt.SessionTerminal.OpenHistory.
+	OpenHistory() (vt.HistoryReader, error)
 	// Compact runs one bounded step of scrollback compression if the model's output has been quiet long
 	// enough, reporting whether another step has work to do. See runCompactor.
 	Compact() (more bool, err error)
@@ -3932,6 +3936,18 @@ func (s *Session) History(format HistoryFormat) ([]byte, error) {
 	default:
 		return term.Plain()
 	}
+}
+
+// OpenHistory starts a page-at-a-time walk of the session's contents. A session without a terminal model has
+// no history, which is reported as a nil reader rather than an error, for the reason History gives.
+func (s *Session) OpenHistory() (vt.HistoryReader, error) {
+	s.mu.Lock()
+	term := s.term
+	s.mu.Unlock()
+	if term == nil {
+		return nil, nil
+	}
+	return term.OpenHistory()
 }
 
 // HistoryFormat selects how History renders contents.

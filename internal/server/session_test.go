@@ -63,6 +63,9 @@ type fakeTerminal struct {
 	compactWork  int
 	compactErr   error
 	compactCalls int
+	// historyErr is what every history page fails with, and closedReaders counts history readers closed.
+	historyErr    error
+	closedReaders int
 	// cellWidth and cellHeight are the last cell metrics the model was resized with.
 	cellWidth  uint16
 	cellHeight uint16
@@ -256,6 +259,38 @@ func (f *fakeTerminal) Pwd() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.pwd
+}
+
+// OpenHistory walks what was written a line per row. historyErr, when set, is what every page fails with,
+// and closedReaders counts readers closed.
+func (f *fakeTerminal) OpenHistory() (vt.HistoryReader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &fakeHistory{term: f, lines: bytes.SplitAfter(bytes.Clone(f.written), []byte("\n"))}, nil
+}
+
+type fakeHistory struct {
+	term  *fakeTerminal
+	lines [][]byte
+}
+
+func (h *fakeHistory) Next(rows int) ([]byte, bool, error) {
+	h.term.mu.Lock()
+	err := h.term.historyErr
+	h.term.mu.Unlock()
+	if err != nil {
+		return nil, false, err
+	}
+	n := min(rows, len(h.lines))
+	out := bytes.Join(h.lines[:n], nil)
+	h.lines = h.lines[n:]
+	return out, len(h.lines) == 0, nil
+}
+
+func (h *fakeHistory) Close() {
+	h.term.mu.Lock()
+	defer h.term.mu.Unlock()
+	h.term.closedReaders++
 }
 
 func (f *fakeTerminal) Plain() ([]byte, error) {

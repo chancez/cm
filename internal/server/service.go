@@ -1579,6 +1579,24 @@ func (s *Service) History(ctx context.Context, req *serverv1.HistoryRequest) (*s
 	return &serverv1.HistoryResponse{Data: data}, nil
 }
 
+// HistoryPage returns a session's contents a page at a time. See Manager.HistoryPage.
+func (s *Service) HistoryPage(ctx context.Context, req *serverv1.HistoryPageRequest) (*serverv1.HistoryPageResponse, error) {
+	id, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.mgr.HistoryPage(ctx, id, s.readableSession(id), req.Cursor, int(req.Rows))
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.HistoryPageResponse{
+		Data:      page.Data,
+		Cursor:    page.Cursor,
+		Done:      page.Done,
+		Discarded: page.Discarded,
+	}, nil
+}
+
 // Read returns a bounded, parseable view of a session's recent output.
 //
 // Distinct from History, which renders the whole scrollback: a caller reading a session

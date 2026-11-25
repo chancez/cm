@@ -16,6 +16,7 @@ type ServerService interface {
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
+	HistoryPage(context.Context, *HistoryPageRequest) (*HistoryPageResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 	Report(context.Context, *ReportRequest) (*ReportResponse, error)
 	SetResume(context.Context, *SetResumeRequest) (*SetResumeResponse, error)
@@ -115,6 +116,13 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 					return nil, err
 				}
 				return svc.History(ctx, &req)
+			},
+			"HistoryPage": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req HistoryPageRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.HistoryPage(ctx, &req)
 			},
 			"GetEnv": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req GetEnvRequest
@@ -306,6 +314,7 @@ type ServerClient interface {
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	Send(context.Context, *SendRequest) (*SendResponse, error)
 	History(context.Context, *HistoryRequest) (*HistoryResponse, error)
+	HistoryPage(context.Context, *HistoryPageRequest) (*HistoryPageResponse, error)
 	GetEnv(context.Context, *GetEnvRequest) (*GetEnvResponse, error)
 	Report(context.Context, *ReportRequest) (*ReportResponse, error)
 	SetResume(context.Context, *SetResumeRequest) (*SetResumeResponse, error)
@@ -427,6 +436,14 @@ func (c *serverClient) Send(ctx context.Context, req *SendRequest) (*SendRespons
 func (c *serverClient) History(ctx context.Context, req *HistoryRequest) (*HistoryResponse, error) {
 	var resp HistoryResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "History", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) HistoryPage(ctx context.Context, req *HistoryPageRequest) (*HistoryPageResponse, error) {
+	var resp HistoryPageResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "HistoryPage", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
