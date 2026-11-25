@@ -50,8 +50,15 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 		Long:              long,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: completeSessionNames(g),
+		Annotations:       map[string]string{targetElsewhere: "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target := args[0]
+			target, host, err := g.splitLocalTarget(args[0])
+			if err != nil {
+				return err
+			}
+			if host != "" {
+				return fmt.Errorf("%s is on %s, and moving a window to another host is not supported yet", target, host)
+			}
 			// --from first, so it names the session without one around it. Resolving CM_SESSION first
 			// failed `cm switch B --from A` from any shell outside a session with "no session given",
 			// before --from was read at all.

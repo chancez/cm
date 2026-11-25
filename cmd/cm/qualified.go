@@ -107,6 +107,39 @@ func (g *globals) resolveRemoteName() error {
 	return nil
 }
 
+// targetElsewhere marks a command whose session argument is a target on another host rather than where the
+// command runs, so routing leaves it alone and the command reads the qualifier itself. `cm switch` and
+// `cm rebind` move a window of this machine's: routed by the target's host, the request went to white's
+// server, which was asked to move a window it has never seen and answered that the session had no clients.
+const targetElsewhere = "cm.target-elsewhere"
+
+// splitLocalTarget reads a switch target: the reference on this machine with any qualifier naming this
+// machine stripped, and the host when it names another one.
+func (g *globals) splitLocalTarget(target string) (ref, host string, err error) {
+	h, rest, ok := remote.SplitRef(target)
+	if !ok {
+		return target, "", nil
+	}
+	cfg, err := g.config()
+	if err != nil {
+		return "", "", err
+	}
+	local, err := cfg.LocalName()
+	if err != nil {
+		return "", "", err
+	}
+	if h == local {
+		return rest, "", nil
+	}
+	if _, ok, err := cfg.LookupRemote(h); err != nil {
+		return "", "", err
+	} else if !ok {
+		// Left for the reference check to refuse, which names the host.
+		return target, "", nil
+	}
+	return rest, h, nil
+}
+
 // qualifiedArg is one place a session reference was given: a positional argument or the --session flag.
 type qualifiedArg struct {
 	value string
@@ -127,6 +160,9 @@ type qualifiedArg struct {
 // including the argv a client re-execs itself with on an upgrade: a window attached as `server:@id` would
 // otherwise come back attached to the local session of that ID.
 func (g *globals) routeQualifiedRefs(cmd *cobra.Command, args []string) error {
+	if cmd.Annotations[targetElsewhere] != "" {
+		return nil
+	}
 	var refs []qualifiedArg
 	for _, i := range sessionArgIndexes(cmd, args) {
 		refs = append(refs, qualifiedArg{value: args[i], set: func(v string) error { args[i] = v; return nil }})

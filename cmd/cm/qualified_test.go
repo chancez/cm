@@ -211,3 +211,50 @@ func TestSessionArgIndexesOfRealCommands(t *testing.T) {
 		}
 	}
 }
+
+// A command marked as taking a target elsewhere is not routed by it: `cm rebind server:work` moves a window
+// of this machine's, so sending it to server asked server to move a window it has never seen.
+func TestTargetElsewhereIsNotRouted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cm.toml")
+	body := "[remote]\nlocal_name = \"laptop\"\n[remote.hosts.server]\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CM_REMOTE", "")
+	g := &globals{}
+	root := newRootCommandFor(g)
+	var got routed
+	probe := &cobra.Command{
+		Use:         "probe <session>",
+		Annotations: map[string]string{targetElsewhere: "true"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			got = routed{args: slices.Clone(args), remote: g.remote}
+			return nil
+		},
+	}
+	root.AddCommand(probe)
+	routeBeforeArgs(g, probe)
+	root.SetArgs([]string{"--config", path, "probe", "server:work"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if want := (routed{args: []string{"server:work"}}); !reflect.DeepEqual(got, want) {
+		t.Errorf("routed = %+v, want %+v", got, want)
+	}
+
+	type split struct{ ref, host string }
+	g = &globals{configPath: path}
+	for in, want := range map[string]split{
+		"work":         {"work", ""},
+		"laptop:work":  {"work", ""},
+		"server:work":  {"work", "server"},
+		"server:@abcd": {"@abcd", "server"},
+		// Nobody's host is left whole, for the reference check to refuse by name.
+		"nowhere:work": {"nowhere:work", ""},
+	} {
+		ref, host, err := g.splitLocalTarget(in)
+		if err != nil || (split{ref, host}) != want {
+			t.Errorf("splitLocalTarget(%q) = %q, %q, %v; want %+v", in, ref, host, err, want)
+		}
+	}
+}
