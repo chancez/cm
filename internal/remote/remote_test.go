@@ -259,3 +259,52 @@ func TestProxyCommandWithoutSharing(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ok   bool
+	}{
+		{name: "server", ok: true},
+		{name: "white.lan", ok: true},
+		{name: "desk-2_b", ok: true},
+		{name: strings.Repeat("a", MaxNameLen), ok: true},
+		{name: strings.Repeat("a", MaxNameLen+1)},
+		{name: ""},
+		{name: "."},
+		{name: ".."},
+		{name: "a:b"},
+		{name: "@a7k2m9x4"},
+		{name: "user@host"},
+		{name: "ssh://host"},
+		{name: "\x1b]0;x\a"},
+	} {
+		err := ValidateName(tc.name)
+		if (err == nil) != tc.ok {
+			t.Errorf("ValidateName(%q) = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+func TestSplitRef(t *testing.T) {
+	type split struct {
+		host, rest string
+		ok         bool
+	}
+	for _, tc := range []struct {
+		ref  string
+		want split
+	}{
+		{ref: "server:@a7k2m9x4", want: split{"server", "@a7k2m9x4", true}},
+		{ref: "server:work", want: split{"server", "work", true}},
+		{ref: "work", want: split{"work", "", false}},
+		{ref: "@a7k2m9x4", want: split{"@a7k2m9x4", "", false}},
+		// Split at the first ':', so the rest fails as a session reference rather than naming a third host.
+		{ref: "a:b:c", want: split{"a", "b:c", true}},
+	} {
+		host, rest, ok := SplitRef(tc.ref)
+		if got := (split{host, rest, ok}); got != tc.want {
+			t.Errorf("SplitRef(%q) = %+v, want %+v", tc.ref, got, tc.want)
+		}
+	}
+}

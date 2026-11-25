@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -663,5 +664,93 @@ func TestClosePolicyDefaultAndValidation(t *testing.T) {
 		if got := (policy{idle, busy}); !tc.err && got != tc.want {
 			t.Errorf("%s: ClosePolicy() = %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestRemotes(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[remote]
+local_name = "laptop"
+ssh_command = "kitten ssh"
+connection_persist = "30s"
+
+[remote.hosts.white]
+
+[remote.hosts.server]
+address = "ssh://me@server.lan:2222/home/me/.local/bin/cm"
+ssh_command = "ssh -F /etc/other"
+connection_persist = "0s"
+`))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got, err := cfg.Remotes()
+	if err != nil {
+		t.Fatalf("Remotes() error = %v", err)
+	}
+	want := []NamedRemote{
+		{
+			Name:              "server",
+			Target:            remote.Target{User: "me", Host: "server.lan", Port: 2222, Command: "/home/me/.local/bin/cm"},
+			SSHCommand:        "ssh -F /etc/other",
+			ConnectionPersist: 0,
+		},
+		// An empty table is the name as an ssh alias, with [remote]'s settings.
+		{
+			Name:              "white",
+			Target:            remote.Target{Host: "white"},
+			SSHCommand:        "kitten ssh",
+			ConnectionPersist: 30 * time.Second,
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Remotes() = %+v\nwant %+v", got, want)
+	}
+
+	r, ok, err := cfg.LookupRemote("white")
+	if err != nil || !ok || !reflect.DeepEqual(r, want[1]) {
+		t.Errorf("LookupRemote(white) = %+v, %v, %v; want %+v", r, ok, err, want[1])
+	}
+	if _, ok, err := cfg.LookupRemote("elsewhere"); err != nil || ok {
+		t.Errorf("LookupRemote(elsewhere) = %v, %v; want not found", ok, err)
+	}
+	if name, err := cfg.LocalName(); err != nil || name != "laptop" {
+		t.Errorf("LocalName() = %q, %v; want laptop", name, err)
+	}
+}
+
+func TestRemotesRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "a name with a colon", body: "[remote.hosts.\"a:b\"]\n"},
+		{name: "a bad address", body: "[remote.hosts.x]\naddress = \"http://x\"\n"},
+		{name: "a bad persist", body: "[remote.hosts.x]\nconnection_persist = \"soon\"\n"},
+		{name: "a bad local name", body: "[remote]\nlocal_name = \"a:b\"\n"},
+	} {
+		cfg, err := Load(writeConfig(t, tc.body))
+		if err != nil {
+			t.Fatalf("%s: Load() error = %v", tc.name, err)
+		}
+		if got, err := cfg.Remotes(); err == nil {
+			t.Errorf("%s: Remotes() = %+v, want an error", tc.name, got)
+		}
+	}
+}
+
+// With nothing configured, a machine answers to its short hostname, lowercased.
+func TestLocalNameDefaultsToTheHostname(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Skip("no hostname")
+	}
+	short, _, _ := strings.Cut(host, ".")
+	if got, err := cfg.LocalName(); err != nil || got != strings.ToLower(short) {
+		t.Errorf("LocalName() = %q, %v; want %q", got, err, strings.ToLower(short))
 	}
 }

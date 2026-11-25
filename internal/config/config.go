@@ -6,11 +6,13 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,8 +151,9 @@ type CloseConfig struct {
 // something a config file should be able to change invisibly. CM_REMOTE already points one shell or one
 // window at a host, which is the scope that makes sense for it.
 //
-// If per-host settings are ever wanted, they belong under a sub-table rather than by turning this one into a
-// map: `[remote.hosts.work]` beside these keys stays readable and leaves these as the defaults.
+// Per-host settings are under a sub-table rather than turning this one into a map: `[remote.hosts.work]`
+// beside these keys stays readable and leaves these as the defaults. Naming a host there is not a default
+// remote either: it gives `--remote work` and `work:@id` a meaning, and nothing goes there unasked.
 type RemoteConfig struct {
 	// SSHCommand is the command line that reaches a remote, empty for plain ssh.
 	//
@@ -169,6 +172,24 @@ type RemoteConfig struct {
 	// The cost of each choice is measured rather than guessed. Sharing takes a `cm ls --remote` from 170ms to
 	// 60-70ms, and what it leaves behind is one ssh process per host holding a connection for this long after
 	// the last command. See docs/rpc.md.
+	ConnectionPersist string `toml:"connection_persist"`
+
+	// LocalName is this machine's name in a qualified reference, so `laptop:@a7k2m9x4` typed here means a
+	// session here rather than an error. Empty means the short hostname. Set it to what the other machines
+	// call this one in their own [remote.hosts], so one reference means one session everywhere.
+	LocalName string `toml:"local_name"`
+
+	// Hosts are the remotes this machine knows by name, keyed by that name.
+	Hosts map[string]RemoteHostConfig `toml:"hosts"`
+}
+
+// RemoteHostConfig is one named remote. Every field is optional: an empty table makes the name an ssh alias.
+type RemoteHostConfig struct {
+	// Address is how to reach it, in --remote's syntax: ssh://[user@]host[:port][/path/to/cm] or [user@]host.
+	// Empty means the name itself, which is the ssh alias most hosts already have.
+	Address string `toml:"address"`
+	// SSHCommand and ConnectionPersist override [remote]'s for this host.
+	SSHCommand        string `toml:"ssh_command"`
 	ConnectionPersist string `toml:"connection_persist"`
 }
 
@@ -707,6 +728,109 @@ func (c *Config) RemoteConnectionPersist() (time.Duration, error) {
 			"remote.connection_persist cannot be negative, got %q", c.Remote.ConnectionPersist)
 	}
 	return d, nil
+}
+
+// NamedRemote is a remote from [remote.hosts], resolved.
+type NamedRemote struct {
+	Name   string
+	Target remote.Target
+	// SSHCommand is the host's own, else [remote]'s, empty for plain ssh.
+	SSHCommand string
+	// ConnectionPersist is the host's own, else [remote]'s.
+	ConnectionPersist time.Duration
+}
+
+// LocalName is this machine's name in a qualified reference: remote.local_name, else the short hostname,
+// lowercased, so a machine with no config still answers to the name it would most likely be given.
+func (c *Config) LocalName() (string, error) {
+	if c.Remote.LocalName != "" {
+		if err := remote.ValidateName(c.Remote.LocalName); err != nil {
+			return "", fmt.Errorf("remote.local_name: %w", err)
+		}
+		return c.Remote.LocalName, nil
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("remote.local_name is unset and the hostname cannot be read: %w", err)
+	}
+	short, _, _ := strings.Cut(host, ".")
+	short = strings.ToLower(short)
+	if err := remote.ValidateName(short); err != nil {
+		return "", fmt.Errorf("remote.local_name is unset and the hostname is not usable as one: %w", err)
+	}
+	return short, nil
+}
+
+// Remotes returns every named remote, by name, failing on the first one that is not usable.
+//
+// All of them rather than only the one asked for, so a typo in a host nobody is using right now is reported
+// by `cm config` rather than discovered by whichever command first names it.
+func (c *Config) Remotes() ([]NamedRemote, error) {
+	local, err := c.LocalName()
+	if err != nil {
+		return nil, err
+	}
+	persist, err := c.RemoteConnectionPersist()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(c.Remote.Hosts))
+	for name := range c.Remote.Hosts {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	out := make([]NamedRemote, 0, len(names))
+	for _, name := range names {
+		h := c.Remote.Hosts[name]
+		if err := remote.ValidateName(name); err != nil {
+			return nil, fmt.Errorf("remote.hosts: %w", err)
+		}
+		// This machine, in a hosts list shared between machines, which lists every one of them. Not a remote:
+		// `laptop:@id` on laptop is a session here, and reaching it over ssh would be a second path to the same
+		// server.
+		if name == local {
+			continue
+		}
+		target, err := remote.Parse(cmp.Or(h.Address, name))
+		if err != nil {
+			return nil, fmt.Errorf("remote.hosts.%s.address: %w", name, err)
+		}
+		r := NamedRemote{
+			Name:              name,
+			Target:            target,
+			SSHCommand:        cmp.Or(h.SSHCommand, c.Remote.SSHCommand),
+			ConnectionPersist: persist,
+		}
+		if h.ConnectionPersist != "" {
+			d, err := time.ParseDuration(h.ConnectionPersist)
+			if err != nil {
+				return nil, fmt.Errorf("remote.hosts.%s.connection_persist: %w", name, err)
+			}
+			if d < 0 {
+				return nil, fmt.Errorf(
+					"remote.hosts.%s.connection_persist cannot be negative, got %q", name, h.ConnectionPersist)
+			}
+			r.ConnectionPersist = d
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// LookupRemote returns the named remote called name. ok is false when there is none, which leaves name to be
+// read as an address.
+func (c *Config) LookupRemote(name string) (NamedRemote, bool, error) {
+	all, err := c.Remotes()
+	if err != nil {
+		return NamedRemote{}, false, err
+	}
+	for _, r := range all {
+		if r.Name == name {
+			return r, true, nil
+		}
+	}
+	return NamedRemote{}, false, nil
 }
 
 // KeepShimLogsFor returns how long an exited shim's diagnostic log is kept.

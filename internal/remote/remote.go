@@ -320,3 +320,46 @@ func (t Target) command() string {
 	}
 	return t.Command
 }
+
+// MaxNameLen bounds a remote's name, matching a session name's limit.
+const MaxNameLen = 64
+
+// ValidateName checks the name a remote is given in config, which is what a qualified reference spells
+// before its ':'.
+//
+// A space name's rules, for the same reasons: it is printed in listings and typed as a bare shell word. ':'
+// cannot appear, since it ends the name in a reference, nor '@', which starts an ID, so `server:@a7k2m9x4`
+// has one reading. Not a hostname: the name is what this machine calls the host, and a hostname does not
+// reconstruct the ssh alias that reaches it.
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("remote name is empty")
+	}
+	if len(name) > MaxNameLen {
+		return fmt.Errorf("remote name %q is %d bytes, limit is %d", name, len(name), MaxNameLen)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("remote name %q is not a name", name)
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+		default:
+			return fmt.Errorf("remote name %q contains disallowed character %q", name, r)
+		}
+	}
+	return nil
+}
+
+// SplitRef splits a qualified session reference, `host:name` or `host:@id`, into the host and the
+// reference on it. ok is false for an unqualified reference, which names a session on whichever server the
+// command already talks to.
+//
+// Only the split: the host is checked with ValidateName and the rest as a session reference by the caller,
+// which knows what an error there should say.
+func SplitRef(ref string) (host, rest string, ok bool) {
+	return strings.Cut(ref, ":")
+}
