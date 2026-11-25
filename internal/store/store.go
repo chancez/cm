@@ -627,4 +627,21 @@ var migrations = []string{
 	`
 	ALTER TABLE sessions ADD COLUMN modes TEXT NOT NULL DEFAULT '';
 	`,
+	// Opaque metadata on a space, for tools that keep state beside the sessions, such as a terminal's
+	// layout. See SpaceMeta.
+	//
+	// revision is an AUTOINCREMENT rowid and every write inserts a fresh row, so a revision is never reused
+	// anywhere in the table: a key deleted and written again cannot come back at the revision a stale
+	// writer holds, which a per-key counter restarting at 1 would allow. Removing the space removes its
+	// metadata.
+	`
+	CREATE TABLE space_meta (
+		revision   INTEGER PRIMARY KEY AUTOINCREMENT,
+		space      TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE,
+		key        TEXT NOT NULL,
+		value      BLOB NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE (space, key)
+	) STRICT;
+	`,
 }

@@ -73,3 +73,38 @@ func Compare(a, b string) int {
 	}
 	return strings.Compare(a, b)
 }
+
+// MaxMetaKeyLen bounds a metadata key: room for a namespace, a kind and a space-or-worktree name, such as
+// kspaces/layout/ plus a 64-byte worktree.
+const MaxMetaKeyLen = 128
+
+// MaxMetaValueLen bounds a metadata value, so metadata stays notes about a space rather than a file store
+// the server keeps in its database. The kitty session files kspaces writes, which a layout is, measured 23
+// files and 30800 bytes in total on a machine with every space in daily use, the largest 3737 bytes: this
+// is about 17 times that.
+const MaxMetaValueLen = 64 << 10
+
+// ValidateMetaKey checks a metadata key.
+//
+// A space name's characters plus '/', so a tool can namespace its keys (kspaces/layout/main) and list them
+// by prefix. Keys are printed by `cm space meta list` for the reason a space name is printed, so the same
+// characters are refused.
+func ValidateMetaKey(key string) error {
+	if key == "" {
+		return errors.New("metadata key is empty")
+	}
+	if len(key) > MaxMetaKeyLen {
+		return fmt.Errorf("metadata key %q is %d bytes, limit is %d", key, len(key), MaxMetaKeyLen)
+	}
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == '/':
+		default:
+			return fmt.Errorf("metadata key %q contains disallowed character %q", key, r)
+		}
+	}
+	return nil
+}
