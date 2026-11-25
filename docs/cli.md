@@ -73,6 +73,10 @@ What a window should store is the qualified ID, `server:@a7k2m9x4`: an ID surviv
 makes it mean the same session from every machine whose config names that host the same way. An upgrade's
 re-exec keeps the host, as `--remote`.
 
+Completion offers each configured host as `server:` after the local sessions, and `server:<TAB>` asks that
+host's server for its sessions, within the five seconds any remote completion gets. A host that does not
+answer completes nothing rather than holding the prompt.
+
 ## Attaching with a command
 
 `cm attach NAME -- CMD` runs CMD only when the attach creates the session, which includes starting afresh

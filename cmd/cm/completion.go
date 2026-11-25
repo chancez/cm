@@ -98,7 +98,7 @@ func completeSessionsMatching(
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 
-		names, err := sessionNames(cmd.Context(), g, toComplete, want)
+		names, directive, err := g.sessionCompletions(cmd.Context(), toComplete, want)
 		if err != nil {
 			// Silence rather than an error: a completion that prints a diagnostic corrupts the
 			// command line the user is typing.
@@ -109,7 +109,7 @@ func completeSessionsMatching(
 		if several && len(args) > 0 {
 			names = without(names, args)
 		}
-		return names, cobra.ShellCompDirectiveNoFileComp
+		return names, directive
 	}
 }
 

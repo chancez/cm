@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/remote"
+	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
 // Qualified references: `server:@a7k2m9x4` names a session on the remote called server, and `laptop:work`
@@ -236,4 +240,65 @@ func completeRemoteNames(g *globals) func(*cobra.Command, []string, string) ([]s
 		}
 		return out, cobra.ShellCompDirectiveNoFileComp
 	}
+}
+
+// sessionCompletions completes a session reference as typed so far, qualified or not.
+//
+// `white:<TAB>` asks white's server and offers its sessions as `white:name`, so what is offered is what
+// routing will act on; this machine's own name asks this machine. Unqualified, the server this invocation
+// names is asked as before, and the configured remotes are offered after its sessions as `white:`, with no
+// space after when only hosts match, since a host alone is not a reference. A host a completion cannot
+// reach offers nothing, within the bound every remote completion has.
+func (g *globals) sessionCompletions(
+	ctx context.Context, toComplete string, want func(*serverv1.Session) bool,
+) ([]string, cobra.ShellCompDirective, error) {
+	directive := cobra.ShellCompDirectiveNoFileComp
+	var (
+		local   string
+		remotes []config.NamedRemote
+	)
+	// A config that does not load completes as it did before there were hosts, rather than not at all.
+	if cfg, err := g.config(); err == nil {
+		local, _ = cfg.LocalName()
+		remotes, _ = cfg.Remotes()
+	}
+
+	if host, rest, ok := remote.SplitRef(toComplete); ok {
+		isRemote := slices.ContainsFunc(remotes, func(r config.NamedRemote) bool { return r.Name == host })
+		if host != local && !isRemote {
+			return nil, directive, nil
+		}
+		// Pointed at the host for this one listing, as routing points the command, then put back.
+		saved := g.remote
+		g.remote = host
+		if host == local {
+			g.remote = ""
+		}
+		defer func() { g.remote = saved }()
+
+		names, err := sessionNames(ctx, g, rest, want)
+		if err != nil {
+			return nil, directive, err
+		}
+		for i, n := range names {
+			names[i] = host + ":" + n
+		}
+		return names, directive, nil
+	}
+
+	names, err := sessionNames(ctx, g, toComplete, want)
+	var hosts []string
+	for _, r := range remotes {
+		if strings.HasPrefix(r.Name+":", toComplete) {
+			hosts = append(hosts, r.Name+":\tsessions on "+r.Target.String())
+		}
+	}
+	// The hosts are still worth offering when this machine's server is not running: they need no server.
+	if err != nil && len(hosts) == 0 {
+		return nil, directive, err
+	}
+	if len(names) == 0 && len(hosts) > 0 {
+		directive |= cobra.ShellCompDirectiveNoSpace
+	}
+	return append(names, hosts...), directive, nil
 }

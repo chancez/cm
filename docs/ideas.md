@@ -879,8 +879,9 @@ to be a second.
 - **Step 4, named remotes.** Built: `[remote.hosts.NAME]` and `remote.local_name` (docs/config.md),
   `--remote NAME`, and qualified references routed client-side in `cmd/cm/qualified.go` (docs/cli.md, "A
   session on another host"). Routing runs before cobra validates arguments, which sees a ':' otherwise;
-  which arguments are sessions is read off each command's usage line, as completion does. Completion does
-  not offer `host:` prefixes yet; step 5's fan-out is where cross-host names come from.
+  which arguments are sessions is read off each command's usage line, as completion does. Completion
+  offers `host:` after the local sessions and completes `host:<TAB>` from that host's server; listing every
+  host at once is step 5.
 - **Step 5, fan-out.** `cm ls` across remotes is a client-side fan-out over `--remote` connections, never a
   server re-serving them (decided under `--remote` above). A remote that does not answer is shown from a
   cached listing, stale, with its time. The provider then sets each session's `host`, which kspaces already

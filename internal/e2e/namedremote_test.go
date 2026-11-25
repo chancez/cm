@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,19 @@ CM_RUNTIME_DIR=%s CM_STATE_DIR=%s CM_CONFIG=/nonexistent.toml exec "$@"
 		t.Fatal(err)
 	}
 	return path
+}
+
+// completed returns what cobra's completion offers for args, one line each, without its trailing notes.
+func completed(t *testing.T, e *env, args ...string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(e.mustRun(append([]string{"__complete"}, args...)...), "\n") {
+		if line == "" || strings.HasPrefix(line, "Completion ended") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // listNames returns the names of the sessions one invocation lists.
@@ -89,6 +103,19 @@ connection_persist = "0"
 	}
 	if r := e.run("info", "nowhere:job"); r.code == 0 || !strings.Contains(r.stderr, `names host "nowhere"`) {
 		t.Errorf("info nowhere:job = %d %q, want a refusal naming the host", r.code, r.stderr)
+	}
+
+	// Completion offers the host, with no space after it since a host alone is not a reference, and then the
+	// host's own sessions, qualified as routing will read them. cobra prints each candidate on a line and the
+	// directive last, as ":N": 4 is no file completion, 2 no trailing space.
+	if got, want := completed(t, e, "attach", "fa"), []string{"far:\tsessions on ssh://far" + e.bin, ":6"}; !slices.Equal(got, want) {
+		t.Errorf("complete attach fa = %q, want %q", got, want)
+	}
+	if got := completed(t, e, "attach", "far:"); len(got) != 2 || !strings.HasPrefix(got[0], "far:job\t") || got[1] != ":4" {
+		t.Errorf("complete attach far: = %q, want far:job and :4", got)
+	}
+	if got := completed(t, e, "attach", "here:"); len(got) != 2 || !strings.HasPrefix(got[0], "here:mine\t") {
+		t.Errorf("complete attach here: = %q, want here:mine", got)
 	}
 
 	e.mustRun("kill", "far:job")
