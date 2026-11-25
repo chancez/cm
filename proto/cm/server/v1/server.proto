@@ -1068,10 +1068,23 @@ message CreateSpaceResponse {}
 
 message RemoveSpaceRequest {
   string name = 1;
+  // End every session in the space first: kill each running one and forget each ended one, then remove the
+  // space. Without it a space holding any session is refused. The default space is refused either way.
+  //
+  // A server that predates this ignores it and refuses a space with sessions, which is the safe way to fail.
+  bool force = 2;
 }
 
-// Empty: removing refuses a space that still holds a session, and the default space, as an error.
-message RemoveSpaceResponse {}
+// Without force, empty: removing refuses a space that still holds a session, and the default space, as an
+// error.
+message RemoveSpaceResponse {
+  // With force, the sessions ended, by the reference a listing shows: a name, or "@" and the ID.
+  repeated string ended = 1;
+  // With force, the sessions that could not be ended, by reference, and why. The space is not removed while
+  // any remain, which is what a shim that does not answer leaves: kill keeps its record rather than
+  // orphaning a shell that may be busy rather than dead.
+  map<string, string> errors = 2;
+}
 
 message MoveRequest {
   // Sessions to move. Empty means the session the caller is in, from CM_SESSION.

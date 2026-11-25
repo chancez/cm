@@ -126,10 +126,64 @@ func (s *Service) RemoveSpace(ctx context.Context, req *serverv1.RemoveSpaceRequ
 	if err := spaces.ValidateName(req.Name); err != nil {
 		return nil, err
 	}
+	resp := &serverv1.RemoveSpaceResponse{}
+	if req.Force {
+		// Refused before anything is ended, which DeleteSpace would only do after: forcing default would
+		// otherwise end every session that has no space of its own and then fail to remove it.
+		if req.Name == spaces.Default {
+			return nil, store.ErrDefaultSpace
+		}
+		ended, errs, err := s.endSpaceSessions(ctx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		resp.Ended, resp.Errors = ended, errs
+		if len(errs) > 0 {
+			return resp, nil
+		}
+	}
 	if err := s.mgr.store.DeleteSpace(ctx, req.Name); err != nil {
 		return nil, err
 	}
-	return &serverv1.RemoveSpaceResponse{}, nil
+	return resp, nil
+}
+
+// endSpaceSessions ends every session in space, as `cm kill` and `cm forget` would by ID: a running one is
+// killed, which forgets it, and an ended one is forgotten. By ID, so a name borrowed into the space does not
+// turn the kill into releasing the name, and every record in the space goes.
+//
+// A session that cannot be ended is reported rather than forced. Killing without force keeps the record of
+// one whose shim does not answer, since a busy shim is indistinguishable from a dead one at first and
+// forgetting it would orphan a live shell; the space then stays, and the caller learns which session held it.
+func (s *Service) endSpaceSessions(ctx context.Context, space string) ([]string, map[string]string, error) {
+	recs, err := s.mgr.store.List(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	names, err := s.mgr.NamesByID(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var ended []string
+	errs := map[string]string{}
+	for _, rec := range recs {
+		if rec.Space != space {
+			continue
+		}
+		label := Label(rec.ID, names[rec.ID])
+		_, live := s.mgr.Get(rec.ID)
+		if live || rec.State == store.StateRunning {
+			_, err = s.mgr.Kill(ctx, rec.ID, KillOptions{})
+		} else {
+			err = s.mgr.Forget(ctx, rec.ID)
+		}
+		if err != nil {
+			errs[label] = err.Error()
+			continue
+		}
+		ended = append(ended, label)
+	}
+	return ended, errs, nil
 }
 
 // Move puts sessions in another space, creating it if needed.

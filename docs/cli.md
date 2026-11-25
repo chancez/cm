@@ -300,7 +300,7 @@ cm attach --space NAME ...        cm run --space NAME ...
 cm list --space NAME
 cm space list [--json]
 cm space create NAME
-cm space remove NAME
+cm space remove NAME [--force]
 cm space move SPACE [SESSION]... [--json]
 ```
 
@@ -313,7 +313,12 @@ session from the overlay goes in the space of the session the window is on.
 
 A space is a record of its own, so it outlives its sessions: `cm space list` shows each with its session
 and running counts, empty ones included. `cm space remove` refuses a space that holds any session,
-shelved and exited ones included, and `default`. Names are a session name's characters, so `:` is refused, which a
+shelved and exited ones included, and `default`. `--force` ends every session in it first, by ID as
+`cm kill` and `cm forget` would, so a name borrowed into the space does not turn the kill into a release:
+running sessions are killed and ended ones forgotten, their saved output with them, and each is printed.
+One whose shim does not answer is left recorded, as `cm kill` without `--force` leaves it, and the space
+stays with it, the command naming the session. `default` is refused before anything in it is ended. A
+server predating `--force` ignores it and refuses a space with sessions. Names are a session name's characters, so `:` is refused, which a
 qualified reference to another host will need. Unlike a session name, one may start with `.`, since kspaces
 names a space after its repository's directory and `~/.dotfiles` is `.dotfiles`; `.` and `..` are refused.
 

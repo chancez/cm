@@ -168,18 +168,31 @@ create the space they name. This is for a space wanted before anything is in it.
 }
 
 func newSpaceRemoveCommand(g *globals) *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:     "remove NAME",
 		Aliases: []string{"rm"},
-		Short:   "Remove an empty space",
+		Short:   "Remove a space, and with --force every session in it",
 		Long: `Remove a space that no session is in.
 
 A space holding any session is refused, shelved and exited sessions included,
 rather than emptied into default: a space is how its sessions are found, and
 scattering them into default would lose that. Move or forget them first. The
-default space cannot be removed.`,
-		Args:              cobra.ExactArgs(1),
-		ValidArgsFunction: completeSpaceArg(g, removableSpace),
+default space cannot be removed.
+
+--force ends every session in the space first, as 'cm kill' and 'cm forget'
+would: running ones are killed and ended ones forgotten, their saved output with
+them. A session whose shim does not answer is left, as 'cm kill' leaves one
+without --force, and the space with it; the command says which.`,
+		Args: cobra.ExactArgs(1),
+		// With --force any space but default can go, so the offer is every one of them.
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			want := removableSpace
+			if force {
+				want = func(sp *serverv1.Space) bool { return sp.Name != spaces.Default }
+			}
+			return completeSpaceArg(g, want)(cmd, args, toComplete)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := spaces.ValidateName(args[0]); err != nil {
 				return err
@@ -188,11 +201,22 @@ default space cannot be removed.`,
 				if err := requireSpaces(ctx, cl); err != nil {
 					return err
 				}
-				_, err := cl.RemoveSpace(ctx, &serverv1.RemoveSpaceRequest{Name: args[0]})
-				return err
+				resp, err := cl.RemoveSpace(ctx, &serverv1.RemoveSpaceRequest{Name: args[0], Force: force})
+				if err != nil {
+					return err
+				}
+				for _, ref := range resp.Ended {
+					fmt.Printf("ended %s\n", ref)
+				}
+				if len(resp.Errors) > 0 {
+					return fmt.Errorf("%s was not removed: %w", args[0], reportedErrors(resp.Errors, false))
+				}
+				return nil
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "end every session in the space, then remove it")
+	return cmd
 }
 
 func newSpaceMoveCommand(g *globals) *cobra.Command {

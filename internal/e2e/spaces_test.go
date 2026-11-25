@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -110,4 +111,59 @@ func TestSpaceMoveAndRemove(t *testing.T) {
 	}
 
 	e.mustRun("space", "remove", "infra")
+}
+
+// --force ends every session in a space and removes it: a running one killed, an ended one forgotten, and
+// nothing outside the space touched. default is refused before anything in it ends.
+func TestSpaceRemoveForce(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	for _, s := range []struct{ name, space string }{{"live", "doomed"}, {"kept", "doomed"}, {"other", "safe"}, {"home", ""}} {
+		args := []string{"run", "--session", s.name, "-d"}
+		if s.space != "" {
+			args = append(args, "--space", s.space)
+		}
+		e.mustRun(append(args, "--", "/bin/sh", "-c", "sleep 120")...)
+	}
+	e.mustRun("kill", "--keep", "kept")
+
+	if r := e.run("space", "remove", "doomed"); r.code == 0 {
+		t.Fatalf("space remove doomed without --force succeeded: %s", r.stdout)
+	}
+	out := e.mustRun("space", "remove", "--force", "doomed")
+	if got, want := sortedLines(out), []string{"ended kept", "ended live"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("space remove --force printed %q, want %q", got, want)
+	}
+	if got, want := e.spacesOf(), map[string]string{"other": "safe", "home": "default"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sessions after removal = %v, want %v", got, want)
+	}
+	var listed []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(e.mustRun("space", "list", "--json")), &listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range listed {
+		if sp.Name == "doomed" {
+			t.Errorf("space doomed is still listed")
+		}
+	}
+
+	if r := e.run("space", "remove", "--force", "default"); r.code == 0 {
+		t.Errorf("space remove --force default succeeded: %s", r.stdout)
+	}
+	if _, ok := e.session("home"); !ok {
+		t.Error("forcing default ended its session before refusing")
+	}
+}
+
+func sortedLines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(s), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
