@@ -1163,3 +1163,19 @@ func TestSortSessionsGroupsBySpace(t *testing.T) {
 		t.Errorf("sorted = %v, want %v", got, want)
 	}
 }
+
+// Sessions that tie on host, space, creation second and name, as two hosts' listings can under
+// --all-hosts, still sort the same way whatever order they arrive in. sort.Slice kept the arrival order
+// for a full tie, so a listing could swap two rows between calls.
+func TestSortSessionsBreaksFullTiesByID(t *testing.T) {
+	a := &serverv1.Session{Id: "aaaaaaaa", Name: "work", Space: "default", CreatedAtUnix: 5}
+	b := &serverv1.Session{Id: "bbbbbbbb", Name: "work", Space: "default", CreatedAtUnix: 5}
+	c := &serverv1.Session{Id: "cccccccc", Name: "work", Space: "default", CreatedAtUnix: 5}
+	want := []*serverv1.Session{a, b, c}
+	for _, in := range [][]*serverv1.Session{{a, b, c}, {c, b, a}, {b, c, a}} {
+		sortSessions(in)
+		if !slices.Equal(in, want) {
+			t.Errorf("sorted = %v, want %v", in, want)
+		}
+	}
+}

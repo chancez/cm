@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -495,23 +497,21 @@ func writeJSON(w io.Writer, v any) error {
 
 // sortSessions orders sessions oldest first, so output is stable across calls.
 func sortSessions(sessions []*serverv1.Session) {
-	sort.Slice(sessions, func(i, j int) bool {
-		// By host before anything, in a listing of several, so each host reads as one block. Every session
-		// of a single server's listing has the same empty host, which changes nothing.
-		if sessions[i].Host != sessions[j].Host {
-			return sessions[i].Host < sessions[j].Host
-		}
-		// Grouped by space first, so a listing across several reads as one block per space. Changes
-		// nothing for someone who uses only default.
-		if c := spaces.Compare(sessions[i].Space, sessions[j].Space); c != 0 {
-			return c < 0
-		}
-		if sessions[i].CreatedAtUnix != sessions[j].CreatedAtUnix {
-			return sessions[i].CreatedAtUnix < sessions[j].CreatedAtUnix
-		}
-		// Names break ties, since sessions created in the same second would otherwise reorder
-		// between calls.
-		return sessions[i].Name < sessions[j].Name
+	slices.SortFunc(sessions, func(a, b *serverv1.Session) int {
+		return cmp.Or(
+			// By host before anything, in a listing of several, so each host reads as one block. Every
+			// session of a single server's listing has the same empty host, which changes nothing.
+			strings.Compare(a.Host, b.Host),
+			// Grouped by space next, so a listing across several reads as one block per space. Changes
+			// nothing for someone who uses only default.
+			spaces.Compare(a.Space, b.Space),
+			cmp.Compare(a.CreatedAtUnix, b.CreatedAtUnix),
+			// Names, then IDs, break ties. Creation time is whole seconds, and two hosts under
+			// --all-hosts can each have a "work" from the same second; without the ID those swapped
+			// places between calls.
+			strings.Compare(a.Name, b.Name),
+			strings.Compare(a.Id, b.Id),
+		)
 	})
 }
 
