@@ -1000,9 +1000,10 @@ what a person actually recognizes a window by.
 
 ## Persistence and history
 
-**Searching history.** `cm history` prints everything and leaves searching to a pager or `grep`, which is
-right for a person and awkward for a script that wants a line number or a match count. Given the sequence
-numbers are already there, a search returning positions would compose better.
+**Searching history.** `cm grep` runs an external grep over every session's contents, which covers a person
+searching. Still open is a search returning positions, for a script or a find bar that wants to jump to a
+match: libghostty's own search (`search.h`) returns matches as selections over the live model, plain
+substrings only, and measured 302ms for 100000 lines against 68ms to render them and 16ms for rg.
 
 **Export a session.** A session's content is a log plus a terminal model. Writing it out as a transcript,
 or as HTML with styling (which `cm history --format html` already does), covers most of this. What is

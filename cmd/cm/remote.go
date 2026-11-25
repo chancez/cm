@@ -482,6 +482,7 @@ var remoteCapable = map[string]bool{
 	"restore":      true,
 	"run":          true,
 	"history":      true,
+	"grep":         true, // reads over the RPC and runs this machine's grep on what comes back
 	"wait":         true,
 	"report":       true,
 	"restore-with": true,

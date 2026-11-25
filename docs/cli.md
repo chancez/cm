@@ -360,6 +360,28 @@ absent. Exit status 2 means the key was not as asked: absent for `get`, elsewher
 caller saving a layout tells "someone else saved since" from "the save failed" by it, and the first wants
 a reload rather than a retry. Refused against a server without the `spaces.meta` capability.
 
+## Searching scrollback
+
+`cm grep PATTERN` searches one session, `--space`, `--tag`, or `--all` with an external grep. Each session's
+contents are written as plain text, soft-wrapped lines rejoined, to a private directory under the runtime
+directory as `SPACE/NAME`, and the command runs once over all of them from inside it, so a match reads as
+`work/kitty.12:40: ...`. The directory is removed afterwards. A finished session is searched if it persisted
+its output.
+
+The command is `--grep-command`, `CM_GREP_COMMAND`, `[grep] command`, then `rg -n` if installed, then
+`grep -n`. cm appends `-e PATTERN --` and the files, passing the pattern as an argument rather than through
+the shell, so flags belong in the command: `--grep-command 'rg -i'`. rg is preferred because the gap is
+large: 20 sessions of 100000 lines took 16ms with rg and 2.9s with the grep macOS ships, 25ms and 6.6s with
+`-i`.
+
+Contents are read a page at a time (`HistoryPage`, capability `history.page`), which holds a session's model
+for about 0.5ms a page rather than for the whole render, 68ms at 100000 lines. A page boundary never repeats
+or drops a line, through new output or a resize. A walk the scrollback is pruned, cleared, or reset under
+starts again once from the top. Against a server without pages it reads one whole `History`.
+
+The exit status is the command's, so 1 means no match; a session that could not be read is named on stderr
+and makes it at least 2.
+
 ## JSON output
 
 `list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `rename`, `switch`, `wait`, `send`, `run`, `status`,

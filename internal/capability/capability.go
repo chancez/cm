@@ -136,6 +136,12 @@ const (
 	// this server for it. Checked by the server before it asks a window to move there, because a client that
 	// predates this tries the reference here, fails, and the window closes.
 	SwitchRemote Name = "switch.remote"
+
+	// HistoryPage means the server implements the HistoryPage RPC, a session's contents a page at a time.
+	//
+	// Checked before `cm grep` reads anything, which falls back to one whole History against an older
+	// server: that works for the scrollback most sessions hold, and the client has no other way to read one.
+	HistoryPage Name = "history.page"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -317,6 +323,7 @@ func Server() Set {
 		Close,
 		SpaceMeta,
 		SwitchRemote,
+		HistoryPage,
 	)
 }
 

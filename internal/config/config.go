@@ -108,6 +108,9 @@ type Config struct {
 	// Debug holds settings for diagnosing cm itself. See DebugConfig.
 	Debug DebugConfig `toml:"debug"`
 
+	// Grep is the [grep] table. See GrepConfig.
+	Grep GrepConfig `toml:"grep"`
+
 	Env     EnvConfig     `toml:"env"`
 	Persist PersistConfig `toml:"persist"`
 	Remote  RemoteConfig  `toml:"remote"`
@@ -252,6 +255,14 @@ func (k *KeyList) UnmarshalTOML(v any) error {
 	default:
 		return fmt.Errorf("a key setting must be a string or a list of strings, got %T", v)
 	}
+}
+
+// GrepConfig is what `cm grep` searches scrollback with.
+type GrepConfig struct {
+	// Command is the shell command `cm grep` runs, with its own flags. cm appends `-e PATTERN --` and one file
+	// per session, so it must take a pattern after -e and files after --, as rg, grep, and ugrep do. Empty
+	// means rg, then grep. --grep-command and CM_GREP_COMMAND override it.
+	Command string `toml:"command"`
 }
 
 // ScrollbackConfig is how much history a session keeps and what shows it.

@@ -125,6 +125,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newListCommand(g),
 		newTUICommand(g),
 		newSearchCommand(g),
+		newGrepCommand(g),
 		newWaitCommand(g),
 		newReadCommand(g),
 		newReportCommand(g),

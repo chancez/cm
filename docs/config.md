@@ -155,6 +155,7 @@ flight_recorder_window = "10s"
 | `prefix_key` | `ctrl-<key>`, or `none` to disable the overlay | `ctrl-]` |
 | `scrollback.lines` | integer; `0` is unlimited | `2000` |
 | `scrollback.pager` | a shell command, fed the scrollback on stdin | `$PAGER`, then `less -R +G` |
+| `grep.command` | a shell command `cm grep` appends `-e PATTERN --` and files to | `rg -n`, then `grep -n` |
 | `overlay.bar` | a style: see [overlay](#overlay) | `reverse` |
 | `overlay.body` | a style | `bright-white on color236` |
 | `overlay.selected` | a style | `bright-white on color241` |
@@ -269,6 +270,15 @@ pager that reads keys from the terminal works: `less`, `nvim -`.
 Resolved as `$CM_PAGER`, then this, then `$PAGER`, then `less -R +G`. cm's own two come before `PAGER`
 so cm can have a pager without changing git's and man's. `cm config` prints the command that would run
 and which of the four it came from. See [overlay.md](overlay.md).
+
+## [grep]
+
+### command
+
+What `cm grep` searches with. It runs through `sh -c` from inside the directory holding one file per session,
+with `-e PATTERN --` and the files appended, so it can carry flags: `rg -S`, `grep -niE`, `ugrep -i`. Any
+tool that takes a pattern after `-e` and files after `--` works. `--grep-command` and `CM_GREP_COMMAND` override
+it; unset, it is `rg -n` if rg is installed, then `grep -n`.
 
 ## [keys]
 
