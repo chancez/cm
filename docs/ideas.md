@@ -776,12 +776,43 @@ aliases. The local host has one too, so a reference means the same thing on ever
   `laptop:work` when it is not.
 - A bare name matching sessions on two hosts is an error naming both, never a guess.
 
-*A window is bound to a session, not to a local proxy of one.* The window's `cm_session` user variable,
-which kitty already saves in its session files, holds a qualified reference, and `launch_wrapper.py`
-reattaches through `--remote` on restore. That is the decision under `--remote` above, a client dialing the
-remote directly, extended to restore. Rejected: a local session running `ssh host cm attach`. Two emulators,
-two scrollbacks, a nested detach key and query replies crossing two multiplexers, and after a reboot the
-local session is dead and something has to re-run the ssh.
+*A window is bound to a name, and a name may point to another host.* A window knows only its name,
+`kitty.1234`, and the server says what that name means; `cm rebind` already rewrites the answer without the
+window noticing. A name can now point at a session on another host: `cm rebind white:work` makes
+`kitty.1234` a pointer to `white:work`, the window's client moves there, and a restore that runs `cm attach
+kitty.1234` follows the pointer. Nothing in the terminal changes, so it works for any terminal that restores
+by name.
+
+- **The local server keeps the pointer and nothing else.** A row in a table of its own, not in `bindings`,
+  since everything that reads `bindings` resolves to a local session and would revive or recreate one under
+  a remote ID. The server never dials the other host and carries none of its traffic.
+- **The client follows it.** A command given a name on this machine looks it up first and, for a pointer,
+  runs against the host it names, as if given `white:work`. A client switched to a pointer re-execs as
+  `cm attach white:@id`, since a client's connection is to one server.
+- **The pointer is borrowed.** `cm rebind` binds a moved name as one that releases on kill, and a pointer is
+  the same: `cm close kitty.1234` from a window-close watcher, or `cm kill kitty.1234`, removes the pointer
+  and leaves the remote session alone. So nothing has to be forwarded across hosts when a window closes.
+- **What it points at is what was typed.** `white:work` stays a name, so a restore after the remote session
+  ended recreates `work` on white, as attaching by a local name recreates its session. `white:@id` stays an
+  ID, which never creates.
+
+This is a directory role rather than a relay: the local server answers what this machine's names mean, and
+the answer may be elsewhere. A host owns its names as it owns its space membership.
+
+Rejected:
+
+- **A relay**, the local server holding the remote connection and passing the stream through. Every remote
+  window drops when the local server restarts, it models sessions it does not own, and every request takes
+  a second hop: the reasons under `--remote` above. And a server started by launchd has dropped the shell's
+  `SSH_AUTH_SOCK`, so it could not reach the agent that unlocks the key.
+- **The terminal holding the target**, cm setting the window's `cm_session` variable to `white:@id` with
+  `OSC 1337 SetUserVar`. It puts cm in the business of managing a terminal's windows, and only helps a
+  terminal that saves user variables.
+- **A client-side alias file.** Names would be defined in two places that can disagree and race, where the
+  server already serializes every change to one.
+- **A local session running `ssh host cm attach`.** Two emulators, two scrollbacks, a nested detach key and
+  query replies crossing two multiplexers, and after a reboot the local session is dead and something has
+  to re-run the ssh.
 
 *Federation is pull, and directed.* Each host lists the remotes it looks at, the named-hosts config section
 still open under `--remote`. A laptop lists the server and the desktop, the desktop lists the server, the
