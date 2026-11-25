@@ -866,12 +866,12 @@ programs in the user's dotfiles: `kspaces-provider-cm`, which matches a window t
 (the wrapper's window is the `cm attach` client, so `cm switch` is followed), and `launch_wrapper.py`, which
 turns the vars into `CM_SPACE` and a `worktree` tag. cm learns nothing about kspaces.
 
-*Layouts follow the sessions.* The cm half is built, as `cm space meta` (docs/cli.md, "Space metadata");
-the provider verbs and kspaces are not. Picking up remote work on another host should restore the
-windows as they were laid out, not a list of detached sessions. A multiplexer gets this for free because
-it owns the splits. Here kitty owns them, kspaces records them in kitty session files, and those files
-stay on the machine that wrote them, while the sessions live on the remote. So the layout is stored on the
-sessions' host, and cm does not understand it.
+*Layouts follow the sessions.* **Built**: `cm space meta` (docs/cli.md, "Space metadata"), the
+provider's `save-layout` and `load-layouts`, and kspaces sharing them (kspaces' docs/kitty.md, "Shared
+layouts"). Two machines showing one space see one state, as a multiplexer's attached clients do: a tab or
+split closed on one closes on the other, one opened opens, within a few seconds. A multiplexer gets this
+for free because it owns the splits. Here each machine's kitty owns its own, so kspaces keeps them in step
+through a layout stored on the sessions' host, which cm does not understand.
 
 - **cm: opaque metadata on a space.** Built. `cm space meta set|get|list|rm SPACE KEY`, keys namespaced by
   convention (`kspaces/layout/<worktree>`), the value a blob cm never parses, size-capped so it does not
@@ -879,14 +879,23 @@ sessions' host, and cm does not understand it.
   rather than overwrite. Owned by the host like membership, so it is reachable through a remote with
   nothing added. The model is Kubernetes annotations, tmux `@user` options, git notes: nothing in it is
   about kitty.
-- **Provider protocol: `save-layout` and `load-layout`**, `{space, key, data}`, behind `capabilities`.
-  `kspaces-provider-cm` maps them to `cm space meta`; another multiplexer's provider can use a file.
-- **kspaces** saves the kitty session it already writes through the provider, and on another host loads
-  and instantiates it. The launch wrapper and watcher are unchanged: they see one window, never a layout.
+- **Provider protocol: `save-layout` and `load-layouts`**, behind the `layouts` capability, the second
+  batched so one `cm space meta list` per space and host finds what changed. `kspaces-provider-cm` maps
+  them to `cm space meta`; another multiplexer's provider can use a file.
+- **The blob is kspaces' own**, not a kitty session file: tabs of panes, each pane a session by the
+  provider's id with a layout pane's split, and nothing else. A kitty session file was measured to hold
+  this machine's paths, kitty window ids and `cmd_at_shell_startup`, which on another machine would start a
+  second copy of a program already running in its session.
 - **References in the blob** are unqualified `@id`s, local to the host storing it. The provider qualifies
   them with the name it reached that host by, so each viewer resolves them through its own remote names.
   This is what syncing kitty session files between machines cannot do, since remote names are per-client.
-  A window whose session has ended opens a new one in that window's cwd, which the kitty session records.
+- **kspaces keeps the machines in step** with a pass at each sidebar poll: it saves its panes once they
+  settle, and takes another machine's layout as a three-way merge by session against the last it saved or
+  took, so concurrent changes both survive. A change is which sessions each tab shows, not split geometry:
+  taking only opens and closes panes, and two screens size splits apart, which would otherwise save over
+  each other forever. Closing on take marks the window kept first, so the close watcher does not end a
+  session the other machine only closed a window of. The launch wrapper and watcher are otherwise
+  unchanged.
 
 Rejected: a group of sessions in cm carrying the layout. Space plus the `worktree` tag already selects
 kspaces' layout unit, and a group would make cm decide what killing, moving or shelving one means, which
@@ -894,10 +903,10 @@ are layout questions cm has ruled out of scope. Rejected: a kspaces server on re
 already reaches the remote through cm, and it would need kspaces where kitty never runs.
 
 Open: a layout spanning hosts needs a host identity every viewer agrees on, such as a stable ID each server
-reports, rather than a client's remote name, so the first version takes layouts on one host. Whether kspaces
-saves on suspend and close only, or on every layout change, which keeps an unplanned switch current at the
-cost of writes and conflicts. Two viewers showing one layout live is out: revisions make it safe, nothing
-syncs it.
+reports, rather than a client's remote name, so a layout is one host's: the host most of a worktree's
+panes show, the rest staying local. Each viewer polls, so a change takes seconds; a `cm space meta watch`
+stream would let the server push it instead, cutting the latency and the polling over ssh. Moving a window
+within the splits tree is not taken, as kitty cannot rearrange a window in place (#10941's flash).
 
 *What will bite.* Hosts upgrade independently, so anything a server answers about spaces needs the
 capability tokens of `docs/capabilities.md`; `spaces` and `close` exist. A remote client answers terminal
@@ -912,10 +921,10 @@ to be a second.
 2. **Built.** The close policy and `cm close`, and the kitty watcher calling it.
 3. **Built.** kspaces on a session provider, with cm's provider in the dotfiles.
 4. **Built.** Named remotes and qualified references, resolving locally for the local host's name.
-5. Cross-host `cm ls` and `cm tui` with the stale cache (**built**, `--all-hosts`), and the provider
-   listing every host's sessions.
-6. Space metadata (**built**), the provider's layout verbs, and kspaces saving and restoring layouts
-   through them.
+5. **Built.** Cross-host `cm ls` and `cm tui` with the stale cache (`--all-hosts`), the provider listing
+   every host's sessions, and kspaces' hosts tab.
+6. **Built.** Space metadata, the provider's layout verbs, and kspaces sharing layouts through them. Left:
+   `cm space meta watch`.
 
 *Picking up the remaining work.* What a new agent needs, beyond the decisions above:
 
@@ -937,9 +946,8 @@ to be a second.
   qualified ref so a restore reconnects.
 - **Step 6, layouts.** cm's half is `internal/store/spacemeta.go`, the `space_meta` migration, the
   `*SpaceMeta` RPCs in `internal/server/spaces.go`, `cmd/cm/spacemeta.go`, and the `spaces.meta`
-  capability. Left: the provider verbs, specified in kspaces' `docs/kitty.md` first, mapped to
-  `cm space meta get --json` and `set --if-revision` in `kspaces-provider-cm`; then kspaces saving and
-  restoring. Restoring on another host needs steps 4 and 5.
+  capability. kspaces' is `internal/spaces/shared.go` (capture and merge) and `sync.go` (the pass); the
+  provider's is `save_layout` and `load_layouts` in `kspaces-provider-cm`.
 - **kspaces gaps.** Detached rows include sessions kspaces' own suspend kept, which its
   `.kept-sessions` already names and could exclude; ended sessions could collapse behind a count so the
   group shows running ones first; the picker and `/` do not find detached sessions, which its TODO.md records.
