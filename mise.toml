@@ -81,7 +81,7 @@ run = "go build -o bin/cm ./cmd/cm"
 
 [tasks.install]
 description = "Build and install cm into PREFIX (default ~/.local)"
-depends = ["build"]
+depends = ["build", "codesign-cert"]
 # Installs to $PREFIX/bin, defaulting to ~/.local, so `mise run install` needs no arguments and
 # PREFIX=/usr/local mise run install works for a system install.
 #
@@ -97,6 +97,17 @@ depends = ["build"]
 # Renaming from a temporary file in the same directory is also atomic, so a concurrent exec sees either
 # the old binary or the new one, never a partial write. The temp file must be on the same filesystem for
 # rename to work, which is why it is created next to the target rather than in /tmp.
+#
+# CM_CODESIGN_IDENTITY names a code-signing certificate in the keychain to sign the installed binary with,
+# instead of the linker's ad-hoc signature. That matters on macOS because a launchd-started server is the
+# privacy (TCC) responsible process for everything in its sessions, and TCC keys a grant on the binary's
+# designated requirement. Ad-hoc, that requirement is the cdhash, so every install is a new program: a Full
+# Disk Access grant stopped matching after each upgrade, `op` could not read 1Password's group container and
+# reported not being signed in, and the Downloads prompt came back. A certificate makes the requirement name
+# the certificate instead, which survives rebuilds. codesign-cert creates a self-signed one under that name
+# if the keychain has none. Unset leaves the ad-hoc signature alone. Opt-in through the environment rather
+# than the config file, since a build is not always made by the user whose config is live. Signed before the
+# rename, so the binary that appears is already final.
 run = """
 set -eu
 prefix="${PREFIX:-$HOME/.local}"
@@ -107,6 +118,9 @@ tmp="$(mktemp "$bindir/.cm.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 cp bin/cm "$tmp"
 chmod 755 "$tmp"
+if [ -n "${CM_CODESIGN_IDENTITY:-}" ]; then
+  codesign --force --sign "$CM_CODESIGN_IDENTITY" --identifier com.github.chancez.cm ${CM_CODESIGN_KEYCHAIN:+--keychain "$CM_CODESIGN_KEYCHAIN"} "$tmp"
+fi
 mv -f "$tmp" "$bindir/cm"
 trap - EXIT
 
@@ -117,6 +131,42 @@ elif [ "$(command -v cm)" != "$bindir/cm" ]; then
   echo "note: $(command -v cm) shadows $bindir/cm on PATH" >&2
 fi
 """
+
+[tasks.codesign-cert]
+description = "Create the self-signed code-signing identity CM_CODESIGN_IDENTITY names, if it is missing"
+# Does nothing unless CM_CODESIGN_IDENTITY is set, so install can depend on it unconditionally. Once per host
+# rather than per worktree: the identity lives in the login keychain, and is looked up by name.
+#
+# The key goes straight into the keychain and the temporary files are removed. A key left on disk could sign
+# any binary as cm, and a cm holding Full Disk Access is worth impersonating. The first codesign with it asks
+# whether codesign may use the key; "Always Allow" ends that for good.
+#
+# /usr/bin/openssl rather than whatever is on PATH. It is LibreSSL, whose PKCS#12 encryption `security
+# import` reads, where OpenSSL 3's default needs -legacy, and it is on every Mac. CM_CODESIGN_KEYCHAIN picks
+# another keychain, which is how this is tested without touching the login one.
+run = '''
+set -eu
+name="${CM_CODESIGN_IDENTITY:-}"
+[ -n "$name" ] || exit 0
+[ "$(uname -s)" = Darwin ] || exit 0
+keychain="${CM_CODESIGN_KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
+if security find-identity -p codesigning "$keychain" | grep -qF "\"$name\""; then
+  exit 0
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+printf '%s\n' '[req]' 'distinguished_name = dn' 'x509_extensions = ext' 'prompt = no' \
+  '[dn]' "CN = $name" \
+  '[ext]' 'basicConstraints = critical,CA:false' 'keyUsage = critical,digitalSignature' \
+  'extendedKeyUsage = critical,codeSigning' >"$tmp/req.cnf"
+/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$tmp/req.cnf" \
+  -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null
+/usr/bin/openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" -name "$name" \
+  -out "$tmp/id.p12" -passout pass:cm
+security import "$tmp/id.p12" -k "$keychain" -P cm -T /usr/bin/codesign >/dev/null
+echo "created code-signing identity \"$name\" in $keychain"
+'''
 
 [tasks.uninstall]
 description = "Remove cm from PREFIX (default ~/.local)"
