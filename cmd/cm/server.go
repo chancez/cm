@@ -658,11 +658,7 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 // about which file is in effect. A config that fails to load starts the server the default way, since the
 // server then exits naming the error and the client shows what it said.
 func startUnderLaunchd() bool {
-	path, err := config.DefaultPath()
-	if err != nil {
-		return false
-	}
-	cfg, err := config.Load(path)
+	cfg, err := config.LoadDefault()
 	if err != nil {
 		return false
 	}

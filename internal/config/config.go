@@ -28,9 +28,10 @@ import (
 
 // Config is cm's configuration.
 type Config struct {
-	// path is where this was read from, and unknown holds the settings the file names that this build
-	// does not know. Both are read through accessors, so neither can be mistaken for a setting.
+	// path is the main file, read or looked for, files every file actually read, and unknown the settings
+	// they name that this build does not know. Read through accessors, so none can be mistaken for a setting.
 	path    string
+	files   []string
 	unknown []string
 
 	// RuntimeDir overrides where sockets live, and StateDir where the database and logs live.
@@ -400,7 +401,7 @@ const DefaultScrollbackLines = 2000
 //
 // An unrecognized setting is neither, and is recorded for the caller to act on. See UnknownSettings.
 func Load(path string) (*Config, error) {
-	cfg := &Config{path: path}
+	cfg := &Config{path: path, files: existing(path)}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -420,6 +421,112 @@ func Load(path string) (*Config, error) {
 
 	return cfg, nil
 }
+
+// DropInDir is the directory of drop-in files beside a config file: conf.d, next to cm.toml.
+const DropInDir = "conf.d"
+
+// LoadDefault loads the configuration from where cm looks for it by default: DefaultPath, then every
+// *.toml in the conf.d directory beside it, in name order, each overriding what came before.
+//
+// conf.d exists so one cm.toml can be shared between machines, through dotfiles, while each machine keeps
+// what is its own in a file the shared copy does not have: remote.local_name, which is necessarily
+// different on every machine, or a [close] policy a server wants and a laptop does not. A directory rather
+// than an include key, so nothing has to be declared, and a directory rather than every *.toml beside
+// cm.toml, so other files can live there.
+//
+// CM_CONFIG names one file and nothing else is read. A sandbox sets CM_CONFIG=/nonexistent.toml to read no
+// configuration at all, and a conf.d resolved beside it would be /conf.d.
+func LoadDefault() (*Config, error) {
+	path, err := DefaultPath()
+	if err != nil {
+		return nil, err
+	}
+	if os.Getenv(paths.Env("CONFIG")) != "" {
+		return Load(path)
+	}
+	dropIns, err := filepath.Glob(filepath.Join(filepath.Dir(path), DropInDir, "*.toml"))
+	if err != nil {
+		return nil, err
+	}
+	if len(dropIns) == 0 {
+		return Load(path)
+	}
+	slices.Sort(dropIns)
+	return loadMerged(path, dropIns)
+}
+
+// loadMerged reads main and then each drop-in, merging them before decoding.
+//
+// Merged as generic tables rather than decoded into the struct one file at a time, because decoding a
+// second file replaces a map entry whole: a conf.d file saying only `[remote.hosts.server]
+// ssh_command = "x"` would drop the address cm.toml gave server. Tables merge key by key; any other value,
+// arrays included, replaces, so a drop-in can take an entry out of a list as well as add one.
+func loadMerged(main string, dropIns []string) (*Config, error) {
+	cfg := &Config{path: main}
+	merged := map[string]any{}
+	for _, path := range append([]string{main}, dropIns...) {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) && path == main {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		var doc map[string]any
+		if _, err := toml.Decode(string(data), &doc); err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		// Each file's own unknown settings, named with the file when it is a drop-in, so the warning points at
+		// the file that has the typo rather than at the merge.
+		md, err := toml.Decode(string(data), &Config{})
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		for _, k := range md.Undecoded() {
+			name := k.String()
+			if path != main {
+				name = filepath.Join(DropInDir, filepath.Base(path)) + ":" + name
+			}
+			cfg.unknown = append(cfg.unknown, name)
+		}
+		mergeTables(merged, doc)
+		cfg.files = append(cfg.files, path)
+	}
+
+	var buf strings.Builder
+	if err := toml.NewEncoder(&buf).Encode(merged); err != nil {
+		return nil, fmt.Errorf("merging %s: %w", strings.Join(cfg.files, ", "), err)
+	}
+	if _, err := toml.Decode(buf.String(), cfg); err != nil {
+		return nil, fmt.Errorf("merging %s: %w", strings.Join(cfg.files, ", "), err)
+	}
+	return cfg, nil
+}
+
+// mergeTables merges src into dst: tables recursively, everything else replaced.
+func mergeTables(dst, src map[string]any) {
+	for k, v := range src {
+		if sub, ok := v.(map[string]any); ok {
+			if have, ok := dst[k].(map[string]any); ok {
+				mergeTables(have, sub)
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
+// existing returns path in a list when the file exists, for Files.
+func existing(path string) []string {
+	if _, err := os.Stat(path); err == nil {
+		return []string{path}
+	}
+	return nil
+}
+
+// Files lists every file this configuration was read from, in the order applied: cm.toml, then conf.d.
+// Empty when there were none, which is every default.
+func (c *Config) Files() []string { return c.files }
 
 // Path is where the configuration was read from, or looked for when there is no file.
 //

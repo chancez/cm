@@ -102,7 +102,7 @@ func TestLoadRecordsUnknownSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want an unknown setting to be recorded rather than refused", err)
 	}
-	want := &Config{path: path, unknown: []string{"scrolback_lines"}, DetachKey: "ctrl-o"}
+	want := &Config{path: path, files: []string{path}, unknown: []string{"scrolback_lines"}, DetachKey: "ctrl-o"}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("Load() = %+v, want %+v", cfg, want)
 	}
@@ -752,5 +752,154 @@ func TestLocalNameDefaultsToTheHostname(t *testing.T) {
 	short, _, _ := strings.Cut(host, ".")
 	if got, err := cfg.LocalName(); err != nil || got != strings.ToLower(short) {
 		t.Errorf("LocalName() = %q, %v; want %q", got, err, strings.ToLower(short))
+	}
+}
+
+// configHome makes a default config location under a temp XDG_CONFIG_HOME with the given files, cm.toml and
+// conf.d/NAME.toml keyed by their path under cm's directory.
+func configHome(t *testing.T, files map[string]string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv(paths.Env("CONFIG"), "")
+	dir := filepath.Join(home, paths.Name)
+	for name, body := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// One cm.toml shared between machines and a conf.d file of this machine's own: tables merge key by key, so a
+// drop-in that sets one key of a host keeps the address the shared file gave it, and later files win.
+func TestLoadDefaultMergesConfD(t *testing.T) {
+	dir := configHome(t, map[string]string{
+		"cm.toml": `
+[close]
+idle = "kill"
+busy = "kill"
+
+[remote.hosts.laptop]
+[remote.hosts.server]
+address = "ssh://me@server.lan"
+`,
+		"conf.d/local.toml": `
+[remote]
+local_name = "laptop"
+
+[remote.hosts.server]
+ssh_command = "kitten ssh"
+
+[close]
+busy = "detach"
+`,
+		// Name order, so this one applies last.
+		"conf.d/zz.toml": "[close]\nbusy = \"kill\"\nidle = \"shelve\"\n",
+		// Not a .toml, so not read.
+		"conf.d/notes.txt": "[close]\nidle = \"nonsense\"\n",
+	})
+	cfg, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+
+	wantFiles := []string{
+		filepath.Join(dir, "cm.toml"),
+		filepath.Join(dir, "conf.d", "local.toml"),
+		filepath.Join(dir, "conf.d", "zz.toml"),
+	}
+	if got := cfg.Files(); !reflect.DeepEqual(got, wantFiles) {
+		t.Errorf("Files() = %q, want %q", got, wantFiles)
+	}
+	if idle, busy, err := cfg.ClosePolicy(); err != nil || idle != "shelve" || busy != "kill" {
+		t.Errorf("ClosePolicy() = %q, %q, %v; want shelve, kill", idle, busy, err)
+	}
+	// laptop is this machine, so the shared list naming it leaves one remote.
+	remotes, err := cfg.Remotes()
+	if err != nil {
+		t.Fatalf("Remotes() error = %v", err)
+	}
+	want := []NamedRemote{{
+		Name:              "server",
+		Target:            remote.Target{User: "me", Host: "server.lan"},
+		SSHCommand:        "kitten ssh",
+		ConnectionPersist: remote.DefaultControlPersist,
+	}}
+	if !reflect.DeepEqual(remotes, want) {
+		t.Errorf("Remotes() = %+v\nwant %+v", remotes, want)
+	}
+	if len(cfg.UnknownSettings()) != 0 {
+		t.Errorf("UnknownSettings() = %q, want none", cfg.UnknownSettings())
+	}
+}
+
+// A list in a drop-in replaces the shared one rather than appending, or nothing could take an entry out.
+func TestConfDReplacesAList(t *testing.T) {
+	configHome(t, map[string]string{
+		"cm.toml":           "[env]\ncapture = [\"A\", \"B\"]\n",
+		"conf.d/local.toml": "[env]\ncapture = [\"C\"]\n",
+	})
+	cfg, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+	if got := cfg.Env.Capture; !reflect.DeepEqual(got, []string{"C"}) {
+		t.Errorf("env.capture = %q, want [C]", got)
+	}
+}
+
+// A machine with only its own file, and no shared one, still reads it.
+func TestConfDWithoutCMToml(t *testing.T) {
+	dir := configHome(t, map[string]string{"conf.d/local.toml": "[remote]\nlocal_name = \"desk\"\n"})
+	cfg, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+	if name, err := cfg.LocalName(); err != nil || name != "desk" {
+		t.Errorf("LocalName() = %q, %v; want desk", name, err)
+	}
+	if got, want := cfg.Files(), []string{filepath.Join(dir, "conf.d", "local.toml")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %q, want %q", got, want)
+	}
+}
+
+// An unknown setting in a drop-in is reported with the file it is in.
+func TestConfDUnknownSettingNamesItsFile(t *testing.T) {
+	configHome(t, map[string]string{
+		"cm.toml":           "typo_main = 1\n",
+		"conf.d/local.toml": "typo_local = 1\n",
+	})
+	cfg, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+	want := []string{"typo_main", "conf.d/local.toml:typo_local"}
+	if got := cfg.UnknownSettings(); !reflect.DeepEqual(got, want) {
+		t.Errorf("UnknownSettings() = %q, want %q", got, want)
+	}
+}
+
+// CM_CONFIG names one file and reads nothing beside it. A sandbox's CM_CONFIG=/nonexistent.toml would
+// otherwise read /conf.d.
+func TestConfigEnvReadsNoConfD(t *testing.T) {
+	dir := configHome(t, map[string]string{
+		"cm.toml":           "[close]\nidle = \"kill\"\n",
+		"conf.d/local.toml": "[close]\nidle = \"shelve\"\n",
+	})
+	t.Setenv(paths.Env("CONFIG"), filepath.Join(dir, "cm.toml"))
+	cfg, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error = %v", err)
+	}
+	if idle, _, err := cfg.ClosePolicy(); err != nil || idle != "kill" {
+		t.Errorf("ClosePolicy() idle = %q, %v; want kill, from cm.toml alone", idle, err)
+	}
+	if got, want := cfg.Files(), []string{filepath.Join(dir, "cm.toml")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Files() = %q, want %q", got, want)
 	}
 }

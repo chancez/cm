@@ -48,6 +48,8 @@ type configJSON struct {
 	// File is where the config was read from, or looked for.
 	File       string `json:"file"`
 	FileExists bool   `json:"file_exists"`
+	// Files is every file read, in the order applied: file, then each conf.d drop-in. See config.LoadDefault.
+	Files []string `json:"files"`
 
 	RuntimeDir string `json:"runtime_dir"`
 	StateDir   string `json:"state_dir"`
@@ -217,6 +219,7 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	out := configJSON{
 		File:       path,
 		FileExists: fileErr == nil,
+		Files:      cfg.Files(),
 		RuntimeDir: dirs.Runtime,
 		StateDir:   dirs.State,
 		Sources: map[string]string{
@@ -258,6 +261,9 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		UnknownSettings:         cfg.UnknownSettings(),
 		KeyProblems:             keyProblems,
 	}
+	if out.Files == nil {
+		out.Files = []string{}
+	}
 	if out.UnknownSettings == nil {
 		// An empty array rather than null, so a script can iterate unconditionally.
 		out.UnknownSettings = []string{}
@@ -280,6 +286,11 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		fmt.Fprint(os.Stdout, " (does not exist; defaults in use)")
 	}
 	fmt.Fprintln(os.Stdout)
+	for _, f := range out.Files {
+		if f != out.File {
+			fmt.Fprintf(os.Stdout, "drop-in                   %s\n", f)
+		}
+	}
 
 	fmt.Fprintf(os.Stdout, "runtime_dir               %s (%s)\n", out.RuntimeDir, out.Sources["runtime_dir"])
 	fmt.Fprintf(os.Stdout, "state_dir                 %s (%s)\n", out.StateDir, out.Sources["state_dir"])

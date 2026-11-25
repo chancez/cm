@@ -8,6 +8,16 @@ config directory (`~/.config/cm/cm.toml` on Linux, `~/Library/Application Suppor
 macOS). On macOS, `~/.config/cm/cm.toml` is read when the platform directory has no file. Override with
 `--config` or `$CM_CONFIG`. Run `cm config` to see which path is in use.
 
+Every `*.toml` in a `conf.d` directory beside that file is read after it, in name order, each overriding
+what came before: `~/.config/cm/conf.d/local.toml`. That is for a `cm.toml` shared between machines through
+dotfiles, with each machine's own settings in a file the shared copy does not have, such as
+`remote.local_name` or a server's own `[close]` policy. Tables merge key by key, so a drop-in that sets one
+key of `[remote.hosts.server]` keeps the address `cm.toml` gave it; any other value replaces, arrays
+included, so a drop-in can take an entry out of a list. A directory of its own rather than every `*.toml`
+beside `cm.toml`, so other files can live there. `--config` and `$CM_CONFIG` name one file and read no
+`conf.d`, which is what keeps a sandbox's `CM_CONFIG=/nonexistent.toml` from reading `/conf.d`. `cm config`
+lists every file read, and an unknown key in a drop-in is reported with the file it is in.
+
 The `~/.config` fallback exists because `XDG_CONFIG_HOME` usually comes from a shell's rc file, and a
 process a GUI app starts directly never sees it. kitty launched from the Dock runs `cm attach` that way, and
 its clients read no file at all while `cm config` in a shell reported the right one: the client's keys,
@@ -641,9 +651,12 @@ How cm reaches a server on another machine, for `--remote ssh://host`. See
 ### [remote.hosts.NAME]
 
 ```toml
+# conf.d/local.toml, on the laptop only
 [remote]
 local_name = "laptop"
 
+# cm.toml, shared
+[remote.hosts.laptop]           # this machine on the laptop, a remote everywhere else
 [remote.hosts.white]            # the ssh alias white, with [remote]'s settings
 
 [remote.hosts.server]
@@ -657,12 +670,13 @@ is optional: `address` defaults to the name, read as an ssh alias, and `ssh_comm
 `connection_persist` default to `[remote]`'s. A configured name wins over an ssh alias of the same name.
 Names are letters, digits, `-`, `_` and `.`.
 
-A qualified reference spells the host by this name, so the names have to agree across machines: give
-each machine the `local_name` the others list it under. That is why it is a name rather than a hostname,
-which does not reconstruct the ssh alias that reaches a host. `--remote` naming `local_name` is this
-machine, so one command line works from every host, and a host listed under this machine's own name is
-an error. `cm config` prints every host as resolved and fails on one that is not usable, rather than the
-command that first names it failing.
+A qualified reference spells the host by this name, so the names have to agree across machines. That is
+why it is a name rather than a hostname, which does not reconstruct the ssh alias that reaches a host.
+One hosts list can be shared by every machine, in `cm.toml`: the entry named after this machine's
+`local_name` is this machine, skipped as a remote, and `--remote` or a qualifier naming it stays here, so
+one command line works from every host. `local_name` is the one thing that differs, so it belongs in a
+`conf.d` file, and needs none where the short hostname already is the name. `cm config` prints every host
+as resolved and fails on one that is not usable, rather than the command that first names it failing.
 
 Listing hosts is not a default remote either: nothing goes to one unless a command names it.
 

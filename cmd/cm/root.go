@@ -253,13 +253,9 @@ func sessionNameArg(cmd *cobra.Command, args []string) error {
 // A missing file is not an error, since configuration is optional and every setting has a
 // default that suits the common case.
 func (g *globals) config() (*config.Config, error) {
-	path := g.configPath
-	if path == "" {
-		p, err := config.DefaultPath()
-		if err != nil {
-			return nil, err
-		}
-		path = p
+	// --config names one file, as CM_CONFIG does, and reads no conf.d. See config.LoadDefault.
+	if g.configPath != "" {
+		return config.Load(g.configPath)
 	}
-	return config.Load(path)
+	return config.LoadDefault()
 }
