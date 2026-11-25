@@ -86,6 +86,14 @@ following it. The server refuses to move a window whose client predates this, wh
 the remote reference here and close; `cm clients upgrade` first. See docs/ideas.md, "A window is bound to
 a name, and a name may point to another host".
 
+`cm ls --all-hosts` (`-A`) lists this machine and every host in `[remote.hosts]` together, with a HOST
+column first and `host` in the JSON, so each row's reference is `HOST:NAME`. The remotes are asked in
+parallel, without starting a server on any, five seconds each. One that does not answer is shown from its
+last listing, kept under the state directory in `remote-listings/`, with `(stale 5m)` in its HOST cell,
+`stale_since` in the JSON, and a line on stderr; with no listing kept, only the stderr line. A session a
+name here points at shows it, `job <- kitty.1234`, and `pointed_by` in the JSON. Opt in rather than the
+default, since a script that lists often, as kspaces does, would otherwise pay an ssh round trip per call.
+
 Completion offers each configured host as `server:` after the local sessions, and `server:<TAB>` asks that
 host's server for its sessions, within the five seconds any remote completion gets. A host that does not
 answer completes nothing rather than holding the prompt.

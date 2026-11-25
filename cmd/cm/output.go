@@ -113,6 +113,14 @@ type sessionJSON struct {
 	Tags map[string]string `json:"tags"`
 	// Space is the space the session is in. Empty only from a server that predates spaces.
 	Space string `json:"space"`
+	// Host is the host the session is on, from `cm ls --all-hosts`: a name in [remote.hosts], or this
+	// machine's remote.local_name. Empty in a listing of one server, which is every other listing.
+	Host string `json:"host"`
+	// StaleSince is when a host that did not answer was last listed, for its sessions shown from that
+	// listing. Null for a live one.
+	StaleSince *time.Time `json:"stale_since"`
+	// PointedBy is this machine's names that point at this session on its host. Empty rather than null.
+	PointedBy []string `json:"pointed_by"`
 	// Hosting names the sessions attached from inside this one by a nested `cm attach`.
 	//
 	// Also says why this session's own title and directory are standing still: while it hosts a nested
@@ -247,6 +255,10 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 	if hosting == nil {
 		hosting = []string{}
 	}
+	pointedBy := s.PointedBy
+	if pointedBy == nil {
+		pointedBy = []string{}
+	}
 
 	// Empty rather than null, like the two above.
 	resume := append([]string{}, s.ResumeArgv...)
@@ -300,6 +312,9 @@ func toSessionJSON(s *serverv1.Session) sessionJSON {
 		ReportedAt:          unixTimeOrNil(s.ReportedAtUnix),
 		Tags:                sessionTags,
 		Space:               s.Space,
+		Host:                s.Host,
+		StaleSince:          unixTimeOrNil(s.StaleSinceUnix),
+		PointedBy:           pointedBy,
 		Hosting:             hosting,
 		AnnouncedClients:    s.AnnouncedClients,
 		ShimBuild:           s.ShimBuild,
@@ -427,10 +442,24 @@ const nameColumnBudget = 32
 // internal/server.Label, so the cell reads as an "@id" reference rather than being empty. See
 // paths.FormatNames for why the whole set is shown and how it is bounded.
 func sessionNameColumn(s *serverv1.Session) string {
+	name := s.Name
 	if names := paths.FormatNames(s.Names, nameColumnBudget); names != "" {
-		return names
+		name = names
 	}
-	return s.Name
+	// The names here pointing at it, so a window rebound to another host is findable by the name it has.
+	if len(s.PointedBy) > 0 {
+		name += " <- " + strings.Join(s.PointedBy, ",")
+	}
+	return name
+}
+
+// sessionHostColumn is the host a session is on, with the age of the listing it came from when that host
+// did not answer.
+func sessionHostColumn(s *serverv1.Session) string {
+	if s.StaleSinceUnix != 0 {
+		return fmt.Sprintf("%s (stale %s)", s.Host, humanAge(time.Unix(s.StaleSinceUnix, 0)))
+	}
+	return s.Host
 }
 
 // stateName renders a session's lifecycle stage.
@@ -467,6 +496,11 @@ func writeJSON(w io.Writer, v any) error {
 // sortSessions orders sessions oldest first, so output is stable across calls.
 func sortSessions(sessions []*serverv1.Session) {
 	sort.Slice(sessions, func(i, j int) bool {
+		// By host before anything, in a listing of several, so each host reads as one block. Every session
+		// of a single server's listing has the same empty host, which changes nothing.
+		if sessions[i].Host != sessions[j].Host {
+			return sessions[i].Host < sessions[j].Host
+		}
 		// Grouped by space first, so a listing across several reads as one block per space. Changes
 		// nothing for someone who uses only default.
 		if c := spaces.Compare(sessions[i].Space, sessions[j].Space); c != 0 {
@@ -687,8 +721,11 @@ func writeSessionsTable(w io.Writer, sessions []*serverv1.Session, termCols int)
 	//
 	// Keyed on the whole list rather than per row, so the header and every row agree on the shape.
 	// Deciding per row misaligns the table, which is worse than an empty cell.
-	var showTags, showTitle, showSpace bool
+	var showTags, showTitle, showSpace, showHost bool
 	for _, s := range sessions {
+		if s.Host != "" {
+			showHost = true
+		}
 		if len(s.Tags) > 0 {
 			showTags = true
 		}
@@ -724,6 +761,12 @@ func writeSessionsTable(w io.Writer, sessions []*serverv1.Session, termCols int)
 		{"CREATED", func(s *serverv1.Session) string {
 			return humanAge(time.Unix(s.CreatedAtUnix, 0))
 		}},
+	}
+	if showHost {
+		// First, since a merged listing is read host by host, and the qualified reference to type is
+		// HOST:NAME. A host shown from its last listing says so, and how old it is, in the same cell, so the
+		// rows cannot be read as live.
+		columns = append([]column{{"HOST", sessionHostColumn}}, columns...)
 	}
 	if showSpace {
 		// Before TITLE, since a space name is bounded and short, and it is the grouping a listing of several
@@ -885,6 +928,10 @@ func sessionFields(s *serverv1.Session) []struct {
 		// script to read. The JSON output carries the map for anything that wants the structure.
 		{"tags", tags.Format(j.Tags)},
 		{"space", j.Space},
+		// From a listing of several hosts only, so empty in `cm info`, which asks one server.
+		{"host", j.Host},
+		{"stale_since", formatTimeOrEmpty(j.StaleSince)},
+		{"pointed_by", strings.Join(j.PointedBy, " ")},
 		// Space-separated, since a session name cannot contain a space and `--field hosting` is read
 		// by a script that would otherwise have to strip punctuation.
 		{"hosting", strings.Join(j.Hosting, " ")},

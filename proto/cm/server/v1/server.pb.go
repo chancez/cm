@@ -5109,7 +5109,19 @@ type Session struct {
 	// modes are the terminal modes the session's program has set that differ from a new terminal's, each with
 	// where in the output it set it. A restarted server applies the ones its replay no longer holds. Empty for a
 	// program that set none, and from an older server.
-	Modes         []*TerminalMode `protobuf:"bytes,36,rep,name=modes,proto3" json:"modes,omitempty"`
+	Modes []*TerminalMode `protobuf:"bytes,36,rep,name=modes,proto3" json:"modes,omitempty"`
+	// The next three are set by a client merging several hosts' listings, `cm ls --all-hosts`, and never by a
+	// server, which knows only its own sessions. Here rather than in a wrapper so everything that renders a
+	// session renders a merged one too.
+	//
+	// host is the host the session is on, as [remote.hosts] names it, or this machine's remote.local_name.
+	Host string `protobuf:"bytes,37,opt,name=host,proto3" json:"host,omitempty"`
+	// stale_since_unix is when the listing this session came from was taken, for a host that did not answer
+	// and was shown from its last listing instead. 0 for a live one.
+	StaleSinceUnix int64 `protobuf:"varint,38,opt,name=stale_since_unix,json=staleSinceUnix,proto3" json:"stale_since_unix,omitempty"`
+	// pointed_by is the names on the listing machine that point at this session on its host. See
+	// docs/ideas.md, "A window is bound to a name, and a name may point to another host".
+	PointedBy     []string `protobuf:"bytes,39,rep,name=pointed_by,json=pointedBy,proto3" json:"pointed_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5392,6 +5404,27 @@ func (x *Session) GetSpace() string {
 func (x *Session) GetModes() []*TerminalMode {
 	if x != nil {
 		return x.Modes
+	}
+	return nil
+}
+
+func (x *Session) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *Session) GetStaleSinceUnix() int64 {
+	if x != nil {
+		return x.StaleSinceUnix
+	}
+	return 0
+}
+
+func (x *Session) GetPointedBy() []string {
+	if x != nil {
+		return x.PointedBy
 	}
 	return nil
 }
@@ -7306,8 +7339,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x04tags\x18\x02 \x03(\tR\x04tags\x12\x14\n" +
 	"\x05space\x18\x03 \x01(\tR\x05space\"A\n" +
 	"\fListResponse\x121\n" +
-	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xd0\n" +
-	"\n" +
+	"\bsessions\x18\x01 \x03(\v2\x15.cm.server.v1.SessionR\bsessions\"\xad\v\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x16 \x01(\tR\x02id\x12\x14\n" +
@@ -7351,7 +7383,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\n" +
 	"on_restore\x18\" \x01(\tR\tonRestore\x12\x14\n" +
 	"\x05space\x18# \x01(\tR\x05space\x120\n" +
-	"\x05modes\x18$ \x03(\v2\x1a.cm.server.v1.TerminalModeR\x05modes\x1a7\n" +
+	"\x05modes\x18$ \x03(\v2\x1a.cm.server.v1.TerminalModeR\x05modes\x12\x12\n" +
+	"\x04host\x18% \x01(\tR\x04host\x12(\n" +
+	"\x10stale_since_unix\x18& \x01(\x03R\x0estaleSinceUnix\x12\x1d\n" +
+	"\n" +
+	"pointed_by\x18' \x03(\tR\tpointedBy\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +

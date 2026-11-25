@@ -1473,6 +1473,19 @@ message Session {
   // where in the output it set it. A restarted server applies the ones its replay no longer holds. Empty for a
   // program that set none, and from an older server.
   repeated TerminalMode modes = 36;
+
+  // The next three are set by a client merging several hosts' listings, `cm ls --all-hosts`, and never by a
+  // server, which knows only its own sessions. Here rather than in a wrapper so everything that renders a
+  // session renders a merged one too.
+  //
+  // host is the host the session is on, as [remote.hosts] names it, or this machine's remote.local_name.
+  string host = 37;
+  // stale_since_unix is when the listing this session came from was taken, for a host that did not answer
+  // and was shown from its last listing instead. 0 for a live one.
+  int64 stale_since_unix = 38;
+  // pointed_by is the names on the listing machine that point at this session on its host. See
+  // docs/ideas.md, "A window is bound to a name, and a name may point to another host".
+  repeated string pointed_by = 39;
 }
 
 // TerminalMode is one terminal mode a session's program set.

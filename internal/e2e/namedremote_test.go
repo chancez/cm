@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -155,6 +156,10 @@ connection_persist = "0"
 		s, ok := far.session("job")
 		return ok && s.Clients > 0
 	})
+	// The merged listing shows far's session with the name here that points at it.
+	if out := e.mustRun("ls", "--all-hosts"); !strings.Contains(out, "job <- win") {
+		t.Errorf("ls --all-hosts does not mark far:job as pointed at by win:\n%s", out)
+	}
 	// The name follows the pointer: info by the window's name answers from far.
 	if got := strings.TrimSpace(e.mustRun("info", "win", "--field", "name")); got != "job" {
 		t.Errorf("info win name = %q, want job, from far", got)
@@ -169,5 +174,59 @@ connection_persist = "0"
 	}
 	if r := e.run("info", "win"); r.code == 0 {
 		t.Errorf("info win after close succeeded: %s, want the name gone", r.stdout)
+	}
+}
+
+// sessionHosts maps "host:name" to whether the listing of that host was stale, from ls --all-hosts --json.
+func listedAcrossHosts(t *testing.T, e *env) map[string]bool {
+	t.Helper()
+	var listed []struct {
+		Name       string  `json:"name"`
+		Host       string  `json:"host"`
+		StaleSince *string `json:"stale_since"`
+	}
+	if err := json.Unmarshal([]byte(e.mustRun("ls", "--all-hosts", "--json")), &listed); err != nil {
+		t.Fatalf("parsing ls --all-hosts --json: %v", err)
+	}
+	out := map[string]bool{}
+	for _, s := range listed {
+		out[s.Host+":"+s.Name] = s.StaleSince != nil
+	}
+	return out
+}
+
+// Every host in one listing, each session with its host; and a host that stops answering is shown from its
+// last listing, marked stale, rather than vanishing or holding the command.
+func TestListAllHosts(t *testing.T) {
+	skipIfShort(t)
+	far := newEnv(t)
+	e := newEnv(t)
+	config := func(sshCommand string) {
+		e.writeConfig(fmt.Sprintf(`
+[remote]
+local_name = "here"
+
+[remote.hosts.far]
+address = "ssh://far%s"
+ssh_command = "%s"
+connection_persist = "0"
+`, e.bin, sshCommand))
+	}
+	config(fakeSSH(t, far))
+
+	far.mustRun("run", "--session", "job", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	e.mustRun("run", "--session", "mine", "-d", "--", "/bin/sh", "-c", "sleep 120")
+
+	if got, want := listedAcrossHosts(t, e), map[string]bool{"here:mine": false, "far:job": false}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ls --all-hosts = %v, want %v", got, want)
+	}
+
+	// far stops answering: its last listing stands in, and stderr says so.
+	config("false")
+	if got, want := listedAcrossHosts(t, e), map[string]bool{"here:mine": false, "far:job": true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ls --all-hosts with far down = %v, want %v", got, want)
+	}
+	if r := e.run("ls", "--all-hosts"); r.code != 0 || !strings.Contains(r.stderr, "far did not answer; showing its listing from") {
+		t.Errorf("ls --all-hosts with far down = %d, stderr %q; want success and a note naming far", r.code, r.stderr)
 	}
 }

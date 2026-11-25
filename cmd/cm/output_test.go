@@ -98,6 +98,9 @@ func TestSessionJSONKeys(t *testing.T) {
 		// From OSC 7501: what a blocked program needs, and how far along the work is.
 		"reported_kind", "reported_progress",
 		"tags", "space", "hosting",
+		// From `cm ls --all-hosts`: where the session is, how old a listing of a host that did not answer
+		// is, and this machine's names pointing at it.
+		"host", "stale_since", "pointed_by",
 		// Counted separately from hosting, which names sessions: an announced client is a nonce on another
 		// host, and this is the one nesting state that can be stale.
 		"announced_clients",
@@ -149,9 +152,10 @@ func TestSessionJSONValues(t *testing.T) {
 		ReportedSource: "my-agent",
 		Tags:           map[string]string{"project": "cm", "review": ""},
 		// Empty rather than nil, like Tags, so a script indexing into it needs no null check.
-		Hosting:  []string{},
-		Location: []locationJSON{},
-		Resume:   []string{},
+		Hosting:   []string{},
+		PointedBy: []string{},
+		Location:  []locationJSON{},
+		Resume:    []string{},
 		// Also empty rather than nil. The fixture describes a session whose clients the server did not
 		// report, which is what an older server looks like; TestSessionJSONReportsAttachedClients
 		// covers the populated case.

@@ -16,6 +16,7 @@ func newListCommand(g *globals) *cobra.Command {
 		asJSON  bool
 		tagArgs []string
 		space   string
+		all     bool
 	)
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -36,7 +37,12 @@ Tags group sessions that a name cannot. A per-window session is named by the
 server, so it is called "s17" and --prefix has nothing to match on, and a session
 belongs to several groupings at once while its name only says one thing.
 
---space lists one space. See 'cm space'.`,
+--space lists one space. See 'cm space'.
+
+--all-hosts lists this machine and every remote in [remote.hosts] together, with
+a HOST column, asking each remote for at most five seconds. One that does not
+answer is shown from its last listing, marked stale with its age, and said so on
+stderr. Each row's reference is HOST:NAME or HOST:@ID.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Parsed client-side too, so a typo is reported the same way whether or not a server is
@@ -46,6 +52,18 @@ belongs to several groupings at once while its name only says one thing.
 			}
 			if err := validateSpaceArg(space); err != nil {
 				return err
+			}
+			if all {
+				listings, err := g.listAllHosts(cmd.Context(),
+					&serverv1.ListRequest{Prefix: prefix, Tags: tagArgs, Space: space})
+				if err != nil {
+					return err
+				}
+				reportUnanswered(listings)
+				if asJSON {
+					return printSessionsJSON(os.Stdout, mergedSessions(listings))
+				}
+				return printSessionsTable(os.Stdout, mergedSessions(listings))
 			}
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
 				// Only when filtering on one, since an older server would ignore the filter and list every
@@ -72,6 +90,7 @@ belongs to several groupings at once while its name only says one thing.
 		"only sessions with this tag, as key or key=value (repeatable, all must match)")
 	f.StringVar(&space, "space", "", "only sessions in this space")
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of a table")
+	f.BoolVarP(&all, "all-hosts", "A", false, "list every host in [remote.hosts] too")
 	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
 }

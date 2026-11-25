@@ -897,7 +897,8 @@ to be a second.
 2. **Built.** The close policy and `cm close`, and the kitty watcher calling it.
 3. **Built.** kspaces on a session provider, with cm's provider in the dotfiles.
 4. **Built.** Named remotes and qualified references, resolving locally for the local host's name.
-5. Cross-host `cm ls` and `cm tui` with the stale cache, and the provider listing every host's sessions.
+5. Cross-host `cm ls` (**built**, `--all-hosts`) and `cm tui` with the stale cache, and the provider
+   listing every host's sessions.
 6. Space metadata (**built**), the provider's layout verbs, and kspaces saving and restoring layouts
    through them.
 
