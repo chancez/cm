@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/client"
+	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/sessionenv"
@@ -18,15 +19,40 @@ import (
 )
 
 // remoteTarget reports the remote server this invocation names, or nil for this machine's.
+//
+// A name from [remote.hosts] first, then an address. A name that is also an ssh alias therefore means the
+// configured host, which is the one with settings someone chose for it.
 func (g *globals) remoteTarget() (*remote.Target, error) {
 	if g.remote == "" {
 		return nil, nil
+	}
+	named, ok, err := g.namedRemote()
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return &named.Target, nil
 	}
 	t, err := remote.Parse(g.remote)
 	if err != nil {
 		return nil, err
 	}
 	return &t, nil
+}
+
+// namedRemote returns the [remote.hosts] entry --remote names, if it names one.
+//
+// An address cannot be a name, so `--remote ssh://host` never reads the hosts, and a mistake in one of them
+// does not break a command that does not use it.
+func (g *globals) namedRemote() (config.NamedRemote, bool, error) {
+	if g.remote == "" || remote.ValidateName(g.remote) != nil {
+		return config.NamedRemote{}, false, nil
+	}
+	cfg, err := g.config()
+	if err != nil {
+		return config.NamedRemote{}, false, err
+	}
+	return cfg.LookupRemote(g.remote)
 }
 
 // remoteDialer opens connections to a remote cm server for a client that reconnects.
@@ -138,6 +164,13 @@ func (g *globals) remoteSettings() ([]string, time.Duration, error) {
 	persist, err := cfg.RemoteConnectionPersist()
 	if err != nil {
 		return nil, 0, err
+	}
+	named, ok, err := g.namedRemote()
+	if err != nil {
+		return nil, 0, err
+	}
+	if ok {
+		persist = named.ConnectionPersist
 	}
 
 	return g.sshCommandLine(), persist, nil
@@ -341,6 +374,11 @@ func (g *globals) completionDeadline(ctx context.Context) (context.Context, cont
 // Bounded by the caller through completionDeadline. Reported as an error rather than as empty results, so a
 // caller can tell "nothing matched" from "could not ask".
 func (g *globals) completionServer(ctx context.Context) (transport.Conn, serverv1.ServerClient, error) {
+	// Completion runs no Args validator, so the routing that clears a --remote naming this machine has not
+	// happened, and without this `--remote laptop` on laptop would complete over an ssh to itself.
+	if err := g.resolveRemoteName(); err != nil {
+		return nil, nil, err
+	}
 	// noStart, because a tab press must not bring a server into being on another machine: completing a name
 	// is a question, and starting a server is not part of asking it.
 	d, err := g.remoteDialerFor(true)
@@ -370,6 +408,10 @@ func (g *globals) completionServer(ctx context.Context) (transport.Conn, serverv
 func (g *globals) sshCommandLine() []string {
 	if g.sshCommand != "" {
 		return strings.Fields(g.sshCommand)
+	}
+	// The host's own, which already falls back to [remote]'s.
+	if named, ok, err := g.namedRemote(); err == nil && ok {
+		return strings.Fields(named.SSHCommand)
 	}
 	if cfg, err := g.config(); err == nil && cfg != nil {
 		return strings.Fields(cfg.Remote.SSHCommand)

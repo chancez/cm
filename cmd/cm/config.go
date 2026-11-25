@@ -91,11 +91,23 @@ type configJSON struct {
 	CloseBusy               string `json:"close_busy"`
 	RemoteSSHCommand        string `json:"remote_ssh_command"`
 	RemoteConnectionPersist string `json:"remote_connection_persist"`
+	// The name a qualified reference spells for this machine, and the remotes known by name, resolved: an
+	// empty table shows the alias it stands for, and each host the ssh settings it actually gets.
+	RemoteLocalName string             `json:"remote_local_name"`
+	RemoteHosts     []configRemoteJSON `json:"remote_hosts"`
 	// UnknownSettings are settings in the file this build does not know, which everything else ignores
 	// with a warning. Empty on a healthy install.
 	UnknownSettings []string `json:"unknown_settings"`
 	// KeyProblems are bindings in [keys] that were not usable, which `cm keys` prints in full.
 	KeyProblems []string `json:"key_problems"`
+}
+
+// configRemoteJSON is one [remote.hosts] entry as `cm config` reports it.
+type configRemoteJSON struct {
+	Name              string `json:"name"`
+	Address           string `json:"address"`
+	SSHCommand        string `json:"ssh_command"`
+	ConnectionPersist string `json:"connection_persist"`
 }
 
 func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
@@ -125,6 +137,23 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	remotePersist, err := cfg.RemoteConnectionPersist()
 	if err != nil {
 		return err
+	}
+	localName, err := cfg.LocalName()
+	if err != nil {
+		return err
+	}
+	remotes, err := cfg.Remotes()
+	if err != nil {
+		return err
+	}
+	remoteHosts := make([]configRemoteJSON, 0, len(remotes))
+	for _, r := range remotes {
+		remoteHosts = append(remoteHosts, configRemoteJSON{
+			Name:              r.Name,
+			Address:           r.Target.String(),
+			SSHCommand:        remoteSSHCommandOrDefault(r.SSHCommand),
+			ConnectionPersist: persistOrOff(r.ConnectionPersist),
+		})
 	}
 	flightWindow, err := cfg.FlightWindow()
 	if err != nil {
@@ -224,6 +253,8 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 		CloseBusy:               closeBusy,
 		RemoteSSHCommand:        remoteSSHCommandOrDefault(cfg.Remote.SSHCommand),
 		RemoteConnectionPersist: persistOrOff(remotePersist),
+		RemoteLocalName:         localName,
+		RemoteHosts:             remoteHosts,
 		UnknownSettings:         cfg.UnknownSettings(),
 		KeyProblems:             keyProblems,
 	}
@@ -277,6 +308,10 @@ func runConfig(cmd *cobra.Command, g *globals, asJSON bool) error {
 	fmt.Fprintf(os.Stdout, "close.busy                %s\n", out.CloseBusy)
 	fmt.Fprintf(os.Stdout, "remote.ssh_command        %s\n", out.RemoteSSHCommand)
 	fmt.Fprintf(os.Stdout, "remote.connection_persist %s\n", out.RemoteConnectionPersist)
+	fmt.Fprintf(os.Stdout, "remote.local_name         %s\n", out.RemoteLocalName)
+	for _, h := range out.RemoteHosts {
+		fmt.Fprintf(os.Stdout, "remote.hosts.%s %s (%s, sharing %s)\n", h.Name, h.Address, h.SSHCommand, h.ConnectionPersist)
+	}
 	fmt.Fprintf(os.Stdout, "env capture               %s\n", strings.Join(out.EnvCapture, " "))
 	if len(out.UnknownSettings) > 0 {
 		// In the report rather than on stderr, next to the values that are in effect, since the whole

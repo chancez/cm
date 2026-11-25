@@ -864,7 +864,7 @@ to be a second.
    `cm ls` and `cm tui` grouped by space, completion. A space name may start with `.`, as `.dotfiles` does.
 2. **Built.** The close policy and `cm close`, and the kitty watcher calling it.
 3. **Built.** kspaces on a session provider, with cm's provider in the dotfiles.
-4. Named remotes and qualified references, resolving locally for the local host's name.
+4. **Built.** Named remotes and qualified references, resolving locally for the local host's name.
 5. Cross-host `cm ls` and `cm tui` with the stale cache, and the provider listing every host's sessions.
 6. Space metadata (**built**), the provider's layout verbs, and kspaces saving and restoring layouts
    through them.
@@ -876,11 +876,11 @@ to be a second.
   `spaces` and `close` capabilities. kspaces (github.com/chancez/kspaces): the provider client in
   `internal/spaces`, the spec in `docs/kitty.md`. Dotfiles: `bins/.local/bin/kspaces-provider-cm`, and
   `kitty/.config/kitty/` `launch_wrapper.py`, `cm-attach` (in bins), `cm_reap.py`, `kitty.conf`.
-- **Step 4, named remotes.** The `[remote]` section has transport settings and no host list, and has no
-  default remote by design (docs/config.md). A remote needs a name, which is what a reference qualifies
-  with, and the local host needs one too. Then `host:@id` and `host:name` are parsed wherever a ref is, and a
-  qualified ref naming this host resolves locally. `ValidateSessionRef` is the place to start, and the
-  `ValidateSessionName` versus `ValidateSessionRef` trap in AGENTS.md applies.
+- **Step 4, named remotes.** Built: `[remote.hosts.NAME]` and `remote.local_name` (docs/config.md),
+  `--remote NAME`, and qualified references routed client-side in `cmd/cm/qualified.go` (docs/cli.md, "A
+  session on another host"). Routing runs before cobra validates arguments, which sees a ':' otherwise;
+  which arguments are sessions is read off each command's usage line, as completion does. Completion does
+  not offer `host:` prefixes yet; step 5's fan-out is where cross-host names come from.
 - **Step 5, fan-out.** `cm ls` across remotes is a client-side fan-out over `--remote` connections, never a
   server re-serving them (decided under `--remote` above). A remote that does not answer is shown from a
   cached listing, stale, with its time. The provider then sets each session's `host`, which kspaces already

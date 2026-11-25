@@ -68,7 +68,11 @@ func (g *globals) dirs() (paths.Dirs, error) {
 }
 
 func newRootCommand() *cobra.Command {
-	g := &globals{}
+	return newRootCommandFor(&globals{})
+}
+
+// newRootCommandFor builds the command tree around g, so a test can read what the flags resolved to.
+func newRootCommandFor(g *globals) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   paths.Name,
@@ -110,7 +114,7 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 	pf.StringVar(&g.configPath, "config", "",
 		"configuration file ($"+paths.Env("CONFIG")+")")
 	pf.StringVar(&g.remote, "remote", "",
-		"a cm server on another machine, as ssh://[user@]host[:port][/path/to/cm] ($"+
+		"a cm server on another machine: a name from [remote.hosts], or ssh://[user@]host[:port][/path/to/cm] ($"+
 			paths.Env("REMOTE")+")")
 	pf.StringVar(&g.sshCommand, "ssh-command", "",
 		"command reaching a --remote, split on spaces, ssh by default ($"+
@@ -158,6 +162,8 @@ provides no windows, tabs, or splits: your terminal emulator already does that.`
 		newCompletionsCommand(),
 		newShellInitCommand(),
 	)
+	routeBeforeArgs(g, root)
+	_ = root.RegisterFlagCompletionFunc("remote", completeRemoteNames(g))
 
 	return root
 }

@@ -54,6 +54,25 @@ instead of killing the session, which is what a per-window name wants once its w
 session that lives elsewhere. `cm kill --json` reports those as `unbound` rather than `killed`, and a
 teardown script should treat them apart: the session named there is still running.
 
+### A session on another host
+
+```
+cm attach server:@a7k2m9x4     # on the remote named server in [remote.hosts]
+cm kill server:job
+cm info laptop:work            # here, when this machine's remote.local_name is laptop
+```
+
+A reference qualified with a host is the same command run with `--remote` naming that host, so every
+command that takes a session takes one. The client strips the host before sending anything, and no server
+sees a qualified reference. Only a host this machine knows is read as one: a name in `[remote.hosts]`, or
+this machine's own `local_name` (docs/config.md), which stays here. `nowhere:job` is refused as a host
+nobody configured, and a colon elsewhere, such as in `cm tag url=http://x`, is left alone. Sessions on two
+hosts in one command, or a qualifier that disagrees with `--remote`, are refused rather than one winning.
+
+What a window should store is the qualified ID, `server:@a7k2m9x4`: an ID survives a rename, and the host
+makes it mean the same session from every machine whose config names that host the same way. An upgrade's
+re-exec keeps the host, as `--remote`.
+
 ## Attaching with a command
 
 `cm attach NAME -- CMD` runs CMD only when the attach creates the session, which includes starting afresh

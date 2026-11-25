@@ -610,6 +610,7 @@ How cm reaches a server on another machine, for `--remote ssh://host`. See
 | --- | --- | --- |
 | `ssh_command` | a command line, split on spaces | `ssh` |
 | `connection_persist` | Go duration; `0` shares nothing | `1m` |
+| `local_name` | this machine's name in a qualified reference | the short hostname, lowercased |
 
 - **`ssh_command`** replaces ssh. A command line rather than a program, because the useful
   overrides are several words: `kitten ssh`, which reuses connections of its own, or an
@@ -636,6 +637,34 @@ How cm reaches a server on another machine, for `--remote ssh://host`. See
   cm keeps its own connection rather than joining one the user's `~/.ssh/config` sets up,
   because finding theirs means parsing their config or paying an `ssh -G` on every
   invocation. Setting this to `0` is how to use only theirs.
+
+### [remote.hosts.NAME]
+
+```toml
+[remote]
+local_name = "laptop"
+
+[remote.hosts.white]            # the ssh alias white, with [remote]'s settings
+
+[remote.hosts.server]
+address = "ssh://me@server.lan/home/me/.local/bin/cm"
+ssh_command = "kitten ssh"
+connection_persist = "10m"
+```
+
+Names a remote, so `--remote server` means it and `server:@a7k2m9x4` names a session on it. Every key
+is optional: `address` defaults to the name, read as an ssh alias, and `ssh_command` and
+`connection_persist` default to `[remote]`'s. A configured name wins over an ssh alias of the same name.
+Names are letters, digits, `-`, `_` and `.`.
+
+A qualified reference spells the host by this name, so the names have to agree across machines: give
+each machine the `local_name` the others list it under. That is why it is a name rather than a hostname,
+which does not reconstruct the ssh alias that reaches a host. `--remote` naming `local_name` is this
+machine, so one command line works from every host, and a host listed under this machine's own name is
+an error. `cm config` prints every host as resolved and fails on one that is not usable, rather than the
+command that first names it failing.
+
+Listing hosts is not a default remote either: nothing goes to one unless a command names it.
 
 There is deliberately **no default remote**. A setting naming one would point every cm command
 in every shell at another host, including the ones that answer about sessions, and the local

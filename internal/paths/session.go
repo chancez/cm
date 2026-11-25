@@ -192,7 +192,14 @@ func ValidateSessionID(id string) error {
 //
 // It is also what a client re-execs with after a switch, so getting this wrong closed the window instead
 // of moving it.
+//
+// A ':' reaching here is a qualified reference whose host the client did not route: one that is not a
+// configured remote or this machine's name. Said so, since "disallowed character ':'" reads as a rule about
+// names rather than as a host nobody configured.
 func ValidateSessionRef(ref string) error {
+	if host, _, ok := strings.Cut(ref, ":"); ok {
+		return fmt.Errorf("session %q names host %q, which is not a remote in [remote.hosts] or this machine's remote.local_name", ref, host)
+	}
 	if value, isID := SessionRef(ref); isID {
 		return ValidateSessionID(value)
 	}
