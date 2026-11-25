@@ -142,6 +142,12 @@ func New(rows, cols uint16, cb Callbacks) (*Terminal, error) {
 		libghostty.WithTitleReport(true),
 		// Tracked so Continuation can say what a fresh terminal needs to pick up mid-sequence. See there.
 		libghostty.WithContinuationMaxBytes(MaxContinuation),
+		// No byte limit, so scrollback.lines is the one that applies. libghostty's default is 10,000 bytes,
+		// rounded up to one page, and it wins over any line limit: every session kept about 200 rows at
+		// 200 columns whatever scrollback.lines said, so a restore, cm history, and the overlay pager all
+		// showed one page. Nothing noticed while attached, because the outer terminal's own scrollback
+		// held the rest.
+		libghostty.WithMaxScrollbackBytes(^uint(0)),
 		// Installed only so the emulator answers the OSC 7501 support query: without a program status
 		// callback libghostty stays silent on "OSC 7501 ; ?", and a program asking whether cm tracks its
 		// status concludes it does not. The reports themselves are read by internal/osc, which works with
@@ -252,8 +258,8 @@ func (t *Terminal) Resize(rows, cols, cellWidth, cellHeight uint16) error {
 
 // SetScrollbackLimit bounds retained scrollback in lines.
 //
-// libghostty prunes at page granularity, so the effective limit is somewhat higher than
-// requested. Zero means unlimited.
+// libghostty prunes whole pages, so the effective limit is within a page of the one requested, in either
+// direction. Zero means unlimited.
 func (t *Terminal) SetScrollbackLimit(lines int) error {
 	if lines <= 0 {
 		return check(t.term.SetScrollbackMaxLines(nil), "clearing scrollback limit")

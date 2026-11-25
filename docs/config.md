@@ -250,8 +250,12 @@ is not the default because not every terminal sends NUL for it. See [overlay.md]
 
 ### lines
 
-How much scrollback a session retains. libghostty prunes at page granularity, so the effective
-limit is somewhat higher than the number given.
+How much scrollback a session retains. libghostty prunes whole pages, so the effective limit is within
+a page of the number given, in either direction: `2000` kept 1857 rows at 200 columns, where a page is
+about 200 rows.
+
+Memory is per row and per column, not per character of output: about 8 bytes a cell, whatever the line
+holds. 100000 lines at 200 columns measured 235 MB resident, against 17.6 MB of text.
 
 ### pager
 
