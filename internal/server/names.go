@@ -35,6 +35,9 @@ func (m *Manager) Resolve(ctx context.Context, ref string) (string, error) {
 
 	binding, err := m.store.Binding(ctx, value)
 	if errors.Is(err, store.ErrNotFound) {
+		if err := m.remoteNameError(ctx, value); err != nil {
+			return "", err
+		}
 		// Named as a name that resolves to nothing rather than as a missing session, because the two
 		// are now different problems with different fixes: the session may well be alive under another
 		// name or under its ID, and saying "no session named x" points at that.
@@ -44,6 +47,53 @@ func (m *Manager) Resolve(ctx context.Context, ref string) (string, error) {
 		return "", err
 	}
 	return binding.SessionID, nil
+}
+
+// RemoteNameError is a name that points to a session on another host, reaching this server.
+//
+// A client that follows pointers never sends one here: it reads the pointer and runs against the host. One
+// that arrives is from a client that predates pointers, and refusing it is the point, since treating the
+// name as unbound would create a local session under it and the window would stop following its name.
+type RemoteNameError struct {
+	Name   string
+	Target string
+}
+
+func (e *RemoteNameError) Error() string {
+	return fmt.Sprintf("%q points at %s on another host, which this client cannot follow; upgrade it", e.Name, e.Target)
+}
+
+// remoteNameError returns a *RemoteNameError when name points to another host, and nil when it does not.
+func (m *Manager) remoteNameError(ctx context.Context, name string) error {
+	rb, err := m.store.RemoteBindingFor(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return &RemoteNameError{Name: name, Target: rb.Qualified()}
+}
+
+// unbindRemote removes name when it points to another host, reporting where it pointed, or "" when it was
+// not a pointer. Killing or closing by a pointer lands here: a pointer is borrowed, so it lets go and the
+// remote session is left to whoever else uses it.
+func (m *Manager) unbindRemote(ctx context.Context, name string) (string, error) {
+	if _, isID := paths.SessionRef(name); isID {
+		return "", nil
+	}
+	rb, err := m.store.RemoteBindingFor(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if _, err := m.store.UnbindRemote(ctx, name); err != nil {
+		return "", err
+	}
+	m.log.Info("unbound name pointing to another host", "name", name, "target", rb.Qualified())
+	return rb.Qualified(), nil
 }
 
 // Names returns the names bound to a session, oldest first.
@@ -114,6 +164,15 @@ func (m *Manager) Bind(
 			name, paths.FormatSessionID(existing.SessionID), paths.FormatSessionID(id))
 	case err != nil && !errors.Is(err, store.ErrNotFound):
 		return err
+	case !move:
+		// Pointing to another host is pointing somewhere, so moving it here is a move like any other.
+		var remoteName *RemoteNameError
+		if err := m.remoteNameError(ctx, name); errors.As(err, &remoteName) {
+			return fmt.Errorf("%q points at %s; pass --move to point it at %s instead",
+				name, remoteName.Target, paths.FormatSessionID(id))
+		} else if err != nil {
+			return err
+		}
 	}
 
 	if err := m.store.Bind(ctx, store.Binding{
@@ -133,6 +192,9 @@ func (m *Manager) Bind(
 
 // Unbind removes a name, leaving the session it pointed at running.
 func (m *Manager) Unbind(ctx context.Context, name string) (bool, error) {
+	if target, err := m.unbindRemote(ctx, name); err != nil || target != "" {
+		return target != "", err
+	}
 	removed, err := m.store.Unbind(ctx, name)
 	if err != nil {
 		return false, err

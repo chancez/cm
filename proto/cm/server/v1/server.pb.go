@@ -6159,8 +6159,15 @@ type SwitchRequest struct {
 	// The session whose client should switch, as a name or an "@id". This is the window's current session,
 	// which a command running inside it reads from CM_SESSION.
 	Session string `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
-	// The session to switch to, as a name or an "@id".
+	// The session to switch to, as a name or an "@id", or qualified with the host it is on, `white:work`.
+	//
+	// A qualified target is on another host, which this server never contacts: the clients are told to move
+	// there, and with bind the name becomes a pointer to what was typed, so a later attach by it follows. The
+	// caller has looked the session up on that host and passes its ID as remote_target_id.
 	Target string `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	// The ID of a qualified target on its own host, without the sigil. Required with one, so the windows land
+	// on exactly the session that was looked up.
+	RemoteTargetId string `protobuf:"bytes,8,opt,name=remote_target_id,json=remoteTargetId,proto3" json:"remote_target_id,omitempty"`
 	// Point this session's name at the target as well, so the switch survives the terminal restarting.
 	//
 	// Without it the switch lasts as long as the client. A terminal emulator's launch command is fixed when
@@ -6235,6 +6242,13 @@ func (x *SwitchRequest) GetSession() string {
 func (x *SwitchRequest) GetTarget() string {
 	if x != nil {
 		return x.Target
+	}
+	return ""
+}
+
+func (x *SwitchRequest) GetRemoteTargetId() string {
+	if x != nil {
+		return x.RemoteTargetId
 	}
 	return ""
 }
@@ -7404,10 +7418,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06errors\x18\x03 \x03(\v2).cm.server.v1.RestoreResponse.ErrorsEntryR\x06errors\x1a9\n" +
 	"\vErrorsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcd\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf7\x01\n" +
 	"\rSwitchRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x16\n" +
-	"\x06target\x18\x02 \x01(\tR\x06target\x12\x12\n" +
+	"\x06target\x18\x02 \x01(\tR\x06target\x12(\n" +
+	"\x10remote_target_id\x18\b \x01(\tR\x0eremoteTargetId\x12\x12\n" +
 	"\x04bind\x18\x03 \x01(\bR\x04bind\x12\x18\n" +
 	"\areplace\x18\x05 \x01(\bR\areplace\x12\x14\n" +
 	"\x05force\x18\x06 \x01(\bR\x05force\x12%\n" +

@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -139,5 +141,51 @@ func upgradeArgv(cmd *cobra.Command, args []string, res client.Result) []string 
 		argv = append(argv, "--")
 		argv = append(argv, args[n:]...)
 	}
+	return argv
+}
+
+// reexecForMove replaces this process with a client attached to a session on another host, as
+// reexecForUpgrade replaces it with a newer one: the same pid, descriptors and terminal, so the window
+// goes from one session to the other without being reset.
+//
+// CM_REMOTE is dropped from the environment. The target names its host, and a remote the window was
+// pointed at with the variable would contradict it, which routing refuses, closing the window.
+func reexecForMove(argv []string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolving the cm binary: %w", err)
+	}
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		return strings.HasPrefix(kv, remoteEnvVar+"=")
+	})
+	if err := syscall.Exec(exe, argv, env); err != nil {
+		return fmt.Errorf("re-executing %s: %w", exe, err)
+	}
+	return nil
+}
+
+// moveArgv is the argv of a client attached to target, a session on another host as host:@id, built from
+// this attach's flags as upgradeArgv builds its own.
+//
+// Without --remote, which the target's host replaces and would contradict, and without a command after
+// "--", which only creating a session uses and an ID never creates.
+func moveArgv(cmd *cobra.Command, target string) []string {
+	argv0 := "cm"
+	if len(os.Args) > 0 {
+		argv0 = os.Args[0]
+	}
+	argv := []string{argv0, cmd.Name(), target}
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if f.Name == "remote" {
+			return
+		}
+		if sv, ok := f.Value.(interface{ GetSlice() []string }); ok {
+			for _, v := range sv.GetSlice() {
+				argv = append(argv, "--"+f.Name+"="+v)
+			}
+			return
+		}
+		argv = append(argv, "--"+f.Name+"="+f.Value.String())
+	})
 	return argv
 }

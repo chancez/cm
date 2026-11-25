@@ -48,3 +48,20 @@ func TestRunSessionPlainDetachFinishes(t *testing.T) {
 		t.Errorf("SwitchTo = %q, want empty for a plain detach", h.result.SwitchTo)
 	}
 }
+
+// A switch to a session on another host leaves the loop for the caller to reconnect there, since this
+// process's connection reaches one server; one to a session here stays in the loop.
+func TestMovesAcross(t *testing.T) {
+	across := Result{Session: "kitty.1", SwitchTo: "white:@abcd2345", Detached: true}
+	if !movesAcross(&across) {
+		t.Fatal("movesAcross(white:@abcd2345) = false, want true")
+	}
+	if want := (Result{Session: "kitty.1", MoveTo: "white:@abcd2345"}); across != want {
+		t.Errorf("result = %+v, want %+v", across, want)
+	}
+
+	here := Result{SwitchTo: "@bbbb3333"}
+	if movesAcross(&here) || here != (Result{SwitchTo: "@bbbb3333"}) {
+		t.Errorf("movesAcross(@bbbb3333) changed the result to %+v", here)
+	}
+}

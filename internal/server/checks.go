@@ -139,11 +139,9 @@ func (m *Manager) checkCapabilitySkew(clientCaps capability.Set) []Finding {
 	// The reverse: this server implements something the client is too old to ask for. Harmless, since a
 	// client that cannot ask cannot be disappointed, but it does say which side is stale.
 	//
-	// Not reachable yet, and kept rather than added later on purpose. capability.Client() holds Reported
-	// alone, so any client that reports at all is missing nothing from it; this fires from the first real
-	// client capability onwards. What it is doing here now is holding the *correct* comparison in place,
-	// against Client() rather than Server(), which is the mistake that made this check fire on every
-	// healthy install once already.
+	// Compared against Client() rather than Server(), which is the mistake that made this check fire on every
+	// healthy install once already. switch.remote is the first client capability it can find missing: a
+	// window whose client predates it cannot be moved to another host.
 	if behind := clientCaps.Missing(expected.Names()...); len(behind) > 0 {
 		parts = append(parts, fmt.Sprintf(
 			"this server implements %s and the client does not report it, so the client is the older side",

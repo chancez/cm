@@ -75,6 +75,13 @@ func (s *Service) Close(ctx context.Context, req *serverv1.CloseRequest) (*serve
 }
 
 func (s *Service) closeRef(ctx context.Context, ref string, clientPID int32) (serverv1.CloseOutcome, error) {
+	// A window whose name points to another host lets go of the name, as one that borrowed a session here
+	// does. Its client was on the other host, so there is nothing here to detach.
+	if target, err := s.mgr.unbindRemote(ctx, ref); err != nil {
+		return 0, err
+	} else if target != "" {
+		return serverv1.CloseOutcome_CLOSE_OUTCOME_UNBOUND, nil
+	}
 	id, err := s.mgr.Resolve(ctx, ref)
 	if err != nil {
 		return 0, err

@@ -258,3 +258,21 @@ func TestTargetElsewhereIsNotRouted(t *testing.T) {
 		}
 	}
 }
+
+// A window moved to another host comes back attached there with its own flags, and without --remote, which
+// the target's host replaces and would contradict, or the command that only creating a session uses.
+func TestMoveArgv(t *testing.T) {
+	root := newRootCommandFor(&globals{})
+	cmd, _, err := root.Find([]string{"attach"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.ParseFlags([]string{"--read-only", "--remote", "old", "--tag", "a=b", "--", "make"}); err != nil {
+		t.Fatalf("ParseFlags() error = %v", err)
+	}
+	got := moveArgv(cmd, "white:@abcd2345")
+	want := []string{os.Args[0], "attach", "white:@abcd2345", "--read-only=true", "--tag=a=b"}
+	if !slices.Equal(got, want) {
+		t.Errorf("moveArgv() = %q, want %q", got, want)
+	}
+}

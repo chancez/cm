@@ -3483,6 +3483,30 @@ func (s *Session) UpgradeClients(force bool, current string, activeOnly bool) (a
 // The same in-place replacement an upgrade uses, which is what keeps the window from resetting: the
 // client execs over itself without restoring the terminal, so the screen goes straight from one session
 // to the other. Zero asked when activeOnly is set and no client can be named as the active one.
+// ClientsLacking counts the clients a switch would ask that do not report need: the one in use with
+// activeOnly, every one without. A client that reports nothing counts, since what it cannot say it does is
+// what a client from before the capability does.
+func (s *Session) ClientsLacking(activeOnly bool, need capability.Name) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var only *attachToken
+	if activeOnly {
+		if only = s.activeClientLocked(); only == nil {
+			return 0
+		}
+	}
+	n := 0
+	for tok := range s.evicts {
+		if only != nil && tok != only {
+			continue
+		}
+		if cs := s.clientSizes[tok]; cs == nil || cs.capabilities.Supports(need) != capability.Present {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Session) SwitchClients(ref string, activeOnly bool) (asked int) {
 	asked, _ = s.evictClients(true, "", activeOnly, ref)
 	return asked

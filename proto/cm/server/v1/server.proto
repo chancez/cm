@@ -1644,8 +1644,15 @@ message SwitchRequest {
   // The session whose client should switch, as a name or an "@id". This is the window's current session,
   // which a command running inside it reads from CM_SESSION.
   string session = 1;
-  // The session to switch to, as a name or an "@id".
+  // The session to switch to, as a name or an "@id", or qualified with the host it is on, `white:work`.
+  //
+  // A qualified target is on another host, which this server never contacts: the clients are told to move
+  // there, and with bind the name becomes a pointer to what was typed, so a later attach by it follows. The
+  // caller has looked the session up on that host and passes its ID as remote_target_id.
   string target = 2;
+  // The ID of a qualified target on its own host, without the sigil. Required with one, so the windows land
+  // on exactly the session that was looked up.
+  string remote_target_id = 8;
   // Point this session's name at the target as well, so the switch survives the terminal restarting.
   //
   // Without it the switch lasts as long as the client. A terminal emulator's launch command is fixed when

@@ -125,6 +125,17 @@ const (
 	// an older server's Unimplemented error names a method rather than saying the server needs restarting
 	// onto the binary already installed.
 	SpaceMeta Name = "spaces.meta"
+
+	// SwitchRemote is declared by both roles, for the two halves of moving a window to another host.
+	//
+	// From a server: Switch accepts a target qualified with another host, and a name can point there. Checked
+	// before `cm switch` or `cm rebind` sends one, since an older server would resolve `white:work` as a local
+	// name and refuse it with a message about the name rather than the server.
+	//
+	// From a client: told to switch to a qualified reference, it connects to that host rather than asking
+	// this server for it. Checked by the server before it asks a window to move there, because a client that
+	// predates this tries the reference here, fails, and the window closes.
+	SwitchRemote Name = "switch.remote"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -305,20 +316,18 @@ func Server() Set {
 		Spaces,
 		Close,
 		SpaceMeta,
+		SwitchRemote,
 	)
 }
 
 // Client is what this build's client can do.
 //
-// Only Reported so far, which is not a placeholder: a client's set exists so a server can *report* the
-// skew, and the server decides nothing on it. There is no client capability a server needs to branch on
-// yet, and adding one before there is would be the bookkeeping without the benefit.
-//
-// Worth stating because the asymmetry looks like an omission. A capability probe only ever helps the peer
-// that knows a capability exists, and the server is not the peer waiting on the client for anything.
+// Mostly for a server to *report* skew. SwitchRemote is the one a server branches on: it is the server that
+// asks a window to move to another host, so it is the peer that has to know whether the client can.
 func Client() Set {
 	return New(
 		Reported,
+		SwitchRemote,
 	)
 }
 

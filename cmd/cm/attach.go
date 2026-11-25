@@ -307,6 +307,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 			// Keyed by pid, which an upgrade's exec keeps, so the replacement takes over the same socket.
 			defer serveDiagnostics(cmd.Context(), dirs, cfg, "client-"+strconv.Itoa(os.Getpid()), logger)()
 			return runAttach(cmd.Context(), dirs, opts, func(res client.Result) []string {
+				if res.MoveTo != "" {
+					return moveArgv(cmd, res.MoveTo)
+				}
 				return upgradeArgv(cmd, args, res)
 			})
 		},
@@ -411,6 +414,15 @@ func runAttach(
 	// Errors fall through to the ordinary teardown below. A failed exec means this process is still
 	// here holding a terminal in raw mode, so it has to restore it and report, rather than leaving a
 	// window that looks alive and answers nothing.
+	// Moved to a session on another host: replaced by a client attached there, in place, for the reasons an
+	// upgrade is. Nothing to resume, since the position belongs to the session being left.
+	if res.MoveTo != "" && attachErr == nil && upgradeArgv != nil {
+		if err := reexecForMove(upgradeArgv(res)); err != nil {
+			_ = tty.Close()
+			return fmt.Errorf("moving the client to %s: %w", res.MoveTo, err)
+		}
+	}
+
 	if res.Upgrade && attachErr == nil && upgradeArgv != nil {
 		if err := reexecForUpgrade(upgradeArgv(res), res.ResumeFrom); err != nil {
 			// Restored first, for the reason above: the message must be readable and the shell that

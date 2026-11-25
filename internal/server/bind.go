@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -91,6 +93,11 @@ type killOutcome struct {
 func (s *Service) killRef(
 	ctx context.Context, ref string, opts KillOptions,
 ) (killOutcome, error) {
+	if target, err := s.mgr.unbindRemote(ctx, ref); err != nil {
+		return killOutcome{}, err
+	} else if target != "" {
+		return killOutcome{unboundFrom: target}, nil
+	}
 	id, err := s.mgr.Resolve(ctx, ref)
 	if err != nil {
 		return killOutcome{}, err
@@ -136,6 +143,10 @@ func (s *Service) Switch(
 		// resolving to nothing and the next attach by it creating a session under a name that meant
 		// something else an instant ago.
 		return nil, errors.New("replace needs the name to move as well; use `cm rebind`")
+	}
+
+	if host, ref, ok := remote.SplitRef(req.Target); ok {
+		return s.switchAcross(ctx, req, host, ref)
 	}
 
 	fromID, err := s.mgr.Resolve(ctx, req.Session)
@@ -209,6 +220,80 @@ func (s *Service) Switch(
 	resp := &serverv1.SwitchResponse{
 		Asked:      uint32(asked),
 		TargetId:   targetID,
+		SwitchedTo: switchTo,
+		BoundName:  boundName,
+	}
+	if req.Replace {
+		resp.KilledSession, resp.KeptReason = s.replacePrevious(sess, asked)
+	}
+	return resp, nil
+}
+
+// switchAcross moves a window to a session on another host, and with bind points its name there.
+//
+// This server never contacts the host. The caller looked the session up there and passes its ID, the
+// clients are told to move to host:@id and connect there themselves, and the name becomes a pointer to what
+// was typed, so a restore that attaches by the name follows it. See docs/ideas.md, "A window is bound to a
+// name, and a name may point to another host".
+func (s *Service) switchAcross(
+	ctx context.Context, req *serverv1.SwitchRequest, host, ref string,
+) (*serverv1.SwitchResponse, error) {
+	if err := remote.ValidateName(host); err != nil {
+		return nil, err
+	}
+	if err := paths.ValidateSessionRef(ref); err != nil {
+		return nil, err
+	}
+	if err := paths.ValidateSessionID(req.RemoteTargetId); err != nil {
+		return nil, fmt.Errorf("a target on another host needs its ID there: %w", err)
+	}
+
+	fromID, err := s.mgr.Resolve(ctx, req.Session)
+	if err != nil {
+		return nil, err
+	}
+	sess, live := s.mgr.Get(fromID)
+	if !live {
+		return nil, fmt.Errorf("session %s has no clients to switch", req.Session)
+	}
+	// Before anything moves. A client from before this would try host:@id against this server, fail, and
+	// close the window, so asking it is worse than refusing.
+	if n := sess.ClientsLacking(!req.AllClients, capability.SwitchRemote); n > 0 {
+		return nil, fmt.Errorf("%d of the windows asked cannot move to another host, their client predates "+
+			"it; cm clients upgrade first", n)
+	}
+	if req.Replace && !req.Force {
+		if err := s.replaceable(ctx, req, fromID); err != nil {
+			return nil, err
+		}
+	}
+
+	switchTo := host + ":" + paths.FormatSessionID(req.RemoteTargetId)
+	boundName := ""
+	if req.Bind {
+		names, err := s.mgr.Names(ctx, fromID)
+		if err != nil {
+			return nil, err
+		}
+		if len(names) == 0 {
+			return nil, fmt.Errorf(
+				"session %s has no name to move; bind a name to it first, or use `cm switch` to move "+
+					"this window without one",
+				paths.FormatSessionID(fromID))
+		}
+		boundName = names[0]
+		// What was typed, not the ID: a name there recreates its session once it has ended, as attaching by
+		// a name here does, which is what a window restored after that needs.
+		if err := s.mgr.store.BindRemote(ctx, store.RemoteBinding{Name: boundName, Host: host, Ref: ref}); err != nil {
+			return nil, err
+		}
+		s.mgr.log.Info("pointed a name to another host", "name", boundName, "target", host+":"+ref)
+	}
+
+	asked := sess.SwitchClients(switchTo, !req.AllClients)
+	resp := &serverv1.SwitchResponse{
+		Asked:      uint32(asked),
+		TargetId:   req.RemoteTargetId,
 		SwitchedTo: switchTo,
 		BoundName:  boundName,
 	}

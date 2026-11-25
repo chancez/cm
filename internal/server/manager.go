@@ -1079,6 +1079,11 @@ func (m *Manager) Open(ctx context.Context, opts OpenOptions) (*Session, bool, e
 	binding, err := m.store.Binding(ctx, value)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
+		// A name pointing to another host is held, by a session there. Creating one here would take the
+		// window off the session its name follows.
+		if err := m.remoteNameError(ctx, value); err != nil {
+			return nil, false, err
+		}
 		// A name nothing holds: allocate an identity and point the name at it. The name owns the
 		// session it was created with, so killing by that name kills the session, which is what
 		// `cm kill work` has always meant.

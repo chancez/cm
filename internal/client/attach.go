@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -369,6 +370,18 @@ type SessionMetadata struct {
 	CwdIsLocal bool
 }
 
+// movesAcross reports whether a switch is to a session on another host, and if so turns it into a MoveTo for
+// the caller, since this process's connection reaches one server. A qualified reference is the only kind
+// with a ':' in it; every one this server can answer is a name or an ID.
+func movesAcross(result *Result) bool {
+	if !strings.Contains(result.SwitchTo, ":") {
+		return false
+	}
+	result.MoveTo, result.SwitchTo = result.SwitchTo, ""
+	result.Detached, result.Upgrade = false, false
+	return true
+}
+
 // Result describes how an attachment ended.
 type Result struct {
 	// Session is what to call the session when talking to the user: the name it was attached by, or its
@@ -389,6 +402,12 @@ type Result struct {
 	// never sees one in progress. It lives here because the loop needs it out of runSession, which reads
 	// the server's event, and because a test can then assert what was asked for.
 	SwitchTo string
+	// MoveTo is a session on another host the server asked this client to show instead, as host:@id.
+	//
+	// Not handled in the reconnect loop as a switch is, because this process's connection is to one server
+	// and the session is on another. Acted on by the caller, which replaces the process with one attached
+	// there, for the reason Upgrade is: that needs the argv and the terminal.
+	MoveTo string
 	// Upgrade is true when the server asked this client to come back on a newer build rather than
 	// exit. Detached is also set, since an upgrade is a detach that returns.
 	//
@@ -650,6 +669,9 @@ func Attach(ctx context.Context, tty *TTY, opts Options) (Result, error) {
 
 		switch outcome {
 		case outcomeSwitch:
+			if movesAcross(&result) {
+				return result, nil
+			}
 			// Remembered as an ID rather than as the reference this attempt asked for, since a name can be
 			// moved by `cm bind` and the overlay's l has to come back to the same session. Only a switch
 			// records one: a reconnect is the same session, and a detach ends the window's history with it.
