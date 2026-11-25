@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -24,5 +27,31 @@ func TestSpaceCandidates(t *testing.T) {
 	// remove offers only what it accepts: empty, and not default.
 	if got, want := spaceCandidates(all, "", removableSpace), []string{"infra\t0 sessions, 0 running"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("removable = %q, want %q", got, want)
+	}
+}
+
+func TestMetaValue(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "v")
+	if err := os.WriteFile(file, []byte("from file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		file    string
+		want    string
+		wantErr bool
+	}{
+		{name: "argument", args: []string{"inline"}, want: "inline"},
+		{name: "file", file: file, want: "from file"},
+		{name: "stdin", file: "-", want: "from stdin"},
+		{name: "both", args: []string{"inline"}, file: file, wantErr: true},
+		// Neither, which must not fall back to reading a terminal.
+		{name: "neither", wantErr: true},
+	} {
+		got, err := metaValue(tc.args, tc.file, strings.NewReader("from stdin"))
+		if (err != nil) != tc.wantErr || string(got) != tc.want {
+			t.Errorf("%s: metaValue() = %q, %v; want %q, error %v", tc.name, got, err, tc.want, tc.wantErr)
+		}
 	}
 }

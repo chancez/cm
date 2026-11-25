@@ -286,6 +286,26 @@ func (c *fakeClient) Move(
 ) (*serverv1.MoveResponse, error) {
 	panic("unused")
 }
+func (c *fakeClient) ListSpaceMeta(
+	context.Context, *serverv1.ListSpaceMetaRequest,
+) (*serverv1.ListSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) GetSpaceMeta(
+	context.Context, *serverv1.GetSpaceMetaRequest,
+) (*serverv1.GetSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) SetSpaceMeta(
+	context.Context, *serverv1.SetSpaceMetaRequest,
+) (*serverv1.SetSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (c *fakeClient) RemoveSpaceMeta(
+	context.Context, *serverv1.RemoveSpaceMetaRequest,
+) (*serverv1.RemoveSpaceMetaResponse, error) {
+	panic("unused")
+}
 func (c *fakeClient) Close(
 	context.Context, *serverv1.CloseRequest,
 ) (*serverv1.CloseResponse, error) {

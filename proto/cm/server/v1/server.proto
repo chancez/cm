@@ -113,6 +113,19 @@ service Server {
   rpc RemoveSpace(RemoveSpaceRequest) returns (RemoveSpaceResponse);
   rpc Move(MoveRequest) returns (MoveResponse);
 
+  // ListSpaceMeta lists a space's metadata keys; GetSpaceMeta, SetSpaceMeta and RemoveSpaceMeta read and
+  // write one.
+  //
+  // Values cm stores and never reads, for a tool keeping state beside the sessions: a terminal's layout of
+  // a space's windows, so another machine viewing the space can lay them out again. Here rather than in the
+  // tool because the sessions' host is the one place every viewer already reaches. A conditional write that
+  // loses says so in its response rather than as an error, so a caller can tell a conflict, which it should
+  // resolve, from a failure.
+  rpc ListSpaceMeta(ListSpaceMetaRequest) returns (ListSpaceMetaResponse);
+  rpc GetSpaceMeta(GetSpaceMetaRequest) returns (GetSpaceMetaResponse);
+  rpc SetSpaceMeta(SetSpaceMetaRequest) returns (SetSpaceMetaResponse);
+  rpc RemoveSpaceMeta(RemoveSpaceMetaRequest) returns (RemoveSpaceMetaResponse);
+
   // Bind points a name at a session, and Unbind removes a name.
   //
   // Separate calls rather than flags on Attach because neither one attaches: naming a session that
@@ -1074,6 +1087,71 @@ message MoveResponse {
   map<string, string> moved = 1;
   // Sessions that could not be moved, keyed by reference. Shaped like KillResponse.errors.
   map<string, string> errors = 2;
+}
+
+message SpaceMetaEntry {
+  string key = 1;
+  // Empty in a listing, which carries size instead.
+  bytes value = 2;
+  uint32 size = 3;
+  // Changes on every write and is never reused, so it is a token to compare rather than a count.
+  int64 revision = 4;
+  int64 updated_at_unix = 5;
+}
+
+message ListSpaceMetaRequest {
+  string space = 1;
+  // Only keys starting with this, so a tool can list its own namespace.
+  string prefix = 2;
+}
+
+message ListSpaceMetaResponse {
+  repeated SpaceMetaEntry entries = 1;
+}
+
+message GetSpaceMetaRequest {
+  string space = 1;
+  string key = 2;
+}
+
+message GetSpaceMetaResponse {
+  // False for a key the space has no value for. A space that does not exist is an error instead, so a
+  // mistyped space is not read as one with nothing saved.
+  bool found = 1;
+  SpaceMetaEntry entry = 2;
+}
+
+message SetSpaceMetaRequest {
+  // Created if it does not exist, as Move creates the space it names.
+  string space = 1;
+  string key = 2;
+  bytes value = 3;
+  // Write only if the key is at this revision, 0 meaning it must not exist. Unset writes unconditionally.
+  optional int64 if_revision = 4;
+}
+
+message SetSpaceMetaResponse {
+  // The key's new revision, when written.
+  int64 revision = 1;
+  // Not written, because the key was not at if_revision; current_revision is where it is, 0 for absent.
+  bool conflict = 2;
+  int64 current_revision = 3;
+}
+
+message RemoveSpaceMetaRequest {
+  string space = 1;
+  string key = 2;
+  // Remove only if the key is at this revision. Unset removes whatever is there, and a key already gone
+  // is not an error.
+  optional int64 if_revision = 3;
+}
+
+message RemoveSpaceMetaResponse {
+  // Whether there was a value to remove.
+  bool removed = 1;
+  // As in SetSpaceMetaResponse.
+  bool conflict = 2;
+  int64 current_revision = 3;
 }
 
 message CloseRequest {

@@ -281,6 +281,33 @@ capability, which would ignore the filter. `cm attach --space` is not checked, s
 reports no capabilities and attach is every window's startup; an older server files the session in no
 space.
 
+### Space metadata
+
+```sh
+cm space meta list SPACE [--prefix P] [--json]
+cm space meta get SPACE KEY [--json]
+cm space meta set SPACE KEY [VALUE | --file PATH|-] [--if-revision N] [--json]
+cm space meta remove SPACE KEY [--if-revision N]
+```
+
+Values a space holds for other tools, which cm stores and never reads: a terminal's layout of a space's
+windows, so another machine viewing the space can lay them out again. On the sessions' host because that
+is the one place every viewer reaches, and over `--remote` like everything else. See docs/ideas.md,
+"Layouts follow the sessions".
+
+Keys are a space name's characters plus `/`, up to 128 bytes, namespaced by convention
+(`kspaces/layout/main`). Values are up to 64 KiB, about 17 times the largest of the 23 kitty session files
+kspaces had written on a machine in daily use. `get` prints the value as stored; `--json` base64-encodes
+it beside its revision. `set` creates the space, as `move` does, and `remove` of a key already gone
+succeeds. Removing a space removes its metadata, so a space made again under the same name does not
+inherit a layout of windows that belonged to the old one.
+
+Every write gives the key a new revision, never reused even across a remove, so a writer holding one can
+tell whether anything was written since it read. `--if-revision N` writes only at revision N, 0 meaning
+absent. Exit status 2 means the key was not as asked: absent for `get`, elsewhere for `--if-revision`. A
+caller saving a layout tells "someone else saved since" from "the save failed" by it, and the first wants
+a reload rather than a retry. Refused against a server without the `spaces.meta` capability.
+
 ## JSON output
 
 `list`, `info`, `kill`, `forget`, `shelve`, `restore`, `get-env`, `tag`, `bind`, `unbind`, `rename`, `switch`, `wait`, `send`, `run`, `status`,

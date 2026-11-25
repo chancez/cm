@@ -28,6 +28,10 @@ type ServerService interface {
 	CreateSpace(context.Context, *CreateSpaceRequest) (*CreateSpaceResponse, error)
 	RemoveSpace(context.Context, *RemoveSpaceRequest) (*RemoveSpaceResponse, error)
 	Move(context.Context, *MoveRequest) (*MoveResponse, error)
+	ListSpaceMeta(context.Context, *ListSpaceMetaRequest) (*ListSpaceMetaResponse, error)
+	GetSpaceMeta(context.Context, *GetSpaceMetaRequest) (*GetSpaceMetaResponse, error)
+	SetSpaceMeta(context.Context, *SetSpaceMetaRequest) (*SetSpaceMetaResponse, error)
+	RemoveSpaceMeta(context.Context, *RemoveSpaceMetaRequest) (*RemoveSpaceMetaResponse, error)
 	Bind(context.Context, *BindRequest) (*BindResponse, error)
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
@@ -196,6 +200,34 @@ func RegisterServerService(srv *ttrpc.Server, svc ServerService) {
 				}
 				return svc.Move(ctx, &req)
 			},
+			"ListSpaceMeta": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ListSpaceMetaRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.ListSpaceMeta(ctx, &req)
+			},
+			"GetSpaceMeta": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req GetSpaceMetaRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.GetSpaceMeta(ctx, &req)
+			},
+			"SetSpaceMeta": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req SetSpaceMetaRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.SetSpaceMeta(ctx, &req)
+			},
+			"RemoveSpaceMeta": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req RemoveSpaceMetaRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.RemoveSpaceMeta(ctx, &req)
+			},
 			"Bind": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 				var req BindRequest
 				if err := unmarshal(&req); err != nil {
@@ -286,6 +318,10 @@ type ServerClient interface {
 	CreateSpace(context.Context, *CreateSpaceRequest) (*CreateSpaceResponse, error)
 	RemoveSpace(context.Context, *RemoveSpaceRequest) (*RemoveSpaceResponse, error)
 	Move(context.Context, *MoveRequest) (*MoveResponse, error)
+	ListSpaceMeta(context.Context, *ListSpaceMetaRequest) (*ListSpaceMetaResponse, error)
+	GetSpaceMeta(context.Context, *GetSpaceMetaRequest) (*GetSpaceMetaResponse, error)
+	SetSpaceMeta(context.Context, *SetSpaceMetaRequest) (*SetSpaceMetaResponse, error)
+	RemoveSpaceMeta(context.Context, *RemoveSpaceMetaRequest) (*RemoveSpaceMetaResponse, error)
 	Bind(context.Context, *BindRequest) (*BindResponse, error)
 	Unbind(context.Context, *UnbindRequest) (*UnbindResponse, error)
 	Switch(context.Context, *SwitchRequest) (*SwitchResponse, error)
@@ -487,6 +523,38 @@ func (c *serverClient) RemoveSpace(ctx context.Context, req *RemoveSpaceRequest)
 func (c *serverClient) Move(ctx context.Context, req *MoveRequest) (*MoveResponse, error) {
 	var resp MoveResponse
 	if err := c.client.Call(ctx, "cm.server.v1.Server", "Move", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) ListSpaceMeta(ctx context.Context, req *ListSpaceMetaRequest) (*ListSpaceMetaResponse, error) {
+	var resp ListSpaceMetaResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "ListSpaceMeta", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) GetSpaceMeta(ctx context.Context, req *GetSpaceMetaRequest) (*GetSpaceMetaResponse, error) {
+	var resp GetSpaceMetaResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "GetSpaceMeta", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) SetSpaceMeta(ctx context.Context, req *SetSpaceMetaRequest) (*SetSpaceMetaResponse, error) {
+	var resp SetSpaceMetaResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "SetSpaceMeta", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *serverClient) RemoveSpaceMeta(ctx context.Context, req *RemoveSpaceMetaRequest) (*RemoveSpaceMetaResponse, error) {
+	var resp RemoveSpaceMetaResponse
+	if err := c.client.Call(ctx, "cm.server.v1.Server", "RemoveSpaceMeta", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

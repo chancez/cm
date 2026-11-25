@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -249,5 +251,82 @@ func TestListFiltersBySpaceAndReportsIt(t *testing.T) {
 	}
 	if want := []string{"a"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("List(space=cm) = %q, want %q", names, want)
+	}
+}
+
+func TestSpaceMetaService(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	svc := NewService(mgr)
+	ctx := context.Background()
+
+	set, err := svc.SetSpaceMeta(ctx, &serverv1.SetSpaceMetaRequest{
+		Space: "cm", Key: "kspaces/layout/main", Value: []byte("layout"), IfRevision: new(int64(0)),
+	})
+	if err != nil {
+		t.Fatalf("SetSpaceMeta() error = %v", err)
+	}
+	if set.Revision == 0 || set.Conflict {
+		t.Fatalf("SetSpaceMeta() = %v, want a write", set)
+	}
+
+	// A lost race is an answer, not an error, so a caller can tell it from a failure.
+	again, err := svc.SetSpaceMeta(ctx, &serverv1.SetSpaceMetaRequest{
+		Space: "cm", Key: "kspaces/layout/main", Value: []byte("other"), IfRevision: new(int64(0)),
+	})
+	if err != nil {
+		t.Fatalf("SetSpaceMeta(conflicting) error = %v", err)
+	}
+	if want := (&serverv1.SetSpaceMetaResponse{Conflict: true, CurrentRevision: set.Revision}); !proto.Equal(again, want) {
+		t.Errorf("SetSpaceMeta(conflicting) = %v, want %v", again, want)
+	}
+
+	got, err := svc.GetSpaceMeta(ctx, &serverv1.GetSpaceMetaRequest{Space: "cm", Key: "kspaces/layout/main"})
+	if err != nil {
+		t.Fatalf("GetSpaceMeta() error = %v", err)
+	}
+	want := &serverv1.GetSpaceMetaResponse{Found: true, Entry: &serverv1.SpaceMetaEntry{
+		Key: "kspaces/layout/main", Value: []byte("layout"), Size: 6, Revision: set.Revision,
+		UpdatedAtUnix: got.GetEntry().GetUpdatedAtUnix(),
+	}}
+	if !proto.Equal(got, want) {
+		t.Errorf("GetSpaceMeta() = %v, want %v", got, want)
+	}
+
+	missing, err := svc.GetSpaceMeta(ctx, &serverv1.GetSpaceMetaRequest{Space: "cm", Key: "nothing"})
+	if err != nil {
+		t.Fatalf("GetSpaceMeta(missing) error = %v", err)
+	}
+	if want := (&serverv1.GetSpaceMetaResponse{}); !proto.Equal(missing, want) {
+		t.Errorf("GetSpaceMeta(missing) = %v, want %v", missing, want)
+	}
+
+	removed, err := svc.RemoveSpaceMeta(ctx, &serverv1.RemoveSpaceMetaRequest{
+		Space: "cm", Key: "kspaces/layout/main", IfRevision: new(set.Revision + 1),
+	})
+	if err != nil {
+		t.Fatalf("RemoveSpaceMeta(conflicting) error = %v", err)
+	}
+	if want := (&serverv1.RemoveSpaceMetaResponse{Conflict: true, CurrentRevision: set.Revision}); !proto.Equal(removed, want) {
+		t.Errorf("RemoveSpaceMeta(conflicting) = %v, want %v", removed, want)
+	}
+}
+
+func TestSpaceMetaServiceRefuses(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	svc := NewService(mgr)
+	ctx := context.Background()
+	for _, req := range []*serverv1.SetSpaceMetaRequest{
+		{Space: "cm", Key: "big", Value: make([]byte, spaces.MaxMetaValueLen+1)},
+		{Space: "cm", Key: "\x1b]0;x\a"},
+		{Space: "a:b", Key: "k"},
+	} {
+		if resp, err := svc.SetSpaceMeta(ctx, req); err == nil {
+			t.Errorf("SetSpaceMeta(%q, %q, %d bytes) = %v, want an error", req.Space, req.Key, len(req.Value), resp)
+		}
+	}
+	if _, err := svc.SetSpaceMeta(ctx, &serverv1.SetSpaceMetaRequest{
+		Space: "cm", Key: "max", Value: make([]byte, spaces.MaxMetaValueLen),
+	}); err != nil {
+		t.Errorf("SetSpaceMeta(at the limit) error = %v", err)
 	}
 }

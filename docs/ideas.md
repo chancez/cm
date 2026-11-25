@@ -819,13 +819,14 @@ programs in the user's dotfiles: `kspaces-provider-cm`, which matches a window t
 (the wrapper's window is the `cm attach` client, so `cm switch` is followed), and `launch_wrapper.py`, which
 turns the vars into `CM_SPACE` and a `worktree` tag. cm learns nothing about kspaces.
 
-*Layouts follow the sessions.* Not built. Picking up remote work on another host should restore the
+*Layouts follow the sessions.* The cm half is built, as `cm space meta` (docs/cli.md, "Space metadata");
+the provider verbs and kspaces are not. Picking up remote work on another host should restore the
 windows as they were laid out, not a list of detached sessions. A multiplexer gets this for free because
 it owns the splits. Here kitty owns them, kspaces records them in kitty session files, and those files
 stay on the machine that wrote them, while the sessions live on the remote. So the layout is stored on the
 sessions' host, and cm does not understand it.
 
-- **cm: opaque metadata on a space.** `cm space meta set|get|list|rm SPACE KEY`, keys namespaced by
+- **cm: opaque metadata on a space.** Built. `cm space meta set|get|list|rm SPACE KEY`, keys namespaced by
   convention (`kspaces/layout/<worktree>`), the value a blob cm never parses, size-capped so it does not
   become a file store, with a revision for compare-and-swap so two viewers saving one layout conflict
   rather than overwrite. Owned by the host like membership, so it is reachable through a remote with
@@ -865,7 +866,8 @@ to be a second.
 3. **Built.** kspaces on a session provider, with cm's provider in the dotfiles.
 4. Named remotes and qualified references, resolving locally for the local host's name.
 5. Cross-host `cm ls` and `cm tui` with the stale cache, and the provider listing every host's sessions.
-6. Space metadata, the provider's layout verbs, and kspaces saving and restoring layouts through them.
+6. Space metadata (**built**), the provider's layout verbs, and kspaces saving and restoring layouts
+   through them.
 
 *Picking up the remaining work.* What a new agent needs, beyond the decisions above:
 
@@ -884,9 +886,11 @@ to be a second.
   cached listing, stale, with its time. The provider then sets each session's `host`, which kspaces already
   groups by, and `open` returns `cm attach --remote ssh://HOST @ID`; the window's `cm_session` stores the
   qualified ref so a restore reconnects.
-- **Step 6, layouts.** Space metadata is a store table and migration, RPCs, `cm space meta`, and a
-  capability token. It can land before step 4, useful locally, but restoring a layout on another host needs
-  steps 4 and 5. The provider verbs go in kspaces' `docs/kitty.md` spec first.
+- **Step 6, layouts.** cm's half is `internal/store/spacemeta.go`, the `space_meta` migration, the
+  `*SpaceMeta` RPCs in `internal/server/spaces.go`, `cmd/cm/spacemeta.go`, and the `spaces.meta`
+  capability. Left: the provider verbs, specified in kspaces' `docs/kitty.md` first, mapped to
+  `cm space meta get --json` and `set --if-revision` in `kspaces-provider-cm`; then kspaces saving and
+  restoring. Restoring on another host needs steps 4 and 5.
 - **kspaces gaps.** Detached rows include sessions kspaces' own suspend kept, which its
   `.kept-sessions` already names and could exclude; ended sessions could collapse behind a count so the
   group shows running ones first; the picker and `/` do not find detached sessions, which its TODO.md records.

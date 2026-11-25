@@ -3934,6 +3934,543 @@ func (x *MoveResponse) GetErrors() map[string]string {
 	return nil
 }
 
+type SpaceMetaEntry struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// Empty in a listing, which carries size instead.
+	Value []byte `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Size  uint32 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	// Changes on every write and is never reused, so it is a token to compare rather than a count.
+	Revision      int64 `protobuf:"varint,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	UpdatedAtUnix int64 `protobuf:"varint,5,opt,name=updated_at_unix,json=updatedAtUnix,proto3" json:"updated_at_unix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SpaceMetaEntry) Reset() {
+	*x = SpaceMetaEntry{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SpaceMetaEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SpaceMetaEntry) ProtoMessage() {}
+
+func (x *SpaceMetaEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SpaceMetaEntry.ProtoReflect.Descriptor instead.
+func (*SpaceMetaEntry) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *SpaceMetaEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SpaceMetaEntry) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *SpaceMetaEntry) GetSize() uint32 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *SpaceMetaEntry) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SpaceMetaEntry) GetUpdatedAtUnix() int64 {
+	if x != nil {
+		return x.UpdatedAtUnix
+	}
+	return 0
+}
+
+type ListSpaceMetaRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Space string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
+	// Only keys starting with this, so a tool can list its own namespace.
+	Prefix        string `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSpaceMetaRequest) Reset() {
+	*x = ListSpaceMetaRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSpaceMetaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSpaceMetaRequest) ProtoMessage() {}
+
+func (x *ListSpaceMetaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSpaceMetaRequest.ProtoReflect.Descriptor instead.
+func (*ListSpaceMetaRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *ListSpaceMetaRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+func (x *ListSpaceMetaRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+type ListSpaceMetaResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*SpaceMetaEntry      `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSpaceMetaResponse) Reset() {
+	*x = ListSpaceMetaResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSpaceMetaResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSpaceMetaResponse) ProtoMessage() {}
+
+func (x *ListSpaceMetaResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSpaceMetaResponse.ProtoReflect.Descriptor instead.
+func (*ListSpaceMetaResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *ListSpaceMetaResponse) GetEntries() []*SpaceMetaEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type GetSpaceMetaRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Space         string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
+	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSpaceMetaRequest) Reset() {
+	*x = GetSpaceMetaRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSpaceMetaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSpaceMetaRequest) ProtoMessage() {}
+
+func (x *GetSpaceMetaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSpaceMetaRequest.ProtoReflect.Descriptor instead.
+func (*GetSpaceMetaRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *GetSpaceMetaRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+func (x *GetSpaceMetaRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+type GetSpaceMetaResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// False for a key the space has no value for. A space that does not exist is an error instead, so a
+	// mistyped space is not read as one with nothing saved.
+	Found         bool            `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Entry         *SpaceMetaEntry `protobuf:"bytes,2,opt,name=entry,proto3" json:"entry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSpaceMetaResponse) Reset() {
+	*x = GetSpaceMetaResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSpaceMetaResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSpaceMetaResponse) ProtoMessage() {}
+
+func (x *GetSpaceMetaResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSpaceMetaResponse.ProtoReflect.Descriptor instead.
+func (*GetSpaceMetaResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *GetSpaceMetaResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetSpaceMetaResponse) GetEntry() *SpaceMetaEntry {
+	if x != nil {
+		return x.Entry
+	}
+	return nil
+}
+
+type SetSpaceMetaRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Created if it does not exist, as Move creates the space it names.
+	Space string `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
+	Key   string `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Value []byte `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	// Write only if the key is at this revision, 0 meaning it must not exist. Unset writes unconditionally.
+	IfRevision    *int64 `protobuf:"varint,4,opt,name=if_revision,json=ifRevision,proto3,oneof" json:"if_revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetSpaceMetaRequest) Reset() {
+	*x = SetSpaceMetaRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSpaceMetaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSpaceMetaRequest) ProtoMessage() {}
+
+func (x *SetSpaceMetaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSpaceMetaRequest.ProtoReflect.Descriptor instead.
+func (*SetSpaceMetaRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *SetSpaceMetaRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+func (x *SetSpaceMetaRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SetSpaceMetaRequest) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *SetSpaceMetaRequest) GetIfRevision() int64 {
+	if x != nil && x.IfRevision != nil {
+		return *x.IfRevision
+	}
+	return 0
+}
+
+type SetSpaceMetaResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The key's new revision, when written.
+	Revision int64 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	// Not written, because the key was not at if_revision; current_revision is where it is, 0 for absent.
+	Conflict        bool  `protobuf:"varint,2,opt,name=conflict,proto3" json:"conflict,omitempty"`
+	CurrentRevision int64 `protobuf:"varint,3,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SetSpaceMetaResponse) Reset() {
+	*x = SetSpaceMetaResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetSpaceMetaResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetSpaceMetaResponse) ProtoMessage() {}
+
+func (x *SetSpaceMetaResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetSpaceMetaResponse.ProtoReflect.Descriptor instead.
+func (*SetSpaceMetaResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *SetSpaceMetaResponse) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SetSpaceMetaResponse) GetConflict() bool {
+	if x != nil {
+		return x.Conflict
+	}
+	return false
+}
+
+func (x *SetSpaceMetaResponse) GetCurrentRevision() int64 {
+	if x != nil {
+		return x.CurrentRevision
+	}
+	return 0
+}
+
+type RemoveSpaceMetaRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Space string                 `protobuf:"bytes,1,opt,name=space,proto3" json:"space,omitempty"`
+	Key   string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	// Remove only if the key is at this revision. Unset removes whatever is there, and a key already gone
+	// is not an error.
+	IfRevision    *int64 `protobuf:"varint,3,opt,name=if_revision,json=ifRevision,proto3,oneof" json:"if_revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveSpaceMetaRequest) Reset() {
+	*x = RemoveSpaceMetaRequest{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSpaceMetaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSpaceMetaRequest) ProtoMessage() {}
+
+func (x *RemoveSpaceMetaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSpaceMetaRequest.ProtoReflect.Descriptor instead.
+func (*RemoveSpaceMetaRequest) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *RemoveSpaceMetaRequest) GetSpace() string {
+	if x != nil {
+		return x.Space
+	}
+	return ""
+}
+
+func (x *RemoveSpaceMetaRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *RemoveSpaceMetaRequest) GetIfRevision() int64 {
+	if x != nil && x.IfRevision != nil {
+		return *x.IfRevision
+	}
+	return 0
+}
+
+type RemoveSpaceMetaResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether there was a value to remove.
+	Removed bool `protobuf:"varint,1,opt,name=removed,proto3" json:"removed,omitempty"`
+	// As in SetSpaceMetaResponse.
+	Conflict        bool  `protobuf:"varint,2,opt,name=conflict,proto3" json:"conflict,omitempty"`
+	CurrentRevision int64 `protobuf:"varint,3,opt,name=current_revision,json=currentRevision,proto3" json:"current_revision,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RemoveSpaceMetaResponse) Reset() {
+	*x = RemoveSpaceMetaResponse{}
+	mi := &file_cm_server_v1_server_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveSpaceMetaResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveSpaceMetaResponse) ProtoMessage() {}
+
+func (x *RemoveSpaceMetaResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cm_server_v1_server_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveSpaceMetaResponse.ProtoReflect.Descriptor instead.
+func (*RemoveSpaceMetaResponse) Descriptor() ([]byte, []int) {
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *RemoveSpaceMetaResponse) GetRemoved() bool {
+	if x != nil {
+		return x.Removed
+	}
+	return false
+}
+
+func (x *RemoveSpaceMetaResponse) GetConflict() bool {
+	if x != nil {
+		return x.Conflict
+	}
+	return false
+}
+
+func (x *RemoveSpaceMetaResponse) GetCurrentRevision() int64 {
+	if x != nil {
+		return x.CurrentRevision
+	}
+	return 0
+}
+
 type CloseRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The session the closed window showed. Empty means the session the caller is in, from CM_SESSION.
@@ -3947,7 +4484,7 @@ type CloseRequest struct {
 
 func (x *CloseRequest) Reset() {
 	*x = CloseRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[44]
+	mi := &file_cm_server_v1_server_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3959,7 +4496,7 @@ func (x *CloseRequest) String() string {
 func (*CloseRequest) ProtoMessage() {}
 
 func (x *CloseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[44]
+	mi := &file_cm_server_v1_server_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3972,7 +4509,7 @@ func (x *CloseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseRequest.ProtoReflect.Descriptor instead.
 func (*CloseRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{44}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *CloseRequest) GetSession() string {
@@ -3998,7 +4535,7 @@ type CloseResponse struct {
 
 func (x *CloseResponse) Reset() {
 	*x = CloseResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[45]
+	mi := &file_cm_server_v1_server_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4010,7 +4547,7 @@ func (x *CloseResponse) String() string {
 func (*CloseResponse) ProtoMessage() {}
 
 func (x *CloseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[45]
+	mi := &file_cm_server_v1_server_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4023,7 +4560,7 @@ func (x *CloseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseResponse.ProtoReflect.Descriptor instead.
 func (*CloseResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{45}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *CloseResponse) GetOutcome() CloseOutcome {
@@ -4043,7 +4580,7 @@ type DetachRequest struct {
 
 func (x *DetachRequest) Reset() {
 	*x = DetachRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[46]
+	mi := &file_cm_server_v1_server_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4055,7 +4592,7 @@ func (x *DetachRequest) String() string {
 func (*DetachRequest) ProtoMessage() {}
 
 func (x *DetachRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[46]
+	mi := &file_cm_server_v1_server_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4068,7 +4605,7 @@ func (x *DetachRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachRequest.ProtoReflect.Descriptor instead.
 func (*DetachRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{46}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *DetachRequest) GetSessions() []string {
@@ -4095,7 +4632,7 @@ type DetachResponse struct {
 
 func (x *DetachResponse) Reset() {
 	*x = DetachResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[47]
+	mi := &file_cm_server_v1_server_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4107,7 +4644,7 @@ func (x *DetachResponse) String() string {
 func (*DetachResponse) ProtoMessage() {}
 
 func (x *DetachResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[47]
+	mi := &file_cm_server_v1_server_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4120,7 +4657,7 @@ func (x *DetachResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachResponse.ProtoReflect.Descriptor instead.
 func (*DetachResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{47}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DetachResponse) GetDetached() map[string]uint32 {
@@ -4164,7 +4701,7 @@ type UpgradeClientsRequest struct {
 
 func (x *UpgradeClientsRequest) Reset() {
 	*x = UpgradeClientsRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[48]
+	mi := &file_cm_server_v1_server_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4176,7 +4713,7 @@ func (x *UpgradeClientsRequest) String() string {
 func (*UpgradeClientsRequest) ProtoMessage() {}
 
 func (x *UpgradeClientsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[48]
+	mi := &file_cm_server_v1_server_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4189,7 +4726,7 @@ func (x *UpgradeClientsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeClientsRequest.ProtoReflect.Descriptor instead.
 func (*UpgradeClientsRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{48}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *UpgradeClientsRequest) GetSessions() []string {
@@ -4233,7 +4770,7 @@ type UpgradeClientsResponse struct {
 
 func (x *UpgradeClientsResponse) Reset() {
 	*x = UpgradeClientsResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[49]
+	mi := &file_cm_server_v1_server_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4245,7 +4782,7 @@ func (x *UpgradeClientsResponse) String() string {
 func (*UpgradeClientsResponse) ProtoMessage() {}
 
 func (x *UpgradeClientsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[49]
+	mi := &file_cm_server_v1_server_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4258,7 +4795,7 @@ func (x *UpgradeClientsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeClientsResponse.ProtoReflect.Descriptor instead.
 func (*UpgradeClientsResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{49}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *UpgradeClientsResponse) GetAsked() map[string]uint32 {
@@ -4304,7 +4841,7 @@ type ListRequest struct {
 
 func (x *ListRequest) Reset() {
 	*x = ListRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[50]
+	mi := &file_cm_server_v1_server_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4316,7 +4853,7 @@ func (x *ListRequest) String() string {
 func (*ListRequest) ProtoMessage() {}
 
 func (x *ListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[50]
+	mi := &file_cm_server_v1_server_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4329,7 +4866,7 @@ func (x *ListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRequest.ProtoReflect.Descriptor instead.
 func (*ListRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{50}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListRequest) GetPrefix() string {
@@ -4362,7 +4899,7 @@ type ListResponse struct {
 
 func (x *ListResponse) Reset() {
 	*x = ListResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[51]
+	mi := &file_cm_server_v1_server_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4374,7 +4911,7 @@ func (x *ListResponse) String() string {
 func (*ListResponse) ProtoMessage() {}
 
 func (x *ListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[51]
+	mi := &file_cm_server_v1_server_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4387,7 +4924,7 @@ func (x *ListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListResponse.ProtoReflect.Descriptor instead.
 func (*ListResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{51}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ListResponse) GetSessions() []*Session {
@@ -4579,7 +5116,7 @@ type Session struct {
 
 func (x *Session) Reset() {
 	*x = Session{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[52]
+	mi := &file_cm_server_v1_server_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4591,7 +5128,7 @@ func (x *Session) String() string {
 func (*Session) ProtoMessage() {}
 
 func (x *Session) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[52]
+	mi := &file_cm_server_v1_server_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4604,7 +5141,7 @@ func (x *Session) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Session.ProtoReflect.Descriptor instead.
 func (*Session) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{52}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *Session) GetName() string {
@@ -4875,7 +5412,7 @@ type TerminalMode struct {
 
 func (x *TerminalMode) Reset() {
 	*x = TerminalMode{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[53]
+	mi := &file_cm_server_v1_server_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4887,7 +5424,7 @@ func (x *TerminalMode) String() string {
 func (*TerminalMode) ProtoMessage() {}
 
 func (x *TerminalMode) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[53]
+	mi := &file_cm_server_v1_server_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4900,7 +5437,7 @@ func (x *TerminalMode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalMode.ProtoReflect.Descriptor instead.
 func (*TerminalMode) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{53}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *TerminalMode) GetKey() string {
@@ -4949,7 +5486,7 @@ type LocationFrame struct {
 
 func (x *LocationFrame) Reset() {
 	*x = LocationFrame{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[54]
+	mi := &file_cm_server_v1_server_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4961,7 +5498,7 @@ func (x *LocationFrame) String() string {
 func (*LocationFrame) ProtoMessage() {}
 
 func (x *LocationFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[54]
+	mi := &file_cm_server_v1_server_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4974,7 +5511,7 @@ func (x *LocationFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocationFrame.ProtoReflect.Descriptor instead.
 func (*LocationFrame) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{54}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *LocationFrame) GetId() string {
@@ -5047,7 +5584,7 @@ type KillRequest struct {
 
 func (x *KillRequest) Reset() {
 	*x = KillRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[55]
+	mi := &file_cm_server_v1_server_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5059,7 +5596,7 @@ func (x *KillRequest) String() string {
 func (*KillRequest) ProtoMessage() {}
 
 func (x *KillRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[55]
+	mi := &file_cm_server_v1_server_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5072,7 +5609,7 @@ func (x *KillRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillRequest.ProtoReflect.Descriptor instead.
 func (*KillRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{55}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *KillRequest) GetSessions() []string {
@@ -5141,7 +5678,7 @@ type KillResponse struct {
 
 func (x *KillResponse) Reset() {
 	*x = KillResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[56]
+	mi := &file_cm_server_v1_server_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5153,7 +5690,7 @@ func (x *KillResponse) String() string {
 func (*KillResponse) ProtoMessage() {}
 
 func (x *KillResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[56]
+	mi := &file_cm_server_v1_server_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5166,7 +5703,7 @@ func (x *KillResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KillResponse.ProtoReflect.Descriptor instead.
 func (*KillResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{56}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *KillResponse) GetKilled() []string {
@@ -5207,7 +5744,7 @@ type SurvivingProcesses struct {
 
 func (x *SurvivingProcesses) Reset() {
 	*x = SurvivingProcesses{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[57]
+	mi := &file_cm_server_v1_server_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5219,7 +5756,7 @@ func (x *SurvivingProcesses) String() string {
 func (*SurvivingProcesses) ProtoMessage() {}
 
 func (x *SurvivingProcesses) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[57]
+	mi := &file_cm_server_v1_server_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5232,7 +5769,7 @@ func (x *SurvivingProcesses) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SurvivingProcesses.ProtoReflect.Descriptor instead.
 func (*SurvivingProcesses) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{57}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *SurvivingProcesses) GetPids() []int32 {
@@ -5258,7 +5795,7 @@ type ForgetRequest struct {
 
 func (x *ForgetRequest) Reset() {
 	*x = ForgetRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[58]
+	mi := &file_cm_server_v1_server_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5270,7 +5807,7 @@ func (x *ForgetRequest) String() string {
 func (*ForgetRequest) ProtoMessage() {}
 
 func (x *ForgetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[58]
+	mi := &file_cm_server_v1_server_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5283,7 +5820,7 @@ func (x *ForgetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetRequest.ProtoReflect.Descriptor instead.
 func (*ForgetRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{58}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ForgetRequest) GetSessions() []string {
@@ -5313,7 +5850,7 @@ type ForgetResponse struct {
 
 func (x *ForgetResponse) Reset() {
 	*x = ForgetResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[59]
+	mi := &file_cm_server_v1_server_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5325,7 +5862,7 @@ func (x *ForgetResponse) String() string {
 func (*ForgetResponse) ProtoMessage() {}
 
 func (x *ForgetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[59]
+	mi := &file_cm_server_v1_server_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5338,7 +5875,7 @@ func (x *ForgetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgetResponse.ProtoReflect.Descriptor instead.
 func (*ForgetResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{59}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ForgetResponse) GetForgotten() []string {
@@ -5367,7 +5904,7 @@ type ShelveRequest struct {
 
 func (x *ShelveRequest) Reset() {
 	*x = ShelveRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[60]
+	mi := &file_cm_server_v1_server_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5379,7 +5916,7 @@ func (x *ShelveRequest) String() string {
 func (*ShelveRequest) ProtoMessage() {}
 
 func (x *ShelveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[60]
+	mi := &file_cm_server_v1_server_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5392,7 +5929,7 @@ func (x *ShelveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShelveRequest.ProtoReflect.Descriptor instead.
 func (*ShelveRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{60}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ShelveRequest) GetSessions() []string {
@@ -5424,7 +5961,7 @@ type ShelveResponse struct {
 
 func (x *ShelveResponse) Reset() {
 	*x = ShelveResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[61]
+	mi := &file_cm_server_v1_server_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5436,7 +5973,7 @@ func (x *ShelveResponse) String() string {
 func (*ShelveResponse) ProtoMessage() {}
 
 func (x *ShelveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[61]
+	mi := &file_cm_server_v1_server_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5449,7 +5986,7 @@ func (x *ShelveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShelveResponse.ProtoReflect.Descriptor instead.
 func (*ShelveResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{61}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ShelveResponse) GetShelved() []string {
@@ -5490,7 +6027,7 @@ type RestoreRequest struct {
 
 func (x *RestoreRequest) Reset() {
 	*x = RestoreRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[62]
+	mi := &file_cm_server_v1_server_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5502,7 +6039,7 @@ func (x *RestoreRequest) String() string {
 func (*RestoreRequest) ProtoMessage() {}
 
 func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[62]
+	mi := &file_cm_server_v1_server_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5515,7 +6052,7 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{62}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *RestoreRequest) GetSessions() []string {
@@ -5568,7 +6105,7 @@ type RestoreResponse struct {
 
 func (x *RestoreResponse) Reset() {
 	*x = RestoreResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[63]
+	mi := &file_cm_server_v1_server_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5580,7 +6117,7 @@ func (x *RestoreResponse) String() string {
 func (*RestoreResponse) ProtoMessage() {}
 
 func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[63]
+	mi := &file_cm_server_v1_server_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5593,7 +6130,7 @@ func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreResponse.ProtoReflect.Descriptor instead.
 func (*RestoreResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{63}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *RestoreResponse) GetRestored() []string {
@@ -5660,7 +6197,7 @@ type SwitchRequest struct {
 
 func (x *SwitchRequest) Reset() {
 	*x = SwitchRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[64]
+	mi := &file_cm_server_v1_server_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5672,7 +6209,7 @@ func (x *SwitchRequest) String() string {
 func (*SwitchRequest) ProtoMessage() {}
 
 func (x *SwitchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[64]
+	mi := &file_cm_server_v1_server_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5685,7 +6222,7 @@ func (x *SwitchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SwitchRequest.ProtoReflect.Descriptor instead.
 func (*SwitchRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{64}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *SwitchRequest) GetSession() string {
@@ -5760,7 +6297,7 @@ type SwitchResponse struct {
 
 func (x *SwitchResponse) Reset() {
 	*x = SwitchResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[65]
+	mi := &file_cm_server_v1_server_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5772,7 +6309,7 @@ func (x *SwitchResponse) String() string {
 func (*SwitchResponse) ProtoMessage() {}
 
 func (x *SwitchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[65]
+	mi := &file_cm_server_v1_server_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5785,7 +6322,7 @@ func (x *SwitchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SwitchResponse.ProtoReflect.Descriptor instead.
 func (*SwitchResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{65}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *SwitchResponse) GetAsked() uint32 {
@@ -5854,7 +6391,7 @@ type BindRequest struct {
 
 func (x *BindRequest) Reset() {
 	*x = BindRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[66]
+	mi := &file_cm_server_v1_server_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5866,7 +6403,7 @@ func (x *BindRequest) String() string {
 func (*BindRequest) ProtoMessage() {}
 
 func (x *BindRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[66]
+	mi := &file_cm_server_v1_server_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5879,7 +6416,7 @@ func (x *BindRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindRequest.ProtoReflect.Descriptor instead.
 func (*BindRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{66}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *BindRequest) GetName() string {
@@ -5923,7 +6460,7 @@ type BindResponse struct {
 
 func (x *BindResponse) Reset() {
 	*x = BindResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[67]
+	mi := &file_cm_server_v1_server_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5935,7 +6472,7 @@ func (x *BindResponse) String() string {
 func (*BindResponse) ProtoMessage() {}
 
 func (x *BindResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[67]
+	mi := &file_cm_server_v1_server_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5948,7 +6485,7 @@ func (x *BindResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BindResponse.ProtoReflect.Descriptor instead.
 func (*BindResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{67}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *BindResponse) GetSessionId() string {
@@ -5974,7 +6511,7 @@ type UnbindRequest struct {
 
 func (x *UnbindRequest) Reset() {
 	*x = UnbindRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[68]
+	mi := &file_cm_server_v1_server_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5986,7 +6523,7 @@ func (x *UnbindRequest) String() string {
 func (*UnbindRequest) ProtoMessage() {}
 
 func (x *UnbindRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[68]
+	mi := &file_cm_server_v1_server_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5999,7 +6536,7 @@ func (x *UnbindRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbindRequest.ProtoReflect.Descriptor instead.
 func (*UnbindRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{68}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *UnbindRequest) GetName() string {
@@ -6022,7 +6559,7 @@ type UnbindResponse struct {
 
 func (x *UnbindResponse) Reset() {
 	*x = UnbindResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[69]
+	mi := &file_cm_server_v1_server_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6034,7 +6571,7 @@ func (x *UnbindResponse) String() string {
 func (*UnbindResponse) ProtoMessage() {}
 
 func (x *UnbindResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[69]
+	mi := &file_cm_server_v1_server_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6047,7 +6584,7 @@ func (x *UnbindResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbindResponse.ProtoReflect.Descriptor instead.
 func (*UnbindResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{69}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *UnbindResponse) GetRemoved() bool {
@@ -6107,7 +6644,7 @@ type SendRequest struct {
 
 func (x *SendRequest) Reset() {
 	*x = SendRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[70]
+	mi := &file_cm_server_v1_server_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6119,7 +6656,7 @@ func (x *SendRequest) String() string {
 func (*SendRequest) ProtoMessage() {}
 
 func (x *SendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[70]
+	mi := &file_cm_server_v1_server_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6132,7 +6669,7 @@ func (x *SendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendRequest.ProtoReflect.Descriptor instead.
 func (*SendRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{70}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *SendRequest) GetSession() string {
@@ -6201,7 +6738,7 @@ type SendResponse struct {
 
 func (x *SendResponse) Reset() {
 	*x = SendResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[71]
+	mi := &file_cm_server_v1_server_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6213,7 +6750,7 @@ func (x *SendResponse) String() string {
 func (*SendResponse) ProtoMessage() {}
 
 func (x *SendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[71]
+	mi := &file_cm_server_v1_server_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6226,7 +6763,7 @@ func (x *SendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendResponse.ProtoReflect.Descriptor instead.
 func (*SendResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{71}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *SendResponse) GetShellReports() bool {
@@ -6253,7 +6790,7 @@ type HistoryRequest struct {
 
 func (x *HistoryRequest) Reset() {
 	*x = HistoryRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[72]
+	mi := &file_cm_server_v1_server_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6265,7 +6802,7 @@ func (x *HistoryRequest) String() string {
 func (*HistoryRequest) ProtoMessage() {}
 
 func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[72]
+	mi := &file_cm_server_v1_server_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6278,7 +6815,7 @@ func (x *HistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryRequest.ProtoReflect.Descriptor instead.
 func (*HistoryRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{72}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *HistoryRequest) GetSession() string {
@@ -6304,7 +6841,7 @@ type HistoryResponse struct {
 
 func (x *HistoryResponse) Reset() {
 	*x = HistoryResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[73]
+	mi := &file_cm_server_v1_server_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6316,7 +6853,7 @@ func (x *HistoryResponse) String() string {
 func (*HistoryResponse) ProtoMessage() {}
 
 func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[73]
+	mi := &file_cm_server_v1_server_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6329,7 +6866,7 @@ func (x *HistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HistoryResponse.ProtoReflect.Descriptor instead.
 func (*HistoryResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{73}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *HistoryResponse) GetData() []byte {
@@ -6348,7 +6885,7 @@ type GetEnvRequest struct {
 
 func (x *GetEnvRequest) Reset() {
 	*x = GetEnvRequest{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[74]
+	mi := &file_cm_server_v1_server_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6360,7 +6897,7 @@ func (x *GetEnvRequest) String() string {
 func (*GetEnvRequest) ProtoMessage() {}
 
 func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[74]
+	mi := &file_cm_server_v1_server_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6373,7 +6910,7 @@ func (x *GetEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvRequest) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{74}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *GetEnvRequest) GetSession() string {
@@ -6393,7 +6930,7 @@ type GetEnvResponse struct {
 
 func (x *GetEnvResponse) Reset() {
 	*x = GetEnvResponse{}
-	mi := &file_cm_server_v1_server_proto_msgTypes[75]
+	mi := &file_cm_server_v1_server_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6405,7 +6942,7 @@ func (x *GetEnvResponse) String() string {
 func (*GetEnvResponse) ProtoMessage() {}
 
 func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cm_server_v1_server_proto_msgTypes[75]
+	mi := &file_cm_server_v1_server_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6418,7 +6955,7 @@ func (x *GetEnvResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvResponse.ProtoReflect.Descriptor instead.
 func (*GetEnvResponse) Descriptor() ([]byte, []int) {
-	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{75}
+	return file_cm_server_v1_server_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *GetEnvResponse) GetEnv() map[string]string {
@@ -6675,7 +7212,45 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
 	"\vErrorsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x90\x01\n" +
+	"\x0eSpaceMetaEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\rR\x04size\x12\x1a\n" +
+	"\brevision\x18\x04 \x01(\x03R\brevision\x12&\n" +
+	"\x0fupdated_at_unix\x18\x05 \x01(\x03R\rupdatedAtUnix\"D\n" +
+	"\x14ListSpaceMetaRequest\x12\x14\n" +
+	"\x05space\x18\x01 \x01(\tR\x05space\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"O\n" +
+	"\x15ListSpaceMetaResponse\x126\n" +
+	"\aentries\x18\x01 \x03(\v2\x1c.cm.server.v1.SpaceMetaEntryR\aentries\"=\n" +
+	"\x13GetSpaceMetaRequest\x12\x14\n" +
+	"\x05space\x18\x01 \x01(\tR\x05space\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"`\n" +
+	"\x14GetSpaceMetaResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x122\n" +
+	"\x05entry\x18\x02 \x01(\v2\x1c.cm.server.v1.SpaceMetaEntryR\x05entry\"\x89\x01\n" +
+	"\x13SetSpaceMetaRequest\x12\x14\n" +
+	"\x05space\x18\x01 \x01(\tR\x05space\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\x12$\n" +
+	"\vif_revision\x18\x04 \x01(\x03H\x00R\n" +
+	"ifRevision\x88\x01\x01B\x0e\n" +
+	"\f_if_revision\"y\n" +
+	"\x14SetSpaceMetaResponse\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x03R\brevision\x12\x1a\n" +
+	"\bconflict\x18\x02 \x01(\bR\bconflict\x12)\n" +
+	"\x10current_revision\x18\x03 \x01(\x03R\x0fcurrentRevision\"v\n" +
+	"\x16RemoveSpaceMetaRequest\x12\x14\n" +
+	"\x05space\x18\x01 \x01(\tR\x05space\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\x12$\n" +
+	"\vif_revision\x18\x03 \x01(\x03H\x00R\n" +
+	"ifRevision\x88\x01\x01B\x0e\n" +
+	"\f_if_revision\"z\n" +
+	"\x17RemoveSpaceMetaResponse\x12\x18\n" +
+	"\aremoved\x18\x01 \x01(\bR\aremoved\x12\x1a\n" +
+	"\bconflict\x18\x02 \x01(\bR\bconflict\x12)\n" +
+	"\x10current_revision\x18\x03 \x01(\x03R\x0fcurrentRevision\"G\n" +
 	"\fCloseRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x1d\n" +
 	"\n" +
@@ -6926,7 +7501,7 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x1aHISTORY_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11HISTORY_FORMAT_VT\x10\x01\x12\x17\n" +
 	"\x13HISTORY_FORMAT_HTML\x10\x02\x12\x17\n" +
-	"\x13HISTORY_FORMAT_ANSI\x10\x032\xad\x0f\n" +
+	"\x13HISTORY_FORMAT_ANSI\x10\x032\x95\x12\n" +
 	"\x06Server\x12G\n" +
 	"\x06Attach\x12\x1b.cm.server.v1.AttachRequest\x1a\x1c.cm.server.v1.AttachResponse(\x010\x01\x12=\n" +
 	"\x04List\x12\x19.cm.server.v1.ListRequest\x1a\x1a.cm.server.v1.ListResponse\x12=\n" +
@@ -6947,7 +7522,11 @@ const file_cm_server_v1_server_proto_rawDesc = "" +
 	"\x06Spaces\x12\x1b.cm.server.v1.SpacesRequest\x1a\x1c.cm.server.v1.SpacesResponse\x12R\n" +
 	"\vCreateSpace\x12 .cm.server.v1.CreateSpaceRequest\x1a!.cm.server.v1.CreateSpaceResponse\x12R\n" +
 	"\vRemoveSpace\x12 .cm.server.v1.RemoveSpaceRequest\x1a!.cm.server.v1.RemoveSpaceResponse\x12=\n" +
-	"\x04Move\x12\x19.cm.server.v1.MoveRequest\x1a\x1a.cm.server.v1.MoveResponse\x12=\n" +
+	"\x04Move\x12\x19.cm.server.v1.MoveRequest\x1a\x1a.cm.server.v1.MoveResponse\x12X\n" +
+	"\rListSpaceMeta\x12\".cm.server.v1.ListSpaceMetaRequest\x1a#.cm.server.v1.ListSpaceMetaResponse\x12U\n" +
+	"\fGetSpaceMeta\x12!.cm.server.v1.GetSpaceMetaRequest\x1a\".cm.server.v1.GetSpaceMetaResponse\x12U\n" +
+	"\fSetSpaceMeta\x12!.cm.server.v1.SetSpaceMetaRequest\x1a\".cm.server.v1.SetSpaceMetaResponse\x12^\n" +
+	"\x0fRemoveSpaceMeta\x12$.cm.server.v1.RemoveSpaceMetaRequest\x1a%.cm.server.v1.RemoveSpaceMetaResponse\x12=\n" +
 	"\x04Bind\x12\x19.cm.server.v1.BindRequest\x1a\x1a.cm.server.v1.BindResponse\x12C\n" +
 	"\x06Unbind\x12\x1b.cm.server.v1.UnbindRequest\x1a\x1c.cm.server.v1.UnbindResponse\x12C\n" +
 	"\x06Switch\x12\x1b.cm.server.v1.SwitchRequest\x1a\x1c.cm.server.v1.SwitchResponse\x12C\n" +
@@ -6970,109 +7549,118 @@ func file_cm_server_v1_server_proto_rawDescGZIP() []byte {
 }
 
 var file_cm_server_v1_server_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 95)
+var file_cm_server_v1_server_proto_msgTypes = make([]protoimpl.MessageInfo, 104)
 var file_cm_server_v1_server_proto_goTypes = []any{
-	(ReportedState)(0),             // 0: cm.server.v1.ReportedState
-	(WaitState)(0),                 // 1: cm.server.v1.WaitState
-	(IfRunning)(0),                 // 2: cm.server.v1.IfRunning
-	(CloseOutcome)(0),              // 3: cm.server.v1.CloseOutcome
-	(SessionState)(0),              // 4: cm.server.v1.SessionState
-	(HistoryFormat)(0),             // 5: cm.server.v1.HistoryFormat
-	(*StatusRequest)(nil),          // 6: cm.server.v1.StatusRequest
-	(*StatusResponse)(nil),         // 7: cm.server.v1.StatusResponse
-	(*ReportRequest)(nil),          // 8: cm.server.v1.ReportRequest
-	(*ReportResponse)(nil),         // 9: cm.server.v1.ReportResponse
-	(*SetResumeRequest)(nil),       // 10: cm.server.v1.SetResumeRequest
-	(*SetResumeResponse)(nil),      // 11: cm.server.v1.SetResumeResponse
-	(*ReadRequest)(nil),            // 12: cm.server.v1.ReadRequest
-	(*ReadResponse)(nil),           // 13: cm.server.v1.ReadResponse
-	(*WaitRequest)(nil),            // 14: cm.server.v1.WaitRequest
-	(*WaitResponse)(nil),           // 15: cm.server.v1.WaitResponse
-	(*DoctorRequest)(nil),          // 16: cm.server.v1.DoctorRequest
-	(*DoctorResponse)(nil),         // 17: cm.server.v1.DoctorResponse
-	(*Finding)(nil),                // 18: cm.server.v1.Finding
-	(*ShutdownRequest)(nil),        // 19: cm.server.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),       // 20: cm.server.v1.ShutdownResponse
-	(*AttachRequest)(nil),          // 21: cm.server.v1.AttachRequest
-	(*Open)(nil),                   // 22: cm.server.v1.Open
-	(*TerminalGraphics)(nil),       // 23: cm.server.v1.TerminalGraphics
-	(*Images)(nil),                 // 24: cm.server.v1.Images
-	(*AttachedClient)(nil),         // 25: cm.server.v1.AttachedClient
-	(*Input)(nil),                  // 26: cm.server.v1.Input
-	(*Resize)(nil),                 // 27: cm.server.v1.Resize
-	(*Detach)(nil),                 // 28: cm.server.v1.Detach
-	(*AttachResponse)(nil),         // 29: cm.server.v1.AttachResponse
-	(*Hosting)(nil),                // 30: cm.server.v1.Hosting
-	(*Query)(nil),                  // 31: cm.server.v1.Query
-	(*Detached)(nil),               // 32: cm.server.v1.Detached
-	(*Metadata)(nil),               // 33: cm.server.v1.Metadata
-	(*Opened)(nil),                 // 34: cm.server.v1.Opened
-	(*Output)(nil),                 // 35: cm.server.v1.Output
-	(*Exited)(nil),                 // 36: cm.server.v1.Exited
-	(*SignalRequest)(nil),          // 37: cm.server.v1.SignalRequest
-	(*SignalResponse)(nil),         // 38: cm.server.v1.SignalResponse
-	(*TagRequest)(nil),             // 39: cm.server.v1.TagRequest
-	(*TagResponse)(nil),            // 40: cm.server.v1.TagResponse
-	(*SpacesRequest)(nil),          // 41: cm.server.v1.SpacesRequest
-	(*SpacesResponse)(nil),         // 42: cm.server.v1.SpacesResponse
-	(*Space)(nil),                  // 43: cm.server.v1.Space
-	(*CreateSpaceRequest)(nil),     // 44: cm.server.v1.CreateSpaceRequest
-	(*CreateSpaceResponse)(nil),    // 45: cm.server.v1.CreateSpaceResponse
-	(*RemoveSpaceRequest)(nil),     // 46: cm.server.v1.RemoveSpaceRequest
-	(*RemoveSpaceResponse)(nil),    // 47: cm.server.v1.RemoveSpaceResponse
-	(*MoveRequest)(nil),            // 48: cm.server.v1.MoveRequest
-	(*MoveResponse)(nil),           // 49: cm.server.v1.MoveResponse
-	(*CloseRequest)(nil),           // 50: cm.server.v1.CloseRequest
-	(*CloseResponse)(nil),          // 51: cm.server.v1.CloseResponse
-	(*DetachRequest)(nil),          // 52: cm.server.v1.DetachRequest
-	(*DetachResponse)(nil),         // 53: cm.server.v1.DetachResponse
-	(*UpgradeClientsRequest)(nil),  // 54: cm.server.v1.UpgradeClientsRequest
-	(*UpgradeClientsResponse)(nil), // 55: cm.server.v1.UpgradeClientsResponse
-	(*ListRequest)(nil),            // 56: cm.server.v1.ListRequest
-	(*ListResponse)(nil),           // 57: cm.server.v1.ListResponse
-	(*Session)(nil),                // 58: cm.server.v1.Session
-	(*TerminalMode)(nil),           // 59: cm.server.v1.TerminalMode
-	(*LocationFrame)(nil),          // 60: cm.server.v1.LocationFrame
-	(*KillRequest)(nil),            // 61: cm.server.v1.KillRequest
-	(*KillResponse)(nil),           // 62: cm.server.v1.KillResponse
-	(*SurvivingProcesses)(nil),     // 63: cm.server.v1.SurvivingProcesses
-	(*ForgetRequest)(nil),          // 64: cm.server.v1.ForgetRequest
-	(*ForgetResponse)(nil),         // 65: cm.server.v1.ForgetResponse
-	(*ShelveRequest)(nil),          // 66: cm.server.v1.ShelveRequest
-	(*ShelveResponse)(nil),         // 67: cm.server.v1.ShelveResponse
-	(*RestoreRequest)(nil),         // 68: cm.server.v1.RestoreRequest
-	(*RestoreResponse)(nil),        // 69: cm.server.v1.RestoreResponse
-	(*SwitchRequest)(nil),          // 70: cm.server.v1.SwitchRequest
-	(*SwitchResponse)(nil),         // 71: cm.server.v1.SwitchResponse
-	(*BindRequest)(nil),            // 72: cm.server.v1.BindRequest
-	(*BindResponse)(nil),           // 73: cm.server.v1.BindResponse
-	(*UnbindRequest)(nil),          // 74: cm.server.v1.UnbindRequest
-	(*UnbindResponse)(nil),         // 75: cm.server.v1.UnbindResponse
-	(*SendRequest)(nil),            // 76: cm.server.v1.SendRequest
-	(*SendResponse)(nil),           // 77: cm.server.v1.SendResponse
-	(*HistoryRequest)(nil),         // 78: cm.server.v1.HistoryRequest
-	(*HistoryResponse)(nil),        // 79: cm.server.v1.HistoryResponse
-	(*GetEnvRequest)(nil),          // 80: cm.server.v1.GetEnvRequest
-	(*GetEnvResponse)(nil),         // 81: cm.server.v1.GetEnvResponse
-	nil,                            // 82: cm.server.v1.Open.ClientEnvEntry
-	nil,                            // 83: cm.server.v1.Open.TagsEntry
-	nil,                            // 84: cm.server.v1.TagRequest.SetEntry
-	nil,                            // 85: cm.server.v1.TagResponse.TagsEntry
-	nil,                            // 86: cm.server.v1.MoveResponse.MovedEntry
-	nil,                            // 87: cm.server.v1.MoveResponse.ErrorsEntry
-	nil,                            // 88: cm.server.v1.DetachResponse.DetachedEntry
-	nil,                            // 89: cm.server.v1.DetachResponse.ErrorsEntry
-	nil,                            // 90: cm.server.v1.UpgradeClientsResponse.AskedEntry
-	nil,                            // 91: cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
-	nil,                            // 92: cm.server.v1.UpgradeClientsResponse.ErrorsEntry
-	nil,                            // 93: cm.server.v1.Session.TagsEntry
-	nil,                            // 94: cm.server.v1.KillResponse.ErrorsEntry
-	nil,                            // 95: cm.server.v1.KillResponse.SurvivingEntry
-	nil,                            // 96: cm.server.v1.KillResponse.UnboundEntry
-	nil,                            // 97: cm.server.v1.ForgetResponse.ErrorsEntry
-	nil,                            // 98: cm.server.v1.ShelveResponse.ErrorsEntry
-	nil,                            // 99: cm.server.v1.RestoreResponse.ErrorsEntry
-	nil,                            // 100: cm.server.v1.GetEnvResponse.EnvEntry
+	(ReportedState)(0),              // 0: cm.server.v1.ReportedState
+	(WaitState)(0),                  // 1: cm.server.v1.WaitState
+	(IfRunning)(0),                  // 2: cm.server.v1.IfRunning
+	(CloseOutcome)(0),               // 3: cm.server.v1.CloseOutcome
+	(SessionState)(0),               // 4: cm.server.v1.SessionState
+	(HistoryFormat)(0),              // 5: cm.server.v1.HistoryFormat
+	(*StatusRequest)(nil),           // 6: cm.server.v1.StatusRequest
+	(*StatusResponse)(nil),          // 7: cm.server.v1.StatusResponse
+	(*ReportRequest)(nil),           // 8: cm.server.v1.ReportRequest
+	(*ReportResponse)(nil),          // 9: cm.server.v1.ReportResponse
+	(*SetResumeRequest)(nil),        // 10: cm.server.v1.SetResumeRequest
+	(*SetResumeResponse)(nil),       // 11: cm.server.v1.SetResumeResponse
+	(*ReadRequest)(nil),             // 12: cm.server.v1.ReadRequest
+	(*ReadResponse)(nil),            // 13: cm.server.v1.ReadResponse
+	(*WaitRequest)(nil),             // 14: cm.server.v1.WaitRequest
+	(*WaitResponse)(nil),            // 15: cm.server.v1.WaitResponse
+	(*DoctorRequest)(nil),           // 16: cm.server.v1.DoctorRequest
+	(*DoctorResponse)(nil),          // 17: cm.server.v1.DoctorResponse
+	(*Finding)(nil),                 // 18: cm.server.v1.Finding
+	(*ShutdownRequest)(nil),         // 19: cm.server.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),        // 20: cm.server.v1.ShutdownResponse
+	(*AttachRequest)(nil),           // 21: cm.server.v1.AttachRequest
+	(*Open)(nil),                    // 22: cm.server.v1.Open
+	(*TerminalGraphics)(nil),        // 23: cm.server.v1.TerminalGraphics
+	(*Images)(nil),                  // 24: cm.server.v1.Images
+	(*AttachedClient)(nil),          // 25: cm.server.v1.AttachedClient
+	(*Input)(nil),                   // 26: cm.server.v1.Input
+	(*Resize)(nil),                  // 27: cm.server.v1.Resize
+	(*Detach)(nil),                  // 28: cm.server.v1.Detach
+	(*AttachResponse)(nil),          // 29: cm.server.v1.AttachResponse
+	(*Hosting)(nil),                 // 30: cm.server.v1.Hosting
+	(*Query)(nil),                   // 31: cm.server.v1.Query
+	(*Detached)(nil),                // 32: cm.server.v1.Detached
+	(*Metadata)(nil),                // 33: cm.server.v1.Metadata
+	(*Opened)(nil),                  // 34: cm.server.v1.Opened
+	(*Output)(nil),                  // 35: cm.server.v1.Output
+	(*Exited)(nil),                  // 36: cm.server.v1.Exited
+	(*SignalRequest)(nil),           // 37: cm.server.v1.SignalRequest
+	(*SignalResponse)(nil),          // 38: cm.server.v1.SignalResponse
+	(*TagRequest)(nil),              // 39: cm.server.v1.TagRequest
+	(*TagResponse)(nil),             // 40: cm.server.v1.TagResponse
+	(*SpacesRequest)(nil),           // 41: cm.server.v1.SpacesRequest
+	(*SpacesResponse)(nil),          // 42: cm.server.v1.SpacesResponse
+	(*Space)(nil),                   // 43: cm.server.v1.Space
+	(*CreateSpaceRequest)(nil),      // 44: cm.server.v1.CreateSpaceRequest
+	(*CreateSpaceResponse)(nil),     // 45: cm.server.v1.CreateSpaceResponse
+	(*RemoveSpaceRequest)(nil),      // 46: cm.server.v1.RemoveSpaceRequest
+	(*RemoveSpaceResponse)(nil),     // 47: cm.server.v1.RemoveSpaceResponse
+	(*MoveRequest)(nil),             // 48: cm.server.v1.MoveRequest
+	(*MoveResponse)(nil),            // 49: cm.server.v1.MoveResponse
+	(*SpaceMetaEntry)(nil),          // 50: cm.server.v1.SpaceMetaEntry
+	(*ListSpaceMetaRequest)(nil),    // 51: cm.server.v1.ListSpaceMetaRequest
+	(*ListSpaceMetaResponse)(nil),   // 52: cm.server.v1.ListSpaceMetaResponse
+	(*GetSpaceMetaRequest)(nil),     // 53: cm.server.v1.GetSpaceMetaRequest
+	(*GetSpaceMetaResponse)(nil),    // 54: cm.server.v1.GetSpaceMetaResponse
+	(*SetSpaceMetaRequest)(nil),     // 55: cm.server.v1.SetSpaceMetaRequest
+	(*SetSpaceMetaResponse)(nil),    // 56: cm.server.v1.SetSpaceMetaResponse
+	(*RemoveSpaceMetaRequest)(nil),  // 57: cm.server.v1.RemoveSpaceMetaRequest
+	(*RemoveSpaceMetaResponse)(nil), // 58: cm.server.v1.RemoveSpaceMetaResponse
+	(*CloseRequest)(nil),            // 59: cm.server.v1.CloseRequest
+	(*CloseResponse)(nil),           // 60: cm.server.v1.CloseResponse
+	(*DetachRequest)(nil),           // 61: cm.server.v1.DetachRequest
+	(*DetachResponse)(nil),          // 62: cm.server.v1.DetachResponse
+	(*UpgradeClientsRequest)(nil),   // 63: cm.server.v1.UpgradeClientsRequest
+	(*UpgradeClientsResponse)(nil),  // 64: cm.server.v1.UpgradeClientsResponse
+	(*ListRequest)(nil),             // 65: cm.server.v1.ListRequest
+	(*ListResponse)(nil),            // 66: cm.server.v1.ListResponse
+	(*Session)(nil),                 // 67: cm.server.v1.Session
+	(*TerminalMode)(nil),            // 68: cm.server.v1.TerminalMode
+	(*LocationFrame)(nil),           // 69: cm.server.v1.LocationFrame
+	(*KillRequest)(nil),             // 70: cm.server.v1.KillRequest
+	(*KillResponse)(nil),            // 71: cm.server.v1.KillResponse
+	(*SurvivingProcesses)(nil),      // 72: cm.server.v1.SurvivingProcesses
+	(*ForgetRequest)(nil),           // 73: cm.server.v1.ForgetRequest
+	(*ForgetResponse)(nil),          // 74: cm.server.v1.ForgetResponse
+	(*ShelveRequest)(nil),           // 75: cm.server.v1.ShelveRequest
+	(*ShelveResponse)(nil),          // 76: cm.server.v1.ShelveResponse
+	(*RestoreRequest)(nil),          // 77: cm.server.v1.RestoreRequest
+	(*RestoreResponse)(nil),         // 78: cm.server.v1.RestoreResponse
+	(*SwitchRequest)(nil),           // 79: cm.server.v1.SwitchRequest
+	(*SwitchResponse)(nil),          // 80: cm.server.v1.SwitchResponse
+	(*BindRequest)(nil),             // 81: cm.server.v1.BindRequest
+	(*BindResponse)(nil),            // 82: cm.server.v1.BindResponse
+	(*UnbindRequest)(nil),           // 83: cm.server.v1.UnbindRequest
+	(*UnbindResponse)(nil),          // 84: cm.server.v1.UnbindResponse
+	(*SendRequest)(nil),             // 85: cm.server.v1.SendRequest
+	(*SendResponse)(nil),            // 86: cm.server.v1.SendResponse
+	(*HistoryRequest)(nil),          // 87: cm.server.v1.HistoryRequest
+	(*HistoryResponse)(nil),         // 88: cm.server.v1.HistoryResponse
+	(*GetEnvRequest)(nil),           // 89: cm.server.v1.GetEnvRequest
+	(*GetEnvResponse)(nil),          // 90: cm.server.v1.GetEnvResponse
+	nil,                             // 91: cm.server.v1.Open.ClientEnvEntry
+	nil,                             // 92: cm.server.v1.Open.TagsEntry
+	nil,                             // 93: cm.server.v1.TagRequest.SetEntry
+	nil,                             // 94: cm.server.v1.TagResponse.TagsEntry
+	nil,                             // 95: cm.server.v1.MoveResponse.MovedEntry
+	nil,                             // 96: cm.server.v1.MoveResponse.ErrorsEntry
+	nil,                             // 97: cm.server.v1.DetachResponse.DetachedEntry
+	nil,                             // 98: cm.server.v1.DetachResponse.ErrorsEntry
+	nil,                             // 99: cm.server.v1.UpgradeClientsResponse.AskedEntry
+	nil,                             // 100: cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
+	nil,                             // 101: cm.server.v1.UpgradeClientsResponse.ErrorsEntry
+	nil,                             // 102: cm.server.v1.Session.TagsEntry
+	nil,                             // 103: cm.server.v1.KillResponse.ErrorsEntry
+	nil,                             // 104: cm.server.v1.KillResponse.SurvivingEntry
+	nil,                             // 105: cm.server.v1.KillResponse.UnboundEntry
+	nil,                             // 106: cm.server.v1.ForgetResponse.ErrorsEntry
+	nil,                             // 107: cm.server.v1.ShelveResponse.ErrorsEntry
+	nil,                             // 108: cm.server.v1.RestoreResponse.ErrorsEntry
+	nil,                             // 109: cm.server.v1.GetEnvResponse.EnvEntry
 }
 var file_cm_server_v1_server_proto_depIdxs = []int32{
 	0,   // 0: cm.server.v1.ReportRequest.state:type_name -> cm.server.v1.ReportedState
@@ -7084,8 +7672,8 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	27,  // 6: cm.server.v1.AttachRequest.resize:type_name -> cm.server.v1.Resize
 	28,  // 7: cm.server.v1.AttachRequest.detach:type_name -> cm.server.v1.Detach
 	23,  // 8: cm.server.v1.AttachRequest.terminal_graphics:type_name -> cm.server.v1.TerminalGraphics
-	82,  // 9: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
-	83,  // 10: cm.server.v1.Open.tags:type_name -> cm.server.v1.Open.TagsEntry
+	91,  // 9: cm.server.v1.Open.client_env:type_name -> cm.server.v1.Open.ClientEnvEntry
+	92,  // 10: cm.server.v1.Open.tags:type_name -> cm.server.v1.Open.TagsEntry
 	2,   // 11: cm.server.v1.Open.if_running:type_name -> cm.server.v1.IfRunning
 	34,  // 12: cm.server.v1.AttachResponse.opened:type_name -> cm.server.v1.Opened
 	35,  // 13: cm.server.v1.AttachResponse.output:type_name -> cm.server.v1.Output
@@ -7095,95 +7683,105 @@ var file_cm_server_v1_server_proto_depIdxs = []int32{
 	31,  // 17: cm.server.v1.AttachResponse.query:type_name -> cm.server.v1.Query
 	30,  // 18: cm.server.v1.AttachResponse.hosting:type_name -> cm.server.v1.Hosting
 	24,  // 19: cm.server.v1.AttachResponse.images:type_name -> cm.server.v1.Images
-	84,  // 20: cm.server.v1.TagRequest.set:type_name -> cm.server.v1.TagRequest.SetEntry
-	85,  // 21: cm.server.v1.TagResponse.tags:type_name -> cm.server.v1.TagResponse.TagsEntry
+	93,  // 20: cm.server.v1.TagRequest.set:type_name -> cm.server.v1.TagRequest.SetEntry
+	94,  // 21: cm.server.v1.TagResponse.tags:type_name -> cm.server.v1.TagResponse.TagsEntry
 	43,  // 22: cm.server.v1.SpacesResponse.spaces:type_name -> cm.server.v1.Space
-	86,  // 23: cm.server.v1.MoveResponse.moved:type_name -> cm.server.v1.MoveResponse.MovedEntry
-	87,  // 24: cm.server.v1.MoveResponse.errors:type_name -> cm.server.v1.MoveResponse.ErrorsEntry
-	3,   // 25: cm.server.v1.CloseResponse.outcome:type_name -> cm.server.v1.CloseOutcome
-	88,  // 26: cm.server.v1.DetachResponse.detached:type_name -> cm.server.v1.DetachResponse.DetachedEntry
-	89,  // 27: cm.server.v1.DetachResponse.errors:type_name -> cm.server.v1.DetachResponse.ErrorsEntry
-	90,  // 28: cm.server.v1.UpgradeClientsResponse.asked:type_name -> cm.server.v1.UpgradeClientsResponse.AskedEntry
-	91,  // 29: cm.server.v1.UpgradeClientsResponse.already_current:type_name -> cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
-	92,  // 30: cm.server.v1.UpgradeClientsResponse.errors:type_name -> cm.server.v1.UpgradeClientsResponse.ErrorsEntry
-	58,  // 31: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
-	4,   // 32: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
-	93,  // 33: cm.server.v1.Session.tags:type_name -> cm.server.v1.Session.TagsEntry
-	60,  // 34: cm.server.v1.Session.location:type_name -> cm.server.v1.LocationFrame
-	25,  // 35: cm.server.v1.Session.attached_clients:type_name -> cm.server.v1.AttachedClient
-	59,  // 36: cm.server.v1.Session.modes:type_name -> cm.server.v1.TerminalMode
-	94,  // 37: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
-	95,  // 38: cm.server.v1.KillResponse.surviving:type_name -> cm.server.v1.KillResponse.SurvivingEntry
-	96,  // 39: cm.server.v1.KillResponse.unbound:type_name -> cm.server.v1.KillResponse.UnboundEntry
-	97,  // 40: cm.server.v1.ForgetResponse.errors:type_name -> cm.server.v1.ForgetResponse.ErrorsEntry
-	98,  // 41: cm.server.v1.ShelveResponse.errors:type_name -> cm.server.v1.ShelveResponse.ErrorsEntry
-	99,  // 42: cm.server.v1.RestoreResponse.errors:type_name -> cm.server.v1.RestoreResponse.ErrorsEntry
-	1,   // 43: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
-	15,  // 44: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
-	5,   // 45: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
-	100, // 46: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
-	63,  // 47: cm.server.v1.KillResponse.SurvivingEntry.value:type_name -> cm.server.v1.SurvivingProcesses
-	21,  // 48: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
-	56,  // 49: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
-	61,  // 50: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
-	64,  // 51: cm.server.v1.Server.Forget:input_type -> cm.server.v1.ForgetRequest
-	66,  // 52: cm.server.v1.Server.Shelve:input_type -> cm.server.v1.ShelveRequest
-	68,  // 53: cm.server.v1.Server.Restore:input_type -> cm.server.v1.RestoreRequest
-	76,  // 54: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
-	78,  // 55: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
-	80,  // 56: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
-	8,   // 57: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
-	10,  // 58: cm.server.v1.Server.SetResume:input_type -> cm.server.v1.SetResumeRequest
-	12,  // 59: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
-	14,  // 60: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
-	16,  // 61: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
-	37,  // 62: cm.server.v1.Server.Signal:input_type -> cm.server.v1.SignalRequest
-	39,  // 63: cm.server.v1.Server.Tag:input_type -> cm.server.v1.TagRequest
-	41,  // 64: cm.server.v1.Server.Spaces:input_type -> cm.server.v1.SpacesRequest
-	44,  // 65: cm.server.v1.Server.CreateSpace:input_type -> cm.server.v1.CreateSpaceRequest
-	46,  // 66: cm.server.v1.Server.RemoveSpace:input_type -> cm.server.v1.RemoveSpaceRequest
-	48,  // 67: cm.server.v1.Server.Move:input_type -> cm.server.v1.MoveRequest
-	72,  // 68: cm.server.v1.Server.Bind:input_type -> cm.server.v1.BindRequest
-	74,  // 69: cm.server.v1.Server.Unbind:input_type -> cm.server.v1.UnbindRequest
-	70,  // 70: cm.server.v1.Server.Switch:input_type -> cm.server.v1.SwitchRequest
-	52,  // 71: cm.server.v1.Server.Detach:input_type -> cm.server.v1.DetachRequest
-	50,  // 72: cm.server.v1.Server.Close:input_type -> cm.server.v1.CloseRequest
-	54,  // 73: cm.server.v1.Server.UpgradeClients:input_type -> cm.server.v1.UpgradeClientsRequest
-	6,   // 74: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
-	19,  // 75: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
-	29,  // 76: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
-	57,  // 77: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
-	62,  // 78: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
-	65,  // 79: cm.server.v1.Server.Forget:output_type -> cm.server.v1.ForgetResponse
-	67,  // 80: cm.server.v1.Server.Shelve:output_type -> cm.server.v1.ShelveResponse
-	69,  // 81: cm.server.v1.Server.Restore:output_type -> cm.server.v1.RestoreResponse
-	77,  // 82: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
-	79,  // 83: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
-	81,  // 84: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
-	9,   // 85: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
-	11,  // 86: cm.server.v1.Server.SetResume:output_type -> cm.server.v1.SetResumeResponse
-	13,  // 87: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
-	15,  // 88: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
-	17,  // 89: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
-	38,  // 90: cm.server.v1.Server.Signal:output_type -> cm.server.v1.SignalResponse
-	40,  // 91: cm.server.v1.Server.Tag:output_type -> cm.server.v1.TagResponse
-	42,  // 92: cm.server.v1.Server.Spaces:output_type -> cm.server.v1.SpacesResponse
-	45,  // 93: cm.server.v1.Server.CreateSpace:output_type -> cm.server.v1.CreateSpaceResponse
-	47,  // 94: cm.server.v1.Server.RemoveSpace:output_type -> cm.server.v1.RemoveSpaceResponse
-	49,  // 95: cm.server.v1.Server.Move:output_type -> cm.server.v1.MoveResponse
-	73,  // 96: cm.server.v1.Server.Bind:output_type -> cm.server.v1.BindResponse
-	75,  // 97: cm.server.v1.Server.Unbind:output_type -> cm.server.v1.UnbindResponse
-	71,  // 98: cm.server.v1.Server.Switch:output_type -> cm.server.v1.SwitchResponse
-	53,  // 99: cm.server.v1.Server.Detach:output_type -> cm.server.v1.DetachResponse
-	51,  // 100: cm.server.v1.Server.Close:output_type -> cm.server.v1.CloseResponse
-	55,  // 101: cm.server.v1.Server.UpgradeClients:output_type -> cm.server.v1.UpgradeClientsResponse
-	7,   // 102: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
-	20,  // 103: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
-	76,  // [76:104] is the sub-list for method output_type
-	48,  // [48:76] is the sub-list for method input_type
-	48,  // [48:48] is the sub-list for extension type_name
-	48,  // [48:48] is the sub-list for extension extendee
-	0,   // [0:48] is the sub-list for field type_name
+	95,  // 23: cm.server.v1.MoveResponse.moved:type_name -> cm.server.v1.MoveResponse.MovedEntry
+	96,  // 24: cm.server.v1.MoveResponse.errors:type_name -> cm.server.v1.MoveResponse.ErrorsEntry
+	50,  // 25: cm.server.v1.ListSpaceMetaResponse.entries:type_name -> cm.server.v1.SpaceMetaEntry
+	50,  // 26: cm.server.v1.GetSpaceMetaResponse.entry:type_name -> cm.server.v1.SpaceMetaEntry
+	3,   // 27: cm.server.v1.CloseResponse.outcome:type_name -> cm.server.v1.CloseOutcome
+	97,  // 28: cm.server.v1.DetachResponse.detached:type_name -> cm.server.v1.DetachResponse.DetachedEntry
+	98,  // 29: cm.server.v1.DetachResponse.errors:type_name -> cm.server.v1.DetachResponse.ErrorsEntry
+	99,  // 30: cm.server.v1.UpgradeClientsResponse.asked:type_name -> cm.server.v1.UpgradeClientsResponse.AskedEntry
+	100, // 31: cm.server.v1.UpgradeClientsResponse.already_current:type_name -> cm.server.v1.UpgradeClientsResponse.AlreadyCurrentEntry
+	101, // 32: cm.server.v1.UpgradeClientsResponse.errors:type_name -> cm.server.v1.UpgradeClientsResponse.ErrorsEntry
+	67,  // 33: cm.server.v1.ListResponse.sessions:type_name -> cm.server.v1.Session
+	4,   // 34: cm.server.v1.Session.state:type_name -> cm.server.v1.SessionState
+	102, // 35: cm.server.v1.Session.tags:type_name -> cm.server.v1.Session.TagsEntry
+	69,  // 36: cm.server.v1.Session.location:type_name -> cm.server.v1.LocationFrame
+	25,  // 37: cm.server.v1.Session.attached_clients:type_name -> cm.server.v1.AttachedClient
+	68,  // 38: cm.server.v1.Session.modes:type_name -> cm.server.v1.TerminalMode
+	103, // 39: cm.server.v1.KillResponse.errors:type_name -> cm.server.v1.KillResponse.ErrorsEntry
+	104, // 40: cm.server.v1.KillResponse.surviving:type_name -> cm.server.v1.KillResponse.SurvivingEntry
+	105, // 41: cm.server.v1.KillResponse.unbound:type_name -> cm.server.v1.KillResponse.UnboundEntry
+	106, // 42: cm.server.v1.ForgetResponse.errors:type_name -> cm.server.v1.ForgetResponse.ErrorsEntry
+	107, // 43: cm.server.v1.ShelveResponse.errors:type_name -> cm.server.v1.ShelveResponse.ErrorsEntry
+	108, // 44: cm.server.v1.RestoreResponse.errors:type_name -> cm.server.v1.RestoreResponse.ErrorsEntry
+	1,   // 45: cm.server.v1.SendRequest.wait_until:type_name -> cm.server.v1.WaitState
+	15,  // 46: cm.server.v1.SendResponse.wait:type_name -> cm.server.v1.WaitResponse
+	5,   // 47: cm.server.v1.HistoryRequest.format:type_name -> cm.server.v1.HistoryFormat
+	109, // 48: cm.server.v1.GetEnvResponse.env:type_name -> cm.server.v1.GetEnvResponse.EnvEntry
+	72,  // 49: cm.server.v1.KillResponse.SurvivingEntry.value:type_name -> cm.server.v1.SurvivingProcesses
+	21,  // 50: cm.server.v1.Server.Attach:input_type -> cm.server.v1.AttachRequest
+	65,  // 51: cm.server.v1.Server.List:input_type -> cm.server.v1.ListRequest
+	70,  // 52: cm.server.v1.Server.Kill:input_type -> cm.server.v1.KillRequest
+	73,  // 53: cm.server.v1.Server.Forget:input_type -> cm.server.v1.ForgetRequest
+	75,  // 54: cm.server.v1.Server.Shelve:input_type -> cm.server.v1.ShelveRequest
+	77,  // 55: cm.server.v1.Server.Restore:input_type -> cm.server.v1.RestoreRequest
+	85,  // 56: cm.server.v1.Server.Send:input_type -> cm.server.v1.SendRequest
+	87,  // 57: cm.server.v1.Server.History:input_type -> cm.server.v1.HistoryRequest
+	89,  // 58: cm.server.v1.Server.GetEnv:input_type -> cm.server.v1.GetEnvRequest
+	8,   // 59: cm.server.v1.Server.Report:input_type -> cm.server.v1.ReportRequest
+	10,  // 60: cm.server.v1.Server.SetResume:input_type -> cm.server.v1.SetResumeRequest
+	12,  // 61: cm.server.v1.Server.Read:input_type -> cm.server.v1.ReadRequest
+	14,  // 62: cm.server.v1.Server.Wait:input_type -> cm.server.v1.WaitRequest
+	16,  // 63: cm.server.v1.Server.Doctor:input_type -> cm.server.v1.DoctorRequest
+	37,  // 64: cm.server.v1.Server.Signal:input_type -> cm.server.v1.SignalRequest
+	39,  // 65: cm.server.v1.Server.Tag:input_type -> cm.server.v1.TagRequest
+	41,  // 66: cm.server.v1.Server.Spaces:input_type -> cm.server.v1.SpacesRequest
+	44,  // 67: cm.server.v1.Server.CreateSpace:input_type -> cm.server.v1.CreateSpaceRequest
+	46,  // 68: cm.server.v1.Server.RemoveSpace:input_type -> cm.server.v1.RemoveSpaceRequest
+	48,  // 69: cm.server.v1.Server.Move:input_type -> cm.server.v1.MoveRequest
+	51,  // 70: cm.server.v1.Server.ListSpaceMeta:input_type -> cm.server.v1.ListSpaceMetaRequest
+	53,  // 71: cm.server.v1.Server.GetSpaceMeta:input_type -> cm.server.v1.GetSpaceMetaRequest
+	55,  // 72: cm.server.v1.Server.SetSpaceMeta:input_type -> cm.server.v1.SetSpaceMetaRequest
+	57,  // 73: cm.server.v1.Server.RemoveSpaceMeta:input_type -> cm.server.v1.RemoveSpaceMetaRequest
+	81,  // 74: cm.server.v1.Server.Bind:input_type -> cm.server.v1.BindRequest
+	83,  // 75: cm.server.v1.Server.Unbind:input_type -> cm.server.v1.UnbindRequest
+	79,  // 76: cm.server.v1.Server.Switch:input_type -> cm.server.v1.SwitchRequest
+	61,  // 77: cm.server.v1.Server.Detach:input_type -> cm.server.v1.DetachRequest
+	59,  // 78: cm.server.v1.Server.Close:input_type -> cm.server.v1.CloseRequest
+	63,  // 79: cm.server.v1.Server.UpgradeClients:input_type -> cm.server.v1.UpgradeClientsRequest
+	6,   // 80: cm.server.v1.Server.Status:input_type -> cm.server.v1.StatusRequest
+	19,  // 81: cm.server.v1.Server.Shutdown:input_type -> cm.server.v1.ShutdownRequest
+	29,  // 82: cm.server.v1.Server.Attach:output_type -> cm.server.v1.AttachResponse
+	66,  // 83: cm.server.v1.Server.List:output_type -> cm.server.v1.ListResponse
+	71,  // 84: cm.server.v1.Server.Kill:output_type -> cm.server.v1.KillResponse
+	74,  // 85: cm.server.v1.Server.Forget:output_type -> cm.server.v1.ForgetResponse
+	76,  // 86: cm.server.v1.Server.Shelve:output_type -> cm.server.v1.ShelveResponse
+	78,  // 87: cm.server.v1.Server.Restore:output_type -> cm.server.v1.RestoreResponse
+	86,  // 88: cm.server.v1.Server.Send:output_type -> cm.server.v1.SendResponse
+	88,  // 89: cm.server.v1.Server.History:output_type -> cm.server.v1.HistoryResponse
+	90,  // 90: cm.server.v1.Server.GetEnv:output_type -> cm.server.v1.GetEnvResponse
+	9,   // 91: cm.server.v1.Server.Report:output_type -> cm.server.v1.ReportResponse
+	11,  // 92: cm.server.v1.Server.SetResume:output_type -> cm.server.v1.SetResumeResponse
+	13,  // 93: cm.server.v1.Server.Read:output_type -> cm.server.v1.ReadResponse
+	15,  // 94: cm.server.v1.Server.Wait:output_type -> cm.server.v1.WaitResponse
+	17,  // 95: cm.server.v1.Server.Doctor:output_type -> cm.server.v1.DoctorResponse
+	38,  // 96: cm.server.v1.Server.Signal:output_type -> cm.server.v1.SignalResponse
+	40,  // 97: cm.server.v1.Server.Tag:output_type -> cm.server.v1.TagResponse
+	42,  // 98: cm.server.v1.Server.Spaces:output_type -> cm.server.v1.SpacesResponse
+	45,  // 99: cm.server.v1.Server.CreateSpace:output_type -> cm.server.v1.CreateSpaceResponse
+	47,  // 100: cm.server.v1.Server.RemoveSpace:output_type -> cm.server.v1.RemoveSpaceResponse
+	49,  // 101: cm.server.v1.Server.Move:output_type -> cm.server.v1.MoveResponse
+	52,  // 102: cm.server.v1.Server.ListSpaceMeta:output_type -> cm.server.v1.ListSpaceMetaResponse
+	54,  // 103: cm.server.v1.Server.GetSpaceMeta:output_type -> cm.server.v1.GetSpaceMetaResponse
+	56,  // 104: cm.server.v1.Server.SetSpaceMeta:output_type -> cm.server.v1.SetSpaceMetaResponse
+	58,  // 105: cm.server.v1.Server.RemoveSpaceMeta:output_type -> cm.server.v1.RemoveSpaceMetaResponse
+	82,  // 106: cm.server.v1.Server.Bind:output_type -> cm.server.v1.BindResponse
+	84,  // 107: cm.server.v1.Server.Unbind:output_type -> cm.server.v1.UnbindResponse
+	80,  // 108: cm.server.v1.Server.Switch:output_type -> cm.server.v1.SwitchResponse
+	62,  // 109: cm.server.v1.Server.Detach:output_type -> cm.server.v1.DetachResponse
+	60,  // 110: cm.server.v1.Server.Close:output_type -> cm.server.v1.CloseResponse
+	64,  // 111: cm.server.v1.Server.UpgradeClients:output_type -> cm.server.v1.UpgradeClientsResponse
+	7,   // 112: cm.server.v1.Server.Status:output_type -> cm.server.v1.StatusResponse
+	20,  // 113: cm.server.v1.Server.Shutdown:output_type -> cm.server.v1.ShutdownResponse
+	82,  // [82:114] is the sub-list for method output_type
+	50,  // [50:82] is the sub-list for method input_type
+	50,  // [50:50] is the sub-list for extension type_name
+	50,  // [50:50] is the sub-list for extension extendee
+	0,   // [0:50] is the sub-list for field type_name
 }
 
 func init() { file_cm_server_v1_server_proto_init() }
@@ -7210,14 +7808,16 @@ func file_cm_server_v1_server_proto_init() {
 		(*AttachResponse_Hosting)(nil),
 		(*AttachResponse_Images)(nil),
 	}
-	file_cm_server_v1_server_proto_msgTypes[52].OneofWrappers = []any{}
+	file_cm_server_v1_server_proto_msgTypes[49].OneofWrappers = []any{}
+	file_cm_server_v1_server_proto_msgTypes[51].OneofWrappers = []any{}
+	file_cm_server_v1_server_proto_msgTypes[61].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cm_server_v1_server_proto_rawDesc), len(file_cm_server_v1_server_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   95,
+			NumMessages:   104,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

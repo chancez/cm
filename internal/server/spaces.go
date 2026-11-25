@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/chancez/cm/internal/spaces"
 	"github.com/chancez/cm/internal/store"
@@ -157,4 +158,87 @@ func (s *Service) Move(ctx context.Context, req *serverv1.MoveRequest) (*serverv
 		resp.Moved[ref] = from
 	}
 	return resp, nil
+}
+
+// validateMeta checks a metadata request's space and key, here because this is the trust boundary: both
+// are printed to the terminal of whoever lists them.
+func validateMeta(space, key string) error {
+	if err := spaces.ValidateName(space); err != nil {
+		return err
+	}
+	return spaces.ValidateMetaKey(key)
+}
+
+// ListSpaceMeta lists a space's metadata keys.
+func (s *Service) ListSpaceMeta(ctx context.Context, req *serverv1.ListSpaceMetaRequest) (*serverv1.ListSpaceMetaResponse, error) {
+	if err := spaces.ValidateName(req.Space); err != nil {
+		return nil, err
+	}
+	all, err := s.mgr.store.SpaceMetas(ctx, req.Space, req.Prefix)
+	if err != nil {
+		return nil, err
+	}
+	resp := &serverv1.ListSpaceMetaResponse{}
+	for _, m := range all {
+		resp.Entries = append(resp.Entries, spaceMetaEntry(m))
+	}
+	return resp, nil
+}
+
+// GetSpaceMeta returns one key's value.
+func (s *Service) GetSpaceMeta(ctx context.Context, req *serverv1.GetSpaceMetaRequest) (*serverv1.GetSpaceMetaResponse, error) {
+	if err := validateMeta(req.Space, req.Key); err != nil {
+		return nil, err
+	}
+	m, err := s.mgr.store.GetSpaceMeta(ctx, req.Space, req.Key)
+	if errors.Is(err, store.ErrMetaNotFound) {
+		return &serverv1.GetSpaceMetaResponse{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.GetSpaceMetaResponse{Found: true, Entry: spaceMetaEntry(m)}, nil
+}
+
+// SetSpaceMeta writes one key's value.
+func (s *Service) SetSpaceMeta(ctx context.Context, req *serverv1.SetSpaceMetaRequest) (*serverv1.SetSpaceMetaResponse, error) {
+	if err := validateMeta(req.Space, req.Key); err != nil {
+		return nil, err
+	}
+	if len(req.Value) > spaces.MaxMetaValueLen {
+		return nil, fmt.Errorf("value is %d bytes, limit is %d", len(req.Value), spaces.MaxMetaValueLen)
+	}
+	rev, err := s.mgr.store.SetSpaceMeta(ctx, req.Space, req.Key, req.Value, req.IfRevision)
+	if mismatch, ok := errors.AsType[*store.RevisionMismatchError](err); ok {
+		return &serverv1.SetSpaceMetaResponse{Conflict: true, CurrentRevision: mismatch.Current}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.SetSpaceMetaResponse{Revision: rev}, nil
+}
+
+// RemoveSpaceMeta removes one key.
+func (s *Service) RemoveSpaceMeta(ctx context.Context, req *serverv1.RemoveSpaceMetaRequest) (*serverv1.RemoveSpaceMetaResponse, error) {
+	if err := validateMeta(req.Space, req.Key); err != nil {
+		return nil, err
+	}
+	removed, err := s.mgr.store.DeleteSpaceMeta(ctx, req.Space, req.Key, req.IfRevision)
+	if mismatch, ok := errors.AsType[*store.RevisionMismatchError](err); ok {
+		return &serverv1.RemoveSpaceMetaResponse{Conflict: true, CurrentRevision: mismatch.Current}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &serverv1.RemoveSpaceMetaResponse{Removed: removed}, nil
+}
+
+func spaceMetaEntry(m store.SpaceMeta) *serverv1.SpaceMetaEntry {
+	return &serverv1.SpaceMetaEntry{
+		Key:           m.Key,
+		Value:         m.Value,
+		Size:          uint32(m.Size),
+		Revision:      m.Revision,
+		UpdatedAtUnix: m.UpdatedAt.Unix(),
+	}
 }

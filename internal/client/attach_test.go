@@ -173,6 +173,26 @@ func (s *stubService) Move(
 ) (*serverv1.MoveResponse, error) {
 	panic("unused")
 }
+func (s *stubService) ListSpaceMeta(
+	context.Context, *serverv1.ListSpaceMetaRequest,
+) (*serverv1.ListSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (s *stubService) GetSpaceMeta(
+	context.Context, *serverv1.GetSpaceMetaRequest,
+) (*serverv1.GetSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (s *stubService) SetSpaceMeta(
+	context.Context, *serverv1.SetSpaceMetaRequest,
+) (*serverv1.SetSpaceMetaResponse, error) {
+	panic("unused")
+}
+func (s *stubService) RemoveSpaceMeta(
+	context.Context, *serverv1.RemoveSpaceMetaRequest,
+) (*serverv1.RemoveSpaceMetaResponse, error) {
+	panic("unused")
+}
 func (s *stubService) Close(
 	context.Context, *serverv1.CloseRequest,
 ) (*serverv1.CloseResponse, error) {

@@ -117,6 +117,14 @@ const (
 	// Unimplemented error naming a method, and a close watcher that reads it as a failure leaves the window's
 	// session as it was, which is at least not destructive.
 	Close Name = "close"
+
+	// SpaceMeta means the server implements the ListSpaceMeta, GetSpaceMeta, SetSpaceMeta and
+	// RemoveSpaceMeta RPCs, a space's opaque metadata.
+	//
+	// Checked before `cm space meta` sends anything. A tool saving a layout through it runs unattended, and
+	// an older server's Unimplemented error names a method rather than saying the server needs restarting
+	// onto the binary already installed.
+	SpaceMeta Name = "spaces.meta"
 )
 
 // Support is what a caller learns when it asks about one capability.
@@ -296,6 +304,7 @@ func Server() Set {
 		Shelve,
 		Spaces,
 		Close,
+		SpaceMeta,
 	)
 }
 

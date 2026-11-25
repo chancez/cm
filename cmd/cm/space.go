@@ -47,6 +47,7 @@ repository's directory such as .dotfiles does; '.' and '..' are refused.`,
 		newSpaceCreateCommand(g),
 		newSpaceRemoveCommand(g),
 		newSpaceMoveCommand(g),
+		newSpaceMetaCommand(g),
 	)
 	return cmd
 }
