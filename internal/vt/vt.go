@@ -267,6 +267,40 @@ func (t *Terminal) SetScrollbackLimit(lines int) error {
 	return check(t.term.SetScrollbackMaxLines(new(uint(lines))), "setting scrollback limit")
 }
 
+// compressionState is what deciding whether to compress needs to know, all of it cheap to read: the
+// activity token moves on every write, and the page counts look at each page without decompressing any.
+type compressionState struct {
+	activity        uint64
+	pages           uint64
+	compressedPages uint64
+}
+
+func (t *Terminal) compressionState() (compressionState, error) {
+	activity, err := t.term.CompressionActivity()
+	if err != nil {
+		return compressionState{}, check(err, "reading compression activity")
+	}
+	usage, err := t.term.MemoryUsage()
+	if err != nil {
+		return compressionState{}, check(err, "reading memory usage")
+	}
+	return compressionState{
+		activity:        activity,
+		pages:           usage.Primary.Pages + usage.Alternate.Pages,
+		compressedPages: usage.Primary.CompressedPages + usage.Alternate.CompressedPages,
+	}, nil
+}
+
+// compressStep runs one bounded step of scrollback compression. more reports that another step has
+// work to do; supported is false on a platform that cannot reclaim the memory.
+func (t *Terminal) compressStep() (more, supported bool, err error) {
+	res, err := t.term.Compress(libghostty.TerminalCompressionIncremental)
+	if err != nil {
+		return false, true, check(err, "compressing scrollback")
+	}
+	return res == libghostty.TerminalCompressionPending, res != libghostty.TerminalCompressionUnsupported, nil
+}
+
 // Close releases the terminal.
 //
 // Safe to call more than once, because teardown can be reached both by an explicit close and

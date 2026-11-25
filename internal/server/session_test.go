@@ -58,6 +58,11 @@ type fakeTerminal struct {
 	onAltScreen bool
 	// kittyKeyboard stands in for a program having pushed kitty keyboard protocol flags.
 	kittyKeyboard bool
+	// compactWork is how many more Compact calls report more work, compactErr what Compact fails with, and
+	// compactCalls counts the calls.
+	compactWork  int
+	compactErr   error
+	compactCalls int
 	// cellWidth and cellHeight are the last cell metrics the model was resized with.
 	cellWidth  uint16
 	cellHeight uint16
@@ -131,6 +136,20 @@ func (f *fakeTerminal) Continuation() ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.continuation, f.continuationErr
+}
+
+func (f *fakeTerminal) Compact() (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compactCalls++
+	if f.compactErr != nil {
+		return false, f.compactErr
+	}
+	if f.compactWork > 0 {
+		f.compactWork--
+		return true, nil
+	}
+	return false, nil
 }
 
 func (f *fakeTerminal) Close() error {

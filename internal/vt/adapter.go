@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/chancez/cm/internal/graphics"
 	"github.com/chancez/cm/internal/paths"
@@ -47,7 +48,22 @@ type SessionTerminal struct {
 	// title and pwd are the most recent values reported by the shell.
 	title string
 	pwd   string
+
+	// seen is the compression state Compact last looked at, and quietSince when its activity last moved.
+	seen       compressionState
+	quietSince time.Time
+	// settled is the state after the last completed pass, when there was one since activity last moved.
+	settled *compressionState
+	// unsupported is set once libghostty reports it cannot reclaim memory here, which does not change.
+	unsupported bool
 }
+
+// CompactIdle is how long a model's output must be quiet before Compact compresses its scrollback.
+//
+// libghostty asks for an idle delay restarted by every write, since compressing a page that is still
+// being written is wasted work. Quiet rather than idle in any stronger sense: a session streaming a log
+// never compresses, and the pages it pushes into history wait for it to stop.
+const CompactIdle = 5 * time.Second
 
 // NewSessionTerminal creates a terminal model for a session.
 //
@@ -237,6 +253,61 @@ func (s *SessionTerminal) HTML() (out []byte, err error) {
 	defer s.mu.Unlock()
 	defer func() { err = recovered(recover(), err, "rendering terminal contents") }()
 	return s.term.HTML()
+}
+
+// Compact runs one bounded step of scrollback compression once output has been quiet for CompactIdle,
+// reporting whether another step has work to do. Call it periodically, and again at once while it
+// reports more: each step holds the lock for about 100us, so output arriving between steps is not held.
+//
+// Measured at 100000 lines: 235 MB resident at 200 columns, 32 MB compressed. Without this every page of
+// scrollback stays at its full width in cells, whatever the lines hold.
+//
+// Activity alone does not say when to compress again. Reading the scrollback decompresses every page it
+// touches and leaves activity where it was: a restore, which every attach does, took 1.1 MB back to 33.2
+// MB with the token unchanged. So a pass also runs again when fewer pages are compressed than the last
+// one left.
+func (s *SessionTerminal) Compact() (more bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { err = recovered(recover(), err, "compressing scrollback") }()
+	// Closed is an end rather than a failure: the server reads its terminal pointer before calling, and the
+	// session can end in between. Checked here because libghostty would be handed a freed terminal.
+	if s.unsupported || s.term.closed {
+		return false, nil
+	}
+	state, err := s.term.compressionState()
+	if err != nil {
+		return false, err
+	}
+	now := time.Now()
+	if s.quietSince.IsZero() || state.activity != s.seen.activity {
+		s.seen, s.quietSince, s.settled = state, now, nil
+		return false, nil
+	}
+	s.seen = state
+	if now.Sub(s.quietSince) < CompactIdle {
+		return false, nil
+	}
+	if s.settled != nil && state.compressedPages >= s.settled.compressedPages {
+		return false, nil
+	}
+	more, supported, err := s.term.compressStep()
+	if err != nil {
+		return false, err
+	}
+	if !supported {
+		s.unsupported = true
+		return false, nil
+	}
+	if more {
+		return true, nil
+	}
+	after, err := s.term.compressionState()
+	if err != nil {
+		return false, err
+	}
+	s.settled = &after
+	return false, nil
 }
 
 // Close releases the emulator.

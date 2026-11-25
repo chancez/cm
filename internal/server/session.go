@@ -657,6 +657,9 @@ type Terminal interface {
 	// ApplyModes sets modes as a program's sequences would, for an adoption whose replay lost the bytes
 	// that set them.
 	ApplyModes(values map[string]int) error
+	// Compact runs one bounded step of scrollback compression if the model's output has been quiet long
+	// enough, reporting whether another step has work to do. See runCompactor.
+	Compact() (more bool, err error)
 	// Plain, VT, ANSI, and HTML render the terminal contents, scrollback included, for a history
 	// dump.
 	Plain() ([]byte, error)
@@ -884,6 +887,8 @@ func newSession(
 	// Expires proxied queries a client never answered, which is what keeps one unanswerable question from
 	// holding every reply behind it. Ends with the session, via s.done.
 	go s.runRequestSweeper()
+	// Compresses the model's scrollback once output is quiet. Ends with the session, via s.done.
+	go s.runCompactor()
 	return s, nil
 }
 

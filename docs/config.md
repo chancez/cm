@@ -255,7 +255,10 @@ a page of the number given, in either direction: `2000` kept 1857 rows at 200 co
 about 200 rows.
 
 Memory is per row and per column, not per character of output: about 8 bytes a cell, whatever the line
-holds. 100000 lines at 200 columns measured 235 MB resident, against 17.6 MB of text.
+holds. 100000 lines at 200 columns measured 235 MB resident, against 17.6 MB of text. cm compresses a
+session's scrollback once its output has been quiet for 5 seconds, which took the same 100000 lines to 32
+MB. Reading the scrollback back, as a restore on attach, `cm history`, or the pager does, decompresses it
+until the next quiet spell.
 
 ### pager
 
