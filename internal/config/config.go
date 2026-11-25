@@ -109,6 +109,24 @@ type Config struct {
 	Persist PersistConfig `toml:"persist"`
 	Remote  RemoteConfig  `toml:"remote"`
 	Close   CloseConfig   `toml:"close"`
+	Server  ServerConfig  `toml:"server"`
+}
+
+// ServerConfig is how a client starts a server. Read by the client that starts one, so it applies from the
+// next start.
+type ServerConfig struct {
+	// Launchd starts the server through a one-shot launchd job on macOS rather than as a detached child of the
+	// client, and is ignored elsewhere.
+	//
+	// Off by default, because each choice breaks something and this one breaks less of what is visible. A
+	// launchd job gets a coalition of its own, so force-quitting the app that started the first client cannot
+	// end every session, which is how 27 died at once. It also makes cm the privacy (TCC) responsible process
+	// for every program in a session, so access to Downloads or another app's group container is asked of cm
+	// rather than of the terminal the user already approved: `op` could not read 1Password's settings and
+	// reported not being signed in. An ad-hoc signed cm loses any grant at the next install, so on is only
+	// livable with a signed build. Started directly, the server and every session take the coalition and the
+	// privacy grants of whichever app started that first client, as tmux's do.
+	Launchd bool `toml:"launchd"`
 }
 
 // CloseConfig is what `cm close`, a terminal's window-close hook, does to the session a closed window showed

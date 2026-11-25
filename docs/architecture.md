@@ -1173,9 +1173,13 @@ observable only from inside a client, which is where it is now handled.
 
 ## Where a server is started from, on macOS
 
-On macOS a client starts the server through a one-shot launchd job, not as its own child. The job runs `cm
-server spawn`, which starts the server in a session of its own and exits, and the client removes the job once
-the server answers. Linux starts it directly, as before.
+A client starts the server as a detached child of itself by default. On macOS, `[server] launchd = true`
+starts it through a one-shot launchd job instead. The job runs `cm server spawn`, which starts the server in a
+session of its own and exits, and the client removes the job once the server answers. Linux always starts it
+directly.
+
+Neither is free, which is why it is a setting. launchd protects sessions from a Force Quit, below, and costs
+the privacy grants a terminal already has. Starting directly is the reverse.
 
 The reason is the coalition, which macOS assigns at spawn and which `Setsid` does not change. LaunchServices
 counts every process in an app's coalition as that app's. If the app quits while any of them are still
@@ -1228,6 +1232,41 @@ starts the server directly as before. Refusing to start one would take every win
 
 This protects servers started from now on. A session that is already running stays in whatever coalition its
 server was started in, and only recreating it moves it.
+
+### What launchd costs: privacy grants
+
+macOS privacy checks (TCC) are made against a process's *responsible process*, which a child inherits at
+spawn, like its coalition. A server started directly inherits the terminal that started the first client, so
+a program in a session is checked against that terminal's grants, which the user has usually given already.
+A launchd job has no responsible process above it, so the server becomes its own and cm is responsible for
+everything in every session. tccd logged 13424 checks attributed to cm in one day, against 86 for kitty.
+
+Two symptoms, both pointing away from cm:
+
+- A program touching Downloads, Documents, or Desktop prompted "cm would like to access...". nvim's
+  auto-session globbed all of Downloads at every startup.
+- `op vaults list` said it was not signed in, where Terminal.app worked. `op whoami --debug` showed EPERM
+  reading `~/Library/Group Containers/2BUA8C4S2C.com.1password/.../settings.json`, which macOS protects as
+  another app's data. op took the failure to mean the desktop app was not installed and skipped its app
+  integration. No prompt appeared at all.
+
+A grant to cm does not survive an install either. TCC keys a grant on the binary's designated requirement,
+and an ad-hoc signature, which is what the Go linker writes, makes that the cdhash, so each build is a new
+program. Signed with a certificate, the requirement names the certificate instead: two different builds
+signed with one self-signed certificate both had `identifier "com.github.chancez.cm" and certificate leaf =
+H"..."`. `CM_CODESIGN_IDENTITY` makes `mise run install` sign that way, and `mise run codesign-cert`, which
+install runs first, creates a self-signed identity under that name in the login keychain if there is none.
+
+So off is the default, for the same trade tmux makes. Someone who wants Force Quit protection turns launchd on
+and signs their build, then grants cm what its sessions need once.
+
+Responsibility is inherited like the coalition, so a server started from inside a session takes that
+session's, which traces back to whatever started the first server. Moving off a launchd-started server means
+restarting it from a shell that is not in a cm session.
+
+*Not claiming the terminal's responsibility from launchd.* `responsibility_spawnattrs_setdisclaim` makes the
+child its own responsible process, which is what a launchd job already gets, and has no way to name another
+app. It does not change the coalition either.
 
 ## Terminal queries: cm answers, or asks one client and relays
 

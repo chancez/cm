@@ -366,5 +366,8 @@ Three places, by kind:
   Terminal.app at 09:56 still had Terminal's coalition six hours and two upgrades later, because each new
   server was started from inside a session, and one Force Quit in the Dock ended 27 sessions. The shims
   logged nothing but `shim exiting ... shell_exited=false`. The Dock's own log names every pid it kills:
-  `log show --info --debug --predicate 'process == "Dock"'`. The server is now started through a launchd
-  job, which gets a coalition of its own. See `docs/architecture.md` on where a server is started from.
+  `log show --info --debug --predicate 'process == "Dock"'`. `[server] launchd = true` starts the server
+  through a launchd job, which gets a coalition of its own, and it is off by default because it also makes
+  cm the privacy (TCC) responsible process for every session: `op` could not read 1Password's group
+  container and said it was not signed in, while an ad-hoc signed cm loses any grant at each install. See
+  `docs/architecture.md` on where a server is started from.

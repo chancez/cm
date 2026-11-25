@@ -21,8 +21,15 @@ const launchdLabelPrefix = "com.github.chancez.cm.server"
 // started by a terminal's own integration carries only a handful of entries.
 const launchctl = "/bin/launchctl"
 
-// startServer starts a server through a launchd job, so it does not join the coalition of the app that
-// started this client, and returns what to call once the server answers.
+// startServer starts a server, through a launchd job when launchd is set so it does not join the coalition of
+// the app that started this client, and returns what to call once the server answers.
+//
+// launchd comes from [server] launchd and is off by default. A server started directly is the privacy (TCC)
+// responsible process of nothing: TCC asks the terminal that started the first client, which the user has
+// usually approved already. Under launchd, cm is responsible for every program in every session, and an
+// ad-hoc signed cm loses whatever it was granted at the next install. `op vaults list` reported not being
+// signed in because it got EPERM reading 1Password's group container, and the Downloads prompt named cm.
+// See ServerConfig.Launchd for the trade.
 //
 // macOS puts every process into the coalition of the process that spawned it, and Setsid does not leave it.
 // LaunchServices treats every process in an app's coalition as belonging to that app: once the app quits with
@@ -48,7 +55,10 @@ const launchctl = "/bin/launchctl"
 // Costs about 65ms on a start: `cm list` starting a server took 62 to 66ms directly and 115 to 194ms this
 // way, median 131ms, of which bootstrap is about 10ms and bootout about 8ms. A start happens once per boot or
 // upgrade, and stays under serverStartQuiet.
-func startServer(exe string, dirs paths.Dirs) (func(), error) {
+func startServer(exe string, dirs paths.Dirs, launchd bool) (func(), error) {
+	if !launchd {
+		return func() {}, spawnServer(exe, dirs, nil)
+	}
 	if done, err := startServerUnderLaunchd(exe, dirs); err == nil {
 		return done, nil
 	}

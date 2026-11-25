@@ -32,6 +32,7 @@ func TestSessionsKeepTheLimitsOfTheClientThatStartedTheServer(t *testing.T) {
 		t.Skip("no gui launchd domain to start the server in, so cm starts it directly")
 	}
 	e := newEnv(t)
+	useLaunchd(e)
 
 	got := strings.TrimSpace(e.mustRun("run", "--", "/bin/sh", "-c", "echo $(ulimit -n) $(ulimit -u)"))
 
@@ -65,19 +66,9 @@ func TestServerRunsOutsideTheCoalitionThatStartedIt(t *testing.T) {
 		t.Skip("no gui launchd domain to start the server in, so cm starts it directly")
 	}
 	e := newEnv(t)
+	useLaunchd(e)
 
-	e.mustRun("run", "--session", "work", "-d", "--", "/bin/sh", "-c", "sleep 120")
-	shell := e.sessionDetail(t, "work").ShellPID
-	server := int(e.cmStatus().PID)
-
-	type placement struct {
-		ServerSharesOurs   bool
-		ShellSharesServers bool
-	}
-	got := placement{
-		ServerSharesOurs:   coalitionOf(t, server) == coalitionOf(t, os.Getpid()),
-		ShellSharesServers: coalitionOf(t, shell) == coalitionOf(t, server),
-	}
+	got := placementOf(t, e)
 	// The shell is checked as well because it is what is actually lost: a server in a coalition of its own
 	// whose shims were somewhere else would fix nothing.
 	want := placement{
@@ -86,6 +77,50 @@ func TestServerRunsOutsideTheCoalitionThatStartedIt(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("placement = %+v, want %+v", got, want)
+	}
+}
+
+// Without [server] launchd, the server is a child of the client and stays in the coalition that started it.
+//
+// The default, because under launchd cm becomes the privacy (TCC) responsible process for every program in a
+// session: `op vaults list` got EPERM reading 1Password's group container and reported not being signed in,
+// where the terminal that started the client already had the grant. Checked so that the default cannot
+// quietly go back to launchd, which would bring that back with nothing failing.
+func TestServerStaysInTheCoalitionThatStartedItByDefault(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+
+	got := placementOf(t, e)
+	want := placement{
+		ServerSharesOurs:   true,
+		ShellSharesServers: true,
+	}
+	if got != want {
+		t.Errorf("placement = %+v, want %+v", got, want)
+	}
+}
+
+// useLaunchd turns on [server] launchd in e and restarts its server, which newEnv already started without it.
+func useLaunchd(e *env) {
+	e.writeConfig("[server]\nlaunchd = true\n")
+	e.mustRun("server", "restart")
+}
+
+// placement is which coalitions a session's shell and its server share.
+type placement struct {
+	ServerSharesOurs   bool
+	ShellSharesServers bool
+}
+
+// placementOf starts a session in e and reports where it and its server landed relative to this process.
+func placementOf(t *testing.T, e *env) placement {
+	t.Helper()
+	e.mustRun("run", "--session", "work", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	shell := e.sessionDetail(t, "work").ShellPID
+	server := int(e.cmStatus().PID)
+	return placement{
+		ServerSharesOurs:   coalitionOf(t, server) == coalitionOf(t, os.Getpid()),
+		ShellSharesServers: coalitionOf(t, shell) == coalitionOf(t, server),
 	}
 }
 

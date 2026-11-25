@@ -122,6 +122,11 @@ idle = "shelve"
 # And to a session running something: "detach" or "kill".
 busy = "detach"
 
+[server]
+# Start the server through launchd on macOS, so a Force Quit of the terminal app cannot end sessions.
+# Makes cm the app macOS asks for privacy access; see below before turning it on.
+launchd = false
+
 [debug]
 # Serve runtime profiles for `cm debug pprof`.
 pprof = false
@@ -571,6 +576,30 @@ What `cm close` does to the session a closed window showed, once no other window
 detach key instead. Read by the server that owns the session, so each host keeps its own: a server can keep
 `busy = "detach"`, so a long job there outlives a laptop window closing on it, while the laptop kills its
 own. A session another window still shows is never ended, whatever these say.
+
+## [server]
+
+How a client starts a server. Read by the client that starts one, from the file the server will read, so a
+change applies from the next `cm server restart`.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `launchd` | `true`, `false` | `false` |
+
+- **`launchd`** starts the server through a one-shot launchd job on macOS, and is ignored elsewhere. Each
+  choice gives up something:
+  - **Off**, the server and every session stay in the coalition of the app that started the first client, as
+    tmux's do. Force Quit on that app's "Running in Background" Dock icon ends all of them, which is how 27
+    sessions died at once. macOS privacy checks (TCC) ask that app, which is usually a terminal the user has
+    approved already.
+  - **On**, the server gets a coalition no app owns. But cm becomes the TCC responsible process for every
+    program in a session, so access to Downloads, or to another app's data, is asked of cm. `op vaults list`
+    reported not being signed in because it could not read 1Password's group container. An ad-hoc signed cm
+    loses any grant at the next install, so on is livable only with a signed build: `CM_CODESIGN_IDENTITY`
+    makes `mise run install` sign with that keychain identity, creating a self-signed one under that name the
+    first time.
+
+  See [architecture.md](architecture.md#where-a-server-is-started-from-on-macos).
 
 ## [remote]
 

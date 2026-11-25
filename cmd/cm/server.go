@@ -624,7 +624,7 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 
 	// How the process comes into being is per platform: see startServer. What the caller sees is the
 	// same either way, a socket that starts answering.
-	done, err := startServer(exe, dirs)
+	done, err := startServer(exe, dirs, startUnderLaunchd())
 	if err != nil {
 		return err
 	}
@@ -650,6 +650,23 @@ func ensureServer(ctx context.Context, dirs paths.Dirs) error {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// startUnderLaunchd reports whether [server] launchd asks for the server to be started through launchd.
+//
+// Read from the file the server itself will read, which --config does not reach, so the two cannot disagree
+// about which file is in effect. A config that fails to load starts the server the default way, since the
+// server then exits naming the error and the client shows what it said.
+func startUnderLaunchd() bool {
+	path, err := config.DefaultPath()
+	if err != nil {
+		return false
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return false
+	}
+	return cfg.Server.Launchd
 }
 
 // serverArgs is the argv after the executable for a server against dirs, with sub naming the command.
