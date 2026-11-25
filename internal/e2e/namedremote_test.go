@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeSSH writes an ssh stand-in that reaches far: it drops ssh's options and host, everything up to the
@@ -121,5 +122,52 @@ connection_persist = "0"
 	e.mustRun("kill", "far:job")
 	if got := listNames(t, far); len(got) != 0 {
 		t.Errorf("far lists %q after kill far:job, want nothing", got)
+	}
+}
+
+// A window rebinds to a session on another host: its client moves there, its name becomes a pointer that
+// commands follow, and closing by the name releases the pointer while the remote session runs on.
+//
+// End to end because the move is three processes cooperating: the local server tells the client, the client
+// re-execs as an attach to the other host, and the next command reads the pointer before routing.
+func TestRebindToAnotherHost(t *testing.T) {
+	skipIfShort(t)
+	far := newEnv(t)
+	e := newEnv(t)
+	e.writeConfig(fmt.Sprintf(`
+[remote]
+local_name = "here"
+
+[remote.hosts.far]
+address = "ssh://far%s"
+ssh_command = "%s"
+connection_persist = "0"
+`, e.bin, fakeSSH(t, far)))
+
+	far.mustRun("run", "--session", "job", "-d", "--", "/bin/sh", "-c", "sleep 120")
+	e.mustRun("attach", "--no-attach", "win", "--", "/bin/sh", "-c", "sleep 120")
+	e.attachInBackground(t, "win")
+
+	e.mustRun("rebind", "--from", "win", "--all-clients", "far:job")
+
+	// The window's client is on far now, and nothing here is watching win's old session.
+	e.waitFor("the window to reach far:job", 15*time.Second, func() bool {
+		s, ok := far.session("job")
+		return ok && s.Clients > 0
+	})
+	// The name follows the pointer: info by the window's name answers from far.
+	if got := strings.TrimSpace(e.mustRun("info", "win", "--field", "name")); got != "job" {
+		t.Errorf("info win name = %q, want job, from far", got)
+	}
+
+	// Closing the window by its name lets go of the pointer and leaves far's session alone.
+	if r := e.run("close", "win"); r.code != 0 || !strings.Contains(r.stdout, "unbound") {
+		t.Errorf("close win = %d %q %q, want unbound", r.code, r.stdout, r.stderr)
+	}
+	if s, ok := far.session("job"); !ok || s.State != "running" {
+		t.Errorf("far:job after close = %+v, %v; want it still running", s, ok)
+	}
+	if r := e.run("info", "win"); r.code == 0 {
+		t.Errorf("info win after close succeeded: %s, want the name gone", r.stdout)
 	}
 }

@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/config"
+	"github.com/chancez/cm/internal/paths"
 	"github.com/chancez/cm/internal/remote"
+	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
 
@@ -173,6 +177,14 @@ func (g *globals) routeQualifiedRefs(cmd *cobra.Command, args []string) error {
 			return cmd.Flags().Set("session", v)
 		}})
 	}
+	// A name of this machine's that points to another host is followed, so a window restored by its name
+	// lands where the name now points.
+	if g.remote == "" && !namesActOnThemselves[commandKey(cmd)] {
+		if err := g.followPointers(cmd.Context(), refs); err != nil {
+			return err
+		}
+	}
+
 	qualified := refs[:0]
 	for _, r := range refs {
 		if strings.Contains(r.value, ":") {
@@ -237,6 +249,83 @@ func (g *globals) routeQualifiedRefs(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return cmd.Flags().Set("remote", host)
+}
+
+// namesActOnThemselves are the commands for which a name is the thing acted on rather than a way to reach a
+// session, so a pointer to another host is not followed: closing a window releases its name, wherever the
+// name points, and renaming one renames it here. This machine's server handles a pointer given to these.
+var namesActOnThemselves = map[string]bool{
+	"kill":   true,
+	"close":  true,
+	"forget": true,
+	"bind":   true,
+	"unbind": true,
+	"rename": true,
+}
+
+// followPointers rewrites each name that points to another host as the qualified reference it stands for.
+//
+// Read from this machine's database rather than asked of its server, so following one needs no server
+// running, as attaching by name starts one only once it knows the name is local. A database that is not
+// there, or is not this build's schema, holds no pointer this build can read, and the names are left as
+// given: the server refuses a pointer it is handed rather than recreating it.
+func (g *globals) followPointers(ctx context.Context, refs []qualifiedArg) error {
+	var names []int
+	for i, r := range refs {
+		if r.value != "" && !strings.ContainsAny(r.value, ":"+paths.IDSigil) {
+			names = append(names, i)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	dirs, err := g.dirs()
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(dirs.Database()); err != nil {
+		return nil
+	}
+	st, err := store.OpenExisting(ctx, dirs.Database())
+	if err != nil {
+		return nil
+	}
+	defer st.Close()
+	for _, i := range names {
+		rb, err := st.RemoteBindingFor(ctx, refs[i].value)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := refs[i].set(rb.Qualified()); err != nil {
+			return err
+		}
+		refs[i].value = rb.Qualified()
+	}
+	return nil
+}
+
+// lookupOn finds the session ref names on the remote host.
+func (g *globals) lookupOn(ctx context.Context, host, ref string) (*serverv1.Session, error) {
+	there := *g
+	there.remote = host
+	var found *serverv1.Session
+	err := withServer(ctx, &there, func(ctx context.Context, cl serverv1.ServerClient) error {
+		resp, err := cl.List(ctx, &serverv1.ListRequest{})
+		if err != nil {
+			return err
+		}
+		for _, s := range resp.Sessions {
+			if paths.FormatSessionID(s.Id) == ref || slices.Contains(s.Names, ref) {
+				found = s
+				return nil
+			}
+		}
+		return fmt.Errorf("no session %s on %s", ref, host)
+	})
+	return found, err
 }
 
 // sameRemote reports whether --remote, given as an address, is the named remote host.

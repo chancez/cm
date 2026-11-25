@@ -776,7 +776,8 @@ aliases. The local host has one too, so a reference means the same thing on ever
   `laptop:work` when it is not.
 - A bare name matching sessions on two hosts is an error naming both, never a guess.
 
-*A window is bound to a name, and a name may point to another host.* A window knows only its name,
+*A window is bound to a name, and a name may point to another host.* **Built** (docs/cli.md, "A session
+on another host"). A window knows only its name,
 `kitty.1234`, and the server says what that name means; `cm rebind` already rewrites the answer without the
 window noticing. A name can now point at a session on another host: `cm rebind white:work` makes
 `kitty.1234` a pointer to `white:work`, the window's client moves there, and a restore that runs `cm attach

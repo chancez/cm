@@ -73,6 +73,19 @@ What a window should store is the qualified ID, `server:@a7k2m9x4`: an ID surviv
 makes it mean the same session from every machine whose config names that host the same way. An upgrade's
 re-exec keeps the host, as `--remote`.
 
+`cm switch` and `cm rebind` are the exception: they move a window of this machine's, so they run here and
+the target's host is where the window goes. `cm rebind white:work` looks `work` up on white, moves the
+window's client there, which re-execs in place as `cm attach white:@id` since a client's connection
+reaches one server, and makes the window's name a pointer to `white:work`. Every command given the name
+then runs against white, read from this machine's database before routing, so a restore that attaches by
+the name follows it; following costs nothing measurable, 34 to 35ms for `cm info` against 38.7ms without.
+The pointer is what was typed, so a name there recreates its session once it has ended, and it is
+borrowed: `cm close` or `cm kill` by it releases it and leaves white's session alone, which is what a
+window-close watcher wants. `bind`, `unbind`, `rename` and `forget` also act on the name itself rather than
+following it. The server refuses to move a window whose client predates this, which would otherwise try
+the remote reference here and close; `cm clients upgrade` first. See docs/ideas.md, "A window is bound to
+a name, and a name may point to another host".
+
 Completion offers each configured host as `server:` after the local sessions, and `server:<TAB>` asks that
 host's server for its sessions, within the five seconds any remote completion gets. A host that does not
 answer completes nothing rather than holding the prompt.

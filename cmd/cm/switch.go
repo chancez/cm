@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/chancez/cm/internal/capability"
 	"github.com/chancez/cm/internal/paths"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -56,8 +57,16 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A target on another host is looked up there, so a typo fails before the window moves, and so the
+			// window lands on exactly the session found. The move itself is this machine's server's business.
+			remoteTargetID := ""
 			if host != "" {
-				return fmt.Errorf("%s is on %s, and moving a window to another host is not supported yet", target, host)
+				found, err := g.lookupOn(cmd.Context(), host, target)
+				if err != nil {
+					return err
+				}
+				remoteTargetID = found.Id
+				target = host + ":" + target
 			}
 			// --from first, so it names the session without one around it. Resolving CM_SESSION first
 			// failed `cm switch B --from A` from any shell outside a session with "no session given",
@@ -81,13 +90,20 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 			// Deliberately not ensureServer: switching implies a window is attached to something, and a
 			// server started here holds nothing to switch.
 			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
+				if remoteTargetID != "" {
+					if err := requireServerCapability(serverCapabilities(ctx, cl), capability.SwitchRemote,
+						"move a window to another host"); err != nil {
+						return err
+					}
+				}
 				resp, err := cl.Switch(ctx, &serverv1.SwitchRequest{
-					Session:    session,
-					Target:     target,
-					Bind:       bind,
-					Replace:    replace,
-					Force:      force,
-					AllClients: allClients,
+					Session:        session,
+					Target:         target,
+					RemoteTargetId: remoteTargetID,
+					Bind:           bind,
+					Replace:        replace,
+					Force:          force,
+					AllClients:     allClients,
 					// So the server can tell whether the session being replaced is the one this command
 					// is running in, which decides whether checking it for a running command means
 					// anything. See replaceable.
@@ -182,7 +198,9 @@ which is what you want when a window should stay on the session for good.
 The client detaches and reattaches without leaving its own process, so the window never
 resets: the same terminal, the same process id, the same command in 'ps'. Only the
 session behind it changes, which is the same thing that happens whenever a client
-reconnects after a server restart.
+reconnects after a server restart. To a session on another host, 'cm switch white:work',
+the client re-execs in place instead, since its connection reaches one server: the
+same process id and terminal, and 'ps' then shows the attach to white.
 
 Which window moves is the one that typed the command. A session's output fans out to
 every client attached to it, so there is no way to ask a terminal "are you the one",
@@ -224,6 +242,13 @@ this window should do to a session it borrowed.
 A session with no name cannot be rebound, since there is nothing to move, and this says
 so rather than quietly switching for this client alone. 'cm bind' gives it a name
 first, or 'cm switch' moves the client without one.
+
+A session on another host works the same way: 'cm rebind white:work' points this
+window's name at work on white and moves the window there. The name stays this
+machine's, as a pointer, so a restore that attaches by it follows; it points at what
+was typed, so a name there is recreated if its session has ended. Closing the window
+releases the pointer and leaves white's session running. Refused while a window's
+client is too old to move hosts; 'cm clients upgrade' first.
 
 With no --from, the session this command is running in is used, from CM_SESSION.`
 }
