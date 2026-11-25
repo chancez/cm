@@ -230,3 +230,44 @@ connection_persist = "0"
 		t.Errorf("ls --all-hosts with far down = %d, stderr %q; want success and a note naming far", r.code, r.stderr)
 	}
 }
+
+// A remote that hangs costs one listing the whole bound, and the listings after it nothing: it is not asked
+// again for a while, by any command, and its last listing stands in. kspaces lists every two seconds, so
+// without this an unreachable host would hold every one of its refreshes for five seconds.
+func TestAHungRemoteIsNotAskedAgainAtOnce(t *testing.T) {
+	skipIfShort(t)
+	e := newEnv(t)
+	dir, err := os.MkdirTemp("", "cmhang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	hang := filepath.Join(dir, "ssh")
+	if err := os.WriteFile(hang, []byte("#!/bin/sh\nexec sleep 60\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e.writeConfig(fmt.Sprintf(`
+[remote.hosts.far]
+address = "ssh://far%s"
+ssh_command = "%s"
+connection_persist = "0"
+`, e.bin, hang))
+
+	start := time.Now()
+	e.run("ls", "--all-hosts")
+	first := time.Since(start)
+	start = time.Now()
+	r := e.run("ls", "--all-hosts")
+	second := time.Since(start)
+	t.Logf("listing that found far hung: %s; the next: %s", first, second)
+
+	if first < 4*time.Second {
+		t.Errorf("first listing took %s, want it to wait out the five-second bound on a hung host", first)
+	}
+	if second > 2*time.Second {
+		t.Errorf("second listing took %s, want it not to ask the host that just hung", second)
+	}
+	if !strings.Contains(r.stderr, "not asked again yet") {
+		t.Errorf("second listing stderr = %q, want it to say far was not asked", r.stderr)
+	}
+}

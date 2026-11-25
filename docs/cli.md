@@ -90,7 +90,10 @@ a name, and a name may point to another host".
 column first and `host` in the JSON, so each row's reference is `HOST:NAME`. The remotes are asked in
 parallel, without starting a server on any, five seconds each. One that does not answer is shown from its
 last listing, kept under the state directory in `remote-listings/`, with `(stale 5m)` in its HOST cell,
-`stale_since` in the JSON, and a line on stderr; with no listing kept, only the stderr line. A session a
+`stale_since` in the JSON, and a line on stderr; with no listing kept, only the stderr line. A remote that
+did not answer is not asked again for 30 seconds, by any command, so a script listing every two seconds
+pays the five-second bound once rather than every time: measured at 5.04s for the listing that found a
+hung host and 47 to 50ms for the next. A session a
 name here points at shows it, `job <- kitty.1234`, and `pointed_by` in the JSON. Opt in rather than the
 default, since a script that lists often, as kspaces does, would otherwise pay an ssh round trip per call.
 

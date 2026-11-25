@@ -114,6 +114,18 @@ func (g *globals) listRemote(
 	ctx, cancel := context.WithTimeout(ctx, hostListTimeout)
 	defer cancel()
 
+	// A remote that failed moments ago is not dialed again yet, by this command or any other: kspaces lists
+	// every two seconds, and a host that is unreachable rather than slow would cost each listing the whole
+	// bound. Its last listing stands in, as for any host that does not answer.
+	if age, failed := failedRecently(dirs, r.Name); failed {
+		listing.err = fmt.Errorf("not asked again yet: it did not answer %s ago", humanAge(time.Now().Add(-age)))
+		if cached, at, ok := loadListing(dirs, r.Name); ok {
+			listing.sessions = filterCached(cached.Sessions, req)
+			listing.staleSince = at
+		}
+		return listing
+	}
+
 	there := *g
 	there.remote = r.Name
 	resp, err := func() (*serverv1.ListResponse, error) {
@@ -137,6 +149,7 @@ func (g *globals) listRemote(
 		return cl.List(ctx, req)
 	}()
 	if err == nil {
+		_ = os.Remove(failedPath(dirs, r.Name))
 		listing.sessions = resp.Sessions
 		// Cached unfiltered only, so a cached listing never answers a filter it was not taken under.
 		if req.Prefix == "" && len(req.Tags) == 0 && req.Space == "" {
@@ -146,6 +159,7 @@ func (g *globals) listRemote(
 	}
 
 	listing.err = err
+	markFailed(dirs, r.Name)
 	if cached, at, ok := loadListing(dirs, r.Name); ok {
 		listing.sessions = filterCached(cached.Sessions, req)
 		listing.staleSince = at
@@ -155,6 +169,30 @@ func (g *globals) listRemote(
 
 func listingPath(dirs paths.Dirs, host string) string {
 	return filepath.Join(dirs.State, listingCacheDir, host+".json")
+}
+
+// failedPath marks a remote that did not answer, by its modification time.
+func failedPath(dirs paths.Dirs, host string) string {
+	return filepath.Join(dirs.State, listingCacheDir, host+".failed")
+}
+
+// markFailed records that host did not answer just now.
+func markFailed(dirs paths.Dirs, host string) {
+	path := failedPath(dirs, host)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, nil, 0o600)
+}
+
+// failedRecently reports whether host failed within hostRetryAfter, and how long ago.
+func failedRecently(dirs paths.Dirs, host string) (time.Duration, bool) {
+	info, err := os.Stat(failedPath(dirs, host))
+	if err != nil {
+		return 0, false
+	}
+	age := time.Since(info.ModTime())
+	return age, age < hostRetryAfter
 }
 
 // saveListing keeps a remote's listing for when it next does not answer. Best effort: a listing that cannot

@@ -248,7 +248,7 @@ better and is a server change, not a picker change.
 
 `cm tui --all-hosts` (`-A`) lists this machine and every host in `[remote.hosts]`, each row's name
 qualified with its host, and sends each action to the host its session is on: the picker names a session
-as `host:@id`, and `cm/tuihosts.go` routes the request there without the host, then keys the answer back
+as `host:@id`, and `cmd/cm/tuihosts.go` routes the request there without the host, then keys the answer back
 by what was sent. Attaching runs `cm attach host:@id`, which routes itself. One connection per remote for
 the picker's lifetime, since the list refreshes every second and a fresh one is an ssh; dropped on any
 failure and redialed on the next refresh. A remote that does not connect is left alone for 30 seconds,
