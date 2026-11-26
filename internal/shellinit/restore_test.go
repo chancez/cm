@@ -16,8 +16,7 @@ import (
 // Run: the line runs at the first prompt inside a frame whose argv is the line, which is what the carried
 // declaration binds to and what records it as the typed command again. Offered: it is in the line editor, so
 // text typed next extends it, and the edited line is what runs. bash cannot fill the editor from a hook, so it
-// does not take an offered command, and the server types that one in. Either way the variables are gone by the
-// time anything the shell runs looks for them.
+// does not take an offered command, and the server types that one in; bash before 4.4 takes none. Either way the variables are gone by the time anything the shell runs looks for them.
 func TestRealShellsTakeTheRestoreCommand(t *testing.T) {
 	const line = `printf 'RAN%s\n' OK`
 	for _, shell := range Shells() {
@@ -40,7 +39,7 @@ func TestRealShellsTakeTheRestoreCommand(t *testing.T) {
 				if run {
 					flag = "CM_RESTORE_RUN=1"
 				}
-				takes := run || shell != "bash"
+				takes := takesRestore(t, shell, bin, run)
 				printEnv := `printf 'ENV%s\n' "[${CM_RESTORE_COMMAND-}${CM_RESTORE_RUN-}]"` + "\n"
 				if shell == "fish" {
 					printEnv = `printf 'ENV%s\n' "[$CM_RESTORE_COMMAND$CM_RESTORE_RUN]"` + "\n"
@@ -67,7 +66,7 @@ func TestRealShellsTakeTheRestoreCommand(t *testing.T) {
 				}
 				var want []string
 				switch {
-				case run:
+				case takes && run:
 					want = []string{line}
 				case takes:
 					want = []string{line + " EDITED"}
@@ -75,7 +74,7 @@ func TestRealShellsTakeTheRestoreCommand(t *testing.T) {
 				if !slices.Equal(argvs, want) {
 					t.Errorf("%s ran frames %q, want %q\nraw: %q", shell, argvs, want, out)
 				}
-				if run && !bytes.Contains(out, []byte("RANOK")) {
+				if takes && run && !bytes.Contains(out, []byte("RANOK")) {
 					t.Errorf("%s never ran its restore command\nraw: %q", shell, out)
 				}
 				if !run && takes && !bytes.Contains(out, []byte("RANEDITED")) {
@@ -97,6 +96,9 @@ func TestRealShellsCloseAnInterruptedRestoreCommandsFrame(t *testing.T) {
 			bin, err := exec.LookPath(shell)
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
+			}
+			if !takesRestore(t, shell, bin, true) {
+				t.Skipf("%s leaves its restore command to cm to type in", shell)
 			}
 			script, err := Script(shell)
 			if err != nil {
@@ -150,6 +152,9 @@ func TestRealShellsRunARestoreCommandThroughTheirHooks(t *testing.T) {
 			bin, err := exec.LookPath(shell)
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
+			}
+			if !takesRestore(t, shell, bin, true) {
+				t.Skipf("%s leaves its restore command to cm to type in", shell)
 			}
 			script, err := Script(shell)
 			if err != nil {

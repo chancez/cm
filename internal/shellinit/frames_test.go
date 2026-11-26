@@ -2,6 +2,7 @@ package shellinit
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -53,6 +54,7 @@ func TestRealShellsEmitFrames(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", tt.shell)
 			}
+			skipWithoutFrames(t, tt.shell, bin)
 			script, err := Script(tt.shell)
 			if err != nil {
 				t.Fatalf("Script() error = %v", err)
@@ -107,6 +109,7 @@ func TestRealShellsMintDistinctFrameIDs(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
 			}
+			skipWithoutFrames(t, shell, bin)
 			script, err := Script(shell)
 			if err != nil {
 				t.Fatalf("Script() error = %v", err)
@@ -144,6 +147,52 @@ func interactiveArgs(shell string) []string {
 		return []string{"--norc", "--noprofile", "-i"}
 	default:
 		return []string{"-N", "-i"}
+	}
+}
+
+// shellVersion is the major and minor version of the shell at bin, for the parts of the integration that
+// are not installed on every version. zsh has none, so it is not asked.
+func shellVersion(t *testing.T, shell, bin string) (major, minor int) {
+	t.Helper()
+	var script string
+	switch shell {
+	case "bash":
+		script = `echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"`
+	case "fish":
+		script = `echo $version`
+	default:
+		return 0, 0
+	}
+	out, err := exec.Command(bin, "-c", script).Output()
+	if err != nil {
+		t.Fatalf("asking %s its version: %v", bin, err)
+	}
+	if _, err := fmt.Sscanf(string(out), "%d.%d", &major, &minor); err != nil {
+		t.Fatalf("parsing %s version %q: %v", bin, out, err)
+	}
+	return major, minor
+}
+
+// skipWithoutFrames skips a frame test on bash before 4.4, which has no PS0 and so gets no frame hooks:
+// macOS's /bin/bash is 3.2. That bash emitting nothing is asserted by TestRealShellsTakeTheRestoreCommand,
+// which expects no frame there.
+func skipWithoutFrames(t *testing.T, shell, bin string) {
+	t.Helper()
+	if major, minor := shellVersion(t, shell, bin); shell == "bash" && (major < 4 || major == 4 && minor < 4) {
+		t.Skipf("bash %d.%d has no PS0, so the integration installs no frame hooks", major, minor)
+	}
+}
+
+// takesRestore reports whether the integration takes a revived session's command itself, rather than leaving
+// cm to type it in. bash takes one only to run it, and only from 4.4. See the scripts.
+func takesRestore(t *testing.T, shell, bin string, run bool) bool {
+	t.Helper()
+	major, minor := shellVersion(t, shell, bin)
+	switch shell {
+	case "bash":
+		return run && (major > 4 || major == 4 && minor >= 4)
+	default:
+		return true
 	}
 }
 
@@ -247,6 +296,7 @@ func TestRealShellsKeepAStoppedJobsFrame(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
 			}
+			skipWithoutFrames(t, shell, bin)
 			script, err := Script(shell)
 			if err != nil {
 				t.Fatalf("Script() error = %v", err)
@@ -305,6 +355,7 @@ func TestRealShellsCloseAKilledStoppedJobsFrame(t *testing.T) {
 			if err != nil {
 				t.Skipf("%s is not installed", shell)
 			}
+			skipWithoutFrames(t, shell, bin)
 			script, err := Script(shell)
 			if err != nil {
 				t.Fatalf("Script() error = %v", err)

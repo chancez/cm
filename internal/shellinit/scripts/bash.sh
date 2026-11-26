@@ -158,7 +158,6 @@ if [ -n "${CM_RESTORE_COMMAND-}" ] && [ "${CM_RESTORE_RUN-}" = 1 ]; then
   _cm_restore_line=$CM_RESTORE_COMMAND
   printf '\033]25453;restore=taken\007' > /dev/tty 2>/dev/null
 fi
-unset CM_RESTORE_COMMAND CM_RESTORE_RUN
 _cm_restore() {
   [ -n "$_cm_restore_line" ] || return 0
   local line=$_cm_restore_line
@@ -176,4 +175,7 @@ else
 fi
 fi
 
+# Unset on every version, including the 3.2 that takes no command, which cm then types in. Left set there, the
+# variables reached every program the shell ran, and a zsh or fish started inside it ran the command again.
+unset CM_RESTORE_COMMAND CM_RESTORE_RUN
 fi
