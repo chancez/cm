@@ -14,11 +14,11 @@ import (
 // shell reports "busy" from the moment it starts until it exits, while the agent itself moves between
 // working, waiting for an answer, and finished. Deriving state from the shell cannot see any of that.
 func TestReportTakesPrecedenceOverTheDerivedState(t *testing.T) {
-	svc, sess := waitFixture(t, "reported", "sleep 5")
+	svc, sess := waitFixture(t, "reported", markerScript)
 	ctx := context.Background()
 
 	// The shell says a command is running, which is what an agent looks like from outside.
-	setBusy(sess, true, "claude")
+	setBusy(t, sess, true, "claude")
 	if !sess.Command().Running {
 		t.Fatal("setup: want the shell reporting a running command")
 	}
@@ -49,10 +49,10 @@ func TestReportTakesPrecedenceOverTheDerivedState(t *testing.T) {
 
 // Clearing a report falls back to what cm derives, rather than leaving the session stateless.
 func TestReportClearFallsBackToTheDerivedState(t *testing.T) {
-	svc, sess := waitFixture(t, "cleared", "sleep 5")
+	svc, sess := waitFixture(t, "cleared", markerScript)
 	ctx := context.Background()
 
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 	if _, err := svc.Report(ctx, &serverv1.ReportRequest{
 		Session: "cleared",
 		State:   serverv1.ReportedState_REPORTED_STATE_IDLE,
@@ -85,10 +85,10 @@ func TestReportClearFallsBackToTheDerivedState(t *testing.T) {
 // This is what a script coordinating with an agent does: start it working, then block until it needs
 // something. Nothing else in cm can produce this state, so without the report the wait can only time out.
 func TestWaitForBlockedIsReleasedByAReport(t *testing.T) {
-	svc, sess := waitFixture(t, "release", "sleep 5")
+	svc, sess := waitFixture(t, "release", markerScript)
 	ctx := context.Background()
 
-	setBusy(sess, true, "claude")
+	setBusy(t, sess, true, "claude")
 
 	done := make(chan *serverv1.WaitResponse, 1)
 	go func() {

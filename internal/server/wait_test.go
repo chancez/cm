@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chancez/cm/internal/seq"
 	"github.com/chancez/cm/internal/store"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
@@ -30,23 +32,52 @@ func waitFixture(t *testing.T, name, script string) (*Service, *Session) {
 	return NewService(mgr), sess
 }
 
-// setBusy makes a session report a running command, standing in for a shell's OSC 133 report.
+// markerScript is a session that prints back what it is sent, byte for byte, which is how setBusy hands a
+// marker to the pump. Raw and without echo, so each byte comes back once and unchanged. cat runs in the
+// foreground because dash gives a background job /dev/null for input whatever its redirection says, and it is
+// killed after 10s because the shims these tests start are never closed, as `sleep 5` was. markerReady is printed once the terminal is raw: a marker written
+// before then was echoed in caret notation, so each setBusy saw the effect of the one before it.
+const (
+	markerReady  = "READY"
+	markerScript = "stty raw -echo; printf " + markerReady + "; (sleep 10; kill $$) & exec cat"
+)
+
+// setBusy makes a session report a running command, standing in for a shell's OSC 133 report. The session
+// must run markerScript.
 //
 // Goes through the tracker and noteCommand rather than writing the field, so the bookkeeping the real
 // path does happens here too. Setting sess.command directly is the obvious shortcut and skips the run
 // counter, which made these tests fail against correct code: the fake was not exercising the mechanism
 // under test.
 //
-// Driven through the tracker rather than a real shell because these tests are about the wait's decisions,
+// Through the pty and the pump rather than by feeding the tracker, because the pump owns the tracker and
+// takes no lock for it: feeding it from the test goroutine raced the pump whenever the session printed
+// anything, which a Send's echo does, and failed TestSendWaitBusyResolvesOnTheCommandStarting under -race.
+// Returns once the pump has consumed the marker, so a caller sees its effect, or that it had none.
+//
+// Driven through markers rather than a real shell because these tests are about the wait's decisions,
 // not about parsing markers, which internal/osc covers.
-func setBusy(sess *Session, running bool, command string) {
+func setBusy(t *testing.T, sess *Session, running bool, command string) {
+	t.Helper()
+	marker := "\x1b]133;D;0\x07"
 	if running {
-		esc := strings.ReplaceAll(command, " ", `\ `)
-		sess.commands.Feed([]byte("\x1b]133;C;cmdline=" + esc + "\x07"))
-	} else {
-		sess.commands.Feed([]byte("\x1b]133;D;0\x07"))
+		marker = "\x1b]133;C;cmdline=" + strings.ReplaceAll(command, " ", `\ `) + "\x07"
 	}
-	sess.noteCommand()
+	consumed := func(want seq.Shim, what string) {
+		deadline := time.Now().Add(5 * time.Second)
+		for sess.LastSeq() < want {
+			if time.Now().After(deadline) {
+				t.Fatalf("the pump never consumed %s: at %d, want %d", what, sess.LastSeq(), want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	consumed(seq.Shim(len(markerReady)), markerReady)
+	want := sess.LastSeq() + seq.Shim(len(marker))
+	if err := sess.Write(context.Background(), []byte(marker)); err != nil {
+		t.Fatalf("writing %q: %v", marker, err)
+	}
+	consumed(want, fmt.Sprintf("%q", marker))
 }
 
 // setTitle publishes a metadata change that is not a command state change.
@@ -88,10 +119,10 @@ func TestWaitReturnsAtOnceWhenAlreadyInState(t *testing.T) {
 
 // A wait resolves when the state changes, not by polling.
 func TestWaitResolvesOnStateChange(t *testing.T) {
-	svc, sess := waitFixture(t, "changes", "sleep 5")
+	svc, sess := waitFixture(t, "changes", markerScript)
 	ctx := context.Background()
 
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 
 	done := make(chan *serverv1.WaitResponse, 1)
 	go func() {
@@ -115,7 +146,7 @@ func TestWaitResolvesOnStateChange(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	setBusy(sess, false, "")
+	setBusy(t, sess, false, "")
 
 	select {
 	case resp := <-done:
@@ -132,10 +163,10 @@ func TestWaitResolvesOnStateChange(t *testing.T) {
 // "Not yet" is an ordinary answer a caller acts on. Returning an error would make a timeout
 // indistinguishable from a session that does not exist.
 func TestWaitTimeoutReportsCurrentState(t *testing.T) {
-	svc, sess := waitFixture(t, "slow", "sleep 5")
+	svc, sess := waitFixture(t, "slow", markerScript)
 	ctx := context.Background()
 
-	setBusy(sess, true, "cargo build")
+	setBusy(t, sess, true, "cargo build")
 
 	resp, err := svc.Wait(ctx, &serverv1.WaitRequest{
 		Session:   "slow",
@@ -193,10 +224,10 @@ func TestWaitOnEndedSessionFailsFastForUnreachableStates(t *testing.T) {
 
 // A session ending satisfies a wait for exited and defeats any other.
 func TestWaitEndsWhenTheSessionDoes(t *testing.T) {
-	svc, sess := waitFixture(t, "ending", "sleep 5")
+	svc, sess := waitFixture(t, "ending", markerScript)
 	ctx := context.Background()
 
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 
 	// waiting is closed once the wait is registered, so Close below cannot run first.
 	//
@@ -247,7 +278,7 @@ func TestWaitEndsWhenTheSessionDoes(t *testing.T) {
 // enough to lose every single time rather than occasionally. A caller would then read output from before
 // its own input and see the previous command's results.
 func TestSendWaitDoesNotResolveBeforeTheCommandStarts(t *testing.T) {
-	svc, sess := waitFixture(t, "sendwait", "sleep 5")
+	svc, sess := waitFixture(t, "sendwait", markerScript)
 	ctx := context.Background()
 
 	// Idle to begin with, which is the whole hazard.
@@ -294,14 +325,14 @@ func TestSendWaitDoesNotResolveBeforeTheCommandStarts(t *testing.T) {
 	}
 
 	// Now the shell reports the command, and then finishes it.
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 	select {
 	case resp := <-done:
 		t.Fatalf("Send(--wait idle) returned %+v while the command was running", resp.GetWait())
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	setBusy(sess, false, "")
+	setBusy(t, sess, false, "")
 	select {
 	case resp := <-done:
 		if resp == nil || !resp.GetWait().GetSatisfied() {
@@ -314,7 +345,7 @@ func TestSendWaitDoesNotResolveBeforeTheCommandStarts(t *testing.T) {
 
 // Waiting for busy after sending needs no start detection, since becoming busy is itself the change.
 func TestSendWaitBusyResolvesOnTheCommandStarting(t *testing.T) {
-	svc, sess := waitFixture(t, "sendbusy", "sleep 5")
+	svc, sess := waitFixture(t, "sendbusy", markerScript)
 	ctx := context.Background()
 
 	done := make(chan *serverv1.SendResponse, 1)
@@ -339,7 +370,7 @@ func TestSendWaitBusyResolvesOnTheCommandStarting(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 	select {
 	case resp := <-done:
 		if resp == nil || !resp.GetWait().GetSatisfied() {
@@ -384,14 +415,14 @@ func TestSendWithoutWaitReturnsImmediately(t *testing.T) {
 // Reproduced by publishing both transitions before the waiter can read either, which is what coalescing
 // does in practice rather than an approximation of it.
 func TestSendWaitResolvesWhenBusyIsNeverObserved(t *testing.T) {
-	svc, sess := waitFixture(t, "toofast", "sleep 5")
+	svc, sess := waitFixture(t, "toofast", markerScript)
 	ctx := context.Background()
 
 	// The state changes happen while Send is between writing input and reading its subscription. A
 	// goroutine racing it is not enough to guarantee that, so the transitions are published first and
 	// the wait is then given the state it would actually find: idle, with a command having run.
-	setBusy(sess, true, "true")
-	setBusy(sess, false, "")
+	setBusy(t, sess, true, "true")
+	setBusy(t, sess, false, "")
 
 	// The session is idle and reports nothing running, exactly as it would after a fast command.
 	if sess.Command().Running {
@@ -434,29 +465,29 @@ func TestSendWaitResolvesWhenBusyIsNeverObserved(t *testing.T) {
 // A shell repeats its markers, and a count that moved on every report would make an unrelated wait think
 // a new command had started.
 func TestCommandRunsCountsEachCommandOnce(t *testing.T) {
-	_, sess := waitFixture(t, "counting", "sleep 5")
+	_, sess := waitFixture(t, "counting", markerScript)
 
 	if got := sess.CommandRuns(); got != 0 {
 		t.Fatalf("CommandRuns() = %d on a fresh session, want 0", got)
 	}
 
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 	after := sess.CommandRuns()
 	if after != 1 {
 		t.Errorf("CommandRuns() = %d after one command started, want 1", after)
 	}
 	// The same report again is not a new command.
-	setBusy(sess, true, "make")
+	setBusy(t, sess, true, "make")
 	if got := sess.CommandRuns(); got != after {
 		t.Errorf("CommandRuns() = %d after a repeated report, want it unchanged at %d", got, after)
 	}
 
-	setBusy(sess, false, "")
+	setBusy(t, sess, false, "")
 	if got := sess.CommandRuns(); got != after {
 		t.Errorf("CommandRuns() = %d after the command ended, want it unchanged at %d", got, after)
 	}
 
-	setBusy(sess, true, "test")
+	setBusy(t, sess, true, "test")
 	if got := sess.CommandRuns(); got != after+1 {
 		t.Errorf("CommandRuns() = %d after a second command, want %d", got, after+1)
 	}
@@ -550,18 +581,19 @@ func TestSendWaitDoesNotResolveBeforeTheWorkStarts(t *testing.T) {
 // Asserted on both paths, since `cm send --wait` is the one that needed it and a bare `cm wait` returning zero
 // would give a follower no position to drain to.
 func TestWaitReportsTheConsumedPosition(t *testing.T) {
-	svc, sess := waitFixture(t, "seq", "sleep 30")
+	svc, sess := waitFixture(t, "seq", markerScript)
 	ctx := context.Background()
+
+	// Idle, so the wait is satisfied and returns a reply to inspect.
+	setBusy(t, sess, false, "")
 
 	// A consumed position, as the pump sets after reading from the shim. Written directly because the pump
 	// is what advances it and this test is about the value being reported, not about how it got there.
+	// After setBusy, which waits for the pump to move it past the marker.
 	const want = 4242
 	sess.mu.Lock()
 	sess.lastSeq = want
 	sess.mu.Unlock()
-
-	// Idle, so the wait is satisfied and returns a reply to inspect.
-	setBusy(sess, false, "")
 
 	resp, err := svc.Wait(ctx, &serverv1.WaitRequest{
 		Session:   "seq",
