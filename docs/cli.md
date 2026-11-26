@@ -43,7 +43,11 @@ than one name being cut in half: everything the column shows is meant to be type
 `cm switch` moves this window's client to another session and leaves every name alone, so a restarted
 terminal returns to the session it always named. `cm rebind` moves the window's name as well, which is what
 makes it stick. `cm rebind --replace` also ends the session the name came off, and `rebind_replaces` makes that the
-default. `cm bind` and `cm unbind` manage names: between them they cover giving a session a second name and moving a
+default. Both need the session to exist. `cm attach --rebind` and `cm attach --switch`, run inside a session,
+create it first, as `--no-attach` does, then move the window as `cm rebind` or `cm switch` would, so `cm attach
+--rebind white:work` from a shell in a local session makes `work` on white and the window shows it, rather than
+nesting a second client inside the local session. They are refused outside a session, with `--no-attach` or
+`--read-only`, and for a remote given as an address, which a window's name cannot point at. `cm bind` and `cm unbind` manage names: between them they cover giving a session a second name and moving a
 name to another session. `cm rename` is the two in one, and drops the old name only when the session had
 exactly one. `cm bind <name>` with no session names the session it is run
 in, from `CM_SESSION`, the same way `cm tag`, `cm report` and `cm info` default. The same two are a key each where a

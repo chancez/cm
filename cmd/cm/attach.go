@@ -15,6 +15,7 @@ import (
 	"github.com/chancez/cm/internal/config"
 	"github.com/chancez/cm/internal/keymap"
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/remote"
 	"github.com/chancez/cm/internal/sessionenv"
 	"github.com/chancez/cm/internal/tags"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
@@ -36,6 +37,8 @@ func newAttachCommand(g *globals) *cobra.Command {
 		ifRunningArg string
 		sizeArg      string
 		inShell      bool
+		rebind       bool
+		switchWindow bool
 	)
 	cmd := &cobra.Command{
 		Use: "attach [session]",
@@ -87,7 +90,14 @@ turns it off.
 
 Attaching from inside another cm session keeps working without an override: the key
 leaves the innermost session, and a second press leaves the outer one. The override
-matters for another multiplexer, which sees the key first and never passes it on.`,
+matters for another multiplexer, which sees the key first and never passes it on.
+
+--rebind, run inside a session, creates the session as --no-attach does and then
+moves this window to it, as 'cm rebind' does, rather than nesting a second client in
+it: 'cm attach --rebind white:work' from a shell in a local session makes work on
+white, in this session's space, and the window shows it directly. --switch moves
+the window as 'cm switch' does, leaving its name where it was. The session moved off
+is kept, or ended per rebind_replaces, as 'cm rebind' leaves it.`,
 		// Only the args before "--" are the session name; everything after is the command
 		// to run, so MaximumNArgs would wrongly reject "attach x -- sh -c ...".
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -125,6 +135,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 			// own terminal, so a size given here would be dropped without a word.
 			if sizeArg != "" && !noAttach {
 				return errors.New("--size only applies with --no-attach; an attach takes its terminal's size")
+			}
+			if err := checkMoveFlags(rebind, switchWindow, noAttach, readOnly, os.Getenv(paths.SessionEnv()), g.remote); err != nil {
+				return err
 			}
 			// Refused for the same reason: with no command there is nothing to type, and accepting it would
 			// say a command was going to run when none was.
@@ -295,6 +308,20 @@ matters for another multiplexer, which sees the key first and never passes it on
 				noticeIgnoredCommand(cmd.Context(), g, os.Stderr, session)
 			}
 
+			if rebind || switchWindow {
+				opened, err := openWithoutAttaching(cmd.Context(), dirs, opts, size)
+				if err != nil {
+					return err
+				}
+				// The move is this machine's server's, as cm rebind's is, so it goes there with the target
+				// qualified by the host it was made on.
+				here := *g
+				here.remote = ""
+				return here.moveWindow(cmd.Context(), moveTarget(g.remote, session, opened), windowMove{
+					bind:    rebind,
+					replace: rebind && cfg.RebindReplaces,
+				})
+			}
 			if noAttach {
 				return createWithoutAttaching(cmd.Context(), dirs, opts, size)
 			}
@@ -343,6 +370,10 @@ matters for another multiplexer, which sees the key first and never passes it on
 		"with --no-attach, create the session at COLSxROWS rather than this terminal's size")
 	f.BoolVar(&inShell, "in-shell", false,
 		"type the command into the new session's shell rather than running it in place of the shell")
+	f.BoolVar(&rebind, "rebind", false,
+		"create the session if needed, then move this window and its name to it, as cm rebind")
+	f.BoolVar(&switchWindow, "switch", false,
+		"create the session if needed, then move this window to it, as cm switch")
 	f.StringVar(&ifRunningArg, "if-running", "error",
 		"what a command does if the session is already running: "+strings.Join(ifRunningNames(), " or "))
 	// There is deliberately no flag for the resume position. It crosses an upgrade in the environment,
@@ -355,6 +386,47 @@ matters for another multiplexer, which sees the key first and never passes it on
 	// ps showing no positions left in any argv.
 	_ = cmd.RegisterFlagCompletionFunc("space", completeSpaceNames(g, nil))
 	return cmd
+}
+
+// checkMoveFlags refuses --rebind and --switch where they cannot do what they say: together, with --no-attach
+// or --read-only, which leave no window to move or move none, outside a session, where there is no window this
+// runs in, and against a remote given as an address, since the window's name points at a host by its name in
+// [remote.hosts]. Refused before anything is created, so a refusal leaves no session behind.
+func checkMoveFlags(rebind, switchWindow, noAttach, readOnly bool, callingSession, remoteArg string) error {
+	if !rebind && !switchWindow {
+		return nil
+	}
+	flag := "--rebind"
+	if !rebind {
+		flag = "--switch"
+	}
+	switch {
+	case rebind && switchWindow:
+		return errors.New("--rebind and --switch are two ways to move the window; give one")
+	case noAttach:
+		return fmt.Errorf("%s moves this window, which --no-attach leaves where it is", flag)
+	case readOnly:
+		return fmt.Errorf("%s moves this window to the session as it is, not as a follower", flag)
+	case callingSession == "":
+		return fmt.Errorf("%s moves the window this runs in, and this is not in a cm session", flag)
+	case remoteArg != "" && remote.ValidateName(remoteArg) != nil:
+		return fmt.Errorf("%s needs the host by its name in [remote.hosts], not %s", flag, remoteArg)
+	}
+	return nil
+}
+
+// moveTarget is the session --rebind and --switch move the window to, as cm rebind takes it: what was typed,
+// so a name stays a name and is recreated on a restore after it ends, else the ID of the session the server
+// named, qualified by the host it is on.
+func moveTarget(host, typed string, opened *serverv1.Opened) string {
+	ref := typed
+	if ref == "" {
+		ref = paths.FormatSessionID(opened.SessionId)
+	}
+	if host != "" {
+		return host + ":" + ref
+	}
+	return ref
 }
 
 // ifRunningValues maps --if-running to its wire enum.

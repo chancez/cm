@@ -391,6 +391,18 @@ func followSessionSignalling(
 // the detach changes nothing observable. Kept because it states the intent, that this client is leaving on
 // purpose.
 func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options, size windowSize) error {
+	opened, err := openWithoutAttaching(ctx, dirs, opts, size)
+	if err != nil {
+		return err
+	}
+	// The name, since the caller may not have chosen one and needs it to attach later. Printed even when the
+	// session already existed, because the useful answer to "make sure this exists" is its name either way.
+	_, err = fmt.Println(opened.Session)
+	return err
+}
+
+// openWithoutAttaching opens a session, creating or reviving it, and leaves, reporting what was opened.
+func openWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Options, size windowSize) (*serverv1.Opened, error) {
 	// opts carries the logger already, since this is called from attach, which opens one.
 	//
 	// Both halves follow the Options rather than this machine: a remote attachment creating a session must
@@ -398,19 +410,19 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	// wrong one. See serverFor, and runAttach for why a remote needs no separate start.
 	if opts.Dial == nil {
 		if err := ensureServer(ctx, dirs); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	conn, cl, err := serverFor(ctx, dirs, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer conn.Close()
 
 	stream, err := cl.Attach(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Built from the options rather than field by field, so a field added to Open reaches this path too.
@@ -428,25 +440,21 @@ func createWithoutAttaching(ctx context.Context, dirs paths.Dirs, opts client.Op
 	if err := stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Open{Open: open},
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
 	resp, err := stream.Recv()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opened := resp.GetOpened()
 	if opened == nil {
-		return errors.New("server did not open the session")
+		return nil, errors.New("server did not open the session")
 	}
 
 	_ = stream.Send(&serverv1.AttachRequest{
 		Event: &serverv1.AttachRequest_Detach{Detach: &serverv1.Detach{NoAck: true}},
 	})
 	client.DrainAfterDetach(stream)
-
-	// The name, since the caller may not have chosen one and needs it to attach later. Printed even when the
-	// session already existed, because the useful answer to "make sure this exists" is its name either way.
-	_, err = fmt.Println(opened.Session)
-	return err
+	return opened, nil
 }

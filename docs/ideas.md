@@ -815,25 +815,20 @@ Rejected:
   query replies crossing two multiplexers, and after a reboot the local session is dead and something has
   to re-run the ssh.
 
-*Moving a window to a new session on another host.* Open. `cm attach white:foo` typed in a window showing a
-local session nests: the window still shows the local session, whose shell runs a second client, so
-everything that maps windows to sessions, kspaces' provider among them, sees the local session and lists
-white's as detached. `cm rebind white:foo` is the move wanted, the window's name pointing at white and its
-client moving there, but it refuses a session white does not have, since it looks the target up first so a
-typo fails before the window moves. What is missing is creating it.
+*Moving a window to a new session on another host.* **Built**, as `cm attach --rebind` and `cm attach --switch`
+(docs/cli.md). `cm attach white:foo` typed in a window showing a local session nests: the window still shows the
+local session, whose shell runs a second client, so everything that maps windows to sessions, kspaces' provider
+among them, sees the local session and lists white's as detached. `cm rebind white:foo` is the move wanted, but
+it refuses a session white does not have, since it looks the target up first so a typo fails before the window
+moves.
 
-- **`cm rebind --create white:foo`**, or `cm attach --rebind`: when the target is not found, create it on
-  white, then rebind as now. Created as `cm attach white:foo` creates, so in the calling session's space,
-  and with `--dir` meaning a directory on white, since the local one means nothing there.
-- **What becomes of the local session** is `--replace`'s question already: kept, borrowed by nothing, by
-  default, ended with `--replace` or `rebind_replaces`. A session left with a shell at its prompt is the
-  common case, and ending it is what the user most likely wants, but that is a policy `rebind_replaces`
-  already owns.
-- **A flag rather than the default**, because the lookup-first rule is what keeps a typo from moving a
-  window onto a fresh, empty session; creating must be asked for.
-- **Nesting could say so.** A client started inside a session and pointed at another host could print that
-  the window still shows the local session and suggest `cm rebind --create`, since nesting is rarely what
-  someone typing `cm attach white:foo` meant.
+- **On attach rather than on rebind**, because attach is the command that creates: `--rebind` creates the session
+  as `--no-attach` would, in the calling session's space and with `--dir` meaning a directory on white, then moves
+  the window and its name as `cm rebind` does; `--switch` moves the window alone, as `cm switch` does.
+- **What becomes of the local session** is `rebind_replaces`'s, as for `cm rebind`: kept by default, without its
+  name, which now points at white.
+- **A flag rather than the default**, because nesting is still what `cm attach` inside a session means, and moving
+  the window is a different act.
 
 *Federation is pull, and directed.* Each host lists the remotes it looks at, the named-hosts config section
 still open under `--remote`. A laptop lists the server and the desktop, the desktop lists the server, the
