@@ -205,5 +205,8 @@ jobs:
       # lifetime races, so it is worth paying for; but it also changes timing enough that a failure
       # under it and a failure without it are different findings, and seeing which one fired is the
       # first question when triaging.
+      #
+      # -timeout because internal/e2e takes 1737s under -race against 237s without, and go's 10m default
+      # panicked in whichever test was running at the time: every Linux run that reached this step.
       - name: go test -race
-        run: go test -race ./internal/... ./cmd/...
+        run: go test -race -timeout 60m ./internal/... ./cmd/...
