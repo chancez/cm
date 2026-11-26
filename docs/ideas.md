@@ -896,15 +896,24 @@ through a layout stored on the sessions' host, which cm does not understand.
   each other forever. Closing on take marks the window kept first, so the close watcher does not end a
   session the other machine only closed a window of. The launch wrapper and watcher are otherwise
   unchanged.
+- **One layout per worktree and host.** A worktree's panes split by the host of the session each shows, and
+  each host's are stored on that host, so a tab mixing hosts is in each host's layout with its panes alone.
+  Opening a worktree loads every host's layout with sessions tagged with it, as `cm ls --all-hosts` lists
+  them, though no pane shows one yet: opening `gr@dev` on a laptop brings up the desktop's tabs. A host
+  whose sessions appear later is left in the detached row.
+- **A base holds only while its host answers.** A stale host, one `load-layouts` names `unreachable`, or 30
+  seconds without an answer drops it, so a long disconnect is not merged as if both sides changed a moment
+  apart. Coming back, the last layout both agreed on says which side changed: one side's wins whole, and
+  both is a divergence the user resolves from the worktree's row, keeping this machine's, taking the
+  host's, or keeping both. Clocks are not compared: a disconnected machine's and the host's are not one.
 
 Rejected: a group of sessions in cm carrying the layout. Space plus the `worktree` tag already selects
 kspaces' layout unit, and a group would make cm decide what killing, moving or shelving one means, which
 are layout questions cm has ruled out of scope. Rejected: a kspaces server on remote hosts. Every viewer
 already reaches the remote through cm, and it would need kspaces where kitty never runs.
 
-Open: a layout spanning hosts needs a host identity every viewer agrees on, such as a stable ID each server
-reports, rather than a client's remote name, so a layout is one host's: the host most of a worktree's
-panes show, the rest staying local. Each viewer polls, so a change takes seconds; a `cm space meta watch`
+Open: one layout spanning hosts would need a host identity every viewer agrees on, such as a stable ID
+each server reports, rather than a client's remote name, so each host keeps its own. Each viewer polls, so a change takes seconds; a `cm space meta watch`
 stream would let the server push it instead, cutting the latency and the polling over ssh. Moving a window
 within the splits tree is not taken, as kitty cannot rearrange a window in place (#10941's flash).
 
