@@ -53,29 +53,6 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 		ValidArgsFunction: completeSessionNames(g),
 		Annotations:       map[string]string{targetElsewhere: "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, host, err := g.splitLocalTarget(args[0])
-			if err != nil {
-				return err
-			}
-			// A target on another host is looked up there, so a typo fails before the window moves, and so the
-			// window lands on exactly the session found. The move itself is this machine's server's business.
-			remoteTargetID := ""
-			if host != "" {
-				found, err := g.lookupOn(cmd.Context(), host, target)
-				if err != nil {
-					return err
-				}
-				remoteTargetID = found.Id
-				target = host + ":" + target
-			}
-			// --from first, so it names the session without one around it. Resolving CM_SESSION first
-			// failed `cm switch B --from A` from any shell outside a session with "no session given",
-			// before --from was read at all.
-			session, err := sessionTarget([]string{from}, "switch")
-			if err != nil {
-				return err
-			}
-
 			cfg, err := g.config()
 			if err != nil {
 				return err
@@ -86,82 +63,13 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 			if bind && !cmd.Flags().Changed("replace") {
 				replace = cfg.RebindReplaces
 			}
-
-			// Deliberately not ensureServer: switching implies a window is attached to something, and a
-			// server started here holds nothing to switch.
-			return withServer(cmd.Context(), g, func(ctx context.Context, cl serverv1.ServerClient) error {
-				if remoteTargetID != "" {
-					if err := requireServerCapability(serverCapabilities(ctx, cl), capability.SwitchRemote,
-						"move a window to another host"); err != nil {
-						return err
-					}
-				}
-				resp, err := cl.Switch(ctx, &serverv1.SwitchRequest{
-					Session:        session,
-					Target:         target,
-					RemoteTargetId: remoteTargetID,
-					Bind:           bind,
-					Replace:        replace,
-					Force:          force,
-					AllClients:     allClients,
-					// So the server can tell whether the session being replaced is the one this command
-					// is running in, which decides whether checking it for a running command means
-					// anything. See replaceable.
-					CallerSession: os.Getenv(paths.SessionEnv()),
-				})
-				if err != nil {
-					return err
-				}
-				if asJSON {
-					return writeJSON(os.Stdout, map[string]any{
-						"session":        session,
-						"target":         target,
-						"target_id":      resp.TargetId,
-						"switched_to":    resp.SwitchedTo,
-						"bound_name":     resp.BoundName,
-						"asked":          resp.Asked,
-						"killed_session": resp.KilledSession,
-						"kept_reason":    resp.KeptReason,
-					})
-				}
-				// Printed after the move, and to stderr when the old session survived a --replace, because
-				// that is the case a caller might act on. Neither line is likely to be seen when the
-				// replaced session is the caller's own: killing it takes the shell this command is
-				// printing to. The window is on the target by then, which is the answer that matters.
-				defer func() {
-					switch {
-					case resp.KilledSession != "":
-						fmt.Printf("killed %s\n", paths.FormatSessionID(resp.KilledSession))
-					case resp.KeptReason != "":
-						fmt.Fprintf(os.Stderr, "%s: left it running: %s\n", paths.Name, resp.KeptReason)
-					}
-				}()
-
-				target := paths.FormatSessionID(resp.TargetId)
-				// A rebind reports the name first, because the name moving is the durable half and the
-				// window following is a consequence. A switch has only the window to report.
-				if resp.BoundName != "" {
-					if resp.Asked == 0 {
-						// The name moved even though no window did, which is a coherent outcome worth
-						// stating rather than hiding: the next attach by that name lands on the target.
-						_, err = fmt.Printf("%s now names %s, and no window was using it\n",
-							resp.BoundName, target)
-						return err
-					}
-					_, err = fmt.Printf("%s now names %s, and moved %s\n",
-						resp.BoundName, target, plural(int(resp.Asked), "window"))
-					return err
-				}
-				if resp.Asked == 0 {
-					// Its own message rather than a bare zero, because the cause is specific and fixable:
-					// the active client is the one that typed most recently, and a session nothing has been
-					// typed in cannot name one. Not an error, since nothing went wrong and nothing moved.
-					_, err = fmt.Fprintf(os.Stderr,
-						"%s: no window is using %s, so nothing moved\n", paths.Name, session)
-					return err
-				}
-				_, err = fmt.Printf("moved %s to %s\n", plural(int(resp.Asked), "window"), target)
-				return err
+			return g.moveWindow(cmd.Context(), args[0], windowMove{
+				from:       from,
+				bind:       bind,
+				replace:    replace,
+				force:      force,
+				allClients: allClients,
+				asJSON:     asJSON,
 			})
 		},
 	}
@@ -179,6 +87,122 @@ func newMoveCommand(g *globals, bind bool) *cobra.Command {
 	}
 	f.BoolVar(&asJSON, "json", false, "print JSON instead of text")
 	return cmd
+}
+
+// windowMove is how moveWindow moves a window: from which session, whether its name goes along, and what
+// becomes of the session the name came off.
+type windowMove struct {
+	from       string
+	bind       bool
+	replace    bool
+	force      bool
+	allClients bool
+	asJSON     bool
+}
+
+// moveWindow moves the window showing mv.from, or the session this runs in, to the session arg names, as
+// `cm switch` does, and its name along with it when mv.bind, as `cm rebind` does. arg may be qualified with
+// another host, where it is looked up first; the move itself is this machine's server's.
+func (g *globals) moveWindow(ctx context.Context, arg string, mv windowMove) error {
+	target, host, err := g.splitLocalTarget(arg)
+	if err != nil {
+		return err
+	}
+	// A target on another host is looked up there, so a typo fails before the window moves, and so the
+	// window lands on exactly the session found. The move itself is this machine's server's business.
+	remoteTargetID := ""
+	if host != "" {
+		found, err := g.lookupOn(ctx, host, target)
+		if err != nil {
+			return err
+		}
+		remoteTargetID = found.Id
+		target = host + ":" + target
+	}
+	// --from first, so it names the session without one around it. Resolving CM_SESSION first
+	// failed `cm switch B --from A` from any shell outside a session with "no session given",
+	// before --from was read at all.
+	session, err := sessionTarget([]string{mv.from}, "switch")
+	if err != nil {
+		return err
+	}
+
+	// Deliberately not ensureServer: switching implies a window is attached to something, and a
+	// server started here holds nothing to switch.
+	return withServer(ctx, g, func(ctx context.Context, cl serverv1.ServerClient) error {
+		if remoteTargetID != "" {
+			if err := requireServerCapability(serverCapabilities(ctx, cl), capability.SwitchRemote,
+				"move a window to another host"); err != nil {
+				return err
+			}
+		}
+		resp, err := cl.Switch(ctx, &serverv1.SwitchRequest{
+			Session:        session,
+			Target:         target,
+			RemoteTargetId: remoteTargetID,
+			Bind:           mv.bind,
+			Replace:        mv.replace,
+			Force:          mv.force,
+			AllClients:     mv.allClients,
+			// So the server can tell whether the session being replaced is the one this command
+			// is running in, which decides whether checking it for a running command means
+			// anything. See replaceable.
+			CallerSession: os.Getenv(paths.SessionEnv()),
+		})
+		if err != nil {
+			return err
+		}
+		if mv.asJSON {
+			return writeJSON(os.Stdout, map[string]any{
+				"session":        session,
+				"target":         target,
+				"target_id":      resp.TargetId,
+				"switched_to":    resp.SwitchedTo,
+				"bound_name":     resp.BoundName,
+				"asked":          resp.Asked,
+				"killed_session": resp.KilledSession,
+				"kept_reason":    resp.KeptReason,
+			})
+		}
+		// Printed after the move, and to stderr when the old session survived a --replace, because
+		// that is the case a caller might act on. Neither line is likely to be seen when the
+		// replaced session is the caller's own: killing it takes the shell this command is
+		// printing to. The window is on the target by then, which is the answer that matters.
+		defer func() {
+			switch {
+			case resp.KilledSession != "":
+				fmt.Printf("killed %s\n", paths.FormatSessionID(resp.KilledSession))
+			case resp.KeptReason != "":
+				fmt.Fprintf(os.Stderr, "%s: left it running: %s\n", paths.Name, resp.KeptReason)
+			}
+		}()
+
+		target := paths.FormatSessionID(resp.TargetId)
+		// A rebind reports the name first, because the name moving is the durable half and the
+		// window following is a consequence. A switch has only the window to report.
+		if resp.BoundName != "" {
+			if resp.Asked == 0 {
+				// The name moved even though no window did, which is a coherent outcome worth
+				// stating rather than hiding: the next attach by that name lands on the target.
+				_, err = fmt.Printf("%s now names %s, and no window was using it\n",
+					resp.BoundName, target)
+				return err
+			}
+			_, err = fmt.Printf("%s now names %s, and moved %s\n",
+				resp.BoundName, target, plural(int(resp.Asked), "window"))
+			return err
+		}
+		if resp.Asked == 0 {
+			// Its own message rather than a bare zero, because the cause is specific and fixable:
+			// the active client is the one that typed most recently, and a session nothing has been
+			// typed in cannot name one. Not an error, since nothing went wrong and nothing moved.
+			_, err = fmt.Fprintf(os.Stderr,
+				"%s: no window is using %s, so nothing moved\n", paths.Name, session)
+			return err
+		}
+		_, err = fmt.Printf("moved %s to %s\n", plural(int(resp.Asked), "window"), target)
+		return err
+	})
 }
 
 // switchHelp is the client-level form.
