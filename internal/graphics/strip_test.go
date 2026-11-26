@@ -1,6 +1,7 @@
 package graphics
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -83,5 +84,37 @@ func TestStripperRemovesEveryCommandInAChunk(t *testing.T) {
 	chunk := "a" + image + "b" + image + "c"
 	if got, want := string(s.Strip([]byte(chunk))), "abc"; got != want {
 		t.Errorf("Strip() = %q, want %q", got, want)
+	}
+}
+
+// A chunked transmission is loading from its first m=1 chunk until the chunk that ends it, whatever the chunk
+// boundaries of the output, and a command boundary inside it is not an image boundary.
+//
+// That difference is what a client switching from stripped to forwarded output needs: switched between two
+// chunks of one image, it got the rest without the first chunk, and its terminal drew nothing.
+func TestStripperIsLoadingUntilTheLastChunkOfAnImage(t *testing.T) {
+	first := "\x1b_Ga=T,q=2,f=24,s=2,v=2,i=7,m=1;AQIDAQID\x1b\\"
+	middle := "\x1b_Ga=T,q=2,m=1;AQID\x1b\\"
+	last := "\x1b_Ga=T,q=2,m=0;AQID\x1b\\"
+
+	var s Stripper
+	type state struct {
+		Pending, Loading bool
+	}
+	var got []state
+	for _, chunk := range []string{"text", first, middle[:5], middle[5:], last, "text"} {
+		s.Strip([]byte(chunk))
+		got = append(got, state{s.Pending(), s.Loading()})
+	}
+	want := []state{{false, false}, {false, true}, {true, true}, {false, true}, {false, false}, {false, false}}
+	if !slices.Equal(got, want) {
+		t.Errorf("after each chunk (Pending, Loading) = %v, want %v", got, want)
+	}
+
+	// Reset forgets it: after a gap the chunks that would end it may be the ones lost.
+	s.Strip([]byte(first))
+	s.Reset()
+	if s.Loading() {
+		t.Error("still loading after Reset")
 	}
 }

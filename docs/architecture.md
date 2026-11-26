@@ -2027,6 +2027,13 @@ and afterwards as an `AttachRequest.terminal_graphics` event, which the server a
 `AttachResponse.images` push carrying the same transmissions and placements a restore would have inlined. So a
 terminal on a slow link is served its text immediately and its pictures one round trip later.
 
+The push goes out from the client's attach loop, at a point in its stream between two images, and the loop
+strips images until then. An answer can land while a program is sending one: kitty's client sends an image in
+4096 byte chunks, so a large one is hundreds of commands. Pushed when the answer arrived, the image was
+incomplete in the store and the push carried nothing, the chunks already sent had been stripped, and the rest
+went out without its first chunk, so the terminal drew nothing. Waiting costs that client the rest of one
+image, which the push then sends whole. `TestAnAnswerMidTransmissionStillGetsTheImage` is the guard.
+
 Not waiting is the design, and the alternative was built first: a 250ms blocking read on the attach path. Any
 bound is wrong here, because the bound has to cover the worst link and the attach cannot afford the worst
 link. `kitten icat` waits ten seconds for this same answer (`--detection-timeout`, from

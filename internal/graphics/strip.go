@@ -16,6 +16,8 @@ package graphics
 // text. Not safe for concurrent use; one per attachment, used only by that attachment's output loop.
 type Stripper struct {
 	sc Scanner
+	// loading is set while a chunked transmission is part way through: its last chunk said m=1. See Loading.
+	loading bool
 	// out is the rebuilt chunk, reused so a steady stream of images does not allocate per chunk.
 	out []byte
 }
@@ -40,10 +42,24 @@ func (s *Stripper) Strip(p []byte) []byte {
 	for _, seg := range segs {
 		if !seg.Graphics {
 			s.out = append(s.out, seg.Data...)
+			continue
+		}
+		// The rule Store.Add keys continuations by: chunks after the first name no image, and m=1 on any of
+		// them means another follows. The protocol does not interleave transmissions, so one flag is enough.
+		if seg.Cmd.IsTransmission() {
+			s.loading = seg.Cmd.More
 		}
 	}
 	return s.out
 }
+
+// Loading reports whether a chunked transmission has started and not finished: the last chunk removed said
+// more were coming.
+//
+// Pending is the boundary of one command; this is the boundary of one image, which can be hundreds of them, as
+// kitty's own client sends 4096 bytes at a time. A caller that stops stripping while this is set forwards the
+// rest of the image without its first chunk, which carries the format and size, so the terminal draws nothing.
+func (s *Stripper) Loading() bool { return s.loading }
 
 // Pending reports whether part of a command is held, waiting for the rest to arrive.
 func (s *Stripper) Pending() bool { return s.sc.Pending() > 0 }
@@ -52,4 +68,9 @@ func (s *Stripper) Pending() bool { return s.sc.Pending() > 0 }
 //
 // For a gap in the session's output, where the bytes that would have completed a held command are the ones
 // that were lost. Holding them across a gap would strip the front of whatever arrives next instead.
-func (s *Stripper) Reset() { s.sc.Reset() }
+//
+// Forgets a transmission in progress for the same reason: its remaining chunks may be among what was lost.
+func (s *Stripper) Reset() {
+	s.sc.Reset()
+	s.loading = false
+}

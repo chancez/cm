@@ -1279,8 +1279,8 @@ func (s *Session) imagesFor(tok *attachToken) []byte {
 	if term == nil {
 		return nil
 	}
-	// Everything this client could have been sent so far. Taken after the token is marked, so any chunk
-	// past it is forwarded to this client with its images intact rather than stripped.
+	// Everything this client could have been sent so far. The caller is the client's own attach loop, which
+	// has stopped stripping by now, so any chunk past it is forwarded with its images intact.
 	sent := s.recent.Next()
 
 	transmissions := s.graphicsRestore()

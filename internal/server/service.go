@@ -397,8 +397,11 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// difference.
 	detached := make(chan struct{})
 	recvErr := make(chan error, 1)
+	// Signalled when this client's terminal answers that it can draw images, so this loop decides when to
+	// start sending them. See startImages.
+	imagesAnswered := make(chan struct{}, 1)
 	go func() {
-		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, att.token, detached)
+		recvErr <- s.recvLoop(ctx, sess, srv, open.ReadOnly, att.token, detached, imagesAnswered)
 	}()
 
 	// Metadata is forwarded so a terminal emulator can retitle a tab or open a new window in the
@@ -426,6 +429,43 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 	// follower collecting bytes, which wants them all.
 	var gfxStrip graphics.Stripper
 	painting := !open.NoRestore
+
+	// forwarding says this client is sent the session's images as they arrive rather than stripped. True from
+	// the start for a terminal that answered before Open, and for a follower, which collects every byte.
+	forwarding := !painting || sess.drawsImages(att.token)
+	// startImages switches a client whose terminal has said yes from stripped output to forwarded, and sends it
+	// the images it was spared. Called after each chunk and when the answer arrives, and does nothing until the
+	// switch is safe at this point in this client's stream.
+	//
+	// Safe means between two images, not merely between two commands. kitty's client sends an image in 4096
+	// byte chunks, so a large one is hundreds of commands, and the answer travels the client's link while they
+	// arrive. Switched between two of them, the push found the image incomplete in the store and carried nothing,
+	// every chunk already sent had been stripped, the first with its format and size among them, and the rest
+	// went out without its start: the terminal drew nothing. Waiting for the image to finish here costs that
+	// client the rest of one image's bytes, which the push then sends whole.
+	//
+	// Decided here rather than when the answer is received, because this loop is what knows where the client's
+	// stream is: the store and the model describe where the pump is, which can be ahead of it.
+	startImages := func() error {
+		if forwarding || !sess.drawsImages(att.token) || gfxStrip.Pending() || gfxStrip.Loading() {
+			return nil
+		}
+		forwarding = true
+		images := sess.imagesFor(att.token)
+		if len(images) == 0 {
+			return nil
+		}
+		if err := srv.Send(&serverv1.AttachResponse{
+			Event: &serverv1.AttachResponse_Images{
+				Images: &serverv1.Images{Data: images},
+			},
+		}); err != nil {
+			return err
+		}
+		s.mgr.log.Debug("sent images to a client whose terminal answered late",
+			"session", sess.id, "bytes", len(images))
+		return nil
+	}
 
 	// Output is read on its own goroutine because the reader blocks, and this loop also has
 	// to notice a detach or a dropped connection.
@@ -471,23 +511,21 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 				// The bytes that would have completed a held command are the ones that were lost, so
 				// holding them would strip the front of whatever arrives next instead.
 				gfxStrip.Reset()
-			} else if painting && (!sess.drawsImages(att.token) || gfxStrip.Pending()) {
+			} else if !forwarding {
 				// This client's terminal cannot draw an image, so the images in the session's live output are
 				// removed rather than printed as base64 across its screen. That is the other half of the
 				// restore gate, and the half a user hit first: with a kitty and a phone both attached, an
 				// icat in the kitty drew there and dumped its payload as text on the phone, because the
 				// session's output goes to every client alike.
 				//
-				// Kept up while anything is held even once the terminal has said yes, since a chunk boundary
-				// inside a command is not a place to change one's mind: the remainder of a half-removed
-				// transmission is text on any terminal. Pending is false at a command boundary, which is
-				// where the switch is safe.
+				// Kept up once the terminal has said yes until startImages finds the stream between two
+				// images: the remainder of a half-removed image is either text or an image with no start.
 				//
 				// Stripped here rather than in the client because the bytes are the cost. An image is
 				// megabytes and the terminal that cannot draw it is usually on the slow link, so sending it
 				// to be discarded on arrival would delay the text behind it.
 				//
-				// Not for a follower, which is what painting excludes: `cm read --raw --follow` is collecting
+				// Not for a follower, which is why forwarding starts true for one: `cm read --raw --follow` is collecting
 				// the session's bytes, and removing some would be corruption in the file rather than a
 				// courtesy. A follower paints no terminal, so nothing there prints base64 either.
 				data = gfxStrip.Strip(data)
@@ -508,6 +546,14 @@ func (s *Service) Attach(ctx context.Context, srv serverv1.Server_AttachServer) 
 					},
 				},
 			}); err != nil {
+				return err
+			}
+			if err := startImages(); err != nil {
+				return err
+			}
+
+		case <-imagesAnswered:
+			if err := startImages(); err != nil {
 				return err
 			}
 
@@ -755,6 +801,7 @@ func (s *Service) recvLoop(
 	readOnly bool,
 	tok *attachToken,
 	detached chan<- struct{},
+	imagesAnswered chan<- struct{},
 ) error {
 	var replies input.ReplyFramer
 	type received struct {
@@ -809,31 +856,21 @@ func (s *Service) recvLoop(
 			switch {
 			case req.GetTerminalGraphics() != nil:
 				// The terminal answered after Open, which is the normal case on any link where the round
-				// trip outlasts the client's window: it asks and does not wait. Nothing was sent before
-				// this, so the images go now.
+				// trip outlasts the client's window: it asks and does not wait.
 				//
-				// Sent from here, which is where the Detached ack is sent for the same reason: this is the
-				// goroutine that received the request, and both are replies to it rather than session
-				// output. Session output and proxied queries go out on the attach loop instead.
 				// Recorded either way. A no matters as much as a yes: it is what tells the query proxy that
 				// this terminal will never answer a graphics query, as against not having answered yet.
+				//
+				// The images themselves are the attach loop's to send, once this client's stream is between
+				// two of them; see startImages. Sent from here, they went out at whatever point the stream had
+				// reached, which could be the middle of one.
 				sess.noteImagesAnswer(tok, req.GetTerminalGraphics().DrawsImages)
-				if !req.GetTerminalGraphics().DrawsImages {
-					break
+				if req.GetTerminalGraphics().DrawsImages {
+					select {
+					case imagesAnswered <- struct{}{}:
+					default:
+					}
 				}
-				images := sess.imagesFor(tok)
-				if len(images) == 0 {
-					break
-				}
-				if err := srv.Send(&serverv1.AttachResponse{
-					Event: &serverv1.AttachResponse_Images{
-						Images: &serverv1.Images{Data: images},
-					},
-				}); err != nil {
-					return err
-				}
-				s.mgr.log.Debug("sent images to a client whose terminal answered late",
-					"session", sess.id, "bytes", len(images))
 
 			case req.GetDetach() != nil:
 				// Acknowledged before signalling, so a client that asks can wait for confirmation rather than
