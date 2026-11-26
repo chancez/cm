@@ -468,6 +468,7 @@ func TestShimArgsCarryPixelSize(t *testing.T) {
 		"--cols", "100",
 		"--xpixel", "800",
 		"--ypixel", "600",
+		"--dir", mgr.home,
 	}
 	if !slices.Equal(args, want) {
 		t.Errorf("shimArgs() = %v, want %v", args, want)
@@ -490,9 +491,38 @@ func TestShimArgsOmitUnknownPixelSize(t *testing.T) {
 		"--session-ref", "@nopixels",
 		"--rows", "24",
 		"--cols", "80",
+		"--dir", mgr.home,
 	}
 	if !slices.Equal(args, want) {
 		t.Errorf("shimArgs() = %v, want %v", args, want)
+	}
+}
+
+// A session asked for no directory starts in the home directory, not wherever the server process was
+// started: a client on another machine sends none, as its own means nothing here, and a server started from
+// ~/projects/cm put every session it created for one there. A directory asked for is kept.
+func TestShimArgsDir(t *testing.T) {
+	mgr, _, _ := newTestManager(t, nil)
+	mgr.home = "/home/me"
+	base := []string{
+		"--runtime-dir", mgr.dirs.Runtime,
+		"--state-dir", mgr.dirs.State,
+		"shim",
+		"--session", "d",
+		"--session-ref", "@d",
+		"--rows", "24",
+		"--cols", "80",
+	}
+	for _, tt := range []struct {
+		dir  string
+		want []string
+	}{
+		{dir: "", want: append(slices.Clone(base), "--dir", "/home/me")},
+		{dir: "/src/x", want: append(slices.Clone(base), "--dir", "/src/x")},
+	} {
+		if got := mgr.shimArgs(OpenOptions{id: "d", Rows: 24, Cols: 80, Dir: tt.dir}, ""); !slices.Equal(got, tt.want) {
+			t.Errorf("shimArgs(Dir: %q) = %v, want %v", tt.dir, got, tt.want)
+		}
 	}
 }
 

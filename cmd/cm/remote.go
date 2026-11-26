@@ -246,8 +246,8 @@ func (g *globals) pointAtServer(opts *client.Options) error {
 // The caller's cwd locally, so a new session starts where the user is, which is what a terminal emulator
 // opening a window expects. Nothing for a remote, because this process's cwd is a path on the wrong machine:
 // it either does not exist there or, worse, exists and is something else. Empty lets the far server decide,
-// which in practice means $HOME. An explicit --dir is passed through untouched either way, as the remote path
-// it must be.
+// which starts the session in the home directory there (Manager.shimArgs) rather than in its own working
+// directory. An explicit --dir is passed through untouched either way, as the remote path it must be.
 //
 // One function rather than the same condition in each command, because that is exactly how the rule got half
 // applied: attach had it and run did not, so `cm run --remote` created its session in this machine's working

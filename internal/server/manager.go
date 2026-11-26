@@ -55,7 +55,9 @@ type NewTerminalFunc func(rows, cols uint16) (Terminal, error)
 
 // Manager owns the session registry and the shims behind it.
 type Manager struct {
-	dirs  paths.Dirs
+	dirs paths.Dirs
+	// home is where a session asked for no directory starts, see shimArgs; empty when it cannot be read.
+	home  string
 	store *store.Store
 	// cursors holds the history walks clients have open. See HistoryPage.
 	cursors historyCursors
@@ -172,8 +174,10 @@ func NewManager(dirs paths.Dirs, st *store.Store, newTerminal NewTerminalFunc) (
 	if err != nil {
 		return nil, fmt.Errorf("resolving own path for shim spawning: %w", err)
 	}
+	home, _ := os.UserHomeDir()
 	return &Manager{
 		dirs:        dirs,
+		home:        home,
 		store:       st,
 		selfExe:     exe,
 		newTerminal: newTerminal,
@@ -1610,8 +1614,11 @@ func (m *Manager) shimArgs(opts OpenOptions, logPath string) []string {
 			}
 		}
 	}
-	if opts.Dir != "" {
-		args = append(args, "--dir", opts.Dir)
+	// A session asked for no directory, as one a client on another machine creates, whose own directory
+	// means nothing here, starts in the home directory rather than inheriting the server's: a server
+	// started from ~/projects/cm put every such session there.
+	if dir := cmp.Or(opts.Dir, m.home); dir != "" {
+		args = append(args, "--dir", dir)
 	}
 	if len(opts.Command) > 0 {
 		args = append(args, "--")
