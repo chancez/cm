@@ -55,3 +55,21 @@ func TestMetaValue(t *testing.T) {
 		}
 	}
 }
+
+// A session created on another host from inside one here takes the space of the one here, which the far host
+// cannot look up by its reference: by any of its names or its ID, and nothing for default or a session not
+// listed.
+func TestSessionSpace(t *testing.T) {
+	sessions := []*serverv1.Session{
+		{Id: "a1", Name: "work", Names: []string{"kitty.5"}, Space: "homelab"},
+		{Id: "b2", Name: "plain", Space: "default"},
+	}
+	got := map[string]string{}
+	for _, ref := range []string{"work", "@a1", "kitty.5", "plain", "gone"} {
+		got[ref] = sessionSpace(sessions, ref)
+	}
+	want := map[string]string{"work": "homelab", "@a1": "homelab", "kitty.5": "homelab", "plain": "", "gone": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sessionSpace = %v, want %v", got, want)
+	}
+}

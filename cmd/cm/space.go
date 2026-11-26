@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -80,6 +81,20 @@ func spaceFrom(g *globals) string {
 		return ""
 	}
 	return os.Getenv(paths.SessionEnv())
+}
+
+// sessionSpace is the space of the session ref names in sessions, by any of its names or its ID, empty for
+// default or for none.
+func sessionSpace(sessions []*serverv1.Session, ref string) string {
+	for _, s := range sessions {
+		if s.Name == ref || paths.FormatSessionID(s.Id) == ref || slices.Contains(s.Names, ref) {
+			if s.Space == spaces.Default {
+				return ""
+			}
+			return s.Space
+		}
+	}
+	return ""
 }
 
 func newSpaceListCommand(g *globals) *cobra.Command {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -136,7 +137,7 @@ owns the process and reaps it, so nothing is inferred from output.`,
 					persist: persist,
 					env:     g.sessionEnvFor(os.Environ(), env),
 					tags:    sessionTags,
-					space:   space,
+					space:   cmp.Or(space, remoteCallingSpace(ctx, g, dirs)),
 					// A remote server cannot resolve the local session this runs in.
 					spaceFrom: spaceFrom(g),
 				})

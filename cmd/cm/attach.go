@@ -272,6 +272,9 @@ matters for another multiplexer, which sees the key first and never passes it on
 				InsideSession: insideCmSession(),
 			}
 			if remoteDialer != nil {
+				if opts.Space == "" {
+					opts.Space = callingSpace(cmd.Context(), dirs)
+				}
 				applyRemote(&opts, remoteDialer, os.Environ(), env, clientHostname())
 			}
 			// Nil unless this process replaced one that was already attached, so an ordinary attach

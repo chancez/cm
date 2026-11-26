@@ -324,8 +324,10 @@ names a space after its repository's directory and `~/.dotfiles` is `.dotfiles`;
 
 The session is told nothing. cm exports no `CM_SPACE`, which every flag's `CM_` binding would read as
 `--space` and which would go stale on a move; the server resolves the calling session through
-`Open.space_from` instead, which is cleared under `--remote` since it names a local session. `CM_SPACE` set
-by hand is read as `--space` and not inherited by a session's shell.
+`Open.space_from` instead, which is cleared under `--remote` since it names a local session. In its place
+the client asks this machine's server for the calling session's space and sends it as the new session's, so
+`cm attach white:foo` from a session in `homelab` creates `foo` in `homelab` on white. `CM_SPACE` set by
+hand is read as `--space` and not inherited by a session's shell.
 
 `cm list` shows a SPACE column once some session is outside `default`, and `space` in its JSON and in
 `cm info`. Every `cm space` command and `cm list --space` are refused against a server without the `spaces`

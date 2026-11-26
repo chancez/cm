@@ -338,6 +338,40 @@ func applyRemote(opts *client.Options, dialer *remoteDialer, environ, env []stri
 	opts.SpaceFrom = ""
 }
 
+// callingSpace is the space of the session this process runs in, asked of this machine's server, for a
+// session created on another host. That host cannot be given the session's reference, which names a session
+// here (see applyRemote), so the space goes as the new session's own instead, and a session made with
+// `cm attach white:NAME` from a shell in space homelab lands in homelab on white, as one made here would.
+// Empty outside a session, for default, or when this machine's server cannot say: the far server then
+// decides, as it did before.
+func callingSpace(ctx context.Context, dirs paths.Dirs) string {
+	self := os.Getenv(paths.SessionEnv())
+	if self == "" {
+		return ""
+	}
+	conn, cl, err := dialServer(dirs)
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	resp, err := cl.List(ctx, &serverv1.ListRequest{})
+	if err != nil {
+		return ""
+	}
+	return sessionSpace(resp.Sessions, self)
+}
+
+// remoteCallingSpace is callingSpace for an invocation reaching another host, empty for one here, whose server
+// takes the calling session's space from its reference.
+func remoteCallingSpace(ctx context.Context, g *globals, dirs paths.Dirs) string {
+	if g.remote == "" {
+		return ""
+	}
+	return callingSpace(ctx, dirs)
+}
+
 // completionTimeout bounds a completion that has to reach another machine.
 //
 // A bound rather than a refusal, which is the whole difference: correct names slowly are worth more than no
