@@ -188,7 +188,9 @@ func TestRealShellsAreInertOutsideASession(t *testing.T) {
 			}
 
 			cmd := exec.Command(bin, "-c", script)
-			// CM_SESSION deliberately absent, which is the case being checked.
+			// CM_SESSION deliberately absent, which is the case being checked. Removed rather than not added,
+			// since a test run inside a cm session inherits it.
+			cmd.Env = slices.DeleteFunc(cmd.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "CM_SESSION=") })
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("loading the %s integration outside a session failed: %v\n%s", shell, err, out)
