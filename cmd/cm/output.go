@@ -116,7 +116,8 @@ type sessionJSON struct {
 	// Space is the space the session is in. Empty only from a server that predates spaces.
 	Space string `json:"space"`
 	// Host is the host the session is on, from `cm ls --all-hosts`: a name in [remote.hosts], or this
-	// machine's remote.local_name. Empty in a listing of one server, which is every other listing.
+	// machine's remote.local_name. `cm info` names it too for a session it reached on another host, by a
+	// qualified reference or a name here pointing there. Empty in every other listing of one server.
 	Host string `json:"host"`
 	// StaleSince is when a host that did not answer was last listed, for its sessions shown from that
 	// listing. Null for a live one.

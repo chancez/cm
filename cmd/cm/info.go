@@ -9,8 +9,19 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/chancez/cm/internal/paths"
+	"github.com/chancez/cm/internal/remote"
 	serverv1 "github.com/chancez/cm/proto/cm/server/v1"
 )
+
+// infoHost is the host cm info names for sessions it found on another one, remoteArg as --remote was set by
+// a qualifier or a followed pointer: a name in [remote.hosts], as a listing of every host names one. Empty
+// for this machine, and for a remote given as an address, which is no name to reach it by again.
+func infoHost(remoteArg string) string {
+	if remoteArg == "" || remote.ValidateName(remoteArg) != nil {
+		return ""
+	}
+	return remoteArg
+}
 
 func newInfoCommand(g *globals) *cobra.Command {
 	var (
@@ -85,6 +96,14 @@ line, so a selector plus a field is a list of that field across the group:
 						return fmt.Errorf("session %q not found", name)
 					}
 					found = append(found, s)
+				}
+				// The host a session is on when this asked another one, by a qualified reference or a name here
+				// that points there: the far server answers as if the session were local to it, and a caller
+				// opening a window beside this one, as a terminal's launch wrapper does, has to know where.
+				if host := infoHost(g.remote); host != "" {
+					for _, s := range found {
+						s.Host = host
+					}
 				}
 
 				if asJSON {
