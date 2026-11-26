@@ -388,7 +388,9 @@ OSC 133;C tells cm it is running, and a title hook names the window, as for a co
 Offered, it goes in the line editor: zsh `print -z`, fish `commandline -r`. Nothing is typed, so the prompt
 is not followed by the line being echoed. bash has no way
 to fill the line editor from a prompt hook, so it takes only a command to run, and an offered one is typed
-in. The variables go to the shell through the shim and are not recorded as the session's client
+in. fish 3 is the same: its reader discards a `commandline -r` from a `fish_prompt` handler, and it has no
+`history append`, so the line is run without being added to the history. bash before 4.4, the 3.2 that
+macOS ships as `/bin/bash`, takes neither and has both typed in, but still unsets the variables. The variables go to the shell through the shim and are not recorded as the session's client
 environment, so `cm get-env` does not hand them out, and they are dropped from what a shim inherits from the
 server, so a server started from a shell that kept them does not pass its command to every new session.
 

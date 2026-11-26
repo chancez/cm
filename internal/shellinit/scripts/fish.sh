@@ -158,10 +158,17 @@ end
 # An INT handler is defined while it runs, empty, because fish cancels the rest of an event handler when its
 # command is interrupted with ctrl-c unless one is: the frame stayed open, so the session went on saying the
 # command ran and a revive brought it back.
-if test -n "$CM_RESTORE_COMMAND"
+#
+# fish 3 takes a command only to run it, and leaves an offered one to cm to type in, as bash does. Its reader
+# discards a commandline set from a fish_prompt handler, so the offered line never reached the editor and
+# whatever was typed next ran on its own. It also has no `history append`, which arrived in 4.0: 3.x reads it
+# as `history search append`, and pipes the search into less whenever stdout is a terminal, so a run command
+# waited behind a pager until a key was pressed. Both measured on fish 3.6.0 and 3.7.0; 4.0.2 does both.
+set -g _cm_fish3
+string match -qr '^[0-3]\.' -- $version; and set _cm_fish3 1
+if test -n "$CM_RESTORE_COMMAND"; and begin; test "$CM_RESTORE_RUN" = 1; or test -z "$_cm_fish3"; end
     set -g _cm_restore_line $CM_RESTORE_COMMAND
     set -g _cm_restore_run $CM_RESTORE_RUN
-    set -e CM_RESTORE_COMMAND CM_RESTORE_RUN
     printf '\033]25453;restore=taken\007' > /dev/tty 2>/dev/null
     function _cm_restore --on-event fish_prompt
         functions --erase _cm_restore
@@ -169,7 +176,7 @@ if test -n "$CM_RESTORE_COMMAND"
         set -l run $_cm_restore_run
         set -e _cm_restore_line _cm_restore_run
         if test "$run" = 1
-            history append -- $line 2>/dev/null
+            test -n "$_cm_fish3"; or history append -- $line 2>/dev/null
             emit fish_preexec $line
             function _cm_restore_int --on-signal INT
             end
@@ -181,4 +188,7 @@ if test -n "$CM_RESTORE_COMMAND"
         end
     end
 end
+# `or true` because erasing an unset variable fails, and as the last statement that failure is the status of
+# the `source` loading this.
+set -e CM_RESTORE_COMMAND CM_RESTORE_RUN; or true
 end

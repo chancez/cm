@@ -16,7 +16,8 @@ import (
 // Run: the line runs at the first prompt inside a frame whose argv is the line, which is what the carried
 // declaration binds to and what records it as the typed command again. Offered: it is in the line editor, so
 // text typed next extends it, and the edited line is what runs. bash cannot fill the editor from a hook, so it
-// does not take an offered command, and the server types that one in; bash before 4.4 takes none. Either way the variables are gone by the time anything the shell runs looks for them.
+// does not take an offered command, and the server types that one in; neither does fish 3, and bash before
+// 4.4 takes none. Either way the variables are gone by the time anything the shell runs looks for them.
 func TestRealShellsTakeTheRestoreCommand(t *testing.T) {
 	const line = `printf 'RAN%s\n' OK`
 	for _, shell := range Shells() {

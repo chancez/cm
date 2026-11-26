@@ -184,13 +184,15 @@ func skipWithoutFrames(t *testing.T, shell, bin string) {
 }
 
 // takesRestore reports whether the integration takes a revived session's command itself, rather than leaving
-// cm to type it in. bash takes one only to run it, and only from 4.4. See the scripts.
+// cm to type it in. bash takes one only to run it, and only from 4.4; fish 3 only to run it. See the scripts.
 func takesRestore(t *testing.T, shell, bin string, run bool) bool {
 	t.Helper()
 	major, minor := shellVersion(t, shell, bin)
 	switch shell {
 	case "bash":
 		return run && (major > 4 || major == 4 && minor >= 4)
+	case "fish":
+		return run || major >= 4
 	default:
 		return true
 	}
